@@ -1,0 +1,11 @@
+.DS_Store
+.agent/
+.rowan/
+AGENT.md
+docs/
+node_modules/
+dist/
+build/
+.env
+.env.*
+*.log
