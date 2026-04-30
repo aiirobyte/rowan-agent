@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
-import { fakeStream } from "../src/stream";
 import { createDemoTools } from "../src/tools";
 import type { StreamFn } from "../src/types";
+import { scriptedStream } from "./support/scripted-stream";
 
 test("Agent.prompt returns an outcome and emits events", async () => {
   const agent = new Agent({
     systemPrompt: "Test system",
-    model: { provider: "fake", name: "fake-v0" },
-    stream: fakeStream,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: createDemoTools(),
   });
   const events: string[] = [];
@@ -28,8 +28,8 @@ test("Agent.prompt returns an outcome and emits events", async () => {
 test("Agent rejects concurrent runs", async () => {
   const agent = new Agent({
     systemPrompt: "Test system",
-    model: { provider: "fake", name: "fake-v0" },
-    stream: fakeStream,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: createDemoTools(),
   });
 
@@ -48,7 +48,7 @@ test("Agent.abort stops an active run", async () => {
   };
   const agent = new Agent({
     systemPrompt: "Test system",
-    model: { provider: "fake", name: "fake-v0" },
+    model: { provider: "test", name: "scripted" },
     stream: hangingStream,
     tools: createDemoTools(),
   });

@@ -3,17 +3,17 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
-import { fakeStream } from "../src/stream";
 import { createDemoTools } from "../src/tools";
 import { jsonlTraceWriter } from "../src/trace-jsonl";
+import { scriptedStream } from "./support/scripted-stream";
 
 test("jsonlTraceWriter writes agent events", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-trace-"));
   const tracePath = join(root, "run.jsonl");
   const agent = new Agent({
     systemPrompt: "Test system",
-    model: { provider: "fake", name: "fake-v0" },
-    stream: fakeStream,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: createDemoTools(),
   });
 

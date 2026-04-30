@@ -1,12 +1,12 @@
-import type { ModelStreamEvent, StreamFn, Task, ToolResult, VerificationResult } from "./types";
-import { createId } from "./types";
-import { createDefaultCriteria } from "./task";
+import type { StreamFn, Task, ToolResult, VerificationResult } from "../../src/types";
+import { createId } from "../../src/types";
+import { createDefaultCriteria } from "../../src/task";
 
 function wantsEcho(input: string): boolean {
   return /\becho\b|tool|工具|use echo/i.test(input);
 }
 
-function createFakeTask(input: string, skillIds: string[]): Task {
+function createScriptedTask(input: string, skillIds: string[]): Task {
   const shouldUseEcho = wantsEcho(input);
   return {
     id: createId("task"),
@@ -24,7 +24,7 @@ function createFakeTask(input: string, skillIds: string[]): Task {
   };
 }
 
-function createFakeVerification(task: Task, toolResults: ToolResult[]): VerificationResult {
+function createScriptedVerification(task: Task, toolResults: ToolResult[]): VerificationResult {
   const requiredEcho = task.toolNames.includes("echo");
   const hasEcho = toolResults.some((result) => result.toolName === "echo" && result.ok);
   const passed = requiredEcho ? hasEcho : true;
@@ -48,7 +48,7 @@ function createFakeVerification(task: Task, toolResults: ToolResult[]): Verifica
   };
 }
 
-export const fakeStream: StreamFn = async function* fakeStream(_model, context, options) {
+export const scriptedStream: StreamFn = async function* scriptedStream(_model, context, options) {
   if (options.signal?.aborted) {
     throw new Error("Stream aborted.");
   }
@@ -58,7 +58,7 @@ export const fakeStream: StreamFn = async function* fakeStream(_model, context, 
     yield { type: "text_delta", text: "Planning task..." };
     yield {
       type: "structured_output",
-      value: createFakeTask(context.session.userInput, skillIds),
+      value: createScriptedTask(context.session.userInput, skillIds),
     };
     yield { type: "done" };
     return;
@@ -84,7 +84,7 @@ export const fakeStream: StreamFn = async function* fakeStream(_model, context, 
   yield { type: "text_delta", text: "Verifying task outcome..." };
   yield {
     type: "structured_output",
-    value: createFakeVerification(context.task, context.toolResults),
+    value: createScriptedVerification(context.task, context.toolResults),
   };
   yield { type: "done" };
 };

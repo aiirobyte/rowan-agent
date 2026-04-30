@@ -29,9 +29,9 @@ The main project roadmap now lives in:
 ## Next Steps
 
 1. Run v0.1 with a real OpenAI-compatible API key.
-2. Verify `--openai-compatible --trace` writes a real model trace.
+2. Verify default real model mode with `bun run rowan --trace`.
 3. Decide whether v0.2 starts with workspace ACI or native provider adapters.
-4. Keep v0 fake mode as the regression baseline.
+4. Use mock fetch tests as the regression baseline.
 
 ## Notes
 

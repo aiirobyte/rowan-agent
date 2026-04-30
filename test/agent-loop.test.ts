@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { runAgentLoop } from "../src/agent-loop";
-import { fakeStream } from "../src/stream";
 import { createSession } from "../src/session";
 import { echoTool } from "../src/tools";
 import { createDefaultCriteria } from "../src/task";
 import type { StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
+import { scriptedStream } from "./support/scripted-stream";
 
 test("runAgentLoop completes task with echo tool and verification", async () => {
   const session = createSession({
@@ -17,8 +17,8 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
 
   const outcome = await runAgentLoop({
     session,
-    model: { provider: "fake", name: "fake-v0" },
-    stream: fakeStream,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: [echoTool],
     emit: (event) => {
       events.push(event.type);
@@ -43,8 +43,8 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
 
   const outcome = await runAgentLoop({
     session,
-    model: { provider: "fake", name: "fake-v0" },
-    stream: fakeStream,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: [],
     maxAttempts: 1,
   });
@@ -61,8 +61,8 @@ test("beforeToolCall hook can block execution", async () => {
 
   const outcome = await runAgentLoop({
     session,
-    model: { provider: "fake", name: "fake-v0" },
-    stream: fakeStream,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: [echoTool],
     maxAttempts: 1,
     beforeToolCall: async () => ({ allow: false, reason: "blocked in test" }),
@@ -138,7 +138,7 @@ test("invalid tool args do not execute tool", async () => {
 
   const outcome = await runAgentLoop({
     session,
-    model: { provider: "fake", name: "fake-v0" },
+    model: { provider: "test", name: "scripted" },
     stream: invalidArgsStream,
     tools: [strictTool],
     maxAttempts: 1,

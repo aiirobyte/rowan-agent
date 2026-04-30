@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { verifyTask } from "../src/verifier";
-import { fakeStream } from "../src/stream";
 import { createSession } from "../src/session";
 import { parseTask, createDefaultCriteria } from "../src/task";
 import { createId } from "../src/types";
+import { scriptedStream } from "./support/scripted-stream";
 
 test("verifyTask uses stream structured output", async () => {
   const session = createSession({ systemPrompt: "Test", userInput: "hello" });
@@ -19,8 +19,8 @@ test("verifyTask uses stream structured output", async () => {
   });
 
   const result = await verifyTask({
-    model: { provider: "fake", name: "fake-v0" },
-    stream: fakeStream,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     session,
     task,
     toolResults: [],

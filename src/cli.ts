@@ -4,15 +4,12 @@ import {
   Agent,
   createDemoTools,
   createOpenAICompatibleStream,
-  fakeStream,
   jsonlTraceWriter,
   loadSkills,
   resolveOpenAICompatibleConfig,
 } from "./index";
 
 type CliArgs = {
-  fake: boolean;
-  openaiCompatible: boolean;
   trace?: string;
   skills: string[];
   baseUrl?: string;
@@ -25,26 +22,23 @@ function printHelp(): void {
   console.log(`Rowan
 
 Usage:
-  bun run rowan --fake [--trace path] [--skill path] "prompt"
-  bun run rowan --openai-compatible [--base-url url] [--api-key key] [--model name] [--trace path] "prompt"
+  bun run rowan [--base-url url] [--api-key key] [--model name] [--trace path] [--skill path] "prompt"
 
 Examples:
-  bun run rowan --fake "hello"
-  bun run rowan --fake "use echo tool"
-  bun run rowan --fake --trace .rowan/runs/latest.jsonl "use echo tool"
-  bun run rowan --openai-compatible "hello"
-  bun run rowan --openai-compatible --model gpt-4.1-mini "hello"
+  bun run rowan "hello"
+  bun run rowan --model gpt-4.1-mini "hello"
+  bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
 
 Environment:
   ROWAN_OPENAI_BASE_URL  Defaults to https://api.openai.com/v1
-  ROWAN_OPENAI_API_KEY   Required for --openai-compatible
-  ROWAN_MODEL            Required for --openai-compatible
+  ROWAN_OPENAI_API_KEY   Required unless --api-key is passed
+  ROWAN_MODEL            Required unless --model is passed
 `);
 }
 
 function parseArgs(argv: string[]): CliArgs {
   const args = [...argv];
-  const parsed: CliArgs = { fake: false, openaiCompatible: false, skills: [], prompt: "" };
+  const parsed: CliArgs = { skills: [], prompt: "" };
   const promptParts: string[] = [];
 
   while (args.length > 0) {
@@ -56,16 +50,6 @@ function parseArgs(argv: string[]): CliArgs {
     if (next === "--help" || next === "-h") {
       printHelp();
       process.exit(0);
-    }
-
-    if (next === "--fake") {
-      parsed.fake = true;
-      continue;
-    }
-
-    if (next === "--openai-compatible") {
-      parsed.openaiCompatible = true;
-      continue;
     }
 
     if (next === "--trace") {
@@ -113,16 +97,14 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
+    if (next.startsWith("--")) {
+      throw new Error(`Unknown option: ${next}`);
+    }
+
     promptParts.push(next);
   }
 
   parsed.prompt = promptParts.join(" ").trim();
-  if (parsed.fake && parsed.openaiCompatible) {
-    throw new Error("Choose either --fake or --openai-compatible, not both.");
-  }
-  if (!parsed.fake && !parsed.openaiCompatible) {
-    throw new Error("Choose a runtime: --fake or --openai-compatible.");
-  }
   if (!parsed.prompt) {
     throw new Error("A prompt is required.");
   }
@@ -134,20 +116,16 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const skills = await loadSkills(args.skills);
   const tools = createDemoTools();
-  const config = args.openaiCompatible
-    ? resolveOpenAICompatibleConfig({
-        baseUrl: args.baseUrl,
-        apiKey: args.apiKey,
-        model: args.model,
-        tools,
-      })
-    : undefined;
+  const config = resolveOpenAICompatibleConfig({
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.model,
+    tools,
+  });
   const agent = new Agent({
     systemPrompt: "You are Rowan, a minimal agent kernel.",
-    model: config
-      ? { provider: "openai-compatible", name: config.model }
-      : { provider: "fake", name: "fake-v0" },
-    stream: config ? createOpenAICompatibleStream(config) : fakeStream,
+    model: { provider: "openai-compatible", name: config.model },
+    stream: createOpenAICompatibleStream(config),
     tools,
     skills,
   });

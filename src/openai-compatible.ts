@@ -1,3 +1,4 @@
+import { createDefaultCriteria } from "./task";
 import { buildOpenAICompatibleMessages, type ChatMessage } from "./prompt-builder";
 import { extractJsonObject } from "./json-extract";
 import type {
@@ -74,6 +75,8 @@ type ChatCompletionResponse = {
 type ExecuteModelOutput = {
   message?: string;
   toolCalls?: unknown[];
+  tool_calls?: unknown[];
+  toolCall?: unknown;
 };
 
 function defaultEnv(): Record<string, string | undefined> {
@@ -284,11 +287,141 @@ export async function callOpenAICompatibleChatCompletion(
   }
 }
 
+function formatUnknown(value: unknown): string {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function validationError(phase: LlmContext["phase"], error: unknown): OpenAICompatibleError {
+  const detail = formatUnknown(error);
   return new OpenAICompatibleError({
     code: "invalid_model_schema",
-    message: `Model output for ${phase} did not match the expected schema.`,
-    details: { error: error instanceof Error ? error.message : String(error) },
+    message: `Model output for ${phase} did not match the expected schema: ${detail}`,
+    details: { error: detail },
+  });
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function shortTitle(input: string): string {
+  const trimmed = input.trim().replace(/\s+/g, " ");
+  if (!trimmed) {
+    return "Respond to user";
+  }
+  return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed;
+}
+
+function normalizeStringArray(value: unknown, fallback: string[]): string[] {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return [value.trim()];
+  }
+
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  return value.flatMap((item) => {
+    if (typeof item === "string" && item.trim().length > 0) {
+      return [item.trim()];
+    }
+    if (isRecord(item)) {
+      const name = asString(item.name) ?? asString(item.id);
+      return name ? [name] : [];
+    }
+    return [];
+  });
+}
+
+function normalizeAcceptanceCriteria(value: unknown, instruction: string) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return createDefaultCriteria(`The outcome must address: ${shortTitle(instruction)}`);
+  }
+
+  return value.map((criterion, index) => {
+    if (typeof criterion === "string") {
+      return {
+        id: createId("crit"),
+        type: "model_judge",
+        description: criterion,
+        required: true,
+      };
+    }
+
+    if (isRecord(criterion)) {
+      return {
+        id: createId("crit"),
+        type: "model_judge",
+        description: `Criterion ${index + 1}`,
+        required: true,
+        ...criterion,
+      };
+    }
+
+    return criterion;
+  });
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = asString(value)?.toLowerCase();
+  if (normalized === "true" || normalized === "passed" || normalized === "pass" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "failed" || normalized === "fail" || normalized === "no") {
+    return false;
+  }
+
+  return fallback;
+}
+
+function normalizeEvidence(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((evidence, index) => {
+    if (typeof evidence === "string") {
+      return {
+        id: createId("ev"),
+        kind: "model_observation",
+        summary: evidence,
+      };
+    }
+
+    if (isRecord(evidence)) {
+      return {
+        id: asString(evidence.id) ?? createId("ev"),
+        kind: asString(evidence.kind) ?? asString(evidence.type) ?? "model_observation",
+        summary:
+          asString(evidence.summary) ??
+          asString(evidence.message) ??
+          asString(evidence.content) ??
+          `Evidence ${index + 1}`,
+        ...(evidence.data !== undefined ? { data: evidence.data } : { data: evidence }),
+      };
+    }
+
+    return {
+      id: createId("ev"),
+      kind: "model_observation",
+      summary: `Evidence ${index + 1}`,
+      data: evidence,
+    };
   });
 }
 
@@ -298,12 +431,22 @@ function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phas
     throw validationError("plan", "Expected an object containing a task.");
   }
 
+  const instruction =
+    asString(raw.instruction) ??
+    asString(raw.description) ??
+    asString(raw.message) ??
+    context.session.userInput;
+  const defaultSkillIds = context.session.skills.map((skill) => skill.id);
   const normalized = {
-    id: createId("task"),
-    skillIds: context.session.skills.map((skill) => skill.id),
-    status: "pending",
-    attempts: 0,
     ...raw,
+    id: asString(raw.id) ?? createId("task"),
+    title: asString(raw.title) ?? asString(raw.name) ?? shortTitle(instruction),
+    instruction,
+    acceptanceCriteria: normalizeAcceptanceCriteria(raw.acceptanceCriteria, instruction),
+    toolNames: normalizeStringArray(raw.toolNames ?? raw.tools, []),
+    skillIds: normalizeStringArray(raw.skillIds ?? raw.skills, defaultSkillIds),
+    status: asString(raw.status) ?? "pending",
+    attempts: typeof raw.attempts === "number" ? raw.attempts : 0,
   };
 
   try {
@@ -319,7 +462,13 @@ function normalizeExecuteOutput(value: unknown): { message?: string; toolCalls: 
   }
 
   const output = value as ExecuteModelOutput;
-  const rawToolCalls = Array.isArray(output.toolCalls) ? output.toolCalls : [];
+  const rawToolCalls = Array.isArray(output.toolCalls)
+    ? output.toolCalls
+    : Array.isArray(output.tool_calls)
+      ? output.tool_calls
+      : isRecord(output.toolCall)
+        ? [output.toolCall]
+        : [];
   const toolCalls = rawToolCalls.map((toolCall) => {
     if (!isRecord(toolCall)) {
       throw validationError("execute", "Each tool call must be an object.");
@@ -344,17 +493,31 @@ function normalizeExecuteOutput(value: unknown): { message?: string; toolCalls: 
   };
 }
 
-function normalizeVerificationOutput(value: unknown): VerificationResult {
+function normalizeVerificationOutput(
+  value: unknown,
+  context: Extract<LlmContext, { phase: "verify" }>,
+): VerificationResult {
   const raw = isRecord(value) && isRecord(value.verificationResult) ? value.verificationResult : value;
   if (!isRecord(raw)) {
     throw validationError("verify", "Expected a verification result object.");
   }
 
+  const passed = normalizeBoolean(raw.passed ?? raw.status, false);
+  const defaultFailedCriteria = passed
+    ? []
+    : context.criteria.filter((criterion) => criterion.required).map((criterion) => criterion.id);
+
   try {
     return Validators.verificationResult.Parse({
-      evidence: [],
-      failedCriteria: [],
       ...raw,
+      passed,
+      message:
+        asString(raw.message) ??
+        asString(raw.reason) ??
+        asString(raw.summary) ??
+        (passed ? "Task passed." : "Task failed."),
+      evidence: normalizeEvidence(raw.evidence),
+      failedCriteria: normalizeStringArray(raw.failedCriteria ?? raw.failed_criteria, defaultFailedCriteria),
     });
   } catch (error) {
     throw validationError("verify", error);
@@ -399,7 +562,7 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     yield {
       type: "structured_output",
-      value: normalizeVerificationOutput(value),
+      value: normalizeVerificationOutput(value, context),
     };
     yield { type: "done" };
   };

@@ -53,14 +53,14 @@ export ROWAN_MODEL="..."
 ```bash
 bun test
 bun run build
-bun run rowan --openai-compatible "say hello"
-bun run rowan --openai-compatible --trace .rowan/runs/real.jsonl "use echo tool"
+bun run rowan "say hello"
+bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
 ```
 
 CLI 参数优先级高于环境变量，适合临时覆盖：
 
 ```bash
-bun run rowan --openai-compatible \
+bun run rowan \
   --base-url https://api.openai.com/v1 \
   --api-key sk-... \
   --model gpt-4.1-mini \

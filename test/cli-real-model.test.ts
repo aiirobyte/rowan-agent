@@ -23,30 +23,30 @@ async function runCli(args: string[], env: Record<string, string | undefined> = 
   return { stdout, stderr, exitCode };
 }
 
-test("CLI keeps fake runtime working", async () => {
-  const result = await runCli(["--fake", "hello"]);
-
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain("\"passed\": true");
-});
-
 test("CLI requires OpenAI-compatible API key", async () => {
-  const result = await runCli(["--openai-compatible", "--model", "test-model", "hello"]);
+  const result = await runCli(["--model", "test-model", "hello"]);
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("Missing API key");
 });
 
 test("CLI requires OpenAI-compatible model", async () => {
-  const result = await runCli(["--openai-compatible", "--api-key", "test-key", "hello"]);
+  const result = await runCli(["--api-key", "test-key", "hello"]);
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("Missing model");
 });
 
-test("CLI rejects ambiguous runtime flags", async () => {
-  const result = await runCli(["--fake", "--openai-compatible", "hello"]);
+test("CLI rejects removed fake runtime flag", async () => {
+  const result = await runCli(["--fake", "hello"]);
 
   expect(result.exitCode).toBe(1);
-  expect(result.stderr).toContain("Choose either --fake or --openai-compatible");
+  expect(result.stderr).toContain("Unknown option: --fake");
+});
+
+test("CLI rejects removed OpenAI-compatible flag", async () => {
+  const result = await runCli(["--openai-compatible", "--model", "test-model", "hello"]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("Unknown option: --openai-compatible");
 });

@@ -2,7 +2,7 @@ import Type from "typebox";
 import Schema from "typebox/schema";
 
 export type ModelRef = {
-  provider: "fake" | string;
+  provider: string;
   name: string;
 };
 

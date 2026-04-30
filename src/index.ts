@@ -3,7 +3,6 @@ export * from "./agent-loop";
 export * from "./openai-compatible";
 export * from "./session";
 export * from "./skills";
-export * from "./stream";
 export * from "./task";
 export * from "./tools";
 export * from "./trace-jsonl";
