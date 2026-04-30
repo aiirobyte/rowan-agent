@@ -6,6 +6,19 @@ export type ModelRef = {
   name: string;
 };
 
+export type LlmPhase = "plan" | "execute" | "verify";
+
+export type ModelCallUsage = {
+  inputMessages: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
+export type ModelTraceMessage = Pick<AgentMessage, "role" | "content"> & {
+  metadata?: Record<string, unknown>;
+};
+
 export const AgentMessageSchema = Type.Object({
   id: Type.String(),
   role: Type.Union([
@@ -149,10 +162,19 @@ export type Session = {
   updatedAt: string;
 };
 
+export type SessionSnapshot = Omit<Session, "log" | "messages" | "createdAt" | "updatedAt">;
+
 export type ModelStreamEvent =
+  | { type: "trace_messages"; messages: ModelTraceMessage[] }
   | { type: "text_delta"; text: string }
+  | {
+      type: "model_call";
+      phase: LlmPhase;
+      model: ModelRef;
+      usage: ModelCallUsage;
+    }
   | { type: "tool_call"; toolCall: ToolCall }
-  | { type: "structured_output"; value: unknown }
+  | { type: "structured_output"; content: unknown }
   | { type: "done" };
 
 export type LlmContext =
@@ -192,23 +214,45 @@ export type ErrorInfo = {
 };
 
 export type AgentEvent =
-  | { type: "session_start"; sessionId: string; timestamp: string }
-  | { type: "session_end"; sessionId: string; timestamp: string }
-  | { type: "message_start"; messageId: string; timestamp: string }
-  | { type: "message_delta"; messageId: string; text: string; timestamp: string }
-  | { type: "message_end"; message: AgentMessage; timestamp: string }
-  | { type: "task_created"; task: Task; timestamp: string }
-  | { type: "task_attempt_start"; taskId: string; attempt: number; timestamp: string }
-  | { type: "task_attempt_end"; taskId: string; attempt: number; timestamp: string }
-  | { type: "tool_call_start"; toolName: string; args: unknown; timestamp: string }
-  | { type: "tool_call_end"; toolName: string; result: ToolResult; timestamp: string }
-  | { type: "tool_call_blocked"; toolName: string; reason: string; timestamp: string }
-  | { type: "verification_start"; taskId: string; timestamp: string }
-  | { type: "verification_end"; taskId: string; result: VerificationResult; timestamp: string }
-  | { type: "outcome"; outcome: Outcome; timestamp: string }
-  | { type: "error"; error: ErrorInfo; timestamp: string };
+  | { type: "session_created"; session: SessionSnapshot; ts: string }
+  | { type: "session_start"; sessionId: string; ts: string }
+  | { type: "session_end"; sessionId: string; ts: string }
+  | { type: "message_start"; content: AgentMessage[]; ts: string }
+  | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; content: AgentMessage[]; ts: string }
+  | { type: "message_end"; content: AgentMessage[]; ts: string }
+  | {
+      type: "model_call";
+      phase: LlmPhase;
+      model: ModelRef;
+      usage: ModelCallUsage;
+      ts: string;
+    }
+  | { type: "task_created"; task: Task; ts: string }
+  | { type: "task_attempt_start"; taskId: string; attempt: number; ts: string }
+  | { type: "task_attempt_end"; taskId: string; attempt: number; ts: string }
+  | { type: "tool_call_requested"; toolCall: ToolCall; ts: string }
+  | { type: "tool_call_approval_requested"; taskId: string; toolName: string; args: unknown; ts: string }
+  | {
+      type: "tool_call_approval_result";
+      taskId: string;
+      toolName: string;
+      args: unknown;
+      decision: { allow: true } | { allow: false; reason: string };
+      ts: string;
+    }
+  | { type: "tool_call_start"; toolName: string; args: unknown; ts: string }
+  | { type: "tool_call_end"; toolName: string; result: ToolResult; ts: string }
+  | { type: "tool_call_blocked"; toolName: string; reason: string; ts: string }
+  | { type: "tool_result_review_requested"; taskId: string; toolName: string; result: ToolResult; ts: string }
+  | { type: "tool_result_review_result"; taskId: string; toolName: string; result: ToolResult; ts: string }
+  | { type: "verification_start"; taskId: string; ts: string }
+  | { type: "verification_end"; taskId: string; result: VerificationResult; ts: string }
+  | { type: "outcome"; outcome: Outcome; ts: string }
+  | { type: "error"; error: ErrorInfo; ts: string };
 
-export type AgentEventListener = (event: AgentEvent) => void | Promise<void>;
+export type AgentEventListener = ((event: AgentEvent) => void | Promise<void>) & {
+  flush?: () => void | Promise<void>;
+};
 export type Unsubscribe = () => void;
 
 export type AgentLoopInput = {
@@ -235,8 +279,32 @@ export function createId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
 }
 
+function padDatePart(value: number, length = 2): string {
+  return String(value).padStart(length, "0");
+}
+
+export function formatLocalTimestamp(date = new Date()): string {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const offsetSign = offsetMinutes >= 0 ? "+" : "-";
+  const offsetAbsolute = Math.abs(offsetMinutes);
+  const offsetHours = Math.floor(offsetAbsolute / 60);
+  const offsetRemainingMinutes = offsetAbsolute % 60;
+
+  return [
+    `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`,
+    "T",
+    `${padDatePart(date.getHours())}${padDatePart(date.getMinutes())}${padDatePart(date.getSeconds())}`,
+    "-",
+    padDatePart(Math.floor(date.getMilliseconds() / 10)),
+    offsetSign,
+    padDatePart(offsetHours),
+    ":",
+    padDatePart(offsetRemainingMinutes),
+  ].join("");
+}
+
 export function nowIso(): string {
-  return new Date().toISOString();
+  return formatLocalTimestamp();
 }
 
 export function createMessage(

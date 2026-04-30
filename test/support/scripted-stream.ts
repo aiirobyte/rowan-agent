@@ -58,7 +58,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(_model, c
     yield { type: "text_delta", text: "Planning task..." };
     yield {
       type: "structured_output",
-      value: createScriptedTask(context.session.userInput, skillIds),
+      content: createScriptedTask(context.session.userInput, skillIds),
     };
     yield { type: "done" };
     return;
@@ -84,7 +84,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(_model, c
   yield { type: "text_delta", text: "Verifying task outcome..." };
   yield {
     type: "structured_output",
-    value: createScriptedVerification(context.task, context.toolResults),
+    content: createScriptedVerification(context.task, context.toolResults),
   };
   yield { type: "done" };
 };

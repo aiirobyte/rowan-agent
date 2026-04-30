@@ -211,13 +211,32 @@ v0.1 使用 Chat Completions 风格请求：
 {
   model: config.model,
   messages: [
-    { role: "system", content: "..." },
-    { role: "user", content: "..." }
+    { role: "system", content: "runtime + JSON contract" },
+    { role: "user", content: "original user message" },
+    { role: "assistant", content: "prior assistant message" },
+    { role: "user", content: "phase control prompt" }
   ],
   temperature: config.temperature ?? 0,
   response_format: { type: "json_object" }
 }
 ```
+
+Conversation history 作为 Chat Completions 的独立 `messages` 传入，不再拼接到 phase prompt 末尾。Phase prompt 只表达当前阶段的结构化输出契约、task/tools/toolResults 等控制信息。
+
+Trace 中的 `model_call` 不记录完整输入输出内容，只记录一次模型调用的消息数量和 provider token usage：
+
+```text
+model_call
+  -> phase
+  -> model
+  -> ts
+  -> usage.inputMessages
+  -> usage.inputTokens        // provider usage, if available
+  -> usage.outputTokens       // provider usage, if available
+  -> usage.totalTokens        // provider usage, if available
+```
+
+完整 conversation 由 `message_*` 事件表达：`message_start.content` 是初始 `session.messages` 数组，`message_delta.delta` 是新增的 `AgentMessage`，`message_delta.content` 是追加后的完整数组，`message_end.content` 是最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount，只保留 session 静态元信息。模型事件只保留 token 规模信息，避免 prompt 和 raw response 在 trace 中重复膨胀。
 
 `response_format` 可能不是所有 OpenAI-compatible provider 都支持。v0.1 策略：
 
@@ -367,6 +386,7 @@ function createOpenAICompatibleStream(config: OpenAICompatibleConfig): StreamFn
 ```text
 phase plan
   -> call chat completions
+  -> yield model_call usage summary
   -> parse JSON
   -> yield text_delta if message exists
   -> yield structured_output Task
@@ -374,6 +394,7 @@ phase plan
 
 phase execute
   -> call chat completions
+  -> yield model_call usage summary
   -> parse JSON
   -> yield text_delta if message exists
   -> yield tool_call for each tool call
@@ -381,6 +402,7 @@ phase execute
 
 phase verify
   -> call chat completions
+  -> yield model_call usage summary
   -> parse JSON
   -> yield text_delta if message exists
   -> yield structured_output VerificationResult
@@ -397,6 +419,19 @@ bun run rowan --model gpt-4.1-mini "hello"
 bun run rowan --base-url http://localhost:11434/v1 --model qwen "hello"
 bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
 ```
+
+Trace 默认行为：
+
+```text
+bun run rowan "hello"
+  -> 自动写入 .rowan/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-run_<id>.jsonl
+  -> 示例 .rowan/runs/2026-03-12T164018-22+08:00-run_12345678.jsonl
+
+bun run rowan --trace .rowan/runs/real.jsonl "hello"
+  -> 写入指定 trace 文件
+```
+
+默认 run 文件名和 JSONL 内部事件 `ts` 使用同一个本地时间格式化函数，并显式保留时区偏移；`CC` 是两位厘秒，避免时间戳过长。`--trace` 是覆盖路径，不是开启开关。v0.1 起 CLI 每次真实模型运行都应该有 trace，便于复盘 model_call、structured output、tool call、verification、outcome。
 
 环境变量：
 
@@ -476,7 +511,8 @@ bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
 - [ ] mock real model tests 通过。
 - [ ] default real model mode 能读取 env。
 - [ ] missing API key 有清晰错误。
-- [ ] trace 写入真实模型 run。
+- [ ] 默认 trace 写入真实模型 run。
+- [ ] `--trace <path>` 可覆盖默认 trace 路径。
 - [ ] 文档包含 OpenAI-compatible quickstart。
 
 ## 15. 后置到 v0.2+

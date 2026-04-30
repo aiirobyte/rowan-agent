@@ -1,6 +1,11 @@
-import type { LlmContext, Tool } from "./types";
+import type { AgentMessage, LlmContext, ModelTraceMessage, Tool } from "./types";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+export type OpenAICompatiblePrompt = {
+  messages: ChatMessage[];
+  traceMessages: ModelTraceMessage[];
+};
 
 type SerializableTool = {
   name: string;
@@ -25,14 +30,6 @@ function serializeTools(tools: Tool[] = []): SerializableTool[] {
   }));
 }
 
-function serializeMessages(context: LlmContext): unknown[] {
-  return context.session.messages.map((message) => ({
-    role: message.role,
-    content: message.content,
-    metadata: message.metadata,
-  }));
-}
-
 function serializeSkills(context: LlmContext): unknown[] {
   return context.session.skills.map((skill) => ({
     id: skill.id,
@@ -53,27 +50,49 @@ function buildSystemMessage(context: LlmContext): ChatMessage {
   return { role: "system", content };
 }
 
+function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
+  if (message.role === "system") {
+    return undefined;
+  }
+
+  if (message.role === "tool") {
+    const toolName = typeof message.metadata?.toolName === "string" ? ` (${message.metadata.toolName})` : "";
+    return {
+      role: "user",
+      content: `Tool result${toolName}:\n${message.content}`,
+    };
+  }
+
+  return {
+    role: message.role,
+    content: message.content,
+  };
+}
+
+function buildConversationMessages(context: LlmContext): ChatMessage[] {
+  return context.session.messages.flatMap((message) => {
+    const chatMessage = toConversationMessage(message);
+    return chatMessage ? [chatMessage] : [];
+  });
+}
+
 function buildPlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, tools: Tool[]): string {
   return [
     "Phase: plan",
     "",
-    "JSON-only contract: output exactly an object shaped like `{ \"task\": Task }`.",
+    "JSON-only contract: output exactly an object shaped like `{ \"message\": string, \"task\": Task }`.",
+    "The top-level message is the user-visible planning message and is preserved as plain string message content before the task object is recorded.",
     "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
     "Rowan can fill missing id, status, attempts, skillIds, toolNames, and simple acceptance criteria.",
     "Prefer setting task.status to \"pending\" and task.attempts to 0.",
     "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
-    "",
-    "User input:",
-    context.session.userInput,
+    "Create the task for the user's request in the conversation messages already included in this request.",
     "",
     "Loaded skills summary:",
     toJson(serializeSkills(context)),
     "",
     "Available tools with name, description, and parameters:",
     toJson(serializeTools(tools)),
-    "",
-    "Conversation messages:",
-    toJson(serializeMessages(context)),
   ].join("\n");
 }
 
@@ -84,7 +103,8 @@ function buildExecutePrompt(context: Extract<LlmContext, { phase: "execute" }>, 
   return [
     "Phase: execute",
     "",
-    "JSON-only contract: output exactly an object shaped like `{ \"message\"?: string, \"toolCalls\": ToolCall[] }`.",
+    "JSON-only contract: output exactly an object shaped like `{ \"message\": string, \"toolCalls\": ToolCall[] }`.",
+    "The message is a concise user-visible execution status and must be preserved before tool calls are recorded.",
     "ToolCall fields: id, name, args.",
     "If no tool is needed, return `\"toolCalls\": []`.",
     "Call only tools listed in the task toolNames and allowed tools below.",
@@ -100,9 +120,6 @@ function buildExecutePrompt(context: Extract<LlmContext, { phase: "execute" }>, 
     "",
     "Existing toolResults:",
     toJson(context.toolResults),
-    "",
-    "Conversation messages:",
-    toJson(serializeMessages(context)),
   ].join("\n");
 }
 
@@ -110,9 +127,10 @@ function buildVerifyPrompt(context: Extract<LlmContext, { phase: "verify" }>): s
   return [
     "Phase: verify",
     "",
-    "JSON-only contract: output exactly a VerificationResult object.",
+    "JSON-only contract: output exactly a VerificationResult object with a user-visible `message` string.",
+    "The message must be preserved before the verification result is recorded.",
     "VerificationResult fields: passed, message, evidence, failedCriteria.",
-    "Evaluate the task against the acceptance criteria using the toolResults and conversation messages.",
+    "Evaluate the task against the acceptance criteria using the toolResults and the conversation messages already included in this request.",
     "",
     "Task:",
     toJson(context.task),
@@ -122,29 +140,53 @@ function buildVerifyPrompt(context: Extract<LlmContext, { phase: "verify" }>): s
     "",
     "Existing toolResults:",
     toJson(context.toolResults),
-    "",
-    "Conversation messages:",
-    toJson(serializeMessages(context)),
   ].join("\n");
+}
+
+function buildPhasePromptMessage(context: LlmContext, tools: Tool[]): ChatMessage {
+  if (context.phase === "plan") {
+    return { role: "user", content: buildPlanPrompt(context, tools) };
+  }
+
+  if (context.phase === "execute") {
+    return { role: "user", content: buildExecutePrompt(context, tools) };
+  }
+
+  return { role: "user", content: buildVerifyPrompt(context) };
+}
+
+function toPromptTraceMessage(context: LlmContext, message: ChatMessage): ModelTraceMessage {
+  return {
+    role: message.role,
+    content: message.content,
+    metadata: {
+      kind: "model_prompt",
+      phase: context.phase,
+      source: "prompt_builder",
+    },
+  };
+}
+
+export function buildOpenAICompatiblePrompt(input: {
+  context: LlmContext;
+  tools?: Tool[];
+}): OpenAICompatiblePrompt {
+  const tools = input.tools ?? [];
+  const phasePromptMessage = buildPhasePromptMessage(input.context, tools);
+
+  return {
+    messages: [
+      buildSystemMessage(input.context),
+      ...buildConversationMessages(input.context),
+      phasePromptMessage,
+    ],
+    traceMessages: [toPromptTraceMessage(input.context, phasePromptMessage)],
+  };
 }
 
 export function buildOpenAICompatibleMessages(input: {
   context: LlmContext;
   tools?: Tool[];
 }): ChatMessage[] {
-  const tools = input.tools ?? [];
-  const messages = [buildSystemMessage(input.context)];
-
-  if (input.context.phase === "plan") {
-    messages.push({ role: "user", content: buildPlanPrompt(input.context, tools) });
-    return messages;
-  }
-
-  if (input.context.phase === "execute") {
-    messages.push({ role: "user", content: buildExecutePrompt(input.context, tools) });
-    return messages;
-  }
-
-  messages.push({ role: "user", content: buildVerifyPrompt(input.context) });
-  return messages;
+  return buildOpenAICompatiblePrompt(input).messages;
 }

@@ -10,9 +10,12 @@ import type {
   AgentLoopInput,
   AgentMessage,
   ErrorInfo,
+  LlmPhase,
   ModelStreamEvent,
+  ModelTraceMessage,
   Outcome,
   Session,
+  SessionSnapshot,
   Task,
   Tool,
   ToolCall,
@@ -21,9 +24,13 @@ import type {
 } from "./types";
 import { createId, createMessage, nowIso, Validators } from "./types";
 
-async function emit(input: AgentLoopInput, event: AgentEvent): Promise<void> {
+type AgentLoopRuntime = AgentLoopInput & {
+  traceMessages: AgentMessage[];
+};
+
+async function emit(input: AgentLoopRuntime, event: AgentEvent): Promise<void> {
   input.session.log.push(event);
-  input.session.updatedAt = event.timestamp;
+  input.session.updatedAt = event.ts;
   await input.emit?.(event);
 }
 
@@ -37,57 +44,146 @@ function assertNotAborted(signal?: AbortSignal): void {
   }
 }
 
-async function collectTextAndStructured(input: {
-  loop: AgentLoopInput;
-  events: AsyncIterable<ModelStreamEvent>;
-  metadataPhase: string;
-}): Promise<{ text: string; structured?: unknown; toolCalls: ToolCall[] }> {
-  const message = createMessage("assistant", "", { phase: input.metadataPhase });
-  const toolCalls: ToolCall[] = [];
-  let structured: unknown;
+function snapshotSession(session: Session): SessionSnapshot {
+  return {
+    id: session.id,
+    systemPrompt: session.systemPrompt,
+    userInput: session.userInput,
+    skills: session.skills,
+  };
+}
 
-  await emit(input.loop, {
+function snapshotMessage(message: AgentMessage): AgentMessage {
+  return {
+    ...message,
+    ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
+  };
+}
+
+function snapshotMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.map(snapshotMessage);
+}
+
+async function emitMessageStart(input: AgentLoopRuntime): Promise<void> {
+  await emit(input, {
     type: "message_start",
-    messageId: message.id,
-    timestamp: nowIso(),
+    content: snapshotMessages(input.traceMessages),
+    ts: nowIso(),
   });
+}
+
+async function appendTraceMessage(input: AgentLoopRuntime, message: AgentMessage): Promise<void> {
+  input.traceMessages.push(message);
+  await emit(input, {
+    type: "message_delta",
+    delta: snapshotMessage(message),
+    content: snapshotMessages(input.traceMessages),
+    ts: nowIso(),
+  });
+}
+
+async function appendTraceMessages(input: AgentLoopRuntime, messages: AgentMessage[]): Promise<void> {
+  if (messages.length === 0) {
+    return;
+  }
+
+  input.traceMessages.push(...messages);
+  await emit(input, {
+    type: "message_delta",
+    delta: messages.length === 1 ? snapshotMessage(messages[0]) : snapshotMessages(messages),
+    content: snapshotMessages(input.traceMessages),
+    ts: nowIso(),
+  });
+}
+
+async function appendSessionMessage(input: AgentLoopRuntime, message: AgentMessage): Promise<void> {
+  input.session.messages.push(message);
+  await appendTraceMessage(input, message);
+}
+
+async function emitMessageEnd(input: AgentLoopRuntime): Promise<void> {
+  await emit(input, {
+    type: "message_end",
+    content: snapshotMessages(input.traceMessages),
+    ts: nowIso(),
+  });
+}
+
+async function collectTextAndStructured(input: {
+  loop: AgentLoopRuntime;
+  events: AsyncIterable<ModelStreamEvent>;
+  metadataPhase: LlmPhase;
+}): Promise<{ text: string; structured?: unknown; toolCalls: ToolCall[] }> {
+  const toolCalls: ToolCall[] = [];
+  let text = "";
+  let flushedText = "";
+  let structured: unknown;
+  const createTraceMessage = (message: ModelTraceMessage): AgentMessage =>
+    createMessage(message.role, message.content, {
+      ...message.metadata,
+      phase: input.metadataPhase,
+    });
+  const flushText = async () => {
+    if (text.length === 0) {
+      return;
+    }
+
+    flushedText += text;
+    await appendSessionMessage(
+      input.loop,
+      createMessage("assistant", text, { kind: "model_message", phase: input.metadataPhase }),
+    );
+    text = "";
+  };
 
   for await (const event of input.events) {
     assertNotAborted(input.loop.signal);
 
-    if (event.type === "text_delta") {
-      message.content += event.text;
+    if (event.type === "trace_messages") {
+      await appendTraceMessages(input.loop, event.messages.map(createTraceMessage));
+    }
+
+    if (event.type === "model_call") {
       await emit(input.loop, {
-        type: "message_delta",
-        messageId: message.id,
-        text: event.text,
-        timestamp: nowIso(),
+        type: "model_call",
+        phase: event.phase,
+        model: event.model,
+        usage: event.usage,
+        ts: nowIso(),
       });
     }
 
+    if (event.type === "text_delta") {
+      text += event.text;
+    }
+
     if (event.type === "structured_output") {
-      structured = event.value;
+      await flushText();
+      structured = event.content;
     }
 
     if (event.type === "tool_call") {
-      toolCalls.push(Validators.toolCall.Parse(event.toolCall));
+      await flushText();
+      const toolCall = Validators.toolCall.Parse(event.toolCall);
+      toolCalls.push(toolCall);
+      await emit(input.loop, {
+        type: "tool_call_requested",
+        toolCall,
+        ts: nowIso(),
+      });
+    }
+
+    if (event.type === "done") {
+      await flushText();
     }
   }
 
-  if (message.content.length > 0) {
-    input.loop.session.messages.push(message);
-  }
+  await flushText();
 
-  await emit(input.loop, {
-    type: "message_end",
-    message,
-    timestamp: nowIso(),
-  });
-
-  return { text: message.content, structured, toolCalls };
+  return { text: flushedText, structured, toolCalls };
 }
 
-async function planTask(input: AgentLoopInput): Promise<Task> {
+async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: string }> {
   const collected = await collectTextAndStructured({
     loop: input,
     events: input.stream(input.model, { phase: "plan", session: input.session }, { signal: input.signal }),
@@ -98,7 +194,7 @@ async function planTask(input: AgentLoopInput): Promise<Task> {
     throw new Error("Planner did not produce a structured task.");
   }
 
-  return parseTask(collected.structured);
+  return { task: parseTask(collected.structured), text: collected.text };
 }
 
 function findTool(tools: Tool[], name: string): Tool | undefined {
@@ -106,7 +202,7 @@ function findTool(tools: Tool[], name: string): Tool | undefined {
 }
 
 async function executeToolCall(input: {
-  loop: AgentLoopInput;
+  loop: AgentLoopRuntime;
   task: Task;
   toolCall: ToolCall;
 }): Promise<ToolResult> {
@@ -123,7 +219,7 @@ async function executeToolCall(input: {
       type: "tool_call_end",
       toolName: input.toolCall.name,
       result,
-      timestamp: nowIso(),
+      ts: nowIso(),
     });
     return result;
   }
@@ -143,12 +239,31 @@ async function executeToolCall(input: {
       type: "tool_call_end",
       toolName: input.toolCall.name,
       result,
-      timestamp: nowIso(),
+      ts: nowIso(),
     });
     return result;
   }
 
-  const decision = await input.loop.beforeToolCall?.({ task: input.task, tool, args });
+  let decision: Awaited<ReturnType<NonNullable<AgentLoopInput["beforeToolCall"]>>> | undefined;
+  if (input.loop.beforeToolCall) {
+    await emit(input.loop, {
+      type: "tool_call_approval_requested",
+      taskId: input.task.id,
+      toolName: tool.name,
+      args,
+      ts: nowIso(),
+    });
+    decision = await input.loop.beforeToolCall({ task: input.task, tool, args });
+    await emit(input.loop, {
+      type: "tool_call_approval_result",
+      taskId: input.task.id,
+      toolName: tool.name,
+      args,
+      decision: decision ?? { allow: true },
+      ts: nowIso(),
+    });
+  }
+
   if (decision && !decision.allow) {
     const result: ToolResult = {
       toolCallId: input.toolCall.id,
@@ -161,7 +276,7 @@ async function executeToolCall(input: {
       type: "tool_call_blocked",
       toolName: tool.name,
       reason: decision.reason,
-      timestamp: nowIso(),
+      ts: nowIso(),
     });
     return result;
   }
@@ -170,7 +285,7 @@ async function executeToolCall(input: {
     type: "tool_call_start",
     toolName: tool.name,
     args,
-    timestamp: nowIso(),
+    ts: nowIso(),
   });
 
   try {
@@ -184,15 +299,30 @@ async function executeToolCall(input: {
       toolCallId: input.toolCall.id,
       toolName: tool.name,
     });
-    const result = input.loop.afterToolCall
-      ? await input.loop.afterToolCall({ task: input.task, tool, result: normalized })
-      : normalized;
+    let result = normalized;
+    if (input.loop.afterToolCall) {
+      await emit(input.loop, {
+        type: "tool_result_review_requested",
+        taskId: input.task.id,
+        toolName: tool.name,
+        result: normalized,
+        ts: nowIso(),
+      });
+      result = await input.loop.afterToolCall({ task: input.task, tool, result: normalized });
+      await emit(input.loop, {
+        type: "tool_result_review_result",
+        taskId: input.task.id,
+        toolName: tool.name,
+        result,
+        ts: nowIso(),
+      });
+    }
 
     await emit(input.loop, {
       type: "tool_call_end",
       toolName: tool.name,
       result,
-      timestamp: nowIso(),
+      ts: nowIso(),
     });
     return result;
   } catch (error) {
@@ -207,13 +337,13 @@ async function executeToolCall(input: {
       type: "tool_call_end",
       toolName: tool.name,
       result,
-      timestamp: nowIso(),
+      ts: nowIso(),
     });
     return result;
   }
 }
 
-async function executeTask(input: AgentLoopInput, task: Task, toolResults: ToolResult[]): Promise<void> {
+async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: ToolResult[]): Promise<void> {
   const collected = await collectTextAndStructured({
     loop: input,
     events: input.stream(
@@ -227,7 +357,8 @@ async function executeTask(input: AgentLoopInput, task: Task, toolResults: ToolR
   for (const toolCall of collected.toolCalls) {
     const result = await executeToolCall({ loop: input, task, toolCall });
     toolResults.push(result);
-    input.session.messages.push(
+    await appendSessionMessage(
+      input,
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
         toolName: result.toolName,
@@ -237,14 +368,14 @@ async function executeTask(input: AgentLoopInput, task: Task, toolResults: ToolR
 }
 
 async function verifyTask(
-  input: AgentLoopInput,
+  input: AgentLoopRuntime,
   task: Task,
   toolResults: ToolResult[],
 ): Promise<VerificationResult> {
   await emit(input, {
     type: "verification_start",
     taskId: task.id,
-    timestamp: nowIso(),
+    ts: nowIso(),
   });
 
   const collected = await collectTextAndStructured({
@@ -276,69 +407,92 @@ async function verifyTask(
     type: "verification_end",
     taskId: task.id,
     result,
-    timestamp: nowIso(),
+    ts: nowIso(),
   });
 
   return result;
 }
 
 export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
+  const runtime: AgentLoopRuntime = {
+    ...input,
+    traceMessages: snapshotMessages(input.session.messages),
+  };
   const maxAttempts = input.maxAttempts ?? 2;
+  let messageLogEnded = false;
+  const endMessageLog = async () => {
+    if (!messageLogEnded) {
+      await emitMessageEnd(runtime);
+      messageLogEnded = true;
+    }
+  };
 
   try {
-    assertNotAborted(input.signal);
-    await emit(input, {
-      type: "session_start",
-      sessionId: input.session.id,
-      timestamp: nowIso(),
+    assertNotAborted(runtime.signal);
+    await emit(runtime, {
+      type: "session_created",
+      session: snapshotSession(runtime.session),
+      ts: nowIso(),
     });
+    await emit(runtime, {
+      type: "session_start",
+      sessionId: runtime.session.id,
+      ts: nowIso(),
+    });
+    await emitMessageStart(runtime);
 
-    const task = await planTask(input);
-    input.session.messages.push(
-      createMessage("assistant", `Planned task: ${task.title}`, {
-        taskId: task.id,
-      }),
-    );
+    const planned = await planTask(runtime);
+    const task = planned.task;
+    if (planned.text.length === 0) {
+      await appendSessionMessage(
+        runtime,
+        createMessage("assistant", `Planned task: ${task.title}`, {
+          kind: "model_message",
+          taskId: task.id,
+        }),
+      );
+    }
 
-    await emit(input, {
+    await emit(runtime, {
       type: "task_created",
       task,
-      timestamp: nowIso(),
+      ts: nowIso(),
     });
 
     const toolResults: ToolResult[] = [];
     let lastVerification: VerificationResult | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      assertNotAborted(input.signal);
+      assertNotAborted(runtime.signal);
       task.status = "running";
       task.attempts = attempt;
 
-      await emit(input, {
+      await emit(runtime, {
         type: "task_attempt_start",
         taskId: task.id,
         attempt,
-        timestamp: nowIso(),
+        ts: nowIso(),
       });
 
-      await executeTask(input, task, toolResults);
+      await executeTask(runtime, task, toolResults);
 
-      await emit(input, {
+      await emit(runtime, {
         type: "task_attempt_end",
         taskId: task.id,
         attempt,
-        timestamp: nowIso(),
+        ts: nowIso(),
       });
 
-      lastVerification = await verifyTask(input, task, toolResults);
+      lastVerification = await verifyTask(runtime, task, toolResults);
       if (lastVerification.passed) {
         task.status = "passed";
         const outcome = createOutcome(task, lastVerification);
-        await emit(input, { type: "outcome", outcome, timestamp: nowIso() });
-        await emit(input, {
+        await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
+        await endMessageLog();
+        await emit(runtime, {
           type: "session_end",
-          sessionId: input.session.id,
-          timestamp: nowIso(),
+          sessionId: runtime.session.id,
+          ts: nowIso(),
         });
         return outcome;
       }
@@ -346,11 +500,12 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
 
     task.status = "failed";
     const outcome = createFailedOutcome(task, lastVerification);
-    await emit(input, { type: "outcome", outcome, timestamp: nowIso() });
-    await emit(input, {
+    await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
+    await endMessageLog();
+    await emit(runtime, {
       type: "session_end",
-      sessionId: input.session.id,
-      timestamp: nowIso(),
+      sessionId: runtime.session.id,
+      ts: nowIso(),
     });
     return outcome;
   } catch (error) {
@@ -358,7 +513,8 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       "agent_loop_failed",
       error instanceof Error ? error.message : "Agent loop failed.",
     );
-    await emit(input, { type: "error", error: errorInfo, timestamp: nowIso() });
+    await endMessageLog();
+    await emit(runtime, { type: "error", error: errorInfo, ts: nowIso() });
     throw error;
   }
 }

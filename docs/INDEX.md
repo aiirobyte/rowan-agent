@@ -29,7 +29,7 @@ The main project roadmap now lives in:
 ## Next Steps
 
 1. Run v0.1 with a real OpenAI-compatible API key.
-2. Verify default real model mode with `bun run rowan --trace`.
+2. Verify default real model mode with `bun run rowan "hello"` and confirm `.rowan/runs/` receives a JSONL trace.
 3. Decide whether v0.2 starts with workspace ACI or native provider adapters.
 4. Use mock fetch tests as the regression baseline.
 

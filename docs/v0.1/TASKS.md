@@ -34,6 +34,7 @@
 | V01-302 | M3 | CLI 增加 `--base-url` / `--api-key` / `--model` | cli | P0 | V01-301 | done | flags override env |
 | V01-303 | M3 | 移除 CLI fake runtime | cli | P0 | V01-301 | done | `--fake` 被拒绝为未知参数 |
 | V01-304 | M3 | CLI missing config errors | cli | P0 | V01-302 | done | 缺 key/model 清晰 exit 1 |
+| V01-305 | M3 | CLI 默认自动写 trace | cli | P0 | V01-301 | done | `bun run rowan "hello"` 写入 `.rowan/runs/*.jsonl` |
 | V01-401 | M4 | Mock model integration tests | test | P0 | V01-205,V01-301 | done | no real API required |
 | V01-402 | M4 | Manual real model checklist | docs | P1 | V01-301 | done | README/PLAN 包含手动测试命令 |
 | V01-403 | M4 | 更新 root README quickstart | docs | P1 | V01-301 | done | 包含 `.env.example` 和 real model env 示例 |
@@ -45,7 +46,8 @@
 - [x] `bun run build`
 - [x] mock OpenAI-compatible tests pass
 - [ ] `bun run rowan "hello"` works with real env
-- [ ] `bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"` writes trace
+- [x] `bun run rowan "hello"` writes a default trace with mock real-model runtime
+- [ ] `bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"` writes trace with real env
 - [x] missing API key exits 1 with clear error
 
 ## 4. Explicitly Out of v0.1

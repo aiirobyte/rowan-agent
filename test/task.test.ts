@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createDefaultCriteria, parseTask } from "../src/task";
-import { createId } from "../src/types";
+import { createId, nowIso } from "../src/types";
 
 test("parseTask validates structured task schema", () => {
   const task = parseTask({
@@ -20,4 +20,11 @@ test("parseTask validates structured task schema", () => {
 
 test("parseTask rejects invalid task", () => {
   expect(() => parseTask({ title: "bad" })).toThrow();
+});
+
+test("nowIso uses the log timestamp format with local timezone offset", () => {
+  const timestamp = nowIso();
+
+  expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
+  expect(timestamp.endsWith("Z")).toBe(false);
 });

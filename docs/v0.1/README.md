@@ -57,6 +57,10 @@ bun run rowan "say hello"
 bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
 ```
 
+CLI 默认会把每次运行写入 `.rowan/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-run_<id>.jsonl`，例如 `.rowan/runs/2026-03-12T164018-22+08:00-run_12345678.jsonl`。
+JSONL 内部事件 `ts` 使用同一个本地时间格式。
+`--trace <path>` 只用于覆盖默认路径，例如固定写到 `.rowan/runs/real.jsonl`。
+
 CLI 参数优先级高于环境变量，适合临时覆盖：
 
 ```bash

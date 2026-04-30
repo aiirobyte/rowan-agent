@@ -1,8 +1,11 @@
 #!/usr/bin/env bun
 
+import { join } from "node:path";
 import {
   Agent,
+  createId,
   createDemoTools,
+  formatLocalTimestamp,
   createOpenAICompatibleStream,
   jsonlTraceWriter,
   loadSkills,
@@ -18,6 +21,10 @@ type CliArgs = {
   prompt: string;
 };
 
+function createDefaultTracePath(): string {
+  return join(".rowan", "runs", `${formatLocalTimestamp()}-${createId("run")}.jsonl`);
+}
+
 function printHelp(): void {
   console.log(`Rowan
 
@@ -28,6 +35,10 @@ Examples:
   bun run rowan "hello"
   bun run rowan --model gpt-4.1-mini "hello"
   bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
+
+Trace:
+  Runs are logged automatically to .rowan/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-run_<id>.jsonl.
+  Pass --trace to choose a specific trace file path.
 
 Environment:
   ROWAN_OPENAI_BASE_URL  Defaults to https://api.openai.com/v1
@@ -130,12 +141,17 @@ async function main(): Promise<void> {
     skills,
   });
 
-  if (args.trace) {
-    agent.subscribe(jsonlTraceWriter(args.trace));
-  }
+  const tracePath = args.trace ?? createDefaultTracePath();
+  const traceWriter = jsonlTraceWriter(tracePath);
+  agent.subscribe(traceWriter);
 
-  const outcome = await agent.prompt(args.prompt);
-  console.log(JSON.stringify(outcome, null, 2));
+  try {
+    const outcome = await agent.prompt(args.prompt);
+    console.log(JSON.stringify(outcome, null, 2));
+  } finally {
+    await agent.flushTrace();
+    console.error(`Trace written to ${tracePath}`);
+  }
 }
 
 main().catch((error) => {

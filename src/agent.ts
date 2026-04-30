@@ -38,6 +38,8 @@ export class Agent {
   readonly state: AgentState;
   private readonly options: AgentOptions;
   private readonly listeners = new Set<AgentEventListener>();
+  private readonly pendingListenerTasks = new Set<Promise<void>>();
+  private readonly listenerErrors: unknown[] = [];
   private currentRun?: Promise<Outcome>;
   private abortController?: AbortController;
 
@@ -57,6 +59,45 @@ export class Agent {
     };
   }
 
+  private emitToListeners(event: AgentEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        const result = listener(event);
+        if (result && typeof result === "object" && "then" in result) {
+          const task = Promise.resolve(result)
+            .catch((error) => {
+              this.listenerErrors.push(error);
+            })
+            .finally(() => {
+              this.pendingListenerTasks.delete(task);
+            });
+          this.pendingListenerTasks.add(task);
+        }
+      } catch (error) {
+        this.listenerErrors.push(error);
+      }
+    }
+  }
+
+  async flushTrace(): Promise<void> {
+    while (this.pendingListenerTasks.size > 0) {
+      await Promise.all([...this.pendingListenerTasks]);
+    }
+
+    for (const listener of this.listeners) {
+      try {
+        await listener.flush?.();
+      } catch (error) {
+        this.listenerErrors.push(error);
+      }
+    }
+
+    if (this.listenerErrors.length > 0) {
+      const [error] = this.listenerErrors;
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
   async prompt(input: string): Promise<Outcome> {
     if (this.state.isRunning) {
       throw new Error("Agent is already running.");
@@ -73,10 +114,8 @@ export class Agent {
     this.state.isRunning = true;
     this.abortController = new AbortController();
 
-    const emit = async (event: AgentEvent) => {
-      for (const listener of this.listeners) {
-        await listener(event);
-      }
+    const emit = (event: AgentEvent) => {
+      this.emitToListeners(event);
     };
 
     this.currentRun = runAgentLoop({
@@ -113,5 +152,6 @@ export class Agent {
       return;
     }
     await this.currentRun.catch(() => undefined);
+    await this.flushTrace().catch(() => undefined);
   }
 }

@@ -30,7 +30,7 @@ export async function verifyTask(input: {
     { signal: input.signal },
   )) {
     if (event.type === "structured_output") {
-      structured = event.value;
+      structured = event.content;
     }
   }
 

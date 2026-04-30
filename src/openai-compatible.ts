@@ -1,8 +1,9 @@
 import { createDefaultCriteria } from "./task";
-import { buildOpenAICompatibleMessages, type ChatMessage } from "./prompt-builder";
+import { buildOpenAICompatiblePrompt, type ChatMessage } from "./prompt-builder";
 import { extractJsonObject } from "./json-extract";
 import type {
   LlmContext,
+  ModelCallUsage,
   ModelStreamEvent,
   StreamFn,
   StreamOptions,
@@ -70,6 +71,24 @@ type ChatCompletionResponse = {
       refusal?: string | null;
     };
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+};
+
+export type OpenAICompatibleChatCompletionResult = {
+  content: string;
+  requestContent: string;
+  responseContent: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
 };
 
 type ExecuteModelOutput = {
@@ -204,6 +223,48 @@ function getResponseContent(data: ChatCompletionResponse): string {
   return content;
 }
 
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function summarizeRequestUsage(messages: ChatMessage[]): Pick<ModelCallUsage, "inputMessages"> {
+  return {
+    inputMessages: messages.length,
+  };
+}
+
+function normalizeProviderUsage(
+  usage: ChatCompletionResponse["usage"],
+): OpenAICompatibleChatCompletionResult["usage"] {
+  if (!usage) {
+    return undefined;
+  }
+
+  const inputTokens = asNumber(usage.prompt_tokens) ?? asNumber(usage.input_tokens);
+  const outputTokens = asNumber(usage.completion_tokens) ?? asNumber(usage.output_tokens);
+  const totalTokens = asNumber(usage.total_tokens);
+
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+  };
+}
+
+function summarizeResponseUsage(
+  result: OpenAICompatibleChatCompletionResult,
+): Omit<ModelCallUsage, "inputMessages"> {
+  return {
+    ...(result.usage?.inputTokens !== undefined ? { inputTokens: result.usage.inputTokens } : {}),
+    ...(result.usage?.outputTokens !== undefined ? { outputTokens: result.usage.outputTokens } : {}),
+    ...(result.usage?.totalTokens !== undefined ? { totalTokens: result.usage.totalTokens } : {}),
+  };
+}
+
 function normalizeHttpError(response: Response, body: unknown): OpenAICompatibleError {
   return new OpenAICompatibleError({
     code: "http_error",
@@ -218,17 +279,7 @@ function normalizeHttpError(response: Response, body: unknown): OpenAICompatible
   });
 }
 
-export async function callOpenAICompatibleChatCompletion(
-  config: OpenAICompatibleConfig,
-  messages: ChatMessage[],
-  options: StreamOptions = {},
-): Promise<string> {
-  const fetchImpl = config.fetch ?? fetch;
-  const { signal, cleanup } = createRequestSignal({
-    signal: options.signal,
-    timeoutMs: config.timeoutMs,
-  });
-
+function buildChatCompletionBody(config: OpenAICompatibleConfig, messages: ChatMessage[]): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
@@ -239,6 +290,22 @@ export async function callOpenAICompatibleChatCompletion(
     body.response_format = { type: "json_object" };
   }
 
+  return body;
+}
+
+export async function callOpenAICompatibleChatCompletion(
+  config: OpenAICompatibleConfig,
+  messages: ChatMessage[],
+  options: StreamOptions = {},
+  requestBody = buildChatCompletionBody(config, messages),
+): Promise<OpenAICompatibleChatCompletionResult> {
+  const fetchImpl = config.fetch ?? fetch;
+  const { signal, cleanup } = createRequestSignal({
+    signal: options.signal,
+    timeoutMs: config.timeoutMs,
+  });
+  const requestContent = JSON.stringify(requestBody, null, 2);
+
   try {
     const response = await fetchImpl(`${normalizeBaseUrl(config.baseUrl)}/chat/completions`, {
       method: "POST",
@@ -246,7 +313,7 @@ export async function callOpenAICompatibleChatCompletion(
         "content-type": "application/json",
         authorization: `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
       signal,
     });
 
@@ -254,9 +321,11 @@ export async function callOpenAICompatibleChatCompletion(
       throw normalizeHttpError(response, await readErrorBody(response));
     }
 
+    let responseContent: string;
     let data: ChatCompletionResponse;
     try {
-      data = (await response.json()) as ChatCompletionResponse;
+      responseContent = await response.text();
+      data = JSON.parse(responseContent) as ChatCompletionResponse;
     } catch (error) {
       throw new OpenAICompatibleError({
         code: "invalid_http_json",
@@ -265,7 +334,13 @@ export async function callOpenAICompatibleChatCompletion(
       });
     }
 
-    return getResponseContent(data);
+    const usage = normalizeProviderUsage(data.usage);
+    return {
+      content: getResponseContent(data),
+      requestContent,
+      responseContent,
+      ...(usage ? { usage } : {}),
+    };
   } catch (error) {
     if (error instanceof OpenAICompatibleError) {
       throw error;
@@ -524,25 +599,46 @@ function normalizeVerificationOutput(
   }
 }
 
-async function fetchModelJson(config: OpenAICompatibleConfig, context: LlmContext, options: StreamOptions) {
-  const messages = buildOpenAICompatibleMessages({ context, tools: config.tools });
-  const content = await callOpenAICompatibleChatCompletion(config, messages, options);
-  return extractJsonObject(content);
-}
-
 export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): StreamFn {
   const normalizedConfig = {
     ...config,
     baseUrl: normalizeBaseUrl(config.baseUrl),
   };
 
-  return async function* openAICompatibleStream(_model, context, options): AsyncIterable<ModelStreamEvent> {
-    const value = await fetchModelJson(normalizedConfig, context, options);
+  return async function* openAICompatibleStream(model, context, options): AsyncIterable<ModelStreamEvent> {
+    const prompt = buildOpenAICompatiblePrompt({ context, tools: normalizedConfig.tools });
+    const requestUsage = summarizeRequestUsage(prompt.messages);
+    const requestBody = buildChatCompletionBody(normalizedConfig, prompt.messages);
+
+    yield { type: "trace_messages", messages: prompt.traceMessages };
+
+    const result = await callOpenAICompatibleChatCompletion(
+      normalizedConfig,
+      prompt.messages,
+      options,
+      requestBody,
+    );
+    yield {
+      type: "model_call",
+      phase: context.phase,
+      model,
+      usage: {
+        ...requestUsage,
+        ...summarizeResponseUsage(result),
+      },
+    };
+
+    const value = extractJsonObject(result.content);
 
     if (context.phase === "plan") {
+      const task = normalizeTaskOutput(value, context);
+      yield {
+        type: "text_delta",
+        text: result.content,
+      };
       yield {
         type: "structured_output",
-        value: normalizeTaskOutput(value, context),
+        content: task,
       };
       yield { type: "done" };
       return;
@@ -550,9 +646,10 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     if (context.phase === "execute") {
       const output = normalizeExecuteOutput(value);
-      if (output.message) {
-        yield { type: "text_delta", text: output.message };
-      }
+      yield {
+        type: "text_delta",
+        text: result.content,
+      };
       for (const toolCall of output.toolCalls) {
         yield { type: "tool_call", toolCall };
       }
@@ -560,9 +657,14 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
       return;
     }
 
+    const verification = normalizeVerificationOutput(value, context);
+    yield {
+      type: "text_delta",
+      text: result.content,
+    };
     yield {
       type: "structured_output",
-      value: normalizeVerificationOutput(value, context),
+      content: verification,
     };
     yield { type: "done" };
   };

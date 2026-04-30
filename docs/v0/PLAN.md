@@ -488,6 +488,7 @@ session_end
 message_start
 message_delta
 message_end
+model_call
 task_created
 task_attempt_start
 task_attempt_end
@@ -499,6 +500,8 @@ verification_end
 outcome
 error
 ```
+
+`message_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 记录新增 `AgentMessage`，`message_delta.content` 记录追加后的完整数组，`message_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_call` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
 
 Trace 是 event subscriber：
 

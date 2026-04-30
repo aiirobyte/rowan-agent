@@ -12,10 +12,11 @@ import { echoTool } from "../src/tools";
 import type { LlmContext, ModelStreamEvent, Task } from "../src/types";
 import { createId } from "../src/types";
 
-function jsonResponse(content: string): Response {
+function jsonResponse(content: string, usage?: Record<string, number>): Response {
   return new Response(
     JSON.stringify({
       choices: [{ message: { content } }],
+      ...(usage ? { usage } : {}),
     }),
     {
       status: 200,
@@ -82,7 +83,7 @@ test("callOpenAICompatibleChatCompletion posts chat completions request", async 
     return jsonResponse("{\"ok\":true}");
   };
 
-  const content = await callOpenAICompatibleChatCompletion(
+  const result = await callOpenAICompatibleChatCompletion(
     {
       baseUrl: "https://api.example/v1/",
       apiKey: "test-key",
@@ -92,7 +93,32 @@ test("callOpenAICompatibleChatCompletion posts chat completions request", async 
     [{ role: "user", content: "hello" }],
   );
 
-  expect(content).toBe("{\"ok\":true}");
+  expect(result.content).toBe("{\"ok\":true}");
+});
+
+test("callOpenAICompatibleChatCompletion returns provider token usage", async () => {
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    jsonResponse("{\"ok\":true}", {
+      prompt_tokens: 12,
+      completion_tokens: 5,
+      total_tokens: 17,
+    });
+
+  const result = await callOpenAICompatibleChatCompletion(
+    {
+      baseUrl: "https://api.example/v1/",
+      apiKey: "test-key",
+      model: "test-model",
+      fetch: fetchMock,
+    },
+    [{ role: "user", content: "hello" }],
+  );
+
+  expect(result.usage).toEqual({
+    inputTokens: 12,
+    outputTokens: 5,
+    totalTokens: 17,
+  });
 });
 
 test("callOpenAICompatibleChatCompletion normalizes HTTP errors", async () => {
@@ -151,6 +177,7 @@ test("createOpenAICompatibleStream maps plan response to structured task", async
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
+        message: "Planning echo.",
         task: {
           title: "Use echo",
           instruction: "use echo tool",
@@ -159,6 +186,7 @@ test("createOpenAICompatibleStream maps plan response to structured task", async
           skillIds: [],
         },
       }),
+      { prompt_tokens: 30, completion_tokens: 20, total_tokens: 50 },
     );
   const stream = createOpenAICompatibleStream({
     baseUrl: "https://api.example/v1",
@@ -171,10 +199,27 @@ test("createOpenAICompatibleStream maps plan response to structured task", async
   const events = await collect(
     stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", session }, {}),
   );
+  const modelCall = events.find((event) => event.type === "model_call");
+  const text = events.find((event) => event.type === "text_delta");
   const structured = events.find((event) => event.type === "structured_output");
 
+  expect(modelCall?.type).toBe("model_call");
+  expect((modelCall as Extract<ModelStreamEvent, { type: "model_call" }>).usage).toMatchObject({
+    inputMessages: 3,
+    inputTokens: 30,
+    outputTokens: 20,
+    totalTokens: 50,
+  });
+  expect(text?.type).toBe("text_delta");
+  expect(JSON.parse((text as Extract<ModelStreamEvent, { type: "text_delta" }>).text)).toMatchObject({
+    message: "Planning echo.",
+    task: { title: "Use echo" },
+  });
+  expect(events.findIndex((event) => event.type === "text_delta")).toBeLessThan(
+    events.findIndex((event) => event.type === "structured_output"),
+  );
   expect(structured?.type).toBe("structured_output");
-  expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).value).toMatchObject({
+  expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toMatchObject({
     title: "Use echo",
     status: "pending",
     attempts: 0,
@@ -203,7 +248,7 @@ test("createOpenAICompatibleStream fills common omitted task fields", async () =
     stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", session }, {}),
   );
   const structured = events.find((event) => event.type === "structured_output");
-  const task = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).value as Task;
+  const task = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content as Task;
 
   expect(task).toMatchObject({
     title: "Say hello",
@@ -237,7 +282,15 @@ test("createOpenAICompatibleStream maps execute response to text and tool calls"
   const context: LlmContext = { phase: "execute", session, task, toolResults: [] };
   const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
 
-  expect(events.some((event) => event.type === "text_delta")).toBe(true);
+  const text = events.find((event) => event.type === "text_delta");
+  expect(text?.type).toBe("text_delta");
+  expect(JSON.parse((text as Extract<ModelStreamEvent, { type: "text_delta" }>).text)).toMatchObject({
+    message: "Calling echo.",
+    toolCalls: [expect.objectContaining({ name: "echo" })],
+  });
+  expect(events.findIndex((event) => event.type === "text_delta")).toBeLessThan(
+    events.findIndex((event) => event.type === "tool_call"),
+  );
   const toolCall = events.find((event) => event.type === "tool_call");
   expect(toolCall?.type).toBe("tool_call");
   expect((toolCall as Extract<ModelStreamEvent, { type: "tool_call" }>).toolCall).toMatchObject({
@@ -273,9 +326,18 @@ test("createOpenAICompatibleStream maps verify response to verification result",
     criteria: task.acceptanceCriteria,
   };
   const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
+  const text = events.find((event) => event.type === "text_delta");
   const structured = events.find((event) => event.type === "structured_output");
 
-  expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).value).toMatchObject({
+  expect(text?.type).toBe("text_delta");
+  expect(JSON.parse((text as Extract<ModelStreamEvent, { type: "text_delta" }>).text)).toMatchObject({
+    passed: true,
+    message: "Looks good.",
+  });
+  expect(events.findIndex((event) => event.type === "text_delta")).toBeLessThan(
+    events.findIndex((event) => event.type === "structured_output"),
+  );
+  expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toMatchObject({
     passed: true,
     message: "Looks good.",
   });
@@ -308,7 +370,7 @@ test("createOpenAICompatibleStream normalizes common verify response shapes", as
   };
   const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
   const structured = events.find((event) => event.type === "structured_output");
-  const result = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).value;
+  const result = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content;
 
   expect(result).toMatchObject({
     passed: true,

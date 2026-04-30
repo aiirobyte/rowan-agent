@@ -18,14 +18,33 @@ export function redactSecrets(value: unknown): unknown {
 
 export function jsonlTraceWriter(path: string): AgentEventListener {
   let ready: Promise<string | undefined> | undefined;
+  let pending: Promise<void> = Promise.resolve();
+  let failure: unknown;
 
-  return async (event: AgentEvent) => {
+  const write = async (event: unknown) => {
     ready ??= mkdir(dirname(path), { recursive: true }).then(async (made) => {
       await writeFile(path, "", "utf8");
       return made;
     });
     await ready;
-    const redacted = redactSecrets(event);
-    await appendFile(path, `${JSON.stringify(redacted)}\n`, "utf8");
+    await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
   };
+
+  const listener: AgentEventListener = ((event: AgentEvent) => {
+    const snapshot = redactSecrets(event);
+    pending = pending
+      .then(() => write(snapshot))
+      .catch((error) => {
+        failure ??= error;
+      });
+  }) as AgentEventListener;
+
+  listener.flush = async () => {
+    await pending;
+    if (failure) {
+      throw failure;
+    }
+  };
+
+  return listener;
 }

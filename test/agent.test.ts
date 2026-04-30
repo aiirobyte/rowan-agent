@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
 import { createDemoTools } from "../src/tools";
-import type { StreamFn } from "../src/types";
+import type { AgentEventListener, StreamFn } from "../src/types";
 import { scriptedStream } from "./support/scripted-stream";
 
 test("Agent.prompt returns an outcome and emits events", async () => {
@@ -23,6 +23,34 @@ test("Agent.prompt returns an outcome and emits events", async () => {
   expect(agent.state.session?.messages.length).toBeGreaterThan(0);
   expect(agent.state.session?.log.length).toBeGreaterThan(0);
   expect(events).toContain("outcome");
+});
+
+test("Agent.prompt does not wait for async trace listeners", async () => {
+  const agent = new Agent({
+    systemPrompt: "Test system",
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
+    tools: createDemoTools(),
+  });
+  let release: (() => void) | undefined;
+  let blocked = false;
+  const slowListener: AgentEventListener = (() => {
+    if (blocked) {
+      return;
+    }
+    blocked = true;
+    return new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  }) as AgentEventListener;
+  agent.subscribe(slowListener);
+
+  const outcome = await agent.prompt("hello");
+
+  expect(outcome.passed).toBe(true);
+  expect(blocked).toBe(true);
+  release?.();
+  await agent.flushTrace();
 });
 
 test("Agent rejects concurrent runs", async () => {
