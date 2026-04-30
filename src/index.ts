@@ -1,5 +1,6 @@
 export * from "./agent";
 export * from "./agent-loop";
+export * from "./openai-compatible";
 export * from "./session";
 export * from "./skills";
 export * from "./stream";
