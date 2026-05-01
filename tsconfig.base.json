@@ -15,6 +15,8 @@
       "@rowan-agent/trace/*": ["./packages/trace/src/*"],
       "@rowan-agent/aci": ["./packages/aci/src/index.ts"],
       "@rowan-agent/aci/*": ["./packages/aci/src/*"],
+      "@rowan-agent/workspace": ["./packages/workspace/src/index.ts"],
+      "@rowan-agent/workspace/*": ["./packages/workspace/src/*"],
       "@rowan-agent/cli": ["./packages/cli/src/index.ts"],
       "@rowan-agent/cli/*": ["./packages/cli/src/*"]
     }

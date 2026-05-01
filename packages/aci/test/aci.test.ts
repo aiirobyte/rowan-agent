@@ -72,18 +72,84 @@ test("workspace path resolution blocks traversal outside root", async () => {
   expect(() => resolveWorkspacePath({ root }, "../outside.txt")).toThrow("Path escapes workspace root");
 });
 
+test("workspace list ignores Rowan runtime runs directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-aci-ignore-"));
+  await mkdir(join(root, "runs"));
+  await mkdir(join(root, ".rowan"));
+  await writeFile(join(root, "visible.txt"), "ok", "utf8");
+  await writeFile(join(root, "runs", "trace.jsonl"), "{}", "utf8");
+  await writeFile(join(root, ".rowan", "old.jsonl"), "{}", "utf8");
+
+  const list = await findTool(createWorkspaceTools({ root }), "workspace.list").execute(
+    { recursive: true },
+    createToolContext(),
+  );
+
+  expect(list.ok).toBe(true);
+  const content = JSON.stringify(list.content);
+  expect(content).toContain("visible.txt");
+  expect(content).toContain(".rowan/old.jsonl");
+  expect(content).not.toContain("trace.jsonl");
+});
+
+test("workspace list accepts the current working directory as root", async () => {
+  const list = await findTool(createWorkspaceTools({ root: process.cwd() }), "workspace.list").execute(
+    { path: ".", maxEntries: 5 },
+    createToolContext(),
+  );
+
+  expect(list.ok).toBe(true);
+  expect(JSON.stringify(list.content)).toContain('"path":"."');
+});
+
 test("workspace write and execute tools are opt-in", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-aci-gated-"));
   const readonlyTools = createWorkspaceTools({ root }).map((tool) => tool.name);
   expect(readonlyTools).not.toContain("workspace.patch");
-  expect(readonlyTools).not.toContain("workspace.test");
+  expect(readonlyTools).not.toContain("workspace.bash");
 
   const privilegedTools = createWorkspaceTools({
     root,
     allowWrite: true,
     allowExecute: true,
-    allowedTestCommands: ["echo ok"],
   }).map((tool) => tool.name);
   expect(privilegedTools).toContain("workspace.patch");
-  expect(privilegedTools).toContain("workspace.test");
+  expect(privilegedTools).toContain("workspace.bash");
+});
+
+test("workspace bash runs inside the workspace when execute access is enabled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-aci-bash-"));
+  await mkdir(join(root, "src"));
+  await writeFile(join(root, "src", "input.txt"), "hello", "utf8");
+
+  const tools = createWorkspaceTools({
+    root,
+    allowExecute: true,
+    maxBashOutputBytes: 64,
+  });
+  expect(tools.map((tool) => tool.name)).toContain("workspace.bash");
+
+  const result = await findTool(tools, "workspace.bash").execute(
+    { command: "cat input.txt", cwd: "src" },
+    createToolContext(),
+  );
+
+  expect(result.ok).toBe(true);
+  expect(JSON.stringify(result.content)).toContain('"cwd":"src"');
+  expect(JSON.stringify(result.content)).toContain('"stdout":"hello"');
+});
+
+test("workspace bash reports output truncation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-aci-bash-limit-"));
+  const result = await findTool(
+    createWorkspaceTools({
+      root,
+      allowExecute: true,
+    }),
+    "workspace.bash",
+  ).execute({ command: "printf 123456", maxOutputBytes: 3 }, createToolContext());
+
+  expect(result.ok).toBe(true);
+  expect(JSON.stringify(result.content)).toContain('"stdout":"123"');
+  expect(JSON.stringify(result.content)).toContain('"stdoutTruncated":true');
 });

@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import { runAgentLoop } from "../src/agent-loop";
 import { createSession } from "../src/session";
-import { echoTool } from "../src/tools";
 import { createDefaultCriteria } from "../src/task";
 import type { StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
+import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
 test("runAgentLoop completes task with echo tool and verification", async () => {

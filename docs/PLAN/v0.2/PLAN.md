@@ -230,7 +230,7 @@ v0.2 工具：
 | `workspace.search` | 搜索文本 | read |
 | `workspace.diff` | 生成 diff 预览 | read |
 | `workspace.patch` | 应用 patch | write |
-| `workspace.test` | 运行测试命令 | execute |
+| `workspace.bash` | 运行 bash 命令 | execute |
 
 写入和执行类工具必须经过 policy hook。
 
@@ -335,7 +335,7 @@ function createWorkspaceTools(context: WorkspaceContext): Tool[];
 - 默认忽略 `.git`、`node_modules`、`.rowan/runs`。
 - 读取结果需要限制最大字符数。
 - patch 写入默认走 policy hook。
-- test 命令默认只允许配置中的白名单命令。
+- execute 命令通过 policy hook 进入用户/策略许可路径。
 
 v0.2 初始建议：
 
@@ -347,7 +347,7 @@ const tools = [
 ];
 ```
 
-`workspace.patch` 和 `workspace.test` 可以在 M4 后半段接入，确保 policy hook 先可用。
+`workspace.patch` 和 `workspace.bash` 可以在 M4 后半段接入，确保 policy hook 先可用。
 
 ## 9. 迁移顺序
 

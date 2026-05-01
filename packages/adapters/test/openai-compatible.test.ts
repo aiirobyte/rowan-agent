@@ -8,9 +8,9 @@ import {
 } from "../src/openai-compatible";
 import { createDefaultCriteria } from "@rowan-agent/agent/task";
 import { createSession } from "@rowan-agent/agent/session";
-import { echoTool } from "@rowan-agent/agent/tools";
 import type { LlmContext, ModelStreamEvent, Task } from "@rowan-agent/agent/types";
 import { createId } from "@rowan-agent/agent/types";
+import { echoTool } from "../../agent/test/support/echo-tool";
 
 function jsonResponse(content: string, usage?: Record<string, number>): Response {
   return new Response(

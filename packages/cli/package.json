@@ -14,6 +14,7 @@
     "@rowan-agent/aci": "workspace:*",
     "@rowan-agent/adapters": "workspace:*",
     "@rowan-agent/agent": "workspace:*",
-    "@rowan-agent/trace": "workspace:*"
+    "@rowan-agent/trace": "workspace:*",
+    "@rowan-agent/workspace": "workspace:*"
   }
 }

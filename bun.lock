@@ -17,6 +17,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
+        "@rowan-agent/workspace": "workspace:*",
       },
     },
     "packages/adapters": {
@@ -25,6 +26,10 @@
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
       },
+    },
+    "packages/agent": {
+      "name": "@rowan-agent/agent",
+      "version": "0.0.0",
     },
     "packages/cli": {
       "name": "@rowan-agent/cli",
@@ -37,18 +42,20 @@
         "@rowan-agent/adapters": "workspace:*",
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/trace": "workspace:*",
+        "@rowan-agent/workspace": "workspace:*",
       },
-    },
-    "packages/agent": {
-      "name": "@rowan-agent/agent",
-      "version": "0.0.0",
     },
     "packages/trace": {
       "name": "@rowan-agent/trace",
       "version": "0.0.0",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
+        "@rowan-agent/workspace": "workspace:*",
       },
+    },
+    "packages/workspace": {
+      "name": "@rowan-agent/workspace",
+      "version": "0.0.0",
     },
   },
   "packages": {
@@ -56,11 +63,13 @@
 
     "@rowan-agent/adapters": ["@rowan-agent/adapters@workspace:packages/adapters"],
 
-    "@rowan-agent/cli": ["@rowan-agent/cli@workspace:packages/cli"],
-
     "@rowan-agent/agent": ["@rowan-agent/agent@workspace:packages/agent"],
 
+    "@rowan-agent/cli": ["@rowan-agent/cli@workspace:packages/cli"],
+
     "@rowan-agent/trace": ["@rowan-agent/trace@workspace:packages/trace"],
+
+    "@rowan-agent/workspace": ["@rowan-agent/workspace@workspace:packages/workspace"],
 
     "@types/bun": ["@types/bun@1.3.13", "", { "dependencies": { "bun-types": "1.3.13" } }, "sha512-9fqXWk5YIHGGnUau9TEi+qdlTYDAnOj+xLCmSTwXfAIqXr2x4tytJb43E9uCvt09zJURKXwAtkoH4nLQfzeTXw=="],
 

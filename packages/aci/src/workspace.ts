@@ -1,63 +1,39 @@
-import { relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import type { Tool } from "@rowan-agent/agent";
+import { ROWAN_RUNS_DIR, normalizeRelativePath } from "@rowan-agent/workspace";
+import { createWorkspaceBashTool } from "./tools/bash";
 import { createWorkspaceDiffTool } from "./tools/diff";
 import { createWorkspaceListTool } from "./tools/list";
 import { createWorkspacePatchTool } from "./tools/patch";
 import { createWorkspaceReadTool } from "./tools/read";
 import { createWorkspaceSearchTool } from "./tools/search";
-import { createWorkspaceTestTool } from "./tools/test";
+export { type ResolvedWorkspacePath, normalizeRelativePath, resolveWorkspacePath } from "@rowan-agent/workspace";
 
 export type WorkspaceContext = {
   root: string;
   allowWrite?: boolean;
   allowExecute?: boolean;
-  allowedTestCommands?: string[];
   ignoredPaths?: string[];
   maxEntries?: number;
   maxReadBytes?: number;
   maxSearchMatches?: number;
+  bashTimeoutMs?: number;
+  maxBashOutputBytes?: number;
 };
 
-export type ResolvedWorkspacePath = {
-  root: string;
-  inputPath: string;
-  absolutePath: string;
-  relativePath: string;
-};
-
-export const DEFAULT_IGNORED_PATHS = [".git", "node_modules", ".rowan/runs"];
+export const DEFAULT_IGNORED_PATHS = [".git", "node_modules", ROWAN_RUNS_DIR];
 
 export function createWorkspaceContext(input: Partial<WorkspaceContext> = {}): WorkspaceContext {
   return {
     root: resolve(input.root ?? process.cwd()),
     allowWrite: input.allowWrite ?? false,
     allowExecute: input.allowExecute ?? false,
-    allowedTestCommands: input.allowedTestCommands ?? [],
     ignoredPaths: input.ignoredPaths ?? DEFAULT_IGNORED_PATHS,
     maxEntries: input.maxEntries ?? 200,
     maxReadBytes: input.maxReadBytes ?? 64_000,
     maxSearchMatches: input.maxSearchMatches ?? 100,
-  };
-}
-
-export function normalizeRelativePath(path: string): string {
-  return path.split(sep).join("/");
-}
-
-export function resolveWorkspacePath(context: WorkspaceContext, path = "."): ResolvedWorkspacePath {
-  const root = resolve(context.root);
-  const absolutePath = resolve(root, path);
-  const relativePath = relative(root, absolutePath);
-
-  if (relativePath.startsWith("..") || resolve(relativePath) === absolutePath) {
-    throw new Error(`Path escapes workspace root: ${path}`);
-  }
-
-  return {
-    root,
-    inputPath: path,
-    absolutePath,
-    relativePath: normalizeRelativePath(relativePath || "."),
+    bashTimeoutMs: input.bashTimeoutMs ?? 30_000,
+    maxBashOutputBytes: input.maxBashOutputBytes ?? 64_000,
   };
 }
 
@@ -81,7 +57,7 @@ export function createWorkspaceTools(input: Partial<WorkspaceContext> = {}): Too
   }
 
   if (context.allowExecute) {
-    tools.push(createWorkspaceTestTool(context));
+    tools.push(createWorkspaceBashTool(context));
   }
 
   return tools;

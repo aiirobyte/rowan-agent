@@ -42,7 +42,7 @@
 | V02-404 | M4 | 实现 `workspace.search` | aci | P0 | V02-401 | done | 可按文本搜索 workspace |
 | V02-405 | M4 | 添加路径逃逸测试 | security | P0 | V02-402,V02-403 | done | `../` 和绝对路径逃逸被拒绝 |
 | V02-406 | M4 | 设计 `workspace.diff` / `workspace.patch` | aci | P1 | V02-405 | done | 有接口和测试计划，默认不自动写入 |
-| V02-407 | M4 | 设计 `workspace.test` | aci | P1 | V02-405 | done | 只允许配置白名单命令 |
+| V02-407 | M4 | 设计 `workspace.bash` | aci | P1 | V02-405 | done | 执行命令走 execute 权限与 policy hook |
 | V02-501 | M5 | 迁移 CLI 到 `packages/cli` | cli | P0 | V02-301,V02-304,V02-402 | done | `bun run rowan "hello"` 行为不变 |
 | V02-502 | M5 | CLI 接入默认 Workspace ACI read-only tools | cli | P0 | V02-501,V02-404 | done | agent 可调用 list/read/search |
 | V02-503 | M5 | 实现 `rowan trace list` | cli | P1 | V02-306,V02-501 | done | 可列出 `.rowan/runs` |

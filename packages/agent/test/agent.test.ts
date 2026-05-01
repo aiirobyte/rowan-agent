@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
-import { createDemoTools } from "../src/tools";
 import type { AgentEventListener, StreamFn } from "../src/types";
+import { createEchoTools } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
 test("Agent.prompt returns an outcome and emits events", async () => {
@@ -9,7 +9,7 @@ test("Agent.prompt returns an outcome and emits events", async () => {
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createDemoTools(),
+    tools: createEchoTools(),
   });
   const events: string[] = [];
   agent.subscribe((event) => {
@@ -30,7 +30,7 @@ test("Agent.prompt does not wait for async trace listeners", async () => {
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createDemoTools(),
+    tools: createEchoTools(),
   });
   let release: (() => void) | undefined;
   let blocked = false;
@@ -58,7 +58,7 @@ test("Agent rejects concurrent runs", async () => {
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createDemoTools(),
+    tools: createEchoTools(),
   });
 
   const first = agent.prompt("use echo tool");
@@ -78,7 +78,7 @@ test("Agent.abort stops an active run", async () => {
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
     stream: hangingStream,
-    tools: createDemoTools(),
+    tools: createEchoTools(),
   });
 
   const run = agent.prompt("hello");

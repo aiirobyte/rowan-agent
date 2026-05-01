@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { Agent } from "@rowan-agent/agent/agent";
 import { createOpenAICompatibleStream, type OpenAICompatibleFetch } from "@rowan-agent/adapters/openai-compatible";
-import { createDemoTools } from "@rowan-agent/agent/tools";
 import { jsonlTraceWriter } from "../src/jsonl-writer";
 import type { AgentEvent } from "@rowan-agent/agent/types";
+import { createEchoTools } from "../../agent/test/support/echo-tool";
 import { scriptedStream } from "../../agent/test/support/scripted-stream";
 
 test("jsonlTraceWriter writes agent events", async () => {
@@ -16,7 +16,7 @@ test("jsonlTraceWriter writes agent events", async () => {
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createDemoTools(),
+    tools: createEchoTools(),
   });
 
   const traceWriter = jsonlTraceWriter(tracePath);
@@ -90,7 +90,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
-  const tools = createDemoTools();
+  const tools = createEchoTools();
   const agent = new Agent({
     systemPrompt: "Test system",
     model: { provider: "openai-compatible", name: "test-model" },
