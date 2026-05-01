@@ -12,14 +12,6 @@
         "typescript": "latest",
       },
     },
-    "packages/aci": {
-      "name": "@rowan-agent/aci",
-      "version": "0.3.0",
-      "dependencies": {
-        "@rowan-agent/agent": "workspace:*",
-        "@rowan-agent/workspace": "workspace:*",
-      },
-    },
     "packages/adapters": {
       "name": "@rowan-agent/adapters",
       "version": "0.3.0",
@@ -39,7 +31,6 @@
         "rowan": "./src/cli.ts",
       },
       "dependencies": {
-        "@rowan-agent/aci": "workspace:*",
         "@rowan-agent/adapters": "workspace:*",
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/trace": "workspace:*",
@@ -67,8 +58,6 @@
     },
   },
   "packages": {
-    "@rowan-agent/aci": ["@rowan-agent/aci@workspace:packages/aci"],
-
     "@rowan-agent/adapters": ["@rowan-agent/adapters@workspace:packages/adapters"],
 
     "@rowan-agent/agent": ["@rowan-agent/agent@workspace:packages/agent"],

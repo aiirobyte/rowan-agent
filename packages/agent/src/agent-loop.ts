@@ -17,6 +17,7 @@ import type {
   ModelStreamEvent,
   ModelTraceMessage,
   Outcome,
+  AgentBudgetUsage,
   Session,
   SessionSnapshot,
   Task,
@@ -30,7 +31,23 @@ import { createId, createMessage, nowIso, Validators } from "./types";
 
 type AgentLoopRuntime = AgentLoopInput & {
   traceMessages: AgentMessage[];
+  budgetUsage: AgentBudgetUsage;
 };
+
+class BudgetExceededError extends Error {
+  readonly resource: keyof AgentBudgetUsage;
+  readonly limit: number;
+  readonly usage: AgentBudgetUsage;
+
+  constructor(input: { resource: keyof AgentBudgetUsage; limit: number; usage: AgentBudgetUsage }) {
+    const label = input.resource === "modelCalls" ? "model calls" : "tool calls";
+    super(`Agent run exceeded ${label} budget (${input.usage[input.resource]}/${input.limit}).`);
+    this.name = "BudgetExceededError";
+    this.resource = input.resource;
+    this.limit = input.limit;
+    this.usage = { ...input.usage };
+  }
+}
 
 async function emit(input: AgentLoopRuntime, event: AgentEvent): Promise<void> {
   input.session.log.push(event);
@@ -42,6 +59,21 @@ function makeError(code: string, message: string, details?: Record<string, unkno
   return { code, message, retryable: false, ...(details ? { details } : {}) };
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return undefined;
+  }
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function isInvalidModelSchemaError(error: unknown): boolean {
+  return errorCode(error) === "invalid_model_schema";
+}
+
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Agent run aborted.");
@@ -51,10 +83,70 @@ function assertNotAborted(signal?: AbortSignal): void {
 function snapshotSession(session: Session): SessionSnapshot {
   return {
     id: session.id,
+    ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     systemPrompt: session.systemPrompt,
     userInput: session.userInput,
     skills: session.skills,
   };
+}
+
+function cloneBudgetUsage(usage: AgentBudgetUsage): AgentBudgetUsage {
+  return {
+    modelCalls: usage.modelCalls,
+    toolCalls: usage.toolCalls,
+  };
+}
+
+function budgetLimit(
+  input: AgentLoopRuntime,
+  resource: keyof AgentBudgetUsage,
+): number | undefined {
+  return resource === "modelCalls" ? input.budget?.maxModelCalls : input.budget?.maxToolCalls;
+}
+
+function consumeBudget(
+  input: AgentLoopRuntime,
+  resource: keyof AgentBudgetUsage,
+): BudgetExceededError | undefined {
+  input.budgetUsage[resource] += 1;
+  const limit = budgetLimit(input, resource);
+
+  if (limit !== undefined && input.budgetUsage[resource] > limit) {
+    return new BudgetExceededError({
+      resource,
+      limit,
+      usage: cloneBudgetUsage(input.budgetUsage),
+    });
+  }
+
+  return undefined;
+}
+
+function createBudgetExceededOutcome(error: BudgetExceededError, task?: Task): Outcome {
+  return Validators.outcome.Parse({
+    id: createId("out"),
+    ...(task ? { taskId: task.id } : {}),
+    passed: false,
+    message: error.message,
+  });
+}
+
+function createInvalidModelVerification(_task: Task, _error: unknown): VerificationResult {
+  const message = "Model returned invalid verification output.";
+  return Validators.verificationResult.Parse({
+    passed: false,
+    message,
+  });
+}
+
+function createInvalidExecuteToolResult(error: unknown): ToolResult {
+  return Validators.toolResult.Parse({
+    toolCallId: createId("call"),
+    toolName: "model.execute",
+    ok: false,
+    content: null,
+    error: errorMessage(error),
+  });
 }
 
 function snapshotMessage(message: AgentMessage): AgentMessage {
@@ -81,7 +173,6 @@ async function appendTraceMessage(input: AgentLoopRuntime, message: AgentMessage
   await emit(input, {
     type: "message_delta",
     delta: snapshotMessage(message),
-    content: snapshotMessages(input.traceMessages),
     ts: nowIso(),
   });
 }
@@ -95,7 +186,6 @@ async function appendTraceMessages(input: AgentLoopRuntime, messages: AgentMessa
   await emit(input, {
     type: "message_delta",
     delta: messages.length === 1 ? snapshotMessage(messages[0]) : snapshotMessages(messages),
-    content: snapshotMessages(input.traceMessages),
     ts: nowIso(),
   });
 }
@@ -153,6 +243,7 @@ async function collectTextAndStructured(input: {
     }
 
     if (event.type === "model_call") {
+      const budgetError = consumeBudget(input.loop, "modelCalls");
       await emit(input.loop, {
         type: "model_call",
         phase: event.phase,
@@ -160,6 +251,9 @@ async function collectTextAndStructured(input: {
         usage: event.usage,
         ts: nowIso(),
       });
+      if (budgetError) {
+        throw budgetError;
+      }
     }
 
     if (event.type === "text_delta") {
@@ -314,6 +408,11 @@ async function executeToolCall(input: {
     return result;
   }
 
+  const budgetError = consumeBudget(input.loop, "toolCalls");
+  if (budgetError) {
+    throw budgetError;
+  }
+
   await emit(input.loop, {
     type: "tool_call_start",
     toolName: tool.name,
@@ -322,9 +421,15 @@ async function executeToolCall(input: {
   });
 
   try {
+    const toolContext = {
+      session: input.loop.session,
+      task: input.task,
+      toolCallId: input.toolCall.id,
+      ...(input.loop.runSubSession ? { runSubSession: input.loop.runSubSession } : {}),
+    };
     const rawResult = await tool.execute(
       args,
-      { session: input.loop.session, task: input.task, toolCallId: input.toolCall.id },
+      toolContext,
       input.loop.signal,
     );
     const normalized = Validators.toolResult.Parse({
@@ -377,15 +482,32 @@ async function executeToolCall(input: {
 }
 
 async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: ToolResult[]): Promise<void> {
-  const collected = await collectTextAndStructured({
-    loop: input,
-    events: input.stream(
-      input.model,
-      { phase: "execute", session: input.session, task, toolResults },
-      { signal: input.signal },
-    ),
-    metadataPhase: "execute",
-  });
+  let collected: Awaited<ReturnType<typeof collectTextAndStructured>>;
+  try {
+    collected = await collectTextAndStructured({
+      loop: input,
+      events: input.stream(
+        input.model,
+        { phase: "execute", session: input.session, task, toolResults },
+        { signal: input.signal },
+      ),
+      metadataPhase: "execute",
+    });
+  } catch (error) {
+    if (!isInvalidModelSchemaError(error)) {
+      throw error;
+    }
+    const result = createInvalidExecuteToolResult(error);
+    toolResults.push(result);
+    await appendSessionMessage(
+      input,
+      createMessage("tool", JSON.stringify(result), {
+        toolCallId: result.toolCallId,
+        toolName: result.toolName,
+      }),
+    );
+    return;
+  }
 
   for (const toolCall of collected.toolCalls) {
     const result = await executeToolCall({ loop: input, task, toolCall });
@@ -411,29 +533,42 @@ async function verifyTask(
     ts: nowIso(),
   });
 
-  const collected = await collectTextAndStructured({
-    loop: input,
-    events: input.stream(
-      input.model,
-      {
-        phase: "verify",
-        session: input.session,
-        task,
-        toolResults,
-        criteria: task.acceptanceCriteria,
-      },
-      { signal: input.signal },
-    ),
-    metadataPhase: "verify",
-  });
+  let collected: Awaited<ReturnType<typeof collectTextAndStructured>>;
+  try {
+    collected = await collectTextAndStructured({
+      loop: input,
+      events: input.stream(
+        input.model,
+        {
+          phase: "verify",
+          session: input.session,
+          task,
+          toolResults,
+          criteria: task.acceptanceCriteria,
+        },
+        { signal: input.signal },
+      ),
+      metadataPhase: "verify",
+    });
+  } catch (error) {
+    if (!isInvalidModelSchemaError(error)) {
+      throw error;
+    }
+    const result = createInvalidModelVerification(task, error);
+    await emit(input, {
+      type: "verification_end",
+      taskId: task.id,
+      result,
+      ts: nowIso(),
+    });
+    return result;
+  }
 
   const result = collected.structured
     ? parseVerificationResult(collected.structured)
     : {
         passed: false,
         message: "Verifier did not produce structured output.",
-        evidence: [],
-        failedCriteria: task.acceptanceCriteria.map((criterion) => criterion.id),
       };
 
   await emit(input, {
@@ -450,8 +585,10 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   const runtime: AgentLoopRuntime = {
     ...input,
     traceMessages: snapshotMessages(input.session.messages),
+    budgetUsage: { modelCalls: 0, toolCalls: 0 },
   };
   const maxAttempts = input.maxAttempts ?? 2;
+  let currentTask: Task | undefined;
   let messageLogEnded = false;
   const endMessageLog = async () => {
     if (!messageLogEnded) {
@@ -489,6 +626,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
 
     const planned = await planTask(runtime);
     const task = planned.task;
+    currentTask = task;
     if (planned.text.length === 0) {
       await appendSessionMessage(
         runtime,
@@ -555,6 +693,27 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     });
     return outcome;
   } catch (error) {
+    if (error instanceof BudgetExceededError) {
+      const outcome = createBudgetExceededOutcome(error, currentTask);
+      await emit(runtime, {
+        type: "budget_exceeded",
+        resource: error.resource,
+        limit: error.limit,
+        usage: error.usage,
+        message: error.message,
+        ...(currentTask ? { taskId: currentTask.id } : {}),
+        ts: nowIso(),
+      });
+      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
+      await endMessageLog();
+      await emit(runtime, {
+        type: "session_end",
+        sessionId: runtime.session.id,
+        ts: nowIso(),
+      });
+      return outcome;
+    }
+
     const errorInfo = makeError(
       "agent_loop_failed",
       error instanceof Error ? error.message : "Agent loop failed.",

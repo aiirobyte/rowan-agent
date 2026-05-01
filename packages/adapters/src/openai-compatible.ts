@@ -520,57 +520,6 @@ function normalizeRoutingOutput(
   }
 }
 
-function normalizeEvidence(value: unknown): unknown[] {
-  if (typeof value === "string" && value.trim().length > 0) {
-    return [
-      {
-        id: createId("ev"),
-        kind: "model_observation",
-        summary: value.trim(),
-      },
-    ];
-  }
-
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.map((evidence, index) => {
-    if (typeof evidence === "string") {
-      return {
-        id: createId("ev"),
-        kind: "model_observation",
-        summary: evidence,
-      };
-    }
-
-    if (isRecord(evidence)) {
-      return {
-        id: asString(getRecordValue(evidence, "id")) ?? createId("ev"),
-        kind:
-          asString(getRecordValue(evidence, "kind")) ??
-          asString(getRecordValue(evidence, "type")) ??
-          "model_observation",
-        summary:
-          asString(getRecordValue(evidence, "summary")) ??
-          asString(getRecordValue(evidence, "message")) ??
-          asString(getRecordValue(evidence, "content")) ??
-          `Evidence ${index + 1}`,
-        ...(getRecordValue(evidence, "data") !== undefined
-          ? { data: getRecordValue(evidence, "data") }
-          : { data: evidence }),
-      };
-    }
-
-    return {
-      id: createId("ev"),
-      kind: "model_observation",
-      summary: `Evidence ${index + 1}`,
-      data: evidence,
-    };
-  });
-}
-
 function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phase: "plan" }>): Task {
   const raw = unwrapRecord(value, "task");
   if (!isRecord(raw)) {
@@ -609,11 +558,11 @@ function normalizeExecuteOutput(value: unknown): { message?: string; toolCalls: 
   }
 
   const toolCallsValue = getRecordValue(raw, "toolCalls", "tool_calls", "toolCall");
-  const rawToolCalls = Array.isArray(toolCallsValue)
-    ? toolCallsValue
-    : isRecord(toolCallsValue)
-      ? [toolCallsValue]
-      : [];
+  if (!Array.isArray(toolCallsValue)) {
+    throw validationError("execute", "Expected execute output to include a toolCalls array.");
+  }
+
+  const rawToolCalls = toolCallsValue;
   const toolCalls = rawToolCalls.map((toolCall) => {
     if (!isRecord(toolCall)) {
       throw validationError("execute", "Each tool call must be an object.");
@@ -642,34 +591,28 @@ function normalizeExecuteOutput(value: unknown): { message?: string; toolCalls: 
 
 function normalizeVerificationOutput(
   value: unknown,
-  context: Extract<LlmContext, { phase: "verify" }>,
+  _context: Extract<LlmContext, { phase: "verify" }>,
 ): VerificationResult {
-  const raw = unwrapRecord(value, "verificationResult");
+  const raw = value;
   if (!isRecord(raw)) {
-    throw validationError("verify", "Expected a verification result object.");
+    throw validationError("verify", "Expected a verify judgement object.");
   }
 
-  const requestedPassed = normalizeBoolean(getRecordValue(raw, "passed", "status"), false);
-  const defaultFailedCriteria = requestedPassed
-    ? []
-    : context.criteria.filter((criterion) => criterion.required).map((criterion) => criterion.id);
-  const failedCriteria = normalizeStringArray(
-    getRecordValue(raw, "failedCriteria", "failed_criteria"),
-    defaultFailedCriteria,
-  );
-  const passed = requestedPassed && failedCriteria.length === 0;
+  if (raw.task !== undefined || raw.toolCalls !== undefined || raw.tool_calls !== undefined) {
+    throw validationError("verify", "Expected a verify judgement object, received another phase output.");
+  }
+
+  if (typeof raw.passed !== "boolean") {
+    throw validationError("verify", "Expected verify output to include boolean passed.");
+  }
+
+  const passed = raw.passed;
+  const message = asString(raw.message) ?? (passed ? "Task passed." : "Task failed.");
 
   try {
     return Validators.verificationResult.Parse({
-      ...raw,
       passed,
-      message:
-        asString(getRecordValue(raw, "message")) ??
-        asString(getRecordValue(raw, "reason")) ??
-        asString(getRecordValue(raw, "summary")) ??
-        (passed ? "Task passed." : "Task failed."),
-      evidence: normalizeEvidence(getRecordValue(raw, "evidence")),
-      failedCriteria,
+      message,
     });
   } catch (error) {
     throw validationError("verify", error);

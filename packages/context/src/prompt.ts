@@ -17,7 +17,7 @@ export type ExecutePromptInput = {
 export type VerifyPromptInput = {
   taskJson: string;
   criteriaJson: string;
-  toolResultsJson: string;
+  taskOutputJson: string;
 };
 
 export function buildSystemPrompt(systemPrompt: string): string {
@@ -86,8 +86,10 @@ export function buildExecutePrompt(input: ExecutePromptInput): string {
     "The message is a concise user-visible execution status and must be preserved before tool calls are recorded.",
     "ToolCall fields: id, name, args.",
     "If no tool is needed, return `\"toolCalls\": []`.",
+    "Do not return a task, plan, verificationResult, or passed in this phase.",
+    "If more information is needed, call one or more allowed tools now instead of describing a plan.",
     "Call only tools listed in the task toolNames and allowed tools below.",
-    "Workspace tool paths are relative to the workspace; use `.` or an empty string for the workspace root, not filesystem `/`.",
+    "File and command tool paths are relative to the workspace; use `.` or an empty string for the workspace root, not filesystem `/`.",
     "",
     "Task:",
     input.taskJson,
@@ -107,14 +109,14 @@ export function buildVerifyPrompt(input: VerifyPromptInput): string {
   return [
     "Phase: verify",
     "",
-    "JSON-only contract: output exactly a VerificationResult object with a user-visible `message` string.",
-    "The message must be preserved before the verification result is recorded.",
-    "VerificationResult fields: passed, message, evidence, failedCriteria.",
-    "Use `passed: true` when the toolResults are sufficient to answer the user's task, even if the answer is negative such as no matching files found.",
-    "Use `passed: false` only when required tool calls failed, evidence is missing, or the user's task cannot be determined from the available results.",
-    "`evidence` must be an array of evidence objects or concise evidence strings.",
-    "`failedCriteria` must be an array of failed criterion ids; do not copy whole criterion objects into failedCriteria.",
-    "Evaluate the task against the acceptance criteria using the toolResults and the conversation messages already included in this request.",
+    "Analyze the task output and return only a JSON judgement.",
+    "`passed` is a boolean for whether the task is complete; `message` is the final user-visible task answer.",
+    "Use `passed: true` when the task output is sufficient to answer the user's task, even if the answer is negative such as no matching files found.",
+    "Use `passed: false` only when required tool calls failed, required information is missing, or the user's task cannot be determined from the available output.",
+    "Do not return a task, plan, toolCalls, or instructions for future work in this phase.",
+    "Return no extra keys beyond passed and message.",
+    "If more information is needed, return passed=false and explain what is missing in message.",
+    "Evaluate the task against the acceptance criteria using the task output and the conversation messages already included in this request.",
     "",
     "Task:",
     input.taskJson,
@@ -122,7 +124,7 @@ export function buildVerifyPrompt(input: VerifyPromptInput): string {
     "Acceptance criteria:",
     input.criteriaJson,
     "",
-    "Existing toolResults:",
-    input.toolResultsJson,
+    "Task output:",
+    input.taskOutputJson,
   ].join("\n");
 }

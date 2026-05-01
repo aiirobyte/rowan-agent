@@ -48,13 +48,13 @@ function createTask(): Task {
 }
 
 const bashTool: Tool<{ command: string }> = {
-  name: "workspace.bash",
+  name: "bash",
   description: "Runs a bash command within the workspace.",
   parameters: Type.Object({ command: Type.String() }),
   async execute(args, context) {
     return {
       toolCallId: context.toolCallId,
-      toolName: "workspace.bash",
+      toolName: "bash",
       ok: true,
       content: args.command,
     };
@@ -477,6 +477,34 @@ test("createOpenAICompatibleStream normalizes case-insensitive execute keys", as
   });
 });
 
+test("createOpenAICompatibleStream rejects execute outputs without a toolCalls array", async () => {
+  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const task = createTask();
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    jsonResponse(
+      JSON.stringify({
+        message: "Plan: read more files before deciding.",
+        task: {
+          title: "Read files",
+          instruction: "Read files.",
+        },
+      }),
+    );
+  const stream = createOpenAICompatibleStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+    tools: [echoTool],
+  });
+
+  const context: LlmContext = { phase: "execute", session, task, toolResults: [] };
+
+  await expect(
+    collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {})),
+  ).rejects.toThrow("Expected execute output to include a toolCalls array");
+});
+
 test("createOpenAICompatibleStream maps verify response to verification result", async () => {
   const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
   const task = createTask();
@@ -485,8 +513,6 @@ test("createOpenAICompatibleStream maps verify response to verification result",
       JSON.stringify({
         passed: true,
         message: "Looks good.",
-        evidence: [],
-        failedCriteria: [],
       }),
     );
   const stream = createOpenAICompatibleStream({
@@ -521,7 +547,7 @@ test("createOpenAICompatibleStream maps verify response to verification result",
   });
 });
 
-test("createOpenAICompatibleStream normalizes common verify response shapes", async () => {
+test("createOpenAICompatibleStream rejects legacy status verify output", async () => {
   const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
@@ -529,7 +555,6 @@ test("createOpenAICompatibleStream normalizes common verify response shapes", as
       JSON.stringify({
         status: "passed",
         summary: "Looks good.",
-        evidence: ["Echo evidence was present."],
       }),
     );
   const stream = createOpenAICompatibleStream({
@@ -546,19 +571,72 @@ test("createOpenAICompatibleStream normalizes common verify response shapes", as
     toolResults: [],
     criteria: task.acceptanceCriteria,
   };
-  const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
-  const structured = events.find((event) => event.type === "structured_output");
-  const result = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content;
 
-  expect(result).toMatchObject({
-    passed: true,
-    message: "Looks good.",
-    failedCriteria: [],
-  });
-  expect((result as { evidence: unknown[] }).evidence).toHaveLength(1);
+  await expect(
+    collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {})),
+  ).rejects.toThrow("Expected verify output to include boolean passed");
 });
 
-test("createOpenAICompatibleStream normalizes capitalized verify response wrapper", async () => {
+test("createOpenAICompatibleStream rejects execute-shaped verify output", async () => {
+  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const task = createTask();
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    jsonResponse(
+      JSON.stringify({
+        message: "The workspace is a TypeScript project.",
+        toolCalls: [],
+      }),
+    );
+  const stream = createOpenAICompatibleStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+
+  const context: LlmContext = {
+    phase: "verify",
+    session,
+    task,
+    toolResults: [],
+    criteria: task.acceptanceCriteria,
+  };
+
+  await expect(
+    collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {})),
+  ).rejects.toThrow("Expected a verify judgement object, received another phase output");
+});
+
+test("createOpenAICompatibleStream rejects message-only verify output", async () => {
+  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const task = createTask();
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    jsonResponse(
+      JSON.stringify({
+        message: "The workspace is a TypeScript project.",
+      }),
+    );
+  const stream = createOpenAICompatibleStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+
+  const context: LlmContext = {
+    phase: "verify",
+    session,
+    task,
+    toolResults: [],
+    criteria: task.acceptanceCriteria,
+  };
+
+  await expect(
+    collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {})),
+  ).rejects.toThrow("Expected verify output to include boolean passed");
+});
+
+test("createOpenAICompatibleStream rejects legacy verify wrappers", async () => {
   const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
@@ -567,8 +645,6 @@ test("createOpenAICompatibleStream normalizes capitalized verify response wrappe
         VerificationResult: {
           Passed: true,
           Message: "No image files found.",
-          Evidence: ["Workspace listing completed successfully."],
-          FailedCriteria: [],
         },
       }),
     );
@@ -586,29 +662,20 @@ test("createOpenAICompatibleStream normalizes capitalized verify response wrappe
     toolResults: [],
     criteria: task.acceptanceCriteria,
   };
-  const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
-  const structured = events.find((event) => event.type === "structured_output");
-  const result = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content;
 
-  expect(result).toMatchObject({
-    passed: true,
-    message: "No image files found.",
-    failedCriteria: [],
-  });
-  expect((result as { evidence: unknown[] }).evidence).toHaveLength(1);
+  await expect(
+    collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {})),
+  ).rejects.toThrow("Expected verify output to include boolean passed");
 });
 
-test("createOpenAICompatibleStream normalizes loose verify evidence and failed criteria", async () => {
+test("createOpenAICompatibleStream maps failed verify output without criteria details", async () => {
   const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
   const task = createTask();
-  const criterionId = task.acceptanceCriteria[0]?.id ?? "crit_unknown";
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
-        status: "failed",
-        summary: "Not enough evidence.",
-        evidence: "The echo tool was not called.",
-        failedCriteria: [{ ID: criterionId, Description: "Echo evidence is present." }],
+        passed: false,
+        message: "Not enough evidence.",
       }),
     );
   const stream = createOpenAICompatibleStream({
@@ -632,22 +699,22 @@ test("createOpenAICompatibleStream normalizes loose verify evidence and failed c
   expect(result).toMatchObject({
     passed: false,
     message: "Not enough evidence.",
-    failedCriteria: [criterionId],
   });
-  expect((result as { evidence: unknown[] }).evidence).toHaveLength(1);
+  expect(result).not.toHaveProperty("evidence");
+  expect(result).not.toHaveProperty("failedCriteria");
 });
 
-test("createOpenAICompatibleStream treats contradictory verify results as failed", async () => {
+test("createOpenAICompatibleStream rejects plan-shaped verify outputs", async () => {
   const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
   const task = createTask();
-  const criterionId = task.acceptanceCriteria[0]?.id ?? "crit_unknown";
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
-        passed: true,
-        message: "Searching workspace for files...",
-        evidence: ["workspace.list failed: Path escapes workspace root: /"],
-        failedCriteria: [criterionId],
+        message: "Plan: read key configuration files before deciding.",
+        task: {
+          title: "Read config",
+          instruction: "Read package.json.",
+        },
       }),
     );
   const stream = createOpenAICompatibleStream({
@@ -664,15 +731,10 @@ test("createOpenAICompatibleStream treats contradictory verify results as failed
     toolResults: [],
     criteria: task.acceptanceCriteria,
   };
-  const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
-  const structured = events.find((event) => event.type === "structured_output");
-  const result = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content;
 
-  expect(result).toMatchObject({
-    passed: false,
-    message: "Searching workspace for files...",
-    failedCriteria: [criterionId],
-  });
+  await expect(
+    collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {})),
+  ).rejects.toThrow("Expected a verify judgement object, received another phase output");
 });
 
 test("createOpenAICompatibleStream reports invalid model schema", async () => {

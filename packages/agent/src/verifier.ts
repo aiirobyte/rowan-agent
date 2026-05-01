@@ -38,8 +38,6 @@ export async function verifyTask(input: {
     return {
       passed: false,
       message: "Verifier did not produce structured output.",
-      evidence: [],
-      failedCriteria: input.task.acceptanceCriteria.map((criterion) => criterion.id),
     };
   }
 

@@ -1,4 +1,4 @@
-import type { StreamFn, Task, ToolResult, VerificationResult } from "../../src/types";
+import type { StreamFn, Task, ToolResult } from "../../src/types";
 import { createId } from "../../src/types";
 import { createDefaultCriteria } from "../../src/task";
 
@@ -24,7 +24,7 @@ function createScriptedTask(input: string, skillIds: string[]): Task {
   };
 }
 
-function createScriptedVerification(task: Task, toolResults: ToolResult[]): VerificationResult {
+function createScriptedVerification(task: Task, toolResults: ToolResult[]): { passed: boolean; message: string } {
   const requiredEcho = task.toolNames.includes("echo");
   const hasEcho = toolResults.some((result) => result.toolName === "echo" && result.ok);
   const passed = requiredEcho ? hasEcho : true;
@@ -34,17 +34,6 @@ function createScriptedVerification(task: Task, toolResults: ToolResult[]): Veri
     message: passed
       ? `Task passed: ${task.title}`
       : `Task failed: missing required echo evidence for ${task.title}`,
-    evidence: toolResults.map((result) => ({
-      id: createId("ev"),
-      kind: "tool_result",
-      summary: result.ok
-        ? `${result.toolName} returned usable evidence.`
-        : `${result.toolName} failed: ${result.error ?? "unknown error"}`,
-      data: result,
-    })),
-    failedCriteria: passed
-      ? []
-      : task.acceptanceCriteria.filter((criterion) => criterion.required).map((criterion) => criterion.id),
   };
 }
 

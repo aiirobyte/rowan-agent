@@ -50,8 +50,15 @@ function buildSystemMessage(context: LlmContext): ChatMessage {
   return { role: "system", content: buildSystemPrompt(context.session.systemPrompt) };
 }
 
+function isInternalAssistantMessage(message: AgentMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    (message.metadata?.kind === "model_message" || message.metadata?.kind === "routing_decision")
+  );
+}
+
 function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
-  if (message.role === "system") {
+  if (message.role === "system" || isInternalAssistantMessage(message)) {
     return undefined;
   }
 
@@ -106,7 +113,7 @@ function buildPhaseVerifyPrompt(context: Extract<LlmContext, { phase: "verify" }
   return buildVerifyPrompt({
     taskJson: toJson(context.task),
     criteriaJson: toJson(context.criteria),
-    toolResultsJson: toJson(context.toolResults),
+    taskOutputJson: toJson(context.toolResults),
   });
 }
 

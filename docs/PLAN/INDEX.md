@@ -30,14 +30,14 @@ The main project roadmap now lives in:
 - v0.0.0 minimal architecture finalized from user decisions.
 - v0.1.0 real model runtime implemented with mock tests; real API manual verification remains.
 - v0.2.0 monorepo foundation and Workspace ACI seed implemented.
-- v0.3.0 planning started: route-first task gating and sub Agent mechanism.
+- v0.3.0 implemented: route-first task gating and sub_session mechanism.
 
 ## Next Steps
 
 1. Verify route-first behavior with a real OpenAI-compatible API key.
 2. Confirm direct responses do not emit `task_created`.
 3. Confirm tool requests emit `model_call` route before `task_created`.
-4. Implement the v0.3.0 sub Agent API from `docs/PLAN/v0.3.0/TASKS.md`.
+4. Verify the v0.3.0 sub_session API from `docs/PLAN/v0.3.0/TASKS.md`.
 
 ## Notes
 

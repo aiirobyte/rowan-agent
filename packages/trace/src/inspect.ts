@@ -25,6 +25,7 @@ export type TraceInspectSummary = {
   lastTs?: string;
   eventTypes: Record<string, number>;
   sessionIds: string[];
+  subSessions: Array<{ parentSessionId: string; sessionId: string }>;
 };
 
 const RUN_FILE_PATTERN = /^(?<timestamp>.+)-(?<runId>run_[a-f0-9]{8})\.jsonl$/;
@@ -47,6 +48,9 @@ function eventSessionId(event: AgentEvent): string | undefined {
   }
   if (event.type === "session_created") {
     return event.session.id;
+  }
+  if ("childSessionId" in event && typeof event.childSessionId === "string") {
+    return event.childSessionId;
   }
   return undefined;
 }
@@ -108,12 +112,29 @@ export function filterTraceEvents(events: AgentEvent[], filter: TraceEventFilter
 export function summarizeTraceEvents(filePath: string, events: AgentEvent[]): TraceInspectSummary {
   const eventTypes: Record<string, number> = {};
   const sessionIds = new Set<string>();
+  const childSessionKeys = new Set<string>();
+  const subSessions: Array<{ parentSessionId: string; sessionId: string }> = [];
+
+  const addSubSession = (parentSessionId: string, sessionId: string) => {
+    const key = `${parentSessionId}\0${sessionId}`;
+    if (childSessionKeys.has(key)) {
+      return;
+    }
+    childSessionKeys.add(key);
+    subSessions.push({ parentSessionId, sessionId });
+  };
 
   for (const event of events) {
     eventTypes[event.type] = (eventTypes[event.type] ?? 0) + 1;
     const sessionId = eventSessionId(event);
     if (sessionId) {
       sessionIds.add(sessionId);
+    }
+    if (event.type === "sub_session_start" || event.type === "sub_session_end") {
+      addSubSession(event.parentSessionId, event.sessionId);
+    }
+    if (event.type === "session_created" && event.session.parentSessionId) {
+      addSubSession(event.session.parentSessionId, event.session.id);
     }
   }
 
@@ -124,6 +145,7 @@ export function summarizeTraceEvents(filePath: string, events: AgentEvent[]): Tr
     ...(events.at(-1)?.ts ? { lastTs: events.at(-1)?.ts } : {}),
     eventTypes,
     sessionIds: [...sessionIds],
+    subSessions,
   };
 }
 

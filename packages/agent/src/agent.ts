@@ -1,14 +1,17 @@
 import { runAgentLoop } from "./agent-loop";
+import { runSubSession } from "./session";
 import type {
   AfterToolCall,
   AgentEvent,
   AgentEventListener,
+  AgentSubSessionInput,
   BeforeToolCall,
   ModelRef,
   Outcome,
   Session,
   Skill,
   StreamFn,
+  SubSessionRunResult,
   Tool,
   Unsubscribe,
 } from "./types";
@@ -127,6 +130,11 @@ export class Agent {
       signal: this.abortController.signal,
       beforeToolCall: this.options.beforeToolCall,
       afterToolCall: this.options.afterToolCall,
+      runSubSession: (input) =>
+        this.startSubSession({
+          ...input,
+          parentSessionId: input.parentSessionId ?? session.id,
+        }),
       emit,
     });
 
@@ -145,6 +153,27 @@ export class Agent {
 
   abort(reason = "Aborted by caller."): void {
     this.abortController?.abort(reason);
+  }
+
+  async startSubSession(input: AgentSubSessionInput): Promise<SubSessionRunResult> {
+    const parentSessionId = input.parentSessionId ?? this.state.session?.id;
+    if (!parentSessionId) {
+      throw new Error("Sub sessions require a parent session.");
+    }
+
+    return runSubSession({
+      ...input,
+      parentSessionId,
+      systemPrompt: this.options.systemPrompt,
+      model: this.options.model,
+      stream: this.options.stream,
+      signal: this.abortController?.signal,
+      beforeToolCall: this.options.beforeToolCall,
+      afterToolCall: this.options.afterToolCall,
+      emit: (event) => {
+        this.emitToListeners(event);
+      },
+    });
   }
 
   async waitForIdle(): Promise<void> {

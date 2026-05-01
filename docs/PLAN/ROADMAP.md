@@ -85,7 +85,7 @@ v0.0.0 详细执行计划只维护在：
 | v0.0.0 | Minimal Agent Kernel | 跑通 task -> tool -> verify -> outcome | Agent、Task、Criteria、Tool、Skill、Trace、CLI |
 | v0.1.0 | Real Model Runtime | 接入真实模型 | OpenAI-compatible `StreamFn`、Anthropic/Gemini 后续 |
 | v0.2.0 | Monorepo + Workspace ACI Foundation | 完成拆包条件并启动模块化迁移 | packages/agent、adapters、trace、aci、cli，read/list/search tools |
-| v0.3.0 | Agent Mechanism + Sub Agent | 优化 task 进入机制，并引入受控 sub Agent | route phase、direct response、child run、nested trace、per-subagent budget |
+| v0.3.0 | Agent Mechanism + Sub Session | 优化 task 进入机制，并引入受控 sub_session | route phase、direct response、nested session、nested trace、per-session budget |
 | v0.4.0 | Policy and Safety | 把 hook 升级成策略系统 | approval、permission、dangerous command guard |
 | v0.5.0 | Trace Replay | 让失败 run 可复盘 | trace reader、replay、fork from step |
 | v0.6.0 | Eval Harness | 系统比较 agent 质量 | dataset、scorer、batch report |
@@ -100,7 +100,7 @@ v0.0.0 详细执行计划只维护在：
 4. 不在 v0.0.0 引入 ToolRegistry。先用 `Tool[]`，工具生态在 v0.2.0 后扩展。
 5. 不在 v0.0.0 引入 PolicyEngine。先用 hooks，策略系统在 v0.4.0。
 6. 不在 v0.0.0 引入 eval。先让 task verification 成为内核能力，eval 在 v0.6.0。
-7. 不在 v0.0.0 引入 sub-agent。先做单 task，sub-agent 在 v0.3.0 作为受控 child run 引入。
+7. 不在 v0.0.0 引入 sub-session。先做单 task，sub_session 在 v0.3.0 作为当前 Agent 可控的新 session 能力引入。
 8. 不在 v0.0.0 引入 workflow。workflow 必须是外层编排，不污染 Agent Loop。
 
 ## 6. 产品边界
@@ -138,9 +138,9 @@ v0.0.0 详细执行计划只维护在：
 1. 规范所有文档和 package 版本号为三段式语义版本。
 2. 在 Agent Loop 前置 `route` phase，让模型先判断是否需要创建 task。
 3. 对 direct response 路径跳过 `task_created`、execute、verify，并直接输出格式化结果。
-4. 建立 v0.3.0 sub Agent 规划文档和任务表。
-5. 设计 sub Agent 作为受控 child run 的最小 API。
-6. 在 trace 中保留 parent/child 关系，为后续 replay 留扩展位。
+4. 建立 v0.3.0 sub_session 规划文档和任务表。
+5. 设计 sub_session 作为受控新 session 的最小 API。
+6. 在 trace 中保留 parent/sub_session 关系，为后续 replay 留扩展位。
 7. 跑完 v0.3.0 release checklist。
 
 ## 9. v0.1.0 范围
@@ -200,8 +200,8 @@ v0.3.0 已确定：
 
 - 当前输入先经过 `route` phase；只有 `needsTask: true` 才继续 `plan -> task_created -> execute -> verify`。
 - `needsTask: false` 直接返回格式化答案，不创建 task，也不执行工具。
-- sub Agent 作为父 Agent 可控的 child run，而不是 workflow graph。
-- sub Agent 必须继承显式传入的 tools、skills、budget 和 trace parent id。
+- sub_session 作为当前 Agent 可控的新 session，而不是 workflow graph，也不是另一套 Agent 逻辑。
+- sub_session 必须继承显式传入的 tools、skills、budget 和 trace parent id。
 - v0.3.0 不做复杂多 agent 协商，不做长期 memory，不做 workflow DAG。
 
 v0.3.0 release gates：
@@ -210,7 +210,7 @@ v0.3.0 release gates：
 - `bun run build`
 - direct response trace 不包含 `task_created`
 - tool request trace 在 `task_created` 前包含 `model_call` route 事件
-- sub Agent API 有单元测试覆盖 parent/child run 关系
+- sub_session API 有单元测试覆盖 parent/sub_session 关系
 
 ## 12. Open Questions
 

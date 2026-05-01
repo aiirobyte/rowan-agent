@@ -16,7 +16,7 @@ cp .env.example .env
 
 bun run rowan "hello"
 bun run rowan --skill example "summarize the example skill"
-bun run rowan --trace runs/real.jsonl "list workspace files"
+bun run rowan --trace runs/real.jsonl "use bash to list workspace files"
 ```
 
 Rowan resolves one workspace root per runtime:
@@ -27,5 +27,6 @@ Rowan resolves one workspace root per runtime:
 Every CLI run writes a JSONL trace automatically under `<workspace>/runs/` with a local-time file name like `2026-03-12T164018-22+08:00-run_12345678.jsonl`.
 Skills live under `<workspace>/skills/`, so `--skill example` reads `<workspace>/skills/example/SKILL.md`.
 Use `--trace <path>` only when you want to choose the exact file path relative to the workspace.
+The built-in core tools are `read`, `write`, `edit`, and `bash`.
 
 See [docs/PLAN/INDEX.md](docs/PLAN/INDEX.md) for the plan.

@@ -335,7 +335,7 @@ session_end
 error
 ```
 
-`message_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 记录新增 `AgentMessage`，`message_delta.content` 记录追加后的完整数组，`message_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_call` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
+`message_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 只记录新增 `AgentMessage`，不重复输出完整 content，`message_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_call` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
 
 v0.3.0 的 direct response trace 必须包含 `model_call` route 和 `outcome`，但不能包含 `task_created`。需要工具或多步骤执行时，`model_call` route 必须出现在 `task_created` 之前。
 

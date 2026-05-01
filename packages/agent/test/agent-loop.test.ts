@@ -26,7 +26,8 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
   });
 
   expect(outcome.passed).toBe(true);
-  expect(outcome.evidence.length).toBeGreaterThan(0);
+  expect(outcome).not.toHaveProperty("evidence");
+  expect(outcome).not.toHaveProperty("failedCriteria");
   expect(events).toContain("task_created");
   expect(events).toContain("tool_call_end");
   expect(events).toContain("verification_end");
@@ -87,8 +88,6 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
       content: {
         passed: true,
         message: "Verified.",
-        evidence: [],
-        failedCriteria: [],
       },
     };
     yield { type: "done" };
@@ -178,6 +177,154 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
 
   expect(outcome.passed).toBe(false);
   expect(session.log.some((event) => event.type === "tool_call_end")).toBe(true);
+});
+
+function invalidModelSchemaError(message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code: "invalid_model_schema" });
+}
+
+test("runAgentLoop retries when verify returns invalid model schema", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    userInput: "use echo tool",
+  });
+  const task = {
+    id: createId("task"),
+    title: "Retry verify",
+    instruction: "use echo tool",
+    acceptanceCriteria: createDefaultCriteria("Echo evidence is present."),
+    toolNames: ["echo"],
+    skillIds: [],
+    status: "pending" as const,
+    attempts: 0,
+  };
+  let verifyCalls = 0;
+  const stream: StreamFn = async function* retryVerifyStream(model, context) {
+    if (context.phase === "route") {
+      yield { type: "structured_output", content: { needsTask: true, message: "Create task." } };
+      yield { type: "done" };
+      return;
+    }
+    if (context.phase === "plan") {
+      yield { type: "structured_output", content: task };
+      yield { type: "done" };
+      return;
+    }
+    if (context.phase === "execute") {
+      yield {
+        type: "tool_call",
+        toolCall: { id: createId("call"), name: "echo", args: { message: "retry" } },
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    verifyCalls += 1;
+    yield { type: "model_call", phase: "verify", model, usage: { inputMessages: 1 } };
+    if (verifyCalls === 1) {
+      throw invalidModelSchemaError("Model output for verify did not match the expected schema.");
+    }
+    yield {
+      type: "structured_output",
+      content: {
+        passed: true,
+        message: "Verified after retry.",
+      },
+    };
+    yield { type: "done" };
+  };
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "retry-verify" },
+    stream,
+    tools: [echoTool],
+    maxAttempts: 2,
+  });
+
+  expect(outcome.passed).toBe(true);
+  expect(outcome.message).toBe("Verified after retry.");
+  expect(verifyCalls).toBe(2);
+  expect(
+    session.log.some(
+      (event) =>
+        event.type === "verification_end" &&
+        event.result.message === "Model returned invalid verification output.",
+    ),
+  ).toBe(true);
+});
+
+test("runAgentLoop retries when execute returns invalid model schema", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    userInput: "use echo tool",
+  });
+  const task = {
+    id: createId("task"),
+    title: "Retry execute",
+    instruction: "use echo tool",
+    acceptanceCriteria: createDefaultCriteria("Echo evidence is present."),
+    toolNames: ["echo"],
+    skillIds: [],
+    status: "pending" as const,
+    attempts: 0,
+  };
+  let executeCalls = 0;
+  let verifyCalls = 0;
+  const stream: StreamFn = async function* retryExecuteStream(model, context) {
+    if (context.phase === "route") {
+      yield { type: "structured_output", content: { needsTask: true, message: "Create task." } };
+      yield { type: "done" };
+      return;
+    }
+    if (context.phase === "plan") {
+      yield { type: "structured_output", content: task };
+      yield { type: "done" };
+      return;
+    }
+    if (context.phase === "execute") {
+      executeCalls += 1;
+      yield { type: "model_call", phase: "execute", model, usage: { inputMessages: 1 } };
+      if (executeCalls === 1) {
+        throw invalidModelSchemaError("Model output for execute did not include toolCalls.");
+      }
+      yield {
+        type: "tool_call",
+        toolCall: { id: createId("call"), name: "echo", args: { message: "retry" } },
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    verifyCalls += 1;
+    yield {
+      type: "structured_output",
+      content:
+        verifyCalls === 1
+          ? {
+              passed: false,
+              message: "Missing echo evidence.",
+            }
+          : {
+              passed: true,
+              message: "Verified after execute retry.",
+            },
+    };
+    yield { type: "done" };
+  };
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "retry-execute" },
+    stream,
+    tools: [echoTool],
+    maxAttempts: 2,
+  });
+
+  expect(outcome.passed).toBe(true);
+  expect(outcome.message).toBe("Verified after execute retry.");
+  expect(executeCalls).toBe(2);
+  expect(session.messages.some((message) => message.metadata?.toolName === "model.execute")).toBe(true);
 });
 
 test("beforeToolCall hook can block execution", async () => {
@@ -308,8 +455,6 @@ test("invalid tool args do not execute tool", async () => {
       content: {
         passed: false,
         message: "Invalid args prevented execution.",
-        evidence: [],
-        failedCriteria: context.task.acceptanceCriteria.map((criterion) => criterion.id),
       },
     };
     yield { type: "done" };

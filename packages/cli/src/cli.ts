@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 
 import { isAbsolute, join, relative, sep } from "node:path";
-import { createWorkspaceTools } from "@rowan-agent/aci";
 import {
   createOpenAICompatibleStream,
   resolveOpenAICompatibleConfig,
@@ -28,6 +27,7 @@ type RunArgs = {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
+  timeoutMs?: number;
   prompt: string;
 };
 
@@ -43,6 +43,8 @@ type TraceShowArgs = {
 };
 
 type CliArgs = RunArgs | TraceListArgs | TraceShowArgs;
+
+const DEFAULT_OPENAI_TIMEOUT_MS = 60_000;
 
 function createDefaultTracePath(workspace: RowanWorkspacePaths): string {
   return join(workspace.runsDir, `${formatLocalTimestamp()}-${createId("run")}.jsonl`);
@@ -73,7 +75,7 @@ function printHelp(): void {
   console.log(`Rowan
 
 Usage:
-  bun run rowan [--base-url url] [--api-key key] [--model name] [--trace path] [--skill id-or-path] "prompt"
+  bun run rowan [--base-url url] [--api-key key] [--model name] [--timeout-ms ms] [--trace path] [--skill id-or-path] "prompt"
   bun run rowan trace list [--runs-dir path]
   bun run rowan trace show <run-id-or-file> [--runs-dir path]
 
@@ -98,9 +100,23 @@ Environment:
   ROWAN_OPENAI_BASE_URL  Defaults to https://api.openai.com/v1
   ROWAN_OPENAI_API_KEY   Required unless --api-key is passed
   ROWAN_MODEL            Required unless --model is passed
+  ROWAN_OPENAI_TIMEOUT_MS Optional request timeout in milliseconds, defaults to 60000
   ROWAN_RUNTIME          Optional override: source or binary
   ROWAN_WORKSPACE        Optional workspace root override
 `);
+}
+
+function parsePositiveInteger(value: string, source: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${source} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseOptionalTimeoutMs(value: string | undefined): number | undefined {
+  const normalized = value?.trim();
+  return normalized ? parsePositiveInteger(normalized, "ROWAN_OPENAI_TIMEOUT_MS") : undefined;
 }
 
 function parseTraceArgs(args: string[]): TraceListArgs | TraceShowArgs {
@@ -213,6 +229,15 @@ function parseRunArgs(argv: string[]): RunArgs {
       continue;
     }
 
+    if (next === "--timeout-ms") {
+      const value = args.shift();
+      if (!value) {
+        throw new Error("--timeout-ms requires a value.");
+      }
+      parsed.timeoutMs = parsePositiveInteger(value, "--timeout-ms");
+      continue;
+    }
+
     if (next.startsWith("--")) {
       throw new Error(`Unknown option: ${next}`);
     }
@@ -241,17 +266,15 @@ function parseArgs(argv: string[]): CliArgs {
 async function runAgentCommand(args: RunArgs): Promise<void> {
   const workspace = resolveRowanWorkspacePaths();
   const skills = await loadSkills(args.skills, workspace);
-  const tools = [
-    ...createCoreTools(),
-    ...createWorkspaceTools({
-      root: workspace.root,
-      allowExecute: true,
-    }),
-  ];
+  const tools = createCoreTools({ root: workspace.root });
   const config = resolveOpenAICompatibleConfig({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
     model: args.model,
+    timeoutMs:
+      args.timeoutMs ??
+      parseOptionalTimeoutMs(process.env.ROWAN_OPENAI_TIMEOUT_MS) ??
+      DEFAULT_OPENAI_TIMEOUT_MS,
     tools,
   });
   const agent = new Agent({

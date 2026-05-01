@@ -4,13 +4,13 @@ import { hasExplicitToolRequest, scheduleTaskRouting } from "../src/scheduler";
 import type { Tool } from "../src/types";
 
 const bashTool: Tool<{ command: string }> = {
-  name: "workspace.bash",
+  name: "bash",
   description: "Runs a bash command.",
   parameters: Type.Object({ command: Type.String() }),
   async execute(args, context) {
     return {
       toolCallId: context.toolCallId,
-      toolName: "workspace.bash",
+      toolName: "bash",
       ok: true,
       content: args.command,
     };

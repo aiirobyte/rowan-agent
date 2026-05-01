@@ -13,6 +13,7 @@ async function runCli(args: string[], env: Record<string, string | undefined> = 
       ROWAN_OPENAI_API_KEY: "",
       ROWAN_MODEL: "",
       ROWAN_OPENAI_BASE_URL: "",
+      ROWAN_OPENAI_TIMEOUT_MS: "",
       ...env,
     },
     stdout: "pipe",
@@ -74,6 +75,47 @@ test("CLI rejects removed OpenAI-compatible flag", async () => {
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("Unknown option: --openai-compatible");
+});
+
+test("CLI rejects invalid OpenAI-compatible timeout", async () => {
+  const result = await runCli(["--timeout-ms", "0", "hello"]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("--timeout-ms must be a positive integer.");
+});
+
+test("CLI times out stalled OpenAI-compatible requests", async () => {
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    server = Bun.serve({
+      port: 0,
+      fetch: () => new Promise<Response>(() => undefined),
+    });
+  } catch (error) {
+    if (canSkipLocalBindError(error)) {
+      expect(true).toBe(true);
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const result = await runCli(["--timeout-ms", "1", "hello"], {
+      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+      ROWAN_OPENAI_API_KEY: "test-key",
+      ROWAN_MODEL: "test-model",
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Request timed out after 1ms.");
+
+    const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
+    expect(traceMatch).not.toBeNull();
+    const tracePath = join(process.cwd(), traceMatch?.[1] ?? "");
+    await rm(tracePath, { force: true });
+  } finally {
+    server?.stop(true);
+  }
 });
 
 test("CLI writes a default trace without --trace", async () => {
@@ -140,7 +182,7 @@ test("CLI writes a default trace without --trace", async () => {
   }
 });
 
-test("CLI exposes workspace bash during planning and executes returned tool calls", async () => {
+test("CLI exposes core bash during planning and executes returned tool calls", async () => {
   const responses = [
     {
       message: "Use bash to check the current date: $(date)",
@@ -151,14 +193,14 @@ test("CLI exposes workspace bash during planning and executes returned tool call
         title: "Run bash",
         instruction: "run a bash command",
         acceptanceCriteria: ["The bash command output is present."],
-        toolNames: ["workspace.bash"],
+        toolNames: ["bash"],
       },
     },
     {
       message: "Running bash.",
       toolCalls: [
         {
-          name: "workspace.bash",
+          name: "bash",
           args: { command: "printf cli-bash-ok" },
         },
       ],
@@ -166,8 +208,6 @@ test("CLI exposes workspace bash during planning and executes returned tool call
     {
       passed: true,
       message: "cli-bash-ok",
-      evidence: [],
-      failedCriteria: [],
     },
   ];
   const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
@@ -198,7 +238,7 @@ test("CLI exposes workspace bash during planning and executes returned tool call
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("\"passed\": true");
-    expect(requests[0]?.messages?.at(-1)?.content).toContain("\"name\": \"workspace.bash\"");
+    expect(requests[0]?.messages?.at(-1)?.content).toContain("\"name\": \"bash\"");
 
     const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
     expect(traceMatch).not.toBeNull();
@@ -215,7 +255,7 @@ test("CLI exposes workspace bash during planning and executes returned tool call
     expect(routeCallIndex).toBeGreaterThanOrEqual(0);
     expect(taskCreatedIndex).toBeGreaterThan(routeCallIndex);
     expect(trace).toContain("\"type\":\"tool_call_start\"");
-    expect(trace).toContain("\"toolName\":\"workspace.bash\"");
+    expect(trace).toContain("\"toolName\":\"bash\"");
     expect(trace).toContain("cli-bash-ok");
 
     await rm(tracePath, { force: true });

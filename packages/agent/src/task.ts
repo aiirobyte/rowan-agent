@@ -16,14 +16,38 @@ export function parseTaskRoutingDecision(value: unknown): TaskRoutingDecision {
 }
 
 export function normalizeVerificationResult(value: VerificationResult): VerificationResult {
+  return Validators.verificationResult.Parse(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeVerificationInput(value: unknown): VerificationResult {
+  if (!isRecord(value)) {
+    throw new Error("Expected verify output to be an object.");
+  }
+
+  if (typeof value.passed !== "boolean") {
+    throw new Error("Expected verify output to include boolean passed.");
+  }
+
+  const passed = value.passed;
+  const message =
+    typeof value.message === "string" && value.message.trim().length > 0
+      ? value.message
+      : passed === true
+        ? "Task passed."
+        : "Task failed.";
+
   return Validators.verificationResult.Parse({
-    ...value,
-    passed: value.passed && value.failedCriteria.length === 0,
+    passed,
+    message,
   });
 }
 
 export function parseVerificationResult(value: unknown): VerificationResult {
-  return normalizeVerificationResult(Validators.verificationResult.Parse(value));
+  return normalizeVerificationResult(normalizeVerificationInput(value));
 }
 
 export function createDefaultCriteria(description: string): AcceptanceCriterion[] {
@@ -44,21 +68,24 @@ export function createOutcome(task: Task, verification: VerificationResult): Out
     taskId: task.id,
     passed: normalizedVerification.passed,
     message: normalizedVerification.message,
-    evidence: normalizedVerification.evidence,
-    failedCriteria: normalizedVerification.failedCriteria,
   });
 }
 
+function isInternalPlanningMessage(message: string): boolean {
+  return /^plan\s*:/i.test(message.trim());
+}
+
 export function createFailedOutcome(task: Task, verification?: VerificationResult): Outcome {
+  const message =
+    verification?.message && !isInternalPlanningMessage(verification.message)
+      ? verification.message
+      : "Task did not pass acceptance criteria.";
+
   return Validators.outcome.Parse({
     id: createId("out"),
     taskId: task.id,
     passed: false,
-    message: verification?.message ?? "Task did not pass acceptance criteria.",
-    evidence: verification?.evidence ?? [],
-    failedCriteria:
-      verification?.failedCriteria ??
-      task.acceptanceCriteria.filter((criterion) => criterion.required).map((criterion) => criterion.id),
+    message,
   });
 }
 
@@ -67,7 +94,5 @@ export function createDirectOutcome(message: string): Outcome {
     id: createId("out"),
     passed: true,
     message,
-    evidence: [],
-    failedCriteria: [],
   });
 }

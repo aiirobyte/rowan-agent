@@ -52,7 +52,7 @@ test("jsonlTraceWriter writes agent events", async () => {
   expect(messageDeltas[0].delta).toEqual(
     expect.objectContaining({ role: "assistant", content: expect.any(String) }),
   );
-  expect(messageDeltas[0].content).toEqual([...messageStart.content, messageDeltas[0].delta]);
+  expect(messageDeltas[0]).not.toHaveProperty("content");
   expect(messageEnd.content.length).toBeGreaterThan(messageStart.content.length);
   expect(trace).toContain("\"type\":\"tool_call_end\"");
   expect(trace).toContain("\"type\":\"outcome\"");
@@ -82,8 +82,6 @@ test("jsonlTraceWriter records model calls and message deltas without structured
     {
       passed: true,
       message: "Echo returned hello.",
-      evidence: ["hello"],
-      failedCriteria: [],
     },
   ];
   let index = 0;
@@ -194,9 +192,8 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       toolNames: ["echo"],
     },
   });
-  expect(planPromptDelta.content.at(-1)).toEqual(planPromptDelta.delta);
-  expect(planMessageDelta.content.at(-2)).toEqual(planPromptDelta.delta);
-  expect(planMessageDelta.content.at(-1)).toEqual(planMessageDelta.delta);
+  expect(planPromptDelta).not.toHaveProperty("content");
+  expect(planMessageDelta).not.toHaveProperty("content");
   expect(JSON.stringify(planMessageDelta.delta)).not.toContain("\"request\"");
   expect(JSON.stringify(planMessageDelta.delta)).not.toContain("\"rawResponse\"");
   expect(trace).not.toContain("\"kind\":\"model_io\"");

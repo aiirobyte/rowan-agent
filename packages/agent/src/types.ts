@@ -86,20 +86,9 @@ export const TaskRoutingDecisionSchema = Type.Object({
 
 export type TaskRoutingDecision = Type.Static<typeof TaskRoutingDecisionSchema>;
 
-export const EvidenceSchema = Type.Object({
-  id: Type.String(),
-  kind: Type.String(),
-  summary: Type.String(),
-  data: Type.Optional(Type.Unknown()),
-});
-
-export type Evidence = Type.Static<typeof EvidenceSchema>;
-
 export const VerificationResultSchema = Type.Object({
   passed: Type.Boolean(),
   message: Type.String(),
-  evidence: Type.Array(EvidenceSchema),
-  failedCriteria: Type.Array(Type.String()),
 });
 
 export type VerificationResult = Type.Static<typeof VerificationResultSchema>;
@@ -109,11 +98,19 @@ export const OutcomeSchema = Type.Object({
   taskId: Type.Optional(Type.String()),
   passed: Type.Boolean(),
   message: Type.String(),
-  evidence: Type.Array(EvidenceSchema),
-  failedCriteria: Type.Array(Type.String()),
 });
 
 export type Outcome = Type.Static<typeof OutcomeSchema>;
+
+export type AgentRunBudget = {
+  maxToolCalls?: number;
+  maxModelCalls?: number;
+};
+
+export type AgentBudgetUsage = {
+  toolCalls: number;
+  modelCalls: number;
+};
 
 export const ToolCallSchema = Type.Object({
   id: Type.String(),
@@ -137,6 +134,7 @@ export type ToolContext = {
   session: Session;
   task: Task;
   toolCallId: string;
+  runSubSession?: RunSubSession;
 };
 
 export type Tool<TArgs = unknown> = {
@@ -160,6 +158,7 @@ export type AfterToolCall = (input: {
 
 export type Session = {
   id: string;
+  parentSessionId?: string;
   systemPrompt: string;
   userInput: string;
   messages: AgentMessage[];
@@ -170,6 +169,38 @@ export type Session = {
 };
 
 export type SessionSnapshot = Omit<Session, "log" | "messages" | "createdAt" | "updatedAt">;
+
+export type SubSessionInput = {
+  parentSessionId: string;
+  prompt: string;
+  tools: Tool[];
+  skills?: Skill[];
+  maxAttempts?: number;
+  budget?: AgentRunBudget;
+};
+
+export type AgentSubSessionInput = Omit<SubSessionInput, "parentSessionId"> & {
+  parentSessionId?: string;
+};
+
+export type SubSessionRunInput = SubSessionInput & {
+  systemPrompt: string;
+  model: ModelRef;
+  stream: StreamFn;
+  signal?: AbortSignal;
+  beforeToolCall?: BeforeToolCall;
+  afterToolCall?: AfterToolCall;
+  emit?: AgentEventListener;
+};
+
+export type SubSessionRunResult = {
+  parentSessionId: string;
+  session: Session;
+  outcome: Outcome;
+  budgetUsage: AgentBudgetUsage;
+};
+
+export type RunSubSession = (input: AgentSubSessionInput) => Promise<SubSessionRunResult>;
 
 export type ModelStreamEvent =
   | { type: "trace_messages"; messages: ModelTraceMessage[] }
@@ -228,8 +259,17 @@ export type AgentEvent =
   | { type: "session_created"; session: SessionSnapshot; ts: string }
   | { type: "session_start"; sessionId: string; ts: string }
   | { type: "session_end"; sessionId: string; ts: string }
+  | { type: "sub_session_start"; parentSessionId: string; sessionId: string; prompt: string; ts: string }
+  | {
+      type: "sub_session_end";
+      parentSessionId: string;
+      sessionId: string;
+      outcome: Outcome;
+      budgetUsage: AgentBudgetUsage;
+      ts: string;
+    }
   | { type: "message_start"; content: AgentMessage[]; ts: string }
-  | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; content: AgentMessage[]; ts: string }
+  | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; ts: string }
   | { type: "message_end"; content: AgentMessage[]; ts: string }
   | {
       type: "model_call";
@@ -258,6 +298,15 @@ export type AgentEvent =
   | { type: "tool_result_review_result"; taskId: string; toolName: string; result: ToolResult; ts: string }
   | { type: "verification_start"; taskId: string; ts: string }
   | { type: "verification_end"; taskId: string; result: VerificationResult; ts: string }
+  | {
+      type: "budget_exceeded";
+      resource: keyof AgentBudgetUsage;
+      limit: number;
+      usage: AgentBudgetUsage;
+      message: string;
+      taskId?: string;
+      ts: string;
+    }
   | { type: "outcome"; outcome: Outcome; ts: string }
   | { type: "error"; error: ErrorInfo; ts: string };
 
@@ -272,9 +321,11 @@ export type AgentLoopInput = {
   stream: StreamFn;
   tools: Tool[];
   maxAttempts?: number;
+  budget?: AgentRunBudget;
   signal?: AbortSignal;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
+  runSubSession?: RunSubSession;
   emit?: AgentEventListener;
 };
 
@@ -337,6 +388,7 @@ export function createSession(input: {
   systemPrompt: string;
   userInput: string;
   skills?: Skill[];
+  parentSessionId?: string;
 }): Session {
   const createdAt = nowIso();
   const messages = [
@@ -357,6 +409,7 @@ export function createSession(input: {
 
   return {
     id: createId("ses"),
+    ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
     systemPrompt: input.systemPrompt,
     userInput: input.userInput,
     messages,
