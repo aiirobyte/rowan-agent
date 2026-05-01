@@ -1,9 +1,9 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.3.0
+> 版本：v0.3.1
 > 日期：2026-05-01
-> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 规划与机制优化启动
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
+> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first/sub_session 已实现；v0.3.1 persistent session 规划启动
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
 
 ## 1. 一句话定位
 
@@ -86,6 +86,7 @@ v0.0.0 详细执行计划只维护在：
 | v0.1.0 | Real Model Runtime | 接入真实模型 | OpenAI-compatible `StreamFn`、Anthropic/Gemini 后续 |
 | v0.2.0 | Monorepo + Workspace ACI Foundation | 完成拆包条件并启动模块化迁移 | packages/agent、adapters、trace、aci、cli，read/list/search tools |
 | v0.3.0 | Agent Mechanism + Sub Session | 优化 task 进入机制，并引入受控 sub_session | route phase、direct response、nested session、nested trace、per-session budget |
+| v0.3.1 | Persistent Session + Multi-turn CLI | 支持跨 CLI 调用持续会话 | SessionStore、multi-turn Agent、`--session`、`sessions` commands、`chat` mode |
 | v0.4.0 | Policy and Safety | 把 hook 升级成策略系统 | approval、permission、dangerous command guard |
 | v0.5.0 | Trace Replay | 让失败 run 可复盘 | trace reader、replay、fork from step |
 | v0.6.0 | Eval Harness | 系统比较 agent 质量 | dataset、scorer、batch report |
@@ -135,13 +136,12 @@ v0.0.0 详细执行计划只维护在：
 
 ## 8. 近期执行顺序
 
-1. 规范所有文档和 package 版本号为三段式语义版本。
-2. 在 Agent Loop 前置 `route` phase，让模型先判断是否需要创建 task。
-3. 对 direct response 路径跳过 `task_created`、execute、verify，并直接输出格式化结果。
-4. 建立 v0.3.0 sub_session 规划文档和任务表。
-5. 设计 sub_session 作为受控新 session 的最小 API。
-6. 在 trace 中保留 parent/sub_session 关系，为后续 replay 留扩展位。
-7. 跑完 v0.3.0 release checklist。
+1. 建立 v0.3.1 persistent session 规划文档和任务表。
+2. 定义 SessionStore 和本地 JSON Session 文件格式。
+3. 改造 `Agent.prompt()`，让同一个 Agent 可在同一个 Session 中连续处理多轮输入。
+4. 调整 CLI：支持 `--session <id>`、`sessions list/show/delete` 和最小 `chat` 模式。
+5. 让每轮 trace 能关联同一个 session id。
+6. 跑完 v0.3.1 release checklist。
 
 ## 9. v0.1.0 范围
 
@@ -186,8 +186,6 @@ v0.2.0 release gates：
 - Workspace ACI read-only tools pass path safety tests.
 - Package dependency direction check passes.
 
-## 11. Open Questions
-
 ## 11. v0.3.0 范围
 
 v0.3.0 详细执行计划维护在：
@@ -212,9 +210,38 @@ v0.3.0 release gates：
 - tool request trace 在 `task_created` 前包含 `model_call` route 事件
 - sub_session API 有单元测试覆盖 parent/sub_session 关系
 
-## 12. Open Questions
+## 12. v0.3.1 范围
 
-这些问题不阻塞 v0.3.0，但会影响 v0.4.0+：
+v0.3.1 详细执行计划维护在：
+
+- `docs/PLAN/v0.3.1/README.md`
+- `docs/PLAN/v0.3.1/PLAN.md`
+- `docs/PLAN/v0.3.1/TASKS.md`
+
+v0.3.1 已确定：
+
+- Session 需要从单次 run 内存对象升级为可持久化对象。
+- 本地 Session 文件先保存在 `<workspace>/sessions/<session-id>.json`。
+- `Agent.prompt()` 支持在同一个 Session 中多轮追加。
+- CLI 支持 `--session <id>` 继续会话。
+- CLI 支持 `sessions list/show/delete`。
+- CLI 支持最小 `chat` 交互模式。
+- 每轮仍然写独立 trace，但 trace 需要关联 session id。
+- v0.3.1 不做长期 memory、自动摘要、RAG、trace replay 或 UI。
+
+v0.3.1 release gates：
+
+- `bun test packages`
+- `bun run build`
+- `Agent.prompt()` 多轮测试通过
+- CLI `--session` 续聊测试通过
+- CLI `sessions list/show/delete` 测试通过
+- CLI `chat` smoke test 通过
+- trace inspector 能看到 session id
+
+## 13. Open Questions
+
+这些问题不阻塞 v0.3.1，但会影响 v0.4.0+：
 
 - v0.4.0 policy approval 是 CLI 交互优先，还是配置文件优先？
 - v0.5.0 replay 是否需要 workspace snapshot？

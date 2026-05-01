@@ -17,6 +17,8 @@ The main project roadmap now lives in:
 - `docs/PLAN/v0.2.0/PLAN.md`
 - `docs/PLAN/v0.3.0/README.md`
 - `docs/PLAN/v0.3.0/PLAN.md`
+- `docs/PLAN/v0.3.1/README.md`
+- `docs/PLAN/v0.3.1/PLAN.md`
 
 ## Current Status
 
@@ -31,13 +33,15 @@ The main project roadmap now lives in:
 - v0.1.0 real model runtime implemented with mock tests; real API manual verification remains.
 - v0.2.0 monorepo foundation and Workspace ACI seed implemented.
 - v0.3.0 implemented: route-first task gating and sub_session mechanism.
+- v0.3.1 planned: persistent Session, multi-turn Agent semantics, and session-aware CLI.
 
 ## Next Steps
 
-1. Verify route-first behavior with a real OpenAI-compatible API key.
-2. Confirm direct responses do not emit `task_created`.
-3. Confirm tool requests emit `model_call` route before `task_created`.
-4. Verify the v0.3.0 sub_session API from `docs/PLAN/v0.3.0/TASKS.md`.
+1. Implement `SessionStore` and local JSON persistence under `<workspace>/sessions`.
+2. Make `Agent.prompt()` append turns to an existing Session instead of always creating a new Session.
+3. Add CLI `--session <id>` and `sessions list/show/delete`.
+4. Add minimal `rowan chat` interactive mode.
+5. Link every per-turn trace to the persistent session id.
 
 ## Notes
 

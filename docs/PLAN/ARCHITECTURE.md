@@ -1,9 +1,9 @@
 # Rowan Agent Technical Architecture
 
-> 版本：v0.3.0
+> 版本：v0.3.1
 > 日期：2026-05-01
-> 状态：v0.0.0 架构已定稿；v0.1.0 OpenAI-compatible StreamFn 已实现；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first 机制启动
-> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`
+> 状态：v0.0.0 架构已定稿；v0.1.0 OpenAI-compatible StreamFn 已实现；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first/sub_session 已实现；v0.3.1 persistent session 规划启动
+> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`
 
 ## 1. 架构目标
 
@@ -123,7 +123,7 @@ Verifier
 
 Outcome
   user-facing result
-  includes evidence
+  includes pass/fail message
 ```
 
 ## 5. Core Types
@@ -147,6 +147,8 @@ interface Session {
 
 - `messages`：发给模型的上下文。
 - `log`：完整运行事件，可写入 trace。
+
+v0.3.1 起，`messages` 是可持久化的多轮对话上下文；`log` 仍然是运行事件记录，不作为持久 Session 的主存储。
 
 ### 5.2 Agent
 
