@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import Type from "typebox";
 import {
   callOpenAICompatibleChatCompletion,
   createOpenAICompatibleStream,
@@ -8,7 +9,7 @@ import {
 } from "../src/openai-compatible";
 import { createDefaultCriteria } from "@rowan-agent/agent/task";
 import { createSession } from "@rowan-agent/agent/session";
-import type { LlmContext, ModelStreamEvent, Task } from "@rowan-agent/agent/types";
+import type { LlmContext, ModelStreamEvent, Task, Tool } from "@rowan-agent/agent/types";
 import { createId } from "@rowan-agent/agent/types";
 import { echoTool } from "../../agent/test/support/echo-tool";
 
@@ -45,6 +46,20 @@ function createTask(): Task {
     attempts: 0,
   };
 }
+
+const bashTool: Tool<{ command: string }> = {
+  name: "workspace.bash",
+  description: "Runs a bash command within the workspace.",
+  parameters: Type.Object({ command: Type.String() }),
+  async execute(args, context) {
+    return {
+      toolCallId: context.toolCallId,
+      toolName: "workspace.bash",
+      ok: true,
+      content: args.command,
+    };
+  },
+};
 
 test("resolveOpenAICompatibleConfig uses flags over env and defaults base URL", () => {
   const config = resolveOpenAICompatibleConfig({
@@ -170,6 +185,67 @@ test("callOpenAICompatibleChatCompletion supports abort signal", async () => {
   controller.abort(new Error("test abort"));
 
   await expect(promise).rejects.toThrow("test abort");
+});
+
+test("createOpenAICompatibleStream maps route response to a task routing decision", async () => {
+  const session = createSession({ systemPrompt: "Test", userInput: "hello" });
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    jsonResponse(
+      JSON.stringify({
+        message: "Hello directly.",
+        needsTask: false,
+      }),
+      { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    );
+  const stream = createOpenAICompatibleStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+    tools: [echoTool],
+  });
+
+  const events = await collect(
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", session }, {}),
+  );
+  const modelCall = events.find((event) => event.type === "model_call");
+  const structured = events.find((event) => event.type === "structured_output");
+
+  expect(modelCall?.type).toBe("model_call");
+  expect((modelCall as Extract<ModelStreamEvent, { type: "model_call" }>).phase).toBe("route");
+  expect(events.some((event) => event.type === "text_delta")).toBe(false);
+  expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
+    message: "Hello directly.",
+    needsTask: false,
+  });
+});
+
+test("createOpenAICompatibleStream preserves model route decisions without scheduling policy", async () => {
+  const session = createSession({ systemPrompt: "Test", userInput: "使用bash查看当前日期" });
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    jsonResponse(
+      JSON.stringify({
+        message: "Use bash to check the current date: $(date)",
+        needsTask: false,
+      }),
+    );
+  const stream = createOpenAICompatibleStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+    tools: [bashTool],
+  });
+
+  const events = await collect(
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", session }, {}),
+  );
+  const structured = events.find((event) => event.type === "structured_output");
+
+  expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
+    message: "Use bash to check the current date: $(date)",
+    needsTask: false,
+  });
 });
 
 test("createOpenAICompatibleStream maps plan response to structured task", async () => {
@@ -376,6 +452,45 @@ test("createOpenAICompatibleStream normalizes common verify response shapes", as
     passed: true,
     message: "Looks good.",
     failedCriteria: [],
+  });
+  expect((result as { evidence: unknown[] }).evidence).toHaveLength(1);
+});
+
+test("createOpenAICompatibleStream normalizes loose verify evidence and failed criteria", async () => {
+  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const task = createTask();
+  const criterionId = task.acceptanceCriteria[0]?.id ?? "crit_unknown";
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    jsonResponse(
+      JSON.stringify({
+        status: "failed",
+        summary: "Not enough evidence.",
+        evidence: "The echo tool was not called.",
+        failedCriteria: [{ id: criterionId, description: "Echo evidence is present." }],
+      }),
+    );
+  const stream = createOpenAICompatibleStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+
+  const context: LlmContext = {
+    phase: "verify",
+    session,
+    task,
+    toolResults: [],
+    criteria: task.acceptanceCriteria,
+  };
+  const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
+  const structured = events.find((event) => event.type === "structured_output");
+  const result = (structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content;
+
+  expect(result).toMatchObject({
+    passed: false,
+    message: "Not enough evidence.",
+    failedCriteria: [criterionId],
   });
   expect((result as { evidence: unknown[] }).evidence).toHaveLength(1);
 });

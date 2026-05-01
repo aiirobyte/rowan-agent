@@ -1,5 +1,5 @@
 import { createDefaultCriteria } from "@rowan-agent/agent";
-import { buildOpenAICompatiblePrompt, type ChatMessage } from "./prompt-builder";
+import { buildOpenAICompatiblePrompt, type ChatMessage } from "@rowan-agent/context";
 import { extractJsonObject } from "./json-extract";
 import type {
   LlmContext,
@@ -8,6 +8,7 @@ import type {
   StreamFn,
   StreamOptions,
   Task,
+  TaskRoutingDecision,
   Tool,
   ToolCall,
   VerificationResult,
@@ -464,7 +465,46 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
+function normalizeRoutingOutput(
+  value: unknown,
+  context: Extract<LlmContext, { phase: "route" }>,
+): TaskRoutingDecision {
+  const raw = isRecord(value) && isRecord(value.routingDecision) ? value.routingDecision : value;
+  if (!isRecord(raw)) {
+    throw validationError("route", "Expected a routing decision object.");
+  }
+
+  const needsTask = normalizeBoolean(
+    raw.needsTask ?? raw.needs_task ?? raw.taskRequired ?? raw.requiresTask ?? raw.shouldCreateTask,
+    true,
+  );
+  const message =
+    asString(raw.message) ??
+    asString(raw.answer) ??
+    asString(raw.response) ??
+    (needsTask ? "Creating a task for this request." : context.session.userInput);
+
+  try {
+    return Validators.taskRoutingDecision.Parse({
+      needsTask,
+      message,
+    });
+  } catch (error) {
+    throw validationError("route", error);
+  }
+}
+
 function normalizeEvidence(value: unknown): unknown[] {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return [
+      {
+        id: createId("ev"),
+        kind: "model_observation",
+        summary: value.trim(),
+      },
+    ];
+  }
+
   if (!Array.isArray(value)) {
     return [];
   }
@@ -629,6 +669,16 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
     };
 
     const value = extractJsonObject(result.content);
+
+    if (context.phase === "route") {
+      const decision = normalizeRoutingOutput(value, context);
+      yield {
+        type: "structured_output",
+        content: decision,
+      };
+      yield { type: "done" };
+      return;
+    }
 
     if (context.phase === "plan") {
       const task = normalizeTaskOutput(value, context);

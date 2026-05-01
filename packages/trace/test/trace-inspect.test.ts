@@ -9,7 +9,7 @@ import {
   readTraceFile,
 } from "../src";
 
-test("trace reader and inspector read v0.1 JSONL events", async () => {
+test("trace reader and inspector read v0.1.0 JSONL events", async () => {
   const runsDir = await mkdtemp(join(tmpdir(), "rowan-trace-inspect-"));
   const tracePath = join(runsDir, "2026-05-01T121314-15+08:00-run_1234abcd.jsonl");
   await writeFile(

@@ -1,0 +1,57 @@
+import type { TaskRoutingDecision, Tool } from "./types";
+
+export type TaskRoutingScheduleInput = {
+  userInput: string;
+  tools: Tool[];
+  decision: TaskRoutingDecision;
+};
+
+function includesAny(text: string, values: string[]): boolean {
+  return values.some((value) => text.includes(value));
+}
+
+export function hasExplicitToolRequest(userInput: string, tools: Tool[] = []): boolean {
+  const text = userInput.toLowerCase();
+  const compact = text.replace(/\s+/g, "");
+  const availableToolNames = tools.flatMap((tool) => {
+    const lower = tool.name.toLowerCase();
+    const suffix = lower.split(".").at(-1);
+    return suffix && suffix !== lower ? [lower, suffix] : [lower];
+  });
+  const mentionsAvailableTool = availableToolNames.some((name) => {
+    const compactName = name.replace(/\s+/g, "");
+    if (!compactName) {
+      return false;
+    }
+    return compact.includes(compactName) || text.includes(name);
+  });
+
+  if (
+    mentionsAvailableTool &&
+    includesAny(compact, ["use", "call", "run", "execute", "使用", "调用", "运行", "执行", "查看"])
+  ) {
+    return true;
+  }
+
+  return [
+    /\b(use|run|execute|call)\b.*\b(bash|shell|terminal|command|cmd)\b/i,
+    /\b(bash|shell|terminal|command|cmd)\b.*\b(use|run|execute|call)\b/i,
+    /(使用|用|调用|运行|执行|查看).*(bash|shell|终端|命令)/i,
+    /(bash|shell|终端|命令).*(使用|调用|运行|执行|查看)/i,
+    /\b(use|call)\b.*\b(tool|tools)\b/i,
+    /(使用|调用).*(工具)/i,
+    /(列出|读取|搜索|修改|写入|替换|查看).*(workspace|工作区|项目|仓库|文件|目录)/i,
+    /\b(list|read|search|modify|write|edit|patch|diff|inspect)\b.*\b(workspace|repo|project|file|directory)\b/i,
+  ].some((pattern) => pattern.test(userInput));
+}
+
+export function scheduleTaskRouting(input: TaskRoutingScheduleInput): TaskRoutingDecision {
+  if (input.decision.needsTask || !hasExplicitToolRequest(input.userInput, input.tools)) {
+    return input.decision;
+  }
+
+  return {
+    needsTask: true,
+    message: "Creating a task for this request.",
+  };
+}

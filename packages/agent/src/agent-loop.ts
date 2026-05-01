@@ -1,10 +1,13 @@
 import Schema from "typebox/schema";
 import {
+  createDirectOutcome,
   createFailedOutcome,
   createOutcome,
   parseTask,
+  parseTaskRoutingDecision,
   parseVerificationResult,
 } from "./task";
+import { scheduleTaskRouting } from "./scheduler";
 import type {
   AgentEvent,
   AgentLoopInput,
@@ -17,6 +20,7 @@ import type {
   Session,
   SessionSnapshot,
   Task,
+  TaskRoutingDecision,
   Tool,
   ToolCall,
   ToolResult,
@@ -113,6 +117,7 @@ async function collectTextAndStructured(input: {
   loop: AgentLoopRuntime;
   events: AsyncIterable<ModelStreamEvent>;
   metadataPhase: LlmPhase;
+  recordText?: boolean;
 }): Promise<{ text: string; structured?: unknown; toolCalls: ToolCall[] }> {
   const toolCalls: ToolCall[] = [];
   let text = "";
@@ -129,6 +134,10 @@ async function collectTextAndStructured(input: {
     }
 
     flushedText += text;
+    if (input.recordText === false) {
+      text = "";
+      return;
+    }
     await appendSessionMessage(
       input.loop,
       createMessage("assistant", text, { kind: "model_message", phase: input.metadataPhase }),
@@ -195,6 +204,30 @@ async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: st
   }
 
   return { task: parseTask(collected.structured), text: collected.text };
+}
+
+async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecision & { text: string }> {
+  const collected = await collectTextAndStructured({
+    loop: input,
+    events: input.stream(input.model, { phase: "route", session: input.session }, { signal: input.signal }),
+    metadataPhase: "route",
+    recordText: false,
+  });
+
+  if (!collected.structured) {
+    throw new Error("Router did not produce a structured task routing decision.");
+  }
+
+  const decision = scheduleTaskRouting({
+    userInput: input.session.userInput,
+    tools: input.tools,
+    decision: parseTaskRoutingDecision(collected.structured),
+  });
+  await appendSessionMessage(
+    input,
+    createMessage("assistant", JSON.stringify(decision), { kind: "routing_decision", phase: "route" }),
+  );
+  return { ...decision, text: decision.message };
 }
 
 function findTool(tools: Tool[], name: string): Tool | undefined {
@@ -440,6 +473,19 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       ts: nowIso(),
     });
     await emitMessageStart(runtime);
+
+    const routed = await routeRequest(runtime);
+    if (!routed.needsTask) {
+      const outcome = createDirectOutcome(routed.message);
+      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
+      await endMessageLog();
+      await emit(runtime, {
+        type: "session_end",
+        sessionId: runtime.session.id,
+        ts: nowIso(),
+      });
+      return outcome;
+    }
 
     const planned = await planTask(runtime);
     const task = planned.task;

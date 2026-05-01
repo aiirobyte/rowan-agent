@@ -6,7 +6,7 @@ export type ModelRef = {
   name: string;
 };
 
-export type LlmPhase = "plan" | "execute" | "verify";
+export type LlmPhase = "route" | "plan" | "execute" | "verify";
 
 export type ModelCallUsage = {
   inputMessages: number;
@@ -79,6 +79,13 @@ export const TaskSchema = Type.Object({
 
 export type Task = Type.Static<typeof TaskSchema>;
 
+export const TaskRoutingDecisionSchema = Type.Object({
+  needsTask: Type.Boolean(),
+  message: Type.String(),
+});
+
+export type TaskRoutingDecision = Type.Static<typeof TaskRoutingDecisionSchema>;
+
 export const EvidenceSchema = Type.Object({
   id: Type.String(),
   kind: Type.String(),
@@ -99,7 +106,7 @@ export type VerificationResult = Type.Static<typeof VerificationResultSchema>;
 
 export const OutcomeSchema = Type.Object({
   id: Type.String(),
-  taskId: Type.String(),
+  taskId: Type.Optional(Type.String()),
   passed: Type.Boolean(),
   message: Type.String(),
   evidence: Type.Array(EvidenceSchema),
@@ -178,6 +185,10 @@ export type ModelStreamEvent =
   | { type: "done" };
 
 export type LlmContext =
+  | {
+      phase: "route";
+      session: Session;
+    }
   | {
       phase: "plan";
       session: Session;
@@ -269,6 +280,7 @@ export type AgentLoopInput = {
 
 export const Validators = {
   task: Schema.Compile(TaskSchema),
+  taskRoutingDecision: Schema.Compile(TaskRoutingDecisionSchema),
   toolCall: Schema.Compile(ToolCallSchema),
   toolResult: Schema.Compile(ToolResultSchema),
   verificationResult: Schema.Compile(VerificationResultSchema),

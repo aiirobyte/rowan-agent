@@ -1,6 +1,6 @@
 # Rowan Agent
 
-Rowan v0 is a minimal TypeScript + Bun agent kernel.
+Rowan v0.0.0 is a minimal TypeScript + Bun agent kernel.
 
 ```bash
 bun install
@@ -8,7 +8,7 @@ bun test
 bun run build
 ```
 
-For v0.1 model runtime:
+For v0.1.0 model runtime:
 
 ```bash
 cp .env.example .env
@@ -28,4 +28,4 @@ Every CLI run writes a JSONL trace automatically under `<workspace>/runs/` with 
 Skills live under `<workspace>/skills/`, so `--skill example` reads `<workspace>/skills/example/SKILL.md`.
 Use `--trace <path>` only when you want to choose the exact file path relative to the workspace.
 
-See [docs/INDEX.md](docs/INDEX.md) for the plan.
+See [docs/PLAN/INDEX.md](docs/PLAN/INDEX.md) for the plan.

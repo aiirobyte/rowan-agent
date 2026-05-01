@@ -47,6 +47,19 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     attempts: 0,
   };
   const stream: StreamFn = async function* orderedMessageStream(_model, context) {
+    if (context.phase === "route") {
+      yield { type: "text_delta", text: "Routing from model." };
+      yield {
+        type: "structured_output",
+        content: {
+          needsTask: true,
+          message: "Routing from model.",
+        },
+      };
+      yield { type: "done" };
+      return;
+    }
+
     if (context.phase === "plan") {
       yield { type: "text_delta", text: "Planning from model." };
       yield { type: "structured_output", content: task };
@@ -114,6 +127,39 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     indexOf((event) => event.type === "verification_end"),
   );
   expect(session.messages.some((message) => message.content === "Planned task: Ordered messages")).toBe(false);
+});
+
+test("runAgentLoop can return a direct response without creating a task", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    userInput: "hello",
+  });
+  const events: string[] = [];
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
+    tools: [echoTool],
+    emit: (event) => {
+      events.push(event.type);
+    },
+  });
+
+  expect(outcome.passed).toBe(true);
+  expect(outcome.taskId).toBeUndefined();
+  expect(outcome.message).toBe("Direct response: hello");
+  expect(events).toContain("model_call");
+  expect(events).toContain("outcome");
+  expect(events).not.toContain("task_created");
+  expect(events).not.toContain("verification_start");
+  const routeDecision = session.messages.find(
+    (message) => message.metadata?.kind === "routing_decision" && message.metadata.phase === "route",
+  );
+  expect(JSON.parse(routeDecision?.content ?? "{}")).toEqual({
+    needsTask: false,
+    message: "Direct response: hello",
+  });
 });
 
 test("runAgentLoop returns structured error for unknown tool without crashing", async () => {
@@ -214,6 +260,18 @@ test("invalid tool args do not execute tool", async () => {
     },
   };
   const invalidArgsStream: StreamFn = async function* invalidArgsStream(_model, context) {
+    if (context.phase === "route") {
+      yield {
+        type: "structured_output",
+        content: {
+          needsTask: true,
+          message: "Routing invalid args task.",
+        },
+      };
+      yield { type: "done" };
+      return;
+    }
+
     if (context.phase === "plan") {
       yield {
         type: "structured_output",

@@ -63,6 +63,10 @@ test("jsonlTraceWriter records model calls and message deltas without structured
   const tracePath = join(root, "run.jsonl");
   const responses = [
     {
+      message: "A task is needed for echo.",
+      needsTask: true,
+    },
+    {
       message: "Planning echo.",
       task: {
         title: "Echo hello",
@@ -158,7 +162,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       metadata: expect.objectContaining({
         kind: "model_prompt",
         phase: "plan",
-        source: "prompt_builder",
+        source: "context",
       }),
     }),
   );

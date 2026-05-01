@@ -40,7 +40,16 @@ export function createWorkspaceContext(input: Partial<WorkspaceContext> = {}): W
 export function isIgnoredWorkspacePath(context: WorkspaceContext, relativePath: string): boolean {
   const normalized = normalizeRelativePath(relativePath);
   const ignored = context.ignoredPaths ?? DEFAULT_IGNORED_PATHS;
-  return ignored.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
+  const parts = normalized.split("/");
+
+  return ignored.some((pattern) => {
+    const normalizedPattern = normalizeRelativePath(pattern);
+    if (normalizedPattern.includes("/")) {
+      return normalized === normalizedPattern || normalized.startsWith(`${normalizedPattern}/`);
+    }
+
+    return parts.includes(normalizedPattern);
+  });
 }
 
 export function createWorkspaceTools(input: Partial<WorkspaceContext> = {}): Tool[] {

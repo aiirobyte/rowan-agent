@@ -9,12 +9,14 @@ The main project roadmap now lives in:
 - `docs/PLAN/ARCHITECTURE.md`
 - `docs/PLAN/ROADMAP.md`
 - `docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
-- `docs/PLAN/v0/README.md`
-- `docs/PLAN/v0/PLAN.md`
-- `docs/PLAN/v0.1/README.md`
-- `docs/PLAN/v0.1/PLAN.md`
-- `docs/PLAN/v0.2/README.md`
-- `docs/PLAN/v0.2/PLAN.md`
+- `docs/PLAN/v0.0.0/README.md`
+- `docs/PLAN/v0.0.0/PLAN.md`
+- `docs/PLAN/v0.1.0/README.md`
+- `docs/PLAN/v0.1.0/PLAN.md`
+- `docs/PLAN/v0.2.0/README.md`
+- `docs/PLAN/v0.2.0/PLAN.md`
+- `docs/PLAN/v0.3.0/README.md`
+- `docs/PLAN/v0.3.0/PLAN.md`
 
 ## Current Status
 
@@ -24,17 +26,18 @@ The main project roadmap now lives in:
 - Competitive analysis drafted.
 - Project roadmap drafted.
 - Technical architecture drafted.
-- v0 execution pack drafted.
-- v0 minimal architecture finalized from user decisions.
-- v0.1 real model runtime implemented with mock tests; real API manual verification remains.
-- v0.2 monorepo foundation and Workspace ACI seed implemented.
+- v0.0.0 execution pack drafted.
+- v0.0.0 minimal architecture finalized from user decisions.
+- v0.1.0 real model runtime implemented with mock tests; real API manual verification remains.
+- v0.2.0 monorepo foundation and Workspace ACI seed implemented.
+- v0.3.0 planning started: route-first task gating and sub Agent mechanism.
 
 ## Next Steps
 
-1. Run v0.1 with a real OpenAI-compatible API key.
-2. Verify default real model mode with `bun run rowan "hello"` and confirm `.rowan/runs/` receives a JSONL trace.
-3. Verify v0.2 with a real OpenAI-compatible API key.
-4. Prepare v0.3 Policy and Safety planning.
+1. Verify route-first behavior with a real OpenAI-compatible API key.
+2. Confirm direct responses do not emit `task_created`.
+3. Confirm tool requests emit `model_call` route before `task_created`.
+4. Implement the v0.3.0 sub Agent API from `docs/PLAN/v0.3.0/TASKS.md`.
 
 ## Notes
 

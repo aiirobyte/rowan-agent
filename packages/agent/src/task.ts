@@ -1,8 +1,18 @@
-import type { AcceptanceCriterion, Outcome, Task, VerificationResult } from "./types";
+import type {
+  AcceptanceCriterion,
+  Outcome,
+  Task,
+  TaskRoutingDecision,
+  VerificationResult,
+} from "./types";
 import { createId, Validators } from "./types";
 
 export function parseTask(value: unknown): Task {
   return Validators.task.Parse(value);
+}
+
+export function parseTaskRoutingDecision(value: unknown): TaskRoutingDecision {
+  return Validators.taskRoutingDecision.Parse(value);
 }
 
 export function parseVerificationResult(value: unknown): VerificationResult {
@@ -41,5 +51,15 @@ export function createFailedOutcome(task: Task, verification?: VerificationResul
     failedCriteria:
       verification?.failedCriteria ??
       task.acceptanceCriteria.filter((criterion) => criterion.required).map((criterion) => criterion.id),
+  });
+}
+
+export function createDirectOutcome(message: string): Outcome {
+  return Validators.outcome.Parse({
+    id: createId("out"),
+    passed: true,
+    message,
+    evidence: [],
+    failedCriteria: [],
   });
 }

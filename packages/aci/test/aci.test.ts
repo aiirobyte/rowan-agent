@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSession, createDefaultCriteria, createId, type Task, type Tool } from "@rowan-agent/agent";
@@ -90,6 +90,25 @@ test("workspace list ignores Rowan runtime runs directory", async () => {
   expect(content).toContain("visible.txt");
   expect(content).toContain(".rowan/old.jsonl");
   expect(content).not.toContain("trace.jsonl");
+});
+
+test("workspace list ignores nested dependency directories with broken symlinks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-aci-node-modules-"));
+  await mkdir(join(root, "packages", "trace", "node_modules", "@rowan-agent"), { recursive: true });
+  await mkdir(join(root, "packages", "trace", "src"), { recursive: true });
+  await writeFile(join(root, "packages", "trace", "src", "index.ts"), "export {};\n", "utf8");
+  await symlink("../../../missing-core", join(root, "packages", "trace", "node_modules", "@rowan-agent", "core"));
+
+  const list = await findTool(createWorkspaceTools({ root }), "workspace.list").execute(
+    { recursive: true, maxEntries: 100 },
+    createToolContext(),
+  );
+
+  expect(list.ok).toBe(true);
+  const content = JSON.stringify(list.content);
+  expect(content).toContain("packages/trace/src/index.ts");
+  expect(content).not.toContain("node_modules");
+  expect(content).not.toContain("@rowan-agent/core");
 });
 
 test("workspace list accepts the current working directory as root", async () => {

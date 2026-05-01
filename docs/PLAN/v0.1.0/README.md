@@ -1,20 +1,20 @@
-# Rowan v0.1
+# Rowan v0.1.0
 
-> 版本：v0.1
+> 版本：v0.1.0
 > 日期：2026-05-01
 > 状态：已实现，待真实 API 手动验收
-> 上游文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0/PLAN.md`
+> 上游文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`
 
 ## 文档
 
 | 文档 | 用途 |
 |---|---|
-| `docs/PLAN/v0.1/PLAN.md` | v0.1 主计划，聚焦 OpenAI-compatible 真实模型接入 |
-| `docs/PLAN/v0.1/TASKS.md` | 可直接拆 issue 的任务表 |
+| `docs/PLAN/v0.1.0/PLAN.md` | v0.1.0 主计划，聚焦 OpenAI-compatible 真实模型接入 |
+| `docs/PLAN/v0.1.0/TASKS.md` | 可直接拆 issue 的任务表 |
 
-## v0.1 目标
+## v0.1.0 目标
 
-v0.1 在 v0 最简内核之上接入真实模型：
+v0.1.0 在 v0.0.0 最简内核之上接入真实模型：
 
 ```text
 Agent

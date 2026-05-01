@@ -18,6 +18,7 @@ import {
   resolveInRowanWorkspace,
   resolveRowanWorkspacePaths,
 } from "@rowan-agent/workspace";
+import { formatJsonOutput, formatOutcomeOutput } from "./output";
 import { loadSkills } from "./skills";
 
 type RunArgs = {
@@ -267,7 +268,7 @@ async function runAgentCommand(args: RunArgs): Promise<void> {
 
   try {
     const outcome = await agent.prompt(args.prompt);
-    console.log(JSON.stringify(outcome, null, 2));
+    console.log(formatOutcomeOutput(outcome));
   } finally {
     await agent.flushTrace();
     console.error(`Trace written to ${formatWorkspacePathForDisplay(tracePath, workspace)}`);
@@ -280,19 +281,13 @@ async function main(): Promise<void> {
 
   if (args.kind === "trace-list") {
     const runsDir = resolveOptionalWorkspacePath(args.runsDir, workspace) ?? workspace.runsDir;
-    console.log(JSON.stringify(await listTraceRuns(runsDir), null, 2));
+    console.log(formatJsonOutput(await listTraceRuns(runsDir)));
     return;
   }
 
   if (args.kind === "trace-show") {
     const runsDir = resolveOptionalWorkspacePath(args.runsDir, workspace) ?? workspace.runsDir;
-    console.log(
-      JSON.stringify(
-        await inspectTraceRun(resolveTraceTarget(args.target, workspace), runsDir),
-        null,
-        2,
-      ),
-    );
+    console.log(formatJsonOutput(await inspectTraceRun(resolveTraceTarget(args.target, workspace), runsDir)));
     return;
   }
 

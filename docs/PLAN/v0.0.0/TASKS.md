@@ -1,6 +1,6 @@
-# Rowan v0 Task Board
+# Rowan v0.0.0 Task Board
 
-> 版本：v0
+> 版本：v0.0.0
 > 日期：2026-04-30
 > 状态：已定稿，可直接拆 issue
 > 范围：单包 TypeScript + Bun 最简 Agent 内核
@@ -48,18 +48,18 @@
 | V0-502 | M5 | 实现 skill 注入 prompt context | skill | P0 | V0-501,V0-301 | done | model context 包含 skill content |
 | V0-503 | M5 | 添加 example `skills/example/SKILL.md` | docs | P1 | V0-501 | done | 示例 skill 可被测试加载 |
 | V0-601 | M6 | 实现 JSONL trace subscriber | trace | P0 | V0-402 | done | events 写入 JSONL |
-| V0-602 | M6 | 实现 trace redaction v0 | trace | P1 | V0-601 | done | 常见 API key pattern 被隐藏 |
+| V0-602 | M6 | 实现 trace redaction v0.0.0 | trace | P1 | V0-601 | done | 常见 API key pattern 被隐藏 |
 | V0-603 | M6 | 测试 trace 包含关键事件 | test | P0 | V0-601 | done | trace 中有 outcome |
 | V0-701 | M7 | 实现 CLI 参数解析 | cli | P0 | V0-401 | done | `bun run rowan --help` |
 | V0-702 | M7 | 实现 `--fake` 运行路径 | cli | P0 | V0-701,V0-401 | done | `bun run rowan --fake "hello"` |
 | V0-703 | M7 | 实现 `--trace <path>` | cli | P0 | V0-702,V0-601 | done | CLI 可写 trace |
 | V0-704 | M7 | CLI 输出 Outcome | cli | P0 | V0-702 | done | stdout 显示 pass/message |
 | V0-801 | M8 | 编写 README quickstart | docs | P0 | V0-702 | done | 10 分钟内跑通 |
-| V0-802 | M8 | 编写 v0 API 示例 | docs | P1 | V0-401 | todo | 展示 Agent API |
+| V0-802 | M8 | 编写 v0.0.0 API 示例 | docs | P1 | V0-401 | todo | 展示 Agent API |
 | V0-803 | M8 | 编写 SKILL.md 示例说明 | docs | P1 | V0-501 | todo | skill 语义清楚 |
-| V0-804 | M8 | 执行 v0 release checklist | release | P0 | V0-801 | done | 全部验收命令通过 |
+| V0-804 | M8 | 执行 v0.0.0 release checklist | release | P0 | V0-801 | done | 全部验收命令通过 |
 
-## 3. v0 Release Checklist
+## 3. v0.0.0 Release Checklist
 
 - [x] `bun install` 成功。
 - [x] `bun test` 成功。
@@ -76,7 +76,7 @@
 - [x] unknown tool 不 crash。
 - [x] invalid args 不执行工具。
 
-## 4. Explicitly Out of v0
+## 4. Explicitly Out of v0.0.0
 
 - [ ] real model adapter。
 - [ ] workspace ACI。

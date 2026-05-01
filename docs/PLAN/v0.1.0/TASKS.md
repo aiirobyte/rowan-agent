@@ -1,6 +1,6 @@
-# Rowan v0.1 Task Board
+# Rowan v0.1.0 Task Board
 
-> 版本：v0.1
+> 版本：v0.1.0
 > 日期：2026-05-01
 > 状态：已实现，待真实 API 手动验收
 > 范围：OpenAI-compatible 真实模型接入
@@ -29,7 +29,7 @@
 | V01-202 | M2 | 实现 execute phase mapping | stream | P0 | V01-003,V01-004,V01-101 | done | response -> ToolCall[] |
 | V01-203 | M2 | 实现 verify phase mapping | stream | P0 | V01-003,V01-004,V01-101 | done | response -> VerificationResult |
 | V01-204 | M2 | TypeBox validation on model outputs | stream | P0 | V01-201,V01-202,V01-203 | done | invalid schema 报错 |
-| V01-205 | M2 | 导出 `createOpenAICompatibleStream()` | stream | P0 | V01-201,V01-202,V01-203 | done | 可作为 v0 `StreamFn` 使用 |
+| V01-205 | M2 | 导出 `createOpenAICompatibleStream()` | stream | P0 | V01-201,V01-202,V01-203 | done | 可作为 v0.0.0 `StreamFn` 使用 |
 | V01-301 | M3 | CLI 默认使用真实模型 runtime | cli | P0 | V01-205 | done | 直接运行 `bun run rowan "hello"` |
 | V01-302 | M3 | CLI 增加 `--base-url` / `--api-key` / `--model` | cli | P0 | V01-301 | done | flags override env |
 | V01-303 | M3 | 移除 CLI fake runtime | cli | P0 | V01-301 | done | `--fake` 被拒绝为未知参数 |
@@ -50,7 +50,7 @@
 - [ ] `bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"` writes trace with real env
 - [x] missing API key exits 1 with clear error
 
-## 4. Explicitly Out of v0.1
+## 4. Explicitly Out of v0.1.0
 
 - [ ] Anthropic adapter
 - [ ] Gemini adapter

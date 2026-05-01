@@ -33,6 +33,35 @@ function createTestTask(): Task {
   };
 }
 
+test("route prompt defaults to direct answers unless tools are needed", () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    userInput: "What is 2 + 2?",
+  });
+
+  const messages = buildOpenAICompatibleMessages({
+    context: { phase: "route", session },
+    tools: [echoTool],
+  });
+  const combined = messages.map((message) => message.content).join("\n");
+
+  expect(messages).toHaveLength(3);
+  expect(combined).toContain("Phase: route");
+  expect(combined).toContain('{ "message": string, "needsTask": boolean }');
+  expect(combined).toContain("Default to answering the user directly with needsTask=false.");
+  expect(combined).toContain("normal chat, greetings, explanations, calculations");
+  expect(combined).toContain("workspace access");
+  expect(combined).toContain("needsTask must be true");
+  expect(combined).toContain("message must be the complete final user-visible answer");
+  expect(combined).toContain("only when satisfying the request requires tools");
+  expect(combined).toContain("Do not call tools in this phase");
+  expect(combined).toContain("forbidden message values");
+  expect(combined).toContain("\"routed\"");
+  expect(combined).toContain("你好！有什么我可以帮你？");
+  expect(combined).toContain("2 + 2 = 4.");
+  expect(combined).toContain("echo");
+});
+
 test("plan prompt includes phase, JSON-only contract, tools, and skills", () => {
   const session = createSession({
     systemPrompt: "Test system",
@@ -86,7 +115,7 @@ test("prompt builder exposes trace messages from the prompt construction boundar
       metadata: expect.objectContaining({
         kind: "model_prompt",
         phase: "plan",
-        source: "prompt_builder",
+        source: "context",
       }),
     }),
   ]);
@@ -156,6 +185,8 @@ test("verify prompt includes phase, JSON-only contract, task, criteria, and tool
   expect(combined).toContain("JSON-only contract");
   expect(combined).toContain("VerificationResult");
   expect(combined).toContain("message must be preserved before the verification result is recorded");
+  expect(combined).toContain("even if the answer is negative");
+  expect(combined).toContain("failed criterion ids");
   expect(combined).toContain(task.id);
   expect(combined).toContain("Acceptance criteria");
   expect(combined).toContain(task.acceptanceCriteria[0]?.description);

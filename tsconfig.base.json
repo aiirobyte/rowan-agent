@@ -18,7 +18,9 @@
       "@rowan-agent/workspace": ["./packages/workspace/src/index.ts"],
       "@rowan-agent/workspace/*": ["./packages/workspace/src/*"],
       "@rowan-agent/cli": ["./packages/cli/src/index.ts"],
-      "@rowan-agent/cli/*": ["./packages/cli/src/*"]
+      "@rowan-agent/cli/*": ["./packages/cli/src/*"],
+      "@rowan-agent/context": ["./packages/context/src/index.ts"],
+      "@rowan-agent/context/*": ["./packages/context/src/*"]
     }
   }
 }

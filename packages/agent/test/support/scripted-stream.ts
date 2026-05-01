@@ -48,9 +48,30 @@ function createScriptedVerification(task: Task, toolResults: ToolResult[]): Veri
   };
 }
 
-export const scriptedStream: StreamFn = async function* scriptedStream(_model, context, options) {
+export const scriptedStream: StreamFn = async function* scriptedStream(model, context, options) {
   if (options.signal?.aborted) {
     throw new Error("Stream aborted.");
+  }
+
+  if (context.phase === "route") {
+    const needsTask = wantsEcho(context.session.userInput);
+    const message = needsTask ? "Routing to task execution." : `Direct response: ${context.session.userInput}`;
+    yield {
+      type: "model_call",
+      phase: "route",
+      model,
+      usage: { inputMessages: context.session.messages.length },
+    };
+    yield { type: "text_delta", text: message };
+    yield {
+      type: "structured_output",
+      content: {
+        needsTask,
+        message,
+      },
+    };
+    yield { type: "done" };
+    return;
   }
 
   if (context.phase === "plan") {

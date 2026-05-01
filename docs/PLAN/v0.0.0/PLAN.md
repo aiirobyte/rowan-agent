@@ -1,16 +1,16 @@
-# Rowan v0 Plan
+# Rowan v0.0.0 Plan
 
-> 版本：v0
+> 版本：v0.0.0
 > 日期：2026-04-30
 > 状态：已定稿，可直接执行
 > 技术栈：TypeScript + Bun
-> 任务表：`docs/PLAN/v0/TASKS.md`
+> 任务表：`docs/PLAN/v0.0.0/TASKS.md`
 
-## 1. v0 目标
+## 1. v0.0.0 目标
 
-v0 是 Rowan 的最简 Agent 内核版本。
+v0.0.0 是 Rowan 的最简 Agent 内核版本。
 
-它不做平台，不做 monorepo，不做 eval，不做 sub-agent，不做 workflow。v0 只跑通一个核心闭环：
+它不做平台，不做 monorepo，不做 eval，不做 sub-agent，不做 workflow。v0.0.0 只跑通一个核心闭环：
 
 ```text
 Session
@@ -22,19 +22,19 @@ Session
   -> Session log / JSONL trace
 ```
 
-v0 的产品目标：
+v0.0.0 的产品目标：
 
 > 一个有状态 Agent 能接收用户输入，生成结构化 task，调用工具执行，使用同一个模型验证 acceptance criteria，最后输出 outcome，并保留完整 session log。
 
 ## 2. 已确认决策
 
-| 决策点 | v0 决策 |
+| 决策点 | v0.0.0 决策 |
 |---|---|
 | Agent 角色 | 同一个 Agent 同时承担 planner 和 executor |
 | Planner / executor 关系 | 不拆独立 planner；planner 只是同一个 Agent 的一次模型/工具调用阶段 |
-| Task 粒度 | v0 先只做 task，不做 sub-agent |
+| Task 粒度 | v0.0.0 先只做 task，不做 sub-agent |
 | Acceptance criteria | 使用结构化 schema 表示 |
-| Verification | v0 先用同一个模型判断；后续再加 scorer |
+| Verification | v0.0.0 先用同一个模型判断；后续再加 scorer |
 | Session log vs Message | 不合并；log 是完整运行事件，messages 是模型请求上下文 |
 | Skill | 可执行能力，以 `SKILL.md` 形式加载，类似 Codex skill |
 | Trace | JSONL event subscriber |
@@ -42,7 +42,7 @@ v0 的产品目标：
 | Runtime | TypeScript + Bun |
 | Schema | TypeBox 1.x + built-in `Schema.Compile()` validation |
 
-## 3. v0 范围
+## 3. v0.0.0 范围
 
 ### 3.1 必做
 
@@ -77,7 +77,7 @@ v0 的产品目标：
 
 ## 4. 技术假设
 
-| 项 | v0 决策 |
+| 项 | v0.0.0 决策 |
 |---|---|
 | Runtime | Bun |
 | Language | TypeScript |
@@ -87,7 +87,7 @@ v0 的产品目标：
 | CLI | Bun script；先用 `process.argv`，复杂后再引入 Commander |
 | Schema | TypeBox 1.x + `Schema.Compile()` |
 | First model | Fake stream model |
-| Real model adapter | 后置到 v0.1 |
+| Real model adapter | 后置到 v0.1.0 |
 | Trace format | JSONL |
 | Skill format | `skills/<skill-key>/SKILL.md` |
 
@@ -96,9 +96,9 @@ v0 的产品目标：
 - 接近 pi-agent 的 schema 风格。
 - 能自然产生 JSON Schema。
 - 比纯手写 JSON Schema 更适合 TypeScript 类型推导。
-- 自带 schema compiler / validator，v0 不需要 AJV。
+- 自带 schema compiler / validator，v0.0.0 不需要 AJV。
 
-v0 推荐用法：
+v0.0.0 推荐用法：
 
 ```ts
 import Type from "typebox";
@@ -262,7 +262,7 @@ class Agent {
 }
 ```
 
-v0 不要求 `steer()`、`followUp()`、`continue()`。
+v0.0.0 不要求 `steer()`、`followUp()`、`continue()`。
 
 ### 8.3 Task
 
@@ -279,7 +279,7 @@ interface Task {
 }
 ```
 
-v0 只支持一个当前 task，task queue 后置。
+v0.0.0 只支持一个当前 task，task queue 后置。
 
 ### 8.4 Acceptance Criteria
 
@@ -300,10 +300,10 @@ type AcceptanceCriterion =
     };
 ```
 
-v0 判断方式：
+v0.0.0 判断方式：
 
 - `model_judge`：同一个模型根据 task、messages、tool outputs 判断。
-- `tool_observation`：v0 仍可交给同一个模型判断，但保留后续 scorer 扩展位。
+- `tool_observation`：v0.0.0 仍可交给同一个模型判断，但保留后续 scorer 扩展位。
 
 ### 8.5 Outcome
 
@@ -329,7 +329,7 @@ interface Skill {
 }
 ```
 
-v0 的 skill 能力范围：
+v0.0.0 的 skill 能力范围：
 
 - 从 `skills/<id>/SKILL.md` 加载文本。
 - 将 skill 内容注入模型上下文。
@@ -337,7 +337,7 @@ v0 的 skill 能力范围：
 
 ## 9. StreamFn
 
-v0 采用 pi-agent 风格的 `StreamFn`，不做 ModelAdapter 注册系统。
+v0.0.0 采用 pi-agent 风格的 `StreamFn`，不做 ModelAdapter 注册系统。
 
 ```ts
 type StreamFn = (
@@ -357,7 +357,7 @@ type ModelStreamEvent =
   | { type: "done" };
 ```
 
-v0 必须实现 `FakeStreamFn`：
+v0.0.0 必须实现 `FakeStreamFn`：
 
 - 输出普通文本。
 - 输出结构化 task。
@@ -380,7 +380,7 @@ interface Tool<TArgs = unknown> {
 }
 ```
 
-v0 不做 ToolRegistry。Agent state 直接持有 `Tool[]`。
+v0.0.0 不做 ToolRegistry。Agent state 直接持有 `Tool[]`。
 
 ### 10.1 Tool Hooks
 
@@ -408,7 +408,7 @@ type AfterToolCall = (input: {
 
 ## 11. Verifier
 
-v0 的 verifier 使用同一个 `StreamFn`。
+v0.0.0 的 verifier 使用同一个 `StreamFn`。
 
 ```ts
 interface Verifier {
@@ -430,7 +430,7 @@ interface VerificationResult {
 
 ## 12. Agent Loop
 
-v0 loop 分三个阶段：
+v0.0.0 loop 分三个阶段：
 
 ```text
 1. Plan task
@@ -480,7 +480,7 @@ async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
 
 ## 13. Events and Trace
 
-v0 事件生命周期：
+v0.0.0 事件生命周期：
 
 ```text
 session_start

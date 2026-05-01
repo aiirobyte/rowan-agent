@@ -14,7 +14,7 @@
     },
     "packages/aci": {
       "name": "@rowan-agent/aci",
-      "version": "0.0.0",
+      "version": "0.3.0",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/workspace": "workspace:*",
@@ -22,18 +22,19 @@
     },
     "packages/adapters": {
       "name": "@rowan-agent/adapters",
-      "version": "0.0.0",
+      "version": "0.3.0",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
+        "@rowan-agent/context": "workspace:*",
       },
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.0.0",
+      "version": "0.3.0",
     },
     "packages/cli": {
       "name": "@rowan-agent/cli",
-      "version": "0.0.0",
+      "version": "0.3.0",
       "bin": {
         "rowan": "./src/cli.ts",
       },
@@ -45,9 +46,16 @@
         "@rowan-agent/workspace": "workspace:*",
       },
     },
+    "packages/context": {
+      "name": "@rowan-agent/context",
+      "version": "0.3.0",
+      "dependencies": {
+        "@rowan-agent/agent": "workspace:*",
+      },
+    },
     "packages/trace": {
       "name": "@rowan-agent/trace",
-      "version": "0.0.0",
+      "version": "0.3.0",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/workspace": "workspace:*",
@@ -55,7 +63,7 @@
     },
     "packages/workspace": {
       "name": "@rowan-agent/workspace",
-      "version": "0.0.0",
+      "version": "0.3.0",
     },
   },
   "packages": {
@@ -66,6 +74,8 @@
     "@rowan-agent/agent": ["@rowan-agent/agent@workspace:packages/agent"],
 
     "@rowan-agent/cli": ["@rowan-agent/cli@workspace:packages/cli"],
+
+    "@rowan-agent/context": ["@rowan-agent/context@workspace:packages/context"],
 
     "@rowan-agent/trace": ["@rowan-agent/trace@workspace:packages/trace"],
 

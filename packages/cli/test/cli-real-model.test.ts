@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { Outcome } from "@rowan-agent/agent";
+import { formatOutcomeOutput } from "../src/output";
 
 async function runCli(args: string[], env: Record<string, string | undefined> = {}) {
   const proc = Bun.spawn(["bun", "run", "rowan", ...args], {
@@ -77,22 +79,8 @@ test("CLI rejects removed OpenAI-compatible flag", async () => {
 test("CLI writes a default trace without --trace", async () => {
   const responses = [
     {
-      task: {
-        title: "Say hello",
-        instruction: "hello",
-        acceptanceCriteria: ["The final outcome addresses hello."],
-        toolNames: [],
-      },
-    },
-    {
       message: "Hello from model",
-      toolCalls: [],
-    },
-    {
-      passed: true,
-      message: "The model greeted the user.",
-      evidence: [],
-      failedCriteria: [],
+      needsTask: false,
     },
   ];
   let requestCount = 0;
@@ -118,7 +106,13 @@ test("CLI writes a default trace without --trace", async () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("\"passed\": true");
+    const outcome = JSON.parse(result.stdout) as Outcome;
+    expect(outcome).toMatchObject({
+      passed: true,
+      message: "Hello from model",
+    });
+    expect(outcome.taskId).toBeUndefined();
+    expect(result.stdout.trim()).toBe(formatOutcomeOutput(outcome));
 
     const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
     expect(traceMatch).not.toBeNull();
@@ -136,6 +130,8 @@ test("CLI writes a default trace without --trace", async () => {
     expect(trace).toContain("\"type\":\"session_created\"");
     expect(trace).toContain("\"userInput\":\"hello\"");
     expect(trace).toContain("\"type\":\"model_call\"");
+    expect(trace).toContain("\"phase\":\"route\"");
+    expect(trace).not.toContain("\"type\":\"task_created\"");
     expect(trace).toContain("\"type\":\"outcome\"");
 
     await rm(tracePath, { force: true });
@@ -146,6 +142,10 @@ test("CLI writes a default trace without --trace", async () => {
 
 test("CLI exposes workspace bash during planning and executes returned tool calls", async () => {
   const responses = [
+    {
+      message: "Use bash to check the current date: $(date)",
+      needsTask: false,
+    },
     {
       task: {
         title: "Run bash",
@@ -204,6 +204,16 @@ test("CLI exposes workspace bash during planning and executes returned tool call
     expect(traceMatch).not.toBeNull();
     const tracePath = join(process.cwd(), traceMatch?.[1] ?? "");
     const trace = await Bun.file(tracePath).text();
+    const traceEvents = trace
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)) as Array<{ type: string; phase?: string }>;
+    const routeCallIndex = traceEvents.findIndex(
+      (event) => event.type === "model_call" && event.phase === "route",
+    );
+    const taskCreatedIndex = traceEvents.findIndex((event) => event.type === "task_created");
+    expect(routeCallIndex).toBeGreaterThanOrEqual(0);
+    expect(taskCreatedIndex).toBeGreaterThan(routeCallIndex);
     expect(trace).toContain("\"type\":\"tool_call_start\"");
     expect(trace).toContain("\"toolName\":\"workspace.bash\"");
     expect(trace).toContain("cli-bash-ok");

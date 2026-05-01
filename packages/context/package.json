@@ -1,5 +1,5 @@
 {
-  "name": "@rowan-agent/aci",
+  "name": "@rowan-agent/context",
   "version": "0.3.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,6 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/agent": "workspace:*",
-    "@rowan-agent/workspace": "workspace:*"
+    "@rowan-agent/agent": "workspace:*"
   }
 }
