@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { createWorkspaceTools } from "@rowan-agent/aci";
 import {
   createOpenAICompatibleStream,
@@ -9,10 +9,15 @@ import {
 import {
   Agent,
   createId,
-  createDemoTools,
+  createCoreTools,
   formatLocalTimestamp,
 } from "@rowan-agent/agent";
 import { inspectTraceRun, jsonlTraceWriter, listTraceRuns } from "@rowan-agent/trace";
+import {
+  type RowanWorkspacePaths,
+  resolveInRowanWorkspace,
+  resolveRowanWorkspacePaths,
+} from "@rowan-agent/workspace";
 import { loadSkills } from "./skills";
 
 type RunArgs = {
@@ -27,50 +32,79 @@ type RunArgs = {
 
 type TraceListArgs = {
   kind: "trace-list";
-  runsDir: string;
+  runsDir?: string;
 };
 
 type TraceShowArgs = {
   kind: "trace-show";
-  runsDir: string;
+  runsDir?: string;
   target: string;
 };
 
 type CliArgs = RunArgs | TraceListArgs | TraceShowArgs;
 
-function createDefaultTracePath(): string {
-  return join(".rowan", "runs", `${formatLocalTimestamp()}-${createId("run")}.jsonl`);
+function createDefaultTracePath(workspace: RowanWorkspacePaths): string {
+  return join(workspace.runsDir, `${formatLocalTimestamp()}-${createId("run")}.jsonl`);
+}
+
+function resolveOptionalWorkspacePath(path: string | undefined, workspace: RowanWorkspacePaths): string | undefined {
+  return path ? resolveInRowanWorkspace(path, workspace) : undefined;
+}
+
+function resolveTraceTarget(target: string, workspace: RowanWorkspacePaths): string {
+  if (target.endsWith(".jsonl") || target.includes("/") || target.includes("\\")) {
+    return resolveInRowanWorkspace(target, workspace);
+  }
+
+  return target;
+}
+
+function formatWorkspacePathForDisplay(path: string, workspace: RowanWorkspacePaths): string {
+  const workspaceRelativePath = relative(workspace.root, path);
+  if (workspaceRelativePath && !workspaceRelativePath.startsWith("..") && !isAbsolute(workspaceRelativePath)) {
+    return workspaceRelativePath.split(sep).join("/");
+  }
+
+  return path;
 }
 
 function printHelp(): void {
   console.log(`Rowan
 
 Usage:
-  bun run rowan [--base-url url] [--api-key key] [--model name] [--trace path] [--skill path] "prompt"
+  bun run rowan [--base-url url] [--api-key key] [--model name] [--trace path] [--skill id-or-path] "prompt"
   bun run rowan trace list [--runs-dir path]
   bun run rowan trace show <run-id-or-file> [--runs-dir path]
 
 Examples:
   bun run rowan "hello"
   bun run rowan --model gpt-4.1-mini "hello"
-  bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
+  bun run rowan --skill example "summarize the example skill"
+  bun run rowan --trace runs/real.jsonl "list workspace files"
   bun run rowan trace list
   bun run rowan trace show run_12345678
 
 Trace:
-  Runs are logged automatically to .rowan/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-run_<id>.jsonl.
-  Pass --trace to choose a specific trace file path.
+  Source runs use the Rowan project root as the workspace.
+  Packaged binary runs use ~/.rowan as the workspace.
+  Runs are logged automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-run_<id>.jsonl.
+  Relative --trace and --runs-dir paths are resolved from <workspace>.
+
+Skills:
+  --skill example resolves to <workspace>/skills/example/SKILL.md.
 
 Environment:
   ROWAN_OPENAI_BASE_URL  Defaults to https://api.openai.com/v1
   ROWAN_OPENAI_API_KEY   Required unless --api-key is passed
   ROWAN_MODEL            Required unless --model is passed
+  ROWAN_RUNTIME          Optional override: source or binary
+  ROWAN_WORKSPACE        Optional workspace root override
 `);
 }
 
 function parseTraceArgs(args: string[]): TraceListArgs | TraceShowArgs {
   const command = args.shift();
-  let runsDir = ".rowan/runs";
+  let runsDir: string | undefined;
 
   if (!command || command === "--help" || command === "-h") {
     printHelp();
@@ -204,8 +238,15 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 async function runAgentCommand(args: RunArgs): Promise<void> {
-  const skills = await loadSkills(args.skills);
-  const tools = [...createDemoTools(), ...createWorkspaceTools({ root: process.cwd() })];
+  const workspace = resolveRowanWorkspacePaths();
+  const skills = await loadSkills(args.skills, workspace);
+  const tools = [
+    ...createCoreTools(),
+    ...createWorkspaceTools({
+      root: workspace.root,
+      allowExecute: true,
+    }),
+  ];
   const config = resolveOpenAICompatibleConfig({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
@@ -220,7 +261,7 @@ async function runAgentCommand(args: RunArgs): Promise<void> {
     skills,
   });
 
-  const tracePath = args.trace ?? createDefaultTracePath();
+  const tracePath = resolveOptionalWorkspacePath(args.trace, workspace) ?? createDefaultTracePath(workspace);
   const traceWriter = jsonlTraceWriter(tracePath);
   agent.subscribe(traceWriter);
 
@@ -229,20 +270,29 @@ async function runAgentCommand(args: RunArgs): Promise<void> {
     console.log(JSON.stringify(outcome, null, 2));
   } finally {
     await agent.flushTrace();
-    console.error(`Trace written to ${tracePath}`);
+    console.error(`Trace written to ${formatWorkspacePathForDisplay(tracePath, workspace)}`);
   }
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const workspace = resolveRowanWorkspacePaths();
 
   if (args.kind === "trace-list") {
-    console.log(JSON.stringify(await listTraceRuns(args.runsDir), null, 2));
+    const runsDir = resolveOptionalWorkspacePath(args.runsDir, workspace) ?? workspace.runsDir;
+    console.log(JSON.stringify(await listTraceRuns(runsDir), null, 2));
     return;
   }
 
   if (args.kind === "trace-show") {
-    console.log(JSON.stringify(await inspectTraceRun(args.target, args.runsDir), null, 2));
+    const runsDir = resolveOptionalWorkspacePath(args.runsDir, workspace) ?? workspace.runsDir;
+    console.log(
+      JSON.stringify(
+        await inspectTraceRun(resolveTraceTarget(args.target, workspace), runsDir),
+        null,
+        2,
+      ),
+    );
     return;
   }
 

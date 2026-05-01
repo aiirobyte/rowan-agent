@@ -122,12 +122,13 @@ test("CLI writes a default trace without --trace", async () => {
 
     const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
     expect(traceMatch).not.toBeNull();
-    const tracePath = traceMatch?.[1];
-    expect(tracePath?.startsWith(".rowan/runs/")).toBe(true);
-    expect(tracePath).toMatch(
-      /\.rowan\/runs\/\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}-run_[a-f0-9]{8}\.jsonl$/,
+    const displayedTracePath = traceMatch?.[1];
+    expect(displayedTracePath?.startsWith("runs/")).toBe(true);
+    expect(displayedTracePath).toMatch(
+      /runs\/\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}-run_[a-f0-9]{8}\.jsonl$/,
     );
 
+    const tracePath = join(process.cwd(), displayedTracePath ?? "");
     const trace = await Bun.file(tracePath ?? "").text();
     const firstEvent = JSON.parse(trace.split("\n")[0] ?? "{}") as { ts?: string; timestamp?: string };
     expect(firstEvent.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
@@ -137,7 +138,77 @@ test("CLI writes a default trace without --trace", async () => {
     expect(trace).toContain("\"type\":\"model_call\"");
     expect(trace).toContain("\"type\":\"outcome\"");
 
-    await rm(tracePath ?? "", { force: true });
+    await rm(tracePath, { force: true });
+  } finally {
+    server?.stop(true);
+  }
+});
+
+test("CLI exposes workspace bash during planning and executes returned tool calls", async () => {
+  const responses = [
+    {
+      task: {
+        title: "Run bash",
+        instruction: "run a bash command",
+        acceptanceCriteria: ["The bash command output is present."],
+        toolNames: ["workspace.bash"],
+      },
+    },
+    {
+      message: "Running bash.",
+      toolCalls: [
+        {
+          name: "workspace.bash",
+          args: { command: "printf cli-bash-ok" },
+        },
+      ],
+    },
+    {
+      passed: true,
+      message: "cli-bash-ok",
+      evidence: [],
+      failedCriteria: [],
+    },
+  ];
+  const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
+  let requestCount = 0;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requests.push((await request.json()) as { messages?: Array<{ content?: string }> });
+        return openAIResponse(responses[requestCount++] ?? responses.at(-1));
+      },
+    });
+  } catch (error) {
+    if (canSkipLocalBindError(error)) {
+      expect(true).toBe(true);
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const result = await runCli(["use bash"], {
+      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+      ROWAN_OPENAI_API_KEY: "test-key",
+      ROWAN_MODEL: "test-model",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("\"passed\": true");
+    expect(requests[0]?.messages?.at(-1)?.content).toContain("\"name\": \"workspace.bash\"");
+
+    const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
+    expect(traceMatch).not.toBeNull();
+    const tracePath = join(process.cwd(), traceMatch?.[1] ?? "");
+    const trace = await Bun.file(tracePath).text();
+    expect(trace).toContain("\"type\":\"tool_call_start\"");
+    expect(trace).toContain("\"toolName\":\"workspace.bash\"");
+    expect(trace).toContain("cli-bash-ok");
+
+    await rm(tracePath, { force: true });
   } finally {
     server?.stop(true);
   }

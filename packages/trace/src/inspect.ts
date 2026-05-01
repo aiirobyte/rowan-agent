@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { AgentEvent } from "@rowan-agent/agent";
+import { resolveRowanWorkspacePaths } from "@rowan-agent/workspace";
 import { readTraceFile } from "./jsonl-reader";
 
 export type TraceRunSummary = {
@@ -28,6 +29,10 @@ export type TraceInspectSummary = {
 
 const RUN_FILE_PATTERN = /^(?<timestamp>.+)-(?<runId>run_[a-f0-9]{8})\.jsonl$/;
 
+function defaultRunsDir(): string {
+  return resolveRowanWorkspacePaths().runsDir;
+}
+
 function maybeRunMetadata(fileName: string): Pick<TraceRunSummary, "runId" | "timestamp"> {
   const match = fileName.match(RUN_FILE_PATTERN);
   return {
@@ -46,7 +51,7 @@ function eventSessionId(event: AgentEvent): string | undefined {
   return undefined;
 }
 
-export async function listTraceRuns(runsDir = ".rowan/runs"): Promise<TraceRunSummary[]> {
+export async function listTraceRuns(runsDir = defaultRunsDir()): Promise<TraceRunSummary[]> {
   const entries = await readdir(runsDir, { withFileTypes: true }).catch((error) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
@@ -72,7 +77,7 @@ export async function listTraceRuns(runsDir = ".rowan/runs"): Promise<TraceRunSu
   return summaries.sort((left, right) => right.fileName.localeCompare(left.fileName));
 }
 
-export async function resolveTraceRunPath(input: string, runsDir = ".rowan/runs"): Promise<string> {
+export async function resolveTraceRunPath(input: string, runsDir = defaultRunsDir()): Promise<string> {
   if (input.endsWith(".jsonl") || input.includes("/") || input.includes("\\")) {
     return input;
   }
@@ -122,7 +127,7 @@ export function summarizeTraceEvents(filePath: string, events: AgentEvent[]): Tr
   };
 }
 
-export async function inspectTraceRun(input: string, runsDir = ".rowan/runs"): Promise<TraceInspectSummary> {
+export async function inspectTraceRun(input: string, runsDir = defaultRunsDir()): Promise<TraceInspectSummary> {
   const filePath = await resolveTraceRunPath(input, runsDir);
   const events = await readTraceFile(filePath);
   return summarizeTraceEvents(filePath, events);
