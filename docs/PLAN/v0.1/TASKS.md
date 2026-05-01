@@ -1,8 +1,8 @@
 # Rowan v0.1 Task Board
 
-> 版本：v0.1  
-> 日期：2026-05-01  
-> 状态：已实现，待真实 API 手动验收  
+> 版本：v0.1
+> 日期：2026-05-01
+> 状态：已实现，待真实 API 手动验收
 > 范围：OpenAI-compatible 真实模型接入
 
 ## 1. Status Legend

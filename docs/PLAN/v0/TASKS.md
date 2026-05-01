@@ -1,8 +1,8 @@
 # Rowan v0 Task Board
 
-> 版本：v0  
-> 日期：2026-04-30  
-> 状态：已定稿，可直接拆 issue  
+> 版本：v0
+> 日期：2026-04-30
+> 状态：已定稿，可直接拆 issue
 > 范围：单包 TypeScript + Bun 最简 Agent 内核
 
 ## 1. Status Legend

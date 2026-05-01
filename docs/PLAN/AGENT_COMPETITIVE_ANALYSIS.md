@@ -1,6 +1,6 @@
 # Agent Harness Competitive Analysis
 
-> 截至日期：2026-04-29  
+> 截至日期：2026-04-29
 > 目标：参考 pi-agent-core 与 yoagent，梳理主流 Agent / Agent Harness 的实现方式、能力边界、竞品差异，并提炼 Rowan Agent Harness 的产品与架构机会。
 
 ## 1. 结论摘要
@@ -33,7 +33,7 @@ Goose/Claude Code/Codex 的本地工具权限与开发者工作流
 | pi-agent-core | Python 极简 stateful agent loop | 用户提供 `StreamFn`；核心 loop 负责 prompt -> stream -> tool -> steering/follow-up；Pydantic 类型 | LLM-agnostic、事件流、JSON Schema 工具、steering、follow-up、取消、SSE proxy transport、agent/LLM 两级事件 | 非常适合作为最小可行内核：不要一开始绑定 provider，也不要把 workflow/RAG/反思塞进核心 |
 | yoagent | Rust 版极简 agent loop，受 pi-agent-core 启发 | Rust Agent struct + builder；模型流式输出、工具执行、事件流、上下文压缩 | 多 provider、AgentEvent streaming、内置编码工具、token 估算与分层压缩、turn/token/time limit、取消、steering/follow-up、子 agent | Rowan 如果追求性能与可嵌入，可以学习其“loop is the product”：小循环、强事件、强边界 |
 
-资料：pi-agent-core PyPI 描述了它的 LLM-agnostic `StreamFn`、事件系统、工具执行、steering/follow-up、proxy transport 和模块结构；yoagent 文档明确强调 “the loop is the product”，并列出 streaming events、多 provider、工具系统、上下文管理、执行限制、steering/follow-up、取消等能力。  
+资料：pi-agent-core PyPI 描述了它的 LLM-agnostic `StreamFn`、事件系统、工具执行、steering/follow-up、proxy transport 和模块结构；yoagent 文档明确强调 “the loop is the product”，并列出 streaming events、多 provider、工具系统、上下文管理、执行限制、steering/follow-up、取消等能力。
 来源：[pi-agent-core PyPI](https://pypi.org/project/pi-agent-core/)、[yoagent docs](https://yologdev.github.io/yoagent/)、[yoagent docs.rs](https://docs.rs/crate/yoagent/0.5.1)
 
 ## 3. 市场分层
@@ -65,19 +65,19 @@ Goose/Claude Code/Codex 的本地工具权限与开发者工作流
 | smolagents | 轻量 Python code agent | MultiStepAgent；CodeAgent 写 Python actions；ToolCallingAgent 写 JSON | code actions、sandbox via Docker/E2B/Modal/Blaxel、managed agents、callbacks | 简洁、code action 表达力强 | 产品化 trace、权限、workflow 较少 |
 | Youtu-Agent | 开源模型友好的 agent 框架 | workflow mode + meta-agent mode；含评测/训练 | data analysis、file processing、deep research、自动 agent 生成、experience learning、RL | 面向开源模型、高 benchmark 表现 | 更偏研究/框架，不是极简 harness |
 
-资料来源：  
-[OpenAI Agents SDK](https://platform.openai.com/docs/guides/agents-sdk/)、[OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/)、[OpenAI Agents SDK guardrails](https://openai.github.io/openai-agents-python/guardrails/)、[OpenAI Agents SDK handoffs](https://openai.github.io/openai-agents-python/handoffs/)  
-[Claude Agent SDK](https://docs.claude.com/en/docs/claude-code/sdk/sdk-overview)、[Claude Code overview](https://code.claude.com/docs/en/overview)、[Claude Code MCP](https://docs.anthropic.com/en/docs/claude-code/mcp)  
-[LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution)  
-[Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/)  
-[CrewAI introduction](https://docs.crewai.com/en/introduction)、[CrewAI Flows](https://docs.crewai.com/en/concepts/flows)  
-[LlamaIndex human-in-the-loop](https://docs.llamaindex.ai/en/stable/understanding/agent/human_in_the_loop/)  
-[Pydantic AI agents](https://pydantic.dev/docs/ai/core-concepts/agent/)、[Pydantic AI output](https://pydantic.dev/docs/ai/core-concepts/output/)  
-[Mastra agents](https://mastra.ai/agents)、[Mastra observability](https://mastra.ai/observability)  
-[Agno docs](https://docs.agno.com/)、[Agno memory](https://docs-v1.agno.com/agents/memory)  
-[Letta stateful agents](https://docs.letta.com/guides/core-concepts/stateful-agents/)、[Letta memory architecture](https://docs.letta.com/guides/agents/architectures/memgpt)  
-[Haystack Agent](https://docs.haystack.deepset.ai/docs/agent)、[Haystack overview](https://docs.haystack.deepset.ai/docs)  
-[smolagents](https://huggingface.co/docs/smolagents/index)、[smolagents agents reference](https://huggingface.co/docs/smolagents/main/reference/agents)  
+资料来源：
+[OpenAI Agents SDK](https://platform.openai.com/docs/guides/agents-sdk/)、[OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/)、[OpenAI Agents SDK guardrails](https://openai.github.io/openai-agents-python/guardrails/)、[OpenAI Agents SDK handoffs](https://openai.github.io/openai-agents-python/handoffs/)
+[Claude Agent SDK](https://docs.claude.com/en/docs/claude-code/sdk/sdk-overview)、[Claude Code overview](https://code.claude.com/docs/en/overview)、[Claude Code MCP](https://docs.anthropic.com/en/docs/claude-code/mcp)
+[LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution)
+[Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/)
+[CrewAI introduction](https://docs.crewai.com/en/introduction)、[CrewAI Flows](https://docs.crewai.com/en/concepts/flows)
+[LlamaIndex human-in-the-loop](https://docs.llamaindex.ai/en/stable/understanding/agent/human_in_the_loop/)
+[Pydantic AI agents](https://pydantic.dev/docs/ai/core-concepts/agent/)、[Pydantic AI output](https://pydantic.dev/docs/ai/core-concepts/output/)
+[Mastra agents](https://mastra.ai/agents)、[Mastra observability](https://mastra.ai/observability)
+[Agno docs](https://docs.agno.com/)、[Agno memory](https://docs-v1.agno.com/agents/memory)
+[Letta stateful agents](https://docs.letta.com/guides/core-concepts/stateful-agents/)、[Letta memory architecture](https://docs.letta.com/guides/agents/architectures/memgpt)
+[Haystack Agent](https://docs.haystack.deepset.ai/docs/agent)、[Haystack overview](https://docs.haystack.deepset.ai/docs)
+[smolagents](https://huggingface.co/docs/smolagents/index)、[smolagents agents reference](https://huggingface.co/docs/smolagents/main/reference/agents)
 [Youtu-Agent GitHub](https://github.com/Tencent/Youtu-agent)
 
 ### 3.3 编码 Agent / 软件工程 Agent
@@ -96,17 +96,17 @@ Goose/Claude Code/Codex 的本地工具权限与开发者工作流
 | Devin | 商业 AI software engineer | 云端 autonomous SWE；团队知识、浏览器/桌面/PR/incident | 复杂工程任务、PR review、visual QA、migration、docs、scheduled chores、bug fixing、incident triage | 高端企业自动化定位，agent fleet 和审计叙事强 | 闭源、成本高、可控性和复现依赖平台 |
 | Replit Agent | 从自然语言生成应用的 agent | Replit workspace + app builder + testing/deploy | 全栈 app、数据库、环境、依赖、部署、App Testing、Agents & Automations | 面向非专业/快速原型，端到端 app builder 强 | 泛化为通用 harness 的价值有限；平台绑定 |
 
-资料来源：  
-[OpenAI Codex](https://openai.com/codex)、[Introducing Codex](https://openai.com/index/introducing-codex/)、[Codex CLI Help](https://help.openai.com/en/articles/11096431-openai-codex-ci-getting-started)、[Codex GitHub](https://github.com/openai/codex)  
-[Claude Code overview](https://code.claude.com/docs/en/overview)、[Claude Code GitHub Actions](https://code.claude.com/docs/en/github-actions)、[Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks)  
-[Gemini CLI docs](https://developers.google.com/gemini-code-assist/docs/gemini-cli)、[Gemini CLI GitHub](https://github.com/google-gemini/gemini-cli)  
-[Goose docs](https://goose-docs.ai/)、[Goose GitHub](https://github.com/block/goose)、[Goose config](https://goose-docs.ai/docs/guides/config-files)  
-[OpenHands](https://openhands.dev/)、[OpenHands GitHub](https://github.com/OpenHands/OpenHands)、[OpenHands sandbox docs](https://docs.openhands.dev/openhands/usage/sandboxes/overview)  
-[SWE-agent ACI](https://swe-agent.com/1.0/background/aci/)、[SWE-agent GitHub](https://github.com/SWE-agent/SWE-agent)  
-[GitHub Copilot coding agent](https://docs.github.com/en/copilot/concepts/about-assigning-tasks-to-copilot)、[Copilot PR creation](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/assign-copilot-to-an-issue)  
-[Cursor Background Agents](https://docs.cursor.com/en/background-agents)、[Cursor Background Agents API](https://docs.cursor.com/background-agent/api/overview)  
-[Windsurf Cascade](https://docs.windsurf.com/windsurf/cascade)、[Windsurf AGENTS.md](https://docs.windsurf.com/windsurf/cascade/agents-md)  
-[Devin docs](https://docs.devin.ai/)、[Devin website](https://devin.ai/)  
+资料来源：
+[OpenAI Codex](https://openai.com/codex)、[Introducing Codex](https://openai.com/index/introducing-codex/)、[Codex CLI Help](https://help.openai.com/en/articles/11096431-openai-codex-ci-getting-started)、[Codex GitHub](https://github.com/openai/codex)
+[Claude Code overview](https://code.claude.com/docs/en/overview)、[Claude Code GitHub Actions](https://code.claude.com/docs/en/github-actions)、[Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks)
+[Gemini CLI docs](https://developers.google.com/gemini-code-assist/docs/gemini-cli)、[Gemini CLI GitHub](https://github.com/google-gemini/gemini-cli)
+[Goose docs](https://goose-docs.ai/)、[Goose GitHub](https://github.com/block/goose)、[Goose config](https://goose-docs.ai/docs/guides/config-files)
+[OpenHands](https://openhands.dev/)、[OpenHands GitHub](https://github.com/OpenHands/OpenHands)、[OpenHands sandbox docs](https://docs.openhands.dev/openhands/usage/sandboxes/overview)
+[SWE-agent ACI](https://swe-agent.com/1.0/background/aci/)、[SWE-agent GitHub](https://github.com/SWE-agent/SWE-agent)
+[GitHub Copilot coding agent](https://docs.github.com/en/copilot/concepts/about-assigning-tasks-to-copilot)、[Copilot PR creation](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/assign-copilot-to-an-issue)
+[Cursor Background Agents](https://docs.cursor.com/en/background-agents)、[Cursor Background Agents API](https://docs.cursor.com/background-agent/api/overview)
+[Windsurf Cascade](https://docs.windsurf.com/windsurf/cascade)、[Windsurf AGENTS.md](https://docs.windsurf.com/windsurf/cascade/agents-md)
+[Devin docs](https://docs.devin.ai/)、[Devin website](https://devin.ai/)
 [Replit Agent](https://docs.replit.com/core-concepts/agent)、[Replit Agent v2/v3 docs](https://docs.replit.com/replitai/agent-v2)、[Replit Agents & Automations](https://docs.replit.com/replitai/agents-and-automations)
 
 ### 3.4 企业自动化 / Harness 平台
@@ -372,4 +372,3 @@ run agent
 ```
 
 这条链路一旦做扎实，Rowan 会和普通 agent framework 拉开距离：它不是“帮你写 prompt”，而是“让 agent 变成可以工程化管理的进程”。
-

@@ -2,7 +2,6 @@
 .agent/
 .rowan/
 AGENT.md
-docs/
 node_modules/
 dist/
 build/

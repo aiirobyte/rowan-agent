@@ -1,9 +1,9 @@
 # Rowan Agent Technical Architecture
 
-> 版本：0.3  
-> 日期：2026-05-01  
-> 状态：v0 架构已定稿；v0.1 OpenAI-compatible StreamFn 已实现，待真实 API 手动验收  
-> 输入文档：`docs/ROADMAP.md`、`docs/v0/PLAN.md`、`docs/v0.1/PLAN.md`
+> 版本：0.3
+> 日期：2026-05-01
+> 状态：v0 架构已定稿；v0.1 OpenAI-compatible StreamFn 已实现，待真实 API 手动验收
+> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0/PLAN.md`、`docs/PLAN/v0.1/PLAN.md`
 
 ## 1. 架构目标
 
@@ -340,27 +340,27 @@ v0 不做 trace reader、replay、fork。
 ## 11. CLI
 
 ```bash
-bun run rowan --fake "hello"
-bun run rowan --fake "use echo tool"
-bun run rowan --fake --trace .rowan/runs/latest.jsonl "use echo tool"
+bun run rowan "hello"
+bun run rowan --trace .rowan/runs/latest.jsonl "use echo tool"
+bun run rowan --base-url https://api.openai.com/v1 --model gpt-4.1-mini "hello"
 ```
 
 CLI 只负责：
 
 - 创建 Agent。
-- 注入 `FakeStreamFn`。
-- 注入 demo tools。
+- 注入真实模型 `StreamFn`。
+- 注入 tools。
 - 可选加载 skill。
-- 可选挂 JSONL trace subscriber。
+- 默认挂 JSONL trace subscriber。
 - 输出 outcome。
 
 ## 12. Future Modular Architecture
 
-v0 完成后，再按能力拆模块：
+v0.2 开始按能力拆模块，但不一次性完成 v1.0。拆包以依赖方向和已出现的能力压力为准。
 
 ```text
 packages/
-  core/       Agent, Session, Task, Tool, Verifier, Events
+  agent/       Agent, Session, Task, Tool, Verifier, Events
   cli/        command interface
   trace/      trace reader, replay, fork
   aci/        workspace tools
@@ -369,12 +369,57 @@ packages/
   adapters/   real model providers
 ```
 
-拆包条件：
+### 12.1 拆包条件
 
-- v0 API 稳定。
-- 至少一个真实模型 adapter 完成。
-- workspace ACI 开始引入多工具。
-- trace 不再只是 writer，需要 reader/replay。
+| 条件 | v0.2 处理方式 |
+|---|---|
+| v0 API 稳定 | 冻结 `agent` public exports，并把内部 import 迁移到 package 入口 |
+| 至少一个真实模型 adapter 完成 | 将 OpenAI-compatible runtime 迁入 `packages/adapters` |
+| workspace ACI 开始引入多工具 | 新增 `packages/aci`，先提供 read/list/search，再设计 diff/patch/test |
+| trace 不再只是 writer，需要 reader/replay | 将 JSONL writer 迁入 `packages/trace`，新增 reader 和 inspect；完整 replay/fork 后置 |
+
+### 12.2 Package Dependency Direction
+
+```text
+cli
+  -> agent
+  -> adapters
+  -> trace
+  -> aci
+
+adapters -> agent
+trace    -> agent
+aci      -> agent
+
+eval     -> agent, trace
+workflow -> agent
+
+agent     -> no Rowan package dependency
+```
+
+规则：
+
+- `agent` 不依赖任何其他 Rowan package。
+- `adapters` 只把 provider response 映射成 `agent` 的 `StreamFn` events。
+- `trace` 只消费 `agent` 的 `AgentEvent`，不执行 agent。
+- `aci` 只暴露 `agent.Tool`，不直接控制 agent loop。
+- `cli` 是组合层，可以依赖所有运行时 package。
+- `eval` 和 `workflow` 在 v0.2 不进入主链路，保留到后续版本。
+
+### 12.3 v0.2 拆包范围
+
+v0.2 目标结构：
+
+```text
+packages/
+  agent/       existing agent kernel
+  adapters/   existing OpenAI-compatible adapter
+  trace/      existing JSONL writer + new reader/inspect
+  aci/        new workspace tools
+  cli/        existing CLI composition
+```
+
+v0.2 不做完整 `eval`、`workflow`，也不做完整 trace replay/fork。
 
 ## 13. v0.1 Real Model Runtime
 

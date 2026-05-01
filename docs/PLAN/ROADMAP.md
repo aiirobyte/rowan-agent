@@ -1,9 +1,9 @@
 # Rowan Agent Roadmap
 
-> 版本：0.3  
-> 日期：2026-05-01  
-> 状态：v0 已定稿；v0.1 已实现真实模型运行时，待真实 API 手动验收  
-> 相关文档：`docs/ARCHITECTURE.md`、`docs/v0/PLAN.md`、`docs/v0.1/PLAN.md`、`docs/AGENT_COMPETITIVE_ANALYSIS.md`
+> 版本：0.4
+> 日期：2026-05-01
+> 状态：v0 已定稿；v0.1 已实现真实模型运行时；v0.2 monorepo foundation 已实现
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0/PLAN.md`、`docs/PLAN/v0.1/PLAN.md`、`docs/PLAN/v0.2/PLAN.md`、`docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
 
 ## 1. 一句话定位
 
@@ -26,7 +26,7 @@ Session
 | 决策点 | v0 决策 |
 |---|---|
 | 技术栈 | TypeScript + Bun |
-| 项目形态 | 单包 `src/`，暂不做 monorepo |
+| 项目形态 | v0/v0.1 保持单包 `src/`；v0.2 开始 monorepo foundation |
 | Agent 角色 | 同一个 Agent 同时承担 planner 和 executor |
 | Task | v0 先只做 task，不做 sub-agent |
 | Acceptance criteria | 结构化 schema |
@@ -41,9 +41,9 @@ Session
 
 v0 详细执行计划只维护在：
 
-- `docs/v0/README.md`
-- `docs/v0/PLAN.md`
-- `docs/v0/TASKS.md`
+- `docs/PLAN/v0/README.md`
+- `docs/PLAN/v0/PLAN.md`
+- `docs/PLAN/v0/TASKS.md`
 
 ### 3.1 v0 必做
 
@@ -84,13 +84,13 @@ v0 详细执行计划只维护在：
 |---|---|---|---|
 | v0 | Minimal Agent Kernel | 跑通 task -> tool -> verify -> outcome | Agent、Task、Criteria、Tool、Skill、Trace、CLI |
 | v0.1 | Real Model Runtime | 接入真实模型 | OpenAI-compatible `StreamFn`、Anthropic/Gemini 后续 |
-| v0.2 | Workspace ACI | 面向 coding/workspace agent | read/list/search/diff/patch/test tools |
+| v0.2 | Monorepo + Workspace ACI Foundation | 完成拆包条件并启动模块化迁移 | packages/agent、adapters、trace、aci、cli，read/list/search tools |
 | v0.3 | Policy and Safety | 把 hook 升级成策略系统 | approval、permission、dangerous command guard |
 | v0.4 | Trace Replay | 让失败 run 可复盘 | trace reader、replay、fork from step |
 | v0.5 | Eval Harness | 系统比较 agent 质量 | dataset、scorer、batch report |
 | v0.6 | Subagent as Tool | 受控多 Agent | child run、nested trace、per-subagent budget |
 | v0.7 | Workflow | 外层编排 | graph executor、checkpoint、human approval |
-| v1.0 | Modular Harness | 从单包演进为模块化 runtime | packages/core、aci、trace、eval、workflow、cli |
+| v1.0 | Modular Harness | 从单包演进为模块化 runtime | packages/agent、aci、trace、eval、workflow、cli |
 
 ## 5. v0 到 v1 的演进原则
 
@@ -135,21 +135,21 @@ v0 详细执行计划只维护在：
 
 ## 8. 近期执行顺序
 
-1. 按 `docs/v0/PLAN.md` 完成 M0-M3。
-2. 跑通 fake stream 下的 task -> tool -> verification -> outcome。
-3. 实现 stateful `Agent` class。
-4. 实现 `SKILL.md` loader。
-5. 实现 JSONL trace subscriber。
-6. 实现最小 CLI。
-7. 跑完 v0 release checklist。
+1. 完成 v0.1 真实 API 手动验收。
+2. 按 `docs/PLAN/v0.2/PLAN.md` 冻结 public API 和 package dependency direction。
+3. 建立 Bun workspace 和 package scaffold。
+4. 迁移 `agent`、`adapters`、`trace`。
+5. 引入 Workspace ACI read-only tools。
+6. 迁移 CLI composition，并保持 `bun run rowan "hello"` 不变。
+7. 跑完 v0.2 release checklist。
 
 ## 9. v0.1 范围
 
 v0.1 详细执行计划维护在：
 
-- `docs/v0.1/README.md`
-- `docs/v0.1/PLAN.md`
-- `docs/v0.1/TASKS.md`
+- `docs/PLAN/v0.1/README.md`
+- `docs/PLAN/v0.1/PLAN.md`
+- `docs/PLAN/v0.1/TASKS.md`
 
 v0.1 已确定：
 
@@ -159,11 +159,37 @@ v0.1 已确定：
 - 默认 prompt-json 输出，native tool calling 后置。
 - Anthropic/Gemini 后置。
 
-## 10. Open Questions
+## 10. v0.2 范围
 
-这些问题不阻塞 v0.1，但会影响 v0.2+：
+v0.2 详细执行计划维护在：
 
-- v0.2 Workspace ACI 是否以 coding agent 为唯一目标？
+- `docs/PLAN/v0.2/README.md`
+- `docs/PLAN/v0.2/PLAN.md`
+- `docs/PLAN/v0.2/TASKS.md`
+
+v0.2 已确定：
+
+- 以 monorepo foundation 作为主线。
+- Workspace ACI 是触发拆包的第一批工具能力。
+- `agent`、`adapters`、`trace`、`aci`、`cli` 进入首轮拆解。
+- `eval` 和 `workflow` 只保留边界，不做完整实现。
+- trace 在 v0.2 做 reader + inspect，完整 replay/fork 放到 v0.4。
+
+v0.2 release gates：
+
+- `bun test`
+- `bun run build`
+- `bun run rowan "hello"`
+- `bun run rowan trace list`
+- `bun run rowan trace show <run-id-or-file>`
+- Trace reader can parse v0.1 JSONL files.
+- Workspace ACI read-only tools pass path safety tests.
+- Package dependency direction check passes.
+
+## 11. Open Questions
+
+这些问题不阻塞 v0.2，但会影响 v0.3+：
+
 - v0.3 policy approval 是 CLI 交互优先，还是配置文件优先？
 - v0.4 replay 是否需要 workspace snapshot？
 - v0.5 scorer 是否优先程序化 scorer，而不是 LLM judge？

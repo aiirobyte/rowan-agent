@@ -1,10 +1,10 @@
 # Rowan v0 Plan
 
-> 版本：v0  
-> 日期：2026-04-30  
-> 状态：已定稿，可直接执行  
-> 技术栈：TypeScript + Bun  
-> 任务表：`docs/v0/TASKS.md`
+> 版本：v0
+> 日期：2026-04-30
+> 状态：已定稿，可直接执行
+> 技术栈：TypeScript + Bun
+> 任务表：`docs/PLAN/v0/TASKS.md`
 
 ## 1. v0 目标
 

@@ -1,11 +1,11 @@
 # Rowan v0.1 Plan
 
-> 版本：v0.1  
-> 日期：2026-05-01  
-> 状态：已实现，待真实 API 手动验收  
-> 技术栈：TypeScript + Bun  
-> 基线：v0 Minimal Agent Kernel  
-> 任务表：`docs/v0.1/TASKS.md`
+> 版本：v0.1
+> 日期：2026-05-01
+> 状态：已实现，待真实 API 手动验收
+> 技术栈：TypeScript + Bun
+> 基线：v0 Minimal Agent Kernel
+> 任务表：`docs/PLAN/v0.1/TASKS.md`
 
 ## 1. v0.1 目标
 
