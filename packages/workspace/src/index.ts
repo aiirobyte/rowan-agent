@@ -171,9 +171,19 @@ export function normalizeRelativePath(path: string): string {
   return path.split(sep).join("/");
 }
 
+function normalizeWorkspaceInputPath(path = "."): string {
+  const trimmed = path.trim();
+  if (!trimmed || trimmed === "/" || trimmed === "\\") {
+    return ".";
+  }
+
+  return path;
+}
+
 export function resolveWorkspacePath(context: WorkspacePathContext, path = "."): ResolvedWorkspacePath {
   const root = resolve(context.root);
-  const absolutePath = resolve(root, path);
+  const inputPath = normalizeWorkspaceInputPath(path);
+  const absolutePath = resolve(root, inputPath);
   const relativePath = relative(root, absolutePath);
 
   if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
@@ -182,7 +192,7 @@ export function resolveWorkspacePath(context: WorkspacePathContext, path = "."):
 
   return {
     root,
-    inputPath: path,
+    inputPath,
     absolutePath,
     relativePath: normalizeRelativePath(relativePath || "."),
   };

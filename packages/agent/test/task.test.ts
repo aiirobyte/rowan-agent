@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createDefaultCriteria, parseTask } from "../src/task";
+import { createDefaultCriteria, parseTask, parseVerificationResult } from "../src/task";
 import { createId, nowIso } from "../src/types";
 
 test("parseTask validates structured task schema", () => {
@@ -20,6 +20,17 @@ test("parseTask validates structured task schema", () => {
 
 test("parseTask rejects invalid task", () => {
   expect(() => parseTask({ title: "bad" })).toThrow();
+});
+
+test("parseVerificationResult does not allow passed with failed criteria", () => {
+  const result = parseVerificationResult({
+    passed: true,
+    message: "Looks fine.",
+    evidence: [],
+    failedCriteria: ["crit_failed"],
+  });
+
+  expect(result.passed).toBe(false);
 });
 
 test("nowIso uses the log timestamp format with local timezone offset", () => {

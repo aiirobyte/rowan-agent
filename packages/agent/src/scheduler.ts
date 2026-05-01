@@ -42,6 +42,9 @@ export function hasExplicitToolRequest(userInput: string, tools: Tool[] = []): b
     /(使用|调用).*(工具)/i,
     /(列出|读取|搜索|修改|写入|替换|查看).*(workspace|工作区|项目|仓库|文件|目录)/i,
     /\b(list|read|search|modify|write|edit|patch|diff|inspect)\b.*\b(workspace|repo|project|file|directory)\b/i,
+    /(workspace|工作区|项目|工程|仓库|代码库|repo|repository|codebase).*(程序|代码|语言|框架|依赖|配置|结构|版本|文件|目录|图片|资源).*(是|是否|是不是|有|有没有|包含|包括|使用|采用|写|写的)/i,
+    /(我的|当前|这个|本地).*(workspace|工作区|项目|工程|仓库|代码库|repo|repository|codebase).*(是|是否|是不是|有|有没有|包含|包括|使用|采用|写|写的)/i,
+    /\b(workspace|repo|repository|project|codebase)\b.*\b(is|are|does|do|has|have|use|uses|using|written|language|framework|dependency|dependencies|config|version|contain|include|file|directory|asset)\b/i,
   ].some((pattern) => pattern.test(userInput));
 }
 

@@ -80,6 +80,8 @@ test("workspace paths resolve safely inside the current working directory", () =
 
   expect(resolveWorkspacePath({ root }, ".").relativePath).toBe(".");
   expect(resolveWorkspacePath({ root }, "").relativePath).toBe(".");
+  expect(resolveWorkspacePath({ root }, "/").relativePath).toBe(".");
   expect(resolveWorkspacePath({ root }, "packages").relativePath).toBe("packages");
   expect(() => resolveWorkspacePath({ root }, "../outside.txt")).toThrow("Path escapes workspace root");
+  expect(() => resolveWorkspacePath({ root }, "/tmp/outside.txt")).toThrow("Path escapes workspace root");
 });

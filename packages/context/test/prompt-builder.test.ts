@@ -52,6 +52,8 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   expect(combined).toContain("normal chat, greetings, explanations, calculations");
   expect(combined).toContain("workspace access");
   expect(combined).toContain("needsTask must be true");
+  expect(combined).toContain("factual question about the current workspace");
+  expect(combined).toContain("cannot know without inspecting the workspace");
   expect(combined).toContain("message must be the complete final user-visible answer");
   expect(combined).toContain("only when satisfying the request requires tools");
   expect(combined).toContain("Do not call tools in this phase");
@@ -59,6 +61,7 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   expect(combined).toContain("\"routed\"");
   expect(combined).toContain("你好！有什么我可以帮你？");
   expect(combined).toContain("2 + 2 = 4.");
+  expect(combined).toContain("我的workspace程序是js语言写的吗");
   expect(combined).toContain("echo");
 });
 
@@ -152,6 +155,7 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
   expect(combined).toContain("must be preserved before tool calls are recorded");
   expect(combined).toContain(task.id);
   expect(combined).toContain("Allowed tools");
+  expect(combined).toContain("Workspace tool paths are relative to the workspace");
   expect(combined).toContain("echo");
   expect(combined).toContain("previous evidence");
   expect(combined).not.toContain("Conversation messages:");

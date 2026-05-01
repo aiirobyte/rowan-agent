@@ -92,13 +92,6 @@ export type OpenAICompatibleChatCompletionResult = {
   };
 };
 
-type ExecuteModelOutput = {
-  message?: string;
-  toolCalls?: unknown[];
-  tool_calls?: unknown[];
-  toolCall?: unknown;
-};
-
 function defaultEnv(): Record<string, string | undefined> {
   return process.env as Record<string, string | undefined>;
 }
@@ -146,6 +139,30 @@ export function resolveOpenAICompatibleConfig(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getRecordValue(record: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+
+    const matchedKey = Object.keys(record).find((recordKey) => recordKey.toLowerCase() === key.toLowerCase());
+    if (matchedKey && record[matchedKey] !== undefined) {
+      return record[matchedKey];
+    }
+  }
+
+  return undefined;
+}
+
+function unwrapRecord(value: unknown, ...keys: string[]): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const wrapped = getRecordValue(value, ...keys);
+  return isRecord(wrapped) ? wrapped : value;
 }
 
 function createRequestSignal(input: {
@@ -413,11 +430,16 @@ function normalizeStringArray(value: unknown, fallback: string[]): string[] {
       return [item.trim()];
     }
     if (isRecord(item)) {
-      const name = asString(item.name) ?? asString(item.id);
+      const name = asString(getRecordValue(item, "name")) ?? asString(getRecordValue(item, "id"));
       return name ? [name] : [];
     }
     return [];
   });
+}
+
+function normalizeCriterionType(value: unknown): "model_judge" | "tool_observation" {
+  const type = asString(value)?.toLowerCase();
+  return type === "tool_observation" ? "tool_observation" : "model_judge";
 }
 
 function normalizeAcceptanceCriteria(value: unknown, instruction: string) {
@@ -436,13 +458,17 @@ function normalizeAcceptanceCriteria(value: unknown, instruction: string) {
     }
 
     if (isRecord(criterion)) {
-      return {
-        id: createId("crit"),
-        type: "model_judge",
-        description: `Criterion ${index + 1}`,
-        required: true,
-        ...criterion,
+      const type = normalizeCriterionType(getRecordValue(criterion, "type"));
+      const normalized = {
+        id: asString(getRecordValue(criterion, "id")) ?? createId("crit"),
+        type,
+        description:
+          asString(getRecordValue(criterion, "description", "message", "content", "summary")) ??
+          `Criterion ${index + 1}`,
+        required: normalizeBoolean(getRecordValue(criterion, "required"), true),
       };
+      const toolName = asString(getRecordValue(criterion, "toolName", "tool_name"));
+      return type === "tool_observation" && toolName ? { ...normalized, toolName } : normalized;
     }
 
     return criterion;
@@ -469,19 +495,19 @@ function normalizeRoutingOutput(
   value: unknown,
   context: Extract<LlmContext, { phase: "route" }>,
 ): TaskRoutingDecision {
-  const raw = isRecord(value) && isRecord(value.routingDecision) ? value.routingDecision : value;
+  const raw = unwrapRecord(value, "routingDecision");
   if (!isRecord(raw)) {
     throw validationError("route", "Expected a routing decision object.");
   }
 
   const needsTask = normalizeBoolean(
-    raw.needsTask ?? raw.needs_task ?? raw.taskRequired ?? raw.requiresTask ?? raw.shouldCreateTask,
+    getRecordValue(raw, "needsTask", "needs_task", "taskRequired", "requiresTask", "shouldCreateTask"),
     true,
   );
   const message =
-    asString(raw.message) ??
-    asString(raw.answer) ??
-    asString(raw.response) ??
+    asString(getRecordValue(raw, "message")) ??
+    asString(getRecordValue(raw, "answer")) ??
+    asString(getRecordValue(raw, "response")) ??
     (needsTask ? "Creating a task for this request." : context.session.userInput);
 
   try {
@@ -520,14 +546,19 @@ function normalizeEvidence(value: unknown): unknown[] {
 
     if (isRecord(evidence)) {
       return {
-        id: asString(evidence.id) ?? createId("ev"),
-        kind: asString(evidence.kind) ?? asString(evidence.type) ?? "model_observation",
+        id: asString(getRecordValue(evidence, "id")) ?? createId("ev"),
+        kind:
+          asString(getRecordValue(evidence, "kind")) ??
+          asString(getRecordValue(evidence, "type")) ??
+          "model_observation",
         summary:
-          asString(evidence.summary) ??
-          asString(evidence.message) ??
-          asString(evidence.content) ??
+          asString(getRecordValue(evidence, "summary")) ??
+          asString(getRecordValue(evidence, "message")) ??
+          asString(getRecordValue(evidence, "content")) ??
           `Evidence ${index + 1}`,
-        ...(evidence.data !== undefined ? { data: evidence.data } : { data: evidence }),
+        ...(getRecordValue(evidence, "data") !== undefined
+          ? { data: getRecordValue(evidence, "data") }
+          : { data: evidence }),
       };
     }
 
@@ -541,27 +572,27 @@ function normalizeEvidence(value: unknown): unknown[] {
 }
 
 function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phase: "plan" }>): Task {
-  const raw = isRecord(value) && isRecord(value.task) ? value.task : value;
+  const raw = unwrapRecord(value, "task");
   if (!isRecord(raw)) {
     throw validationError("plan", "Expected an object containing a task.");
   }
 
   const instruction =
-    asString(raw.instruction) ??
-    asString(raw.description) ??
-    asString(raw.message) ??
+    asString(getRecordValue(raw, "instruction")) ??
+    asString(getRecordValue(raw, "description")) ??
+    asString(getRecordValue(raw, "message")) ??
     context.session.userInput;
   const defaultSkillIds = context.session.skills.map((skill) => skill.id);
   const normalized = {
     ...raw,
-    id: asString(raw.id) ?? createId("task"),
-    title: asString(raw.title) ?? asString(raw.name) ?? shortTitle(instruction),
+    id: asString(getRecordValue(raw, "id")) ?? createId("task"),
+    title: asString(getRecordValue(raw, "title")) ?? asString(getRecordValue(raw, "name")) ?? shortTitle(instruction),
     instruction,
-    acceptanceCriteria: normalizeAcceptanceCriteria(raw.acceptanceCriteria, instruction),
-    toolNames: normalizeStringArray(raw.toolNames ?? raw.tools, []),
-    skillIds: normalizeStringArray(raw.skillIds ?? raw.skills, defaultSkillIds),
-    status: asString(raw.status) ?? "pending",
-    attempts: typeof raw.attempts === "number" ? raw.attempts : 0,
+    acceptanceCriteria: normalizeAcceptanceCriteria(getRecordValue(raw, "acceptanceCriteria"), instruction),
+    toolNames: normalizeStringArray(getRecordValue(raw, "toolNames", "tools"), []),
+    skillIds: normalizeStringArray(getRecordValue(raw, "skillIds", "skills"), defaultSkillIds),
+    status: asString(getRecordValue(raw, "status")) ?? "pending",
+    attempts: asNumber(getRecordValue(raw, "attempts")) ?? 0,
   };
 
   try {
@@ -572,18 +603,17 @@ function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phas
 }
 
 function normalizeExecuteOutput(value: unknown): { message?: string; toolCalls: ToolCall[] } {
-  if (!isRecord(value)) {
+  const raw = unwrapRecord(value, "executeOutput", "executeResult", "executionResult");
+  if (!isRecord(raw)) {
     throw validationError("execute", "Expected an execute output object.");
   }
 
-  const output = value as ExecuteModelOutput;
-  const rawToolCalls = Array.isArray(output.toolCalls)
-    ? output.toolCalls
-    : Array.isArray(output.tool_calls)
-      ? output.tool_calls
-      : isRecord(output.toolCall)
-        ? [output.toolCall]
-        : [];
+  const toolCallsValue = getRecordValue(raw, "toolCalls", "tool_calls", "toolCall");
+  const rawToolCalls = Array.isArray(toolCallsValue)
+    ? toolCallsValue
+    : isRecord(toolCallsValue)
+      ? [toolCallsValue]
+      : [];
   const toolCalls = rawToolCalls.map((toolCall) => {
     if (!isRecord(toolCall)) {
       throw validationError("execute", "Each tool call must be an object.");
@@ -591,19 +621,21 @@ function normalizeExecuteOutput(value: unknown): { message?: string; toolCalls: 
 
     try {
       return Validators.toolCall.Parse({
-        id: createId("call"),
-        args: {},
-        ...toolCall,
+        id:
+          asString(getRecordValue(toolCall, "id")) ??
+          asString(getRecordValue(toolCall, "toolCallId", "tool_call_id")) ??
+          createId("call"),
+        name: asString(getRecordValue(toolCall, "name", "toolName", "tool_name")),
+        args: getRecordValue(toolCall, "args", "arguments") ?? {},
       });
     } catch (error) {
       throw validationError("execute", error);
     }
   });
 
+  const message = asString(getRecordValue(raw, "message"));
   return {
-    ...(typeof output.message === "string" && output.message.length > 0
-      ? { message: output.message }
-      : {}),
+    ...(message ? { message } : {}),
     toolCalls,
   };
 }
@@ -612,27 +644,32 @@ function normalizeVerificationOutput(
   value: unknown,
   context: Extract<LlmContext, { phase: "verify" }>,
 ): VerificationResult {
-  const raw = isRecord(value) && isRecord(value.verificationResult) ? value.verificationResult : value;
+  const raw = unwrapRecord(value, "verificationResult");
   if (!isRecord(raw)) {
     throw validationError("verify", "Expected a verification result object.");
   }
 
-  const passed = normalizeBoolean(raw.passed ?? raw.status, false);
-  const defaultFailedCriteria = passed
+  const requestedPassed = normalizeBoolean(getRecordValue(raw, "passed", "status"), false);
+  const defaultFailedCriteria = requestedPassed
     ? []
     : context.criteria.filter((criterion) => criterion.required).map((criterion) => criterion.id);
+  const failedCriteria = normalizeStringArray(
+    getRecordValue(raw, "failedCriteria", "failed_criteria"),
+    defaultFailedCriteria,
+  );
+  const passed = requestedPassed && failedCriteria.length === 0;
 
   try {
     return Validators.verificationResult.Parse({
       ...raw,
       passed,
       message:
-        asString(raw.message) ??
-        asString(raw.reason) ??
-        asString(raw.summary) ??
+        asString(getRecordValue(raw, "message")) ??
+        asString(getRecordValue(raw, "reason")) ??
+        asString(getRecordValue(raw, "summary")) ??
         (passed ? "Task passed." : "Task failed."),
-      evidence: normalizeEvidence(raw.evidence),
-      failedCriteria: normalizeStringArray(raw.failedCriteria ?? raw.failed_criteria, defaultFailedCriteria),
+      evidence: normalizeEvidence(getRecordValue(raw, "evidence")),
+      failedCriteria,
     });
   } catch (error) {
     throw validationError("verify", error);

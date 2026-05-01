@@ -15,8 +15,15 @@ export function parseTaskRoutingDecision(value: unknown): TaskRoutingDecision {
   return Validators.taskRoutingDecision.Parse(value);
 }
 
+export function normalizeVerificationResult(value: VerificationResult): VerificationResult {
+  return Validators.verificationResult.Parse({
+    ...value,
+    passed: value.passed && value.failedCriteria.length === 0,
+  });
+}
+
 export function parseVerificationResult(value: unknown): VerificationResult {
-  return Validators.verificationResult.Parse(value);
+  return normalizeVerificationResult(Validators.verificationResult.Parse(value));
 }
 
 export function createDefaultCriteria(description: string): AcceptanceCriterion[] {
@@ -31,13 +38,14 @@ export function createDefaultCriteria(description: string): AcceptanceCriterion[
 }
 
 export function createOutcome(task: Task, verification: VerificationResult): Outcome {
+  const normalizedVerification = normalizeVerificationResult(verification);
   return Validators.outcome.Parse({
     id: createId("out"),
     taskId: task.id,
-    passed: verification.passed,
-    message: verification.message,
-    evidence: verification.evidence,
-    failedCriteria: verification.failedCriteria,
+    passed: normalizedVerification.passed,
+    message: normalizedVerification.message,
+    evidence: normalizedVerification.evidence,
+    failedCriteria: normalizedVerification.failedCriteria,
   });
 }
 
