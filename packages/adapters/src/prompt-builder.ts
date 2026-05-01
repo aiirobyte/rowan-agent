@@ -1,4 +1,4 @@
-import type { AgentMessage, LlmContext, ModelTraceMessage, Tool } from "./types";
+import type { AgentMessage, LlmContext, ModelTraceMessage, Tool } from "@rowan-agent/agent";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 

@@ -1,6 +1,6 @@
 import { basename, dirname, extname, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
-import type { Skill } from "./types";
+import type { Skill } from "@rowan-agent/agent";
 
 function inferSkillId(path: string): string {
   const file = basename(path);

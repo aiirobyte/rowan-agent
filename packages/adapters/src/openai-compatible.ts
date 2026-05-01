@@ -1,4 +1,4 @@
-import { createDefaultCriteria } from "./task";
+import { createDefaultCriteria } from "@rowan-agent/agent";
 import { buildOpenAICompatiblePrompt, type ChatMessage } from "./prompt-builder";
 import { extractJsonObject } from "./json-extract";
 import type {
@@ -11,8 +11,8 @@ import type {
   Tool,
   ToolCall,
   VerificationResult,
-} from "./types";
-import { createId, Validators } from "./types";
+} from "@rowan-agent/agent";
+import { createId, Validators } from "@rowan-agent/agent";
 
 export type OpenAICompatibleFetch = (
   input: Parameters<typeof fetch>[0],

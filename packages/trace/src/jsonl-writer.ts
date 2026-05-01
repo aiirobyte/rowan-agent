@@ -1,6 +1,6 @@
 import { mkdir, appendFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AgentEvent, AgentEventListener } from "./types";
+import type { AgentEvent, AgentEventListener } from "@rowan-agent/agent";
 
 const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9_-]{12,}/g,

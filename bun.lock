@@ -12,8 +12,56 @@
         "typescript": "latest",
       },
     },
+    "packages/aci": {
+      "name": "@rowan-agent/aci",
+      "version": "0.0.0",
+      "dependencies": {
+        "@rowan-agent/agent": "workspace:*",
+      },
+    },
+    "packages/adapters": {
+      "name": "@rowan-agent/adapters",
+      "version": "0.0.0",
+      "dependencies": {
+        "@rowan-agent/agent": "workspace:*",
+      },
+    },
+    "packages/cli": {
+      "name": "@rowan-agent/cli",
+      "version": "0.0.0",
+      "bin": {
+        "rowan": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@rowan-agent/aci": "workspace:*",
+        "@rowan-agent/adapters": "workspace:*",
+        "@rowan-agent/agent": "workspace:*",
+        "@rowan-agent/trace": "workspace:*",
+      },
+    },
+    "packages/agent": {
+      "name": "@rowan-agent/agent",
+      "version": "0.0.0",
+    },
+    "packages/trace": {
+      "name": "@rowan-agent/trace",
+      "version": "0.0.0",
+      "dependencies": {
+        "@rowan-agent/agent": "workspace:*",
+      },
+    },
   },
   "packages": {
+    "@rowan-agent/aci": ["@rowan-agent/aci@workspace:packages/aci"],
+
+    "@rowan-agent/adapters": ["@rowan-agent/adapters@workspace:packages/adapters"],
+
+    "@rowan-agent/cli": ["@rowan-agent/cli@workspace:packages/cli"],
+
+    "@rowan-agent/agent": ["@rowan-agent/agent@workspace:packages/agent"],
+
+    "@rowan-agent/trace": ["@rowan-agent/trace@workspace:packages/trace"],
+
     "@types/bun": ["@types/bun@1.3.13", "", { "dependencies": { "bun-types": "1.3.13" } }, "sha512-9fqXWk5YIHGGnUau9TEi+qdlTYDAnOj+xLCmSTwXfAIqXr2x4tytJb43E9uCvt09zJURKXwAtkoH4nLQfzeTXw=="],
 
     "@types/node": ["@types/node@25.6.0", "", { "dependencies": { "undici-types": "~7.19.0" } }, "sha512-+qIYRKdNYJwY3vRCZMdJbPLJAtGjQBudzZzdzwQYkEPQd+PJGixUL5QfvCLDaULoLv+RhT3LDkwEfKaAkgSmNQ=="],

@@ -2,12 +2,12 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
-import { Agent } from "../src/agent";
-import { createOpenAICompatibleStream, type OpenAICompatibleFetch } from "../src/openai-compatible";
-import { createDemoTools } from "../src/tools";
-import { jsonlTraceWriter } from "../src/trace-jsonl";
-import type { AgentEvent } from "../src/types";
-import { scriptedStream } from "./support/scripted-stream";
+import { Agent } from "@rowan-agent/agent/agent";
+import { createOpenAICompatibleStream, type OpenAICompatibleFetch } from "@rowan-agent/adapters/openai-compatible";
+import { createDemoTools } from "@rowan-agent/agent/tools";
+import { jsonlTraceWriter } from "../src/jsonl-writer";
+import type { AgentEvent } from "@rowan-agent/agent/types";
+import { scriptedStream } from "../../agent/test/support/scripted-stream";
 
 test("jsonlTraceWriter writes agent events", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-trace-"));

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "types": ["bun"],
+    "paths": {
+      "@rowan-agent/agent": ["./packages/agent/src/index.ts"],
+      "@rowan-agent/agent/*": ["./packages/agent/src/*"],
+      "@rowan-agent/adapters": ["./packages/adapters/src/index.ts"],
+      "@rowan-agent/adapters/*": ["./packages/adapters/src/*"],
+      "@rowan-agent/trace": ["./packages/trace/src/index.ts"],
+      "@rowan-agent/trace/*": ["./packages/trace/src/*"],
+      "@rowan-agent/aci": ["./packages/aci/src/index.ts"],
+      "@rowan-agent/aci/*": ["./packages/aci/src/*"],
+      "@rowan-agent/cli": ["./packages/cli/src/index.ts"],
+      "@rowan-agent/cli/*": ["./packages/cli/src/*"]
+    }
+  }
+}

@@ -3,10 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "bun test",
-    "rowan": "bun src/cli.ts"
+    "test": "bun test packages",
+    "rowan": "bun packages/cli/src/cli.ts"
   },
   "dependencies": {
     "typebox": "^1.0.0"

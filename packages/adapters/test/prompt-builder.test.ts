@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { buildOpenAICompatibleMessages, buildOpenAICompatiblePrompt } from "../src/prompt-builder";
-import { createDefaultCriteria } from "../src/task";
-import { createId } from "../src/types";
-import { createSession } from "../src/session";
-import type { Task, Tool } from "../src/types";
+import { createDefaultCriteria } from "@rowan-agent/agent/task";
+import { createId } from "@rowan-agent/agent/types";
+import { createSession } from "@rowan-agent/agent/session";
+import type { Task, Tool } from "@rowan-agent/agent/types";
 
 const echoTool: Tool<{ message: string }> = {
   name: "echo",
