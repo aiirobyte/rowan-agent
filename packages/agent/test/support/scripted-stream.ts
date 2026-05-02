@@ -45,8 +45,8 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
 
   if (context.phase === "route") {
     const currentInput = latestUserInput(context.session);
-    const needsTask = wantsEcho(currentInput);
-    const message = needsTask ? "Routing to task execution." : `Direct response: ${currentInput}`;
+    const route = wantsEcho(currentInput) ? "task" : "direct";
+    const message = route === "task" ? "Routing to task execution." : `Direct response: ${currentInput}`;
     yield {
       type: "model_requested",
       phase: "route",
@@ -57,8 +57,8 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
     yield {
       type: "structured_output",
       content: {
-        needsTask,
         message,
+        route,
       },
     };
     yield { type: "done" };

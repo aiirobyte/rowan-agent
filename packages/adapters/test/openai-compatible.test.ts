@@ -247,7 +247,7 @@ test("createOpenAICompatibleStream maps route response to a task routing decisio
     jsonResponse(
       JSON.stringify({
         message: "Hello directly.",
-        needsTask: false,
+        route: "direct",
       }),
       { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
     );
@@ -270,7 +270,6 @@ test("createOpenAICompatibleStream maps route response to a task routing decisio
   expect(events.some((event) => event.type === "text_delta")).toBe(false);
   expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
     message: "Hello directly.",
-    needsTask: false,
     route: "direct",
   });
 });
@@ -282,7 +281,7 @@ test("createOpenAICompatibleStream normalizes case-insensitive route keys", asyn
       JSON.stringify({
         RoutingDecision: {
           Message: "Hello directly.",
-          NeedsTask: false,
+          Route: "direct",
         },
       }),
     );
@@ -300,7 +299,6 @@ test("createOpenAICompatibleStream normalizes case-insensitive route keys", asyn
 
   expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
     message: "Hello directly.",
-    needsTask: false,
     route: "direct",
   });
 });
@@ -311,7 +309,7 @@ test("createOpenAICompatibleStream preserves model route decisions without sched
     jsonResponse(
       JSON.stringify({
         message: "Use bash to check the current date: $(date)",
-        needsTask: false,
+        route: "direct",
       }),
     );
   const stream = createOpenAICompatibleStream({
@@ -329,7 +327,6 @@ test("createOpenAICompatibleStream preserves model route decisions without sched
 
   expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
     message: "Use bash to check the current date: $(date)",
-    needsTask: false,
     route: "direct",
   });
 });

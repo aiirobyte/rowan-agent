@@ -1,7 +1,7 @@
 import type { TaskRoutingDecision, Tool } from "./types";
 
 export type TaskRoutingScheduleInput = {
-  userInput: string;
+  input: string;
   tools: Tool[];
   decision: TaskRoutingDecision;
   defaultNeedsTaskRoute?: "task" | "thread";
@@ -11,8 +11,8 @@ function includesAny(text: string, values: string[]): boolean {
   return values.some((value) => text.includes(value));
 }
 
-export function hasExplicitToolRequest(userInput: string, tools: Tool[] = []): boolean {
-  const text = userInput.toLowerCase();
+export function hasExplicitToolRequest(input: string, tools: Tool[] = []): boolean {
+  const text = input.toLowerCase();
   const compact = text.replace(/\s+/g, "");
   const availableToolNames = tools.flatMap((tool) => {
     const lower = tool.name.toLowerCase();
@@ -46,27 +46,26 @@ export function hasExplicitToolRequest(userInput: string, tools: Tool[] = []): b
     /(workspace|工作区|项目|工程|仓库|代码库|repo|repository|codebase).*(程序|代码|语言|框架|依赖|配置|结构|版本|文件|目录|图片|资源).*(是|是否|是不是|有|有没有|包含|包括|使用|采用|写|写的)/i,
     /(我的|当前|这个|本地).*(workspace|工作区|项目|工程|仓库|代码库|repo|repository|codebase).*(是|是否|是不是|有|有没有|包含|包括|使用|采用|写|写的)/i,
     /\b(workspace|repo|repository|project|codebase)\b.*\b(is|are|does|do|has|have|use|uses|using|written|language|framework|dependency|dependencies|config|version|contain|include|file|directory|asset)\b/i,
-  ].some((pattern) => pattern.test(userInput));
+  ].some((pattern) => pattern.test(input));
 }
 
 export function scheduleTaskRouting(input: TaskRoutingScheduleInput): TaskRoutingDecision {
   const defaultRoute = input.defaultNeedsTaskRoute ?? "task";
-  if (input.decision.needsTask) {
-    return {
-      ...input.decision,
-      route: input.decision.route ?? defaultRoute,
-    };
+  if (input.decision.route !== "direct") {
+    if (defaultRoute === "thread" && input.decision.route === "task") {
+      return {
+        ...input.decision,
+        route: "thread",
+      };
+    }
+    return input.decision;
   }
 
-  if (!hasExplicitToolRequest(input.userInput, input.tools)) {
-    return {
-      ...input.decision,
-      route: input.decision.route ?? "direct",
-    };
+  if (!hasExplicitToolRequest(input.input, input.tools)) {
+    return input.decision;
   }
 
   return {
-    needsTask: true,
     route: defaultRoute,
     message: "Creating a task for this request.",
   };

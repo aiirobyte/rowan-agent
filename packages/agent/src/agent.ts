@@ -3,7 +3,6 @@ import {
   appendUserTurn,
   createSession,
   nowIso,
-  summarizeSubSessionBudgetUsage,
   type Session,
   type SessionStore,
   type Skill,
@@ -14,12 +13,10 @@ import type {
   AgentEvent,
   AgentEventListener,
   AgentThreadInput,
-  AgentSubSessionInput,
   BeforeToolCall,
   ModelRef,
   Outcome,
   StreamFn,
-  SubSessionRunResult,
   ThreadRunInput,
   ThreadRunResult,
   Tool,
@@ -27,6 +24,20 @@ import type {
 } from "./types";
 
 type AgentSession = Session<AgentEvent>;
+
+function summarizeThreadBudgetUsage(events: readonly AgentEvent[]): AgentBudgetUsage {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === "budget_exceeded") {
+      return { ...event.usage };
+    }
+  }
+
+  return {
+    modelCalls: events.filter((event) => event.type === "model_requested").length,
+    toolCalls: events.filter((event) => event.type === "tool_start").length,
+  };
+}
 
 async function emitThreadEvent(
   session: AgentSession,
@@ -86,11 +97,10 @@ export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult>
     beforeToolCall: input.beforeToolCall,
     afterToolCall: input.afterToolCall,
     runThread: runNestedThread,
-    runSubSession: runNestedThread,
     emit: input.emit,
   });
 
-  const budgetUsage = summarizeSubSessionBudgetUsage<AgentBudgetUsage>(session.log);
+  const budgetUsage = summarizeThreadBudgetUsage(session.log);
   await emitThreadEvent(
     session,
     {
@@ -111,8 +121,6 @@ export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult>
     budgetUsage,
   };
 }
-
-export const runSubSession = runThread;
 
 export type AgentOptions = {
   systemPrompt: string;
@@ -247,11 +255,6 @@ export class Agent {
           ...input,
           parentSessionId: input.parentSessionId ?? session.id,
         }),
-      runSubSession: (input) =>
-        this.startThread({
-          ...input,
-          parentSessionId: input.parentSessionId ?? session.id,
-        }),
       emit,
     });
 
@@ -293,10 +296,6 @@ export class Agent {
         this.emitToListeners(event);
       },
     });
-  }
-
-  async startSubSession(input: AgentSubSessionInput): Promise<SubSessionRunResult> {
-    return this.startThread(input);
   }
 
   async waitForIdle(): Promise<void> {

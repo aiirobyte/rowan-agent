@@ -25,7 +25,7 @@ export type TraceInspectSummary = {
   lastTs?: string;
   eventTypes: Record<string, number>;
   sessionIds: string[];
-  subSessions: Array<{ parentSessionId: string; sessionId: string }>;
+  threads: Array<{ parentSessionId: string; sessionId: string }>;
 };
 
 const SESSION_FILE_PATTERN = /^(?:(?<timestamp>.+)-)?(?<sessionId>ses_[a-f0-9]{8})\.jsonl$/;
@@ -52,9 +52,7 @@ function eventSessionId(event: AgentEvent): string | undefined {
   }
   if (
     event.type === "thread_created" ||
-    event.type === "thread_end" ||
-    event.type === "sub_session_start" ||
-    event.type === "sub_session_end"
+    event.type === "thread_end"
   ) {
     return event.sessionId;
   }
@@ -119,15 +117,15 @@ export function summarizeTraceEvents(filePath: string, events: AgentEvent[]): Tr
   const eventTypes: Record<string, number> = {};
   const sessionIds = new Set<string>();
   const childSessionKeys = new Set<string>();
-  const subSessions: Array<{ parentSessionId: string; sessionId: string }> = [];
+  const threads: Array<{ parentSessionId: string; sessionId: string }> = [];
 
-  const addSubSession = (parentSessionId: string, sessionId: string) => {
+  const addThread = (parentSessionId: string, sessionId: string) => {
     const key = `${parentSessionId}\0${sessionId}`;
     if (childSessionKeys.has(key)) {
       return;
     }
     childSessionKeys.add(key);
-    subSessions.push({ parentSessionId, sessionId });
+    threads.push({ parentSessionId, sessionId });
   };
 
   for (const event of events) {
@@ -138,16 +136,14 @@ export function summarizeTraceEvents(filePath: string, events: AgentEvent[]): Tr
     }
     if (
       event.type === "thread_created" ||
-      event.type === "thread_end" ||
-      event.type === "sub_session_start" ||
-      event.type === "sub_session_end"
+      event.type === "thread_end"
     ) {
       sessionIds.add(event.parentSessionId);
       sessionIds.add(event.sessionId);
-      addSubSession(event.parentSessionId, event.sessionId);
+      addThread(event.parentSessionId, event.sessionId);
     }
     if ((event.type === "session_created" || event.type === "session_loaded") && event.session.parentSessionId) {
-      addSubSession(event.session.parentSessionId, event.session.id);
+      addThread(event.session.parentSessionId, event.session.id);
     }
   }
 
@@ -158,7 +154,7 @@ export function summarizeTraceEvents(filePath: string, events: AgentEvent[]): Tr
     ...(events.at(-1)?.ts ? { lastTs: events.at(-1)?.ts } : {}),
     eventTypes,
     sessionIds: [...sessionIds],
-    subSessions,
+    threads,
   };
 }
 

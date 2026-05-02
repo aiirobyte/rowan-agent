@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
-import { Agent } from "@rowan-agent/agent/agent";
+import { Agent, runThread } from "@rowan-agent/agent/agent";
 import { createOpenAICompatibleStream, type OpenAICompatibleFetch } from "@rowan-agent/adapters/openai-compatible";
 import { jsonlTraceWriter } from "../src/jsonl-writer";
 import type { AgentEvent } from "@rowan-agent/agent/types";
@@ -43,7 +43,6 @@ test("jsonlTraceWriter writes agent events", async () => {
   expect(sessionCreated.session.createdAt).toBeUndefined();
   expect(sessionCreated.session.updatedAt).toBeUndefined();
   expect(trace).toContain("\"input\":\"use echo tool\"");
-  expect(trace).not.toContain("\"userInput\"");
   expect(trace).not.toContain("\"type\":\"session_start\"");
   expect(trace).not.toContain("\"type\":\"session_end\"");
   expect(chatStart.content).toEqual(
@@ -81,7 +80,6 @@ test("jsonlTraceWriter records model calls and message deltas without structured
   const responses = [
     {
       message: "A task is needed for echo.",
-      needsTask: true,
       route: "task",
     },
     {
@@ -111,7 +109,10 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       { status: 200, headers: { "content-type": "application/json" } },
     );
   const tools = createEchoTools();
-  const agent = new Agent({
+  const traceWriter = jsonlTraceWriter(tracePath);
+  const result = await runThread({
+    parentSessionId: "ses_parent",
+    prompt: "hello",
     systemPrompt: "Test system",
     model: { provider: "openai-compatible", name: "test-model" },
     stream: createOpenAICompatibleStream({
@@ -122,12 +123,9 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       tools,
     }),
     tools,
+    emit: traceWriter,
   });
-
-  const traceWriter = jsonlTraceWriter(tracePath);
-  agent.subscribe(traceWriter);
-  await agent.prompt("hello");
-  await agent.flushTrace();
+  await traceWriter.flush?.();
 
   const trace = await readFile(tracePath, "utf8");
   const events = trace
@@ -152,7 +150,6 @@ test("jsonlTraceWriter records model calls and message deltas without structured
 
   expect(trace).toContain("\"type\":\"session_created\"");
   expect(trace).toContain("\"input\":\"hello\"");
-  expect(trace).not.toContain("\"userInput\"");
   expect(trace).toContain("\"type\":\"model_requested\"");
   expect(trace).toContain("\"phase\":\"plan\"");
   expect(trace).not.toContain("\"type\":\"model_request\"");
@@ -176,7 +173,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       toolNames: ["echo"],
     },
   });
-  const planSessionMessage = agent.state.session?.messages.find(
+  const planSessionMessage = result.session.messages.find(
     (message) => message.metadata?.kind === "model_message" && message.metadata.phase === "plan",
   );
   expect(planSessionMessage?.content).toBe(planMessageDelta.delta.content);

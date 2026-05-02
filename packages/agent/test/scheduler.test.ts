@@ -27,15 +27,14 @@ test("scheduler detects explicit tool requests", () => {
 test("scheduler upgrades model direct routing when user explicitly asks for a tool", () => {
   expect(
     scheduleTaskRouting({
-      userInput: "使用bash查看当前日期",
+      input: "使用bash查看当前日期",
       tools: [bashTool],
       decision: {
-        needsTask: false,
+        route: "direct",
         message: "Use bash to check the current date: $(date)",
       },
     }),
   ).toEqual({
-    needsTask: true,
     route: "task",
     message: "Creating a task for this request.",
   });
@@ -44,15 +43,14 @@ test("scheduler upgrades model direct routing when user explicitly asks for a to
 test("scheduler upgrades model direct routing for workspace fact questions", () => {
   expect(
     scheduleTaskRouting({
-      userInput: "我的workspace程序是js语言写的吗",
+      input: "我的workspace程序是js语言写的吗",
       tools: [bashTool],
       decision: {
-        needsTask: false,
+        route: "direct",
         message: "我无法直接判断，需要查看文件内容或目录结构才能确认。",
       },
     }),
   ).toEqual({
-    needsTask: true,
     route: "task",
     message: "Creating a task for this request.",
   });
@@ -61,17 +59,33 @@ test("scheduler upgrades model direct routing for workspace fact questions", () 
 test("scheduler can upgrade explicit tool requests to thread routes", () => {
   expect(
     scheduleTaskRouting({
-      userInput: "使用bash查看当前日期",
+      input: "使用bash查看当前日期",
       tools: [bashTool],
       defaultNeedsTaskRoute: "thread",
       decision: {
-        needsTask: false,
+        route: "direct",
         message: "Use bash to check the current date: $(date)",
       },
     }),
   ).toEqual({
-    needsTask: true,
     route: "thread",
     message: "Creating a task for this request.",
+  });
+});
+
+test("scheduler promotes main-session task routes to thread routes", () => {
+  expect(
+    scheduleTaskRouting({
+      input: "use bash",
+      tools: [bashTool],
+      defaultNeedsTaskRoute: "thread",
+      decision: {
+        route: "task",
+        message: "Creating a task.",
+      },
+    }),
+  ).toEqual({
+    route: "thread",
+    message: "Creating a task.",
   });
 });

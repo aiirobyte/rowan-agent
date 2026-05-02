@@ -33,16 +33,10 @@ function normalizeTaskRoutingInput(value: unknown): TaskRoutingDecision {
   }
 
   const rawRoute = asNonEmptyString(value.route)?.toLowerCase();
-  const explicitRoute =
-    rawRoute === "direct" || rawRoute === "task" || rawRoute === "thread" ? rawRoute : undefined;
-  const rawNeedsTask =
-    typeof value.needsTask === "boolean"
-      ? value.needsTask
-      : typeof value.needs_task === "boolean"
-        ? value.needs_task
-        : undefined;
-  const needsTask = explicitRoute ? explicitRoute !== "direct" : rawNeedsTask ?? false;
-  const route = explicitRoute ?? (needsTask ? undefined : "direct");
+  const route = rawRoute === "direct" || rawRoute === "task" || rawRoute === "thread" ? rawRoute : undefined;
+  if (!route) {
+    throw new Error("Expected route output to include route.");
+  }
   const message =
     asNonEmptyString(value.message) ??
     asNonEmptyString(value.answer) ??
@@ -51,9 +45,8 @@ function normalizeTaskRoutingInput(value: unknown): TaskRoutingDecision {
   const thread = normalizeThread(value.thread);
 
   return Validators.taskRoutingDecision.Parse({
-    needsTask,
     message,
-    ...(route ? { route } : {}),
+    route,
     ...(thread ? { thread } : {}),
   });
 }

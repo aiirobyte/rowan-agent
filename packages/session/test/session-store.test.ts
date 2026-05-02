@@ -20,7 +20,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   });
   appendUserTurn(session, "second turn");
   session.messages.push(
-    createMessage("assistant", "{\"needsTask\":false,\"message\":\"internal\"}", {
+    createMessage("assistant", "{\"route\":\"direct\",\"message\":\"internal\"}", {
       kind: "routing_decision",
       phase: "route",
     }),
@@ -32,11 +32,10 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(persisted.version).toBe(SESSION_SCHEMA_VERSION);
   expect(persisted.id).toBe(session.id);
   expect(persisted.input).toBe("hello");
-  expect(persisted).not.toHaveProperty("userInput");
   expect(persisted.task).toBe("Say hello");
   expect(persisted.goal).toBe("A greeting is returned.");
   expect(persisted.title).toBe("Greeting");
-  expect(persisted.messages.some((message) => message.content.includes("needsTask"))).toBe(true);
+  expect(persisted.messages.some((message) => message.content.includes("\"route\":\"direct\""))).toBe(true);
 
   const list = await store.list();
   expect(list).toEqual([
@@ -44,7 +43,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
       id: session.id,
       title: "Greeting",
       messageCount: persisted.messages.length,
-      latestMessage: "{\"needsTask\":false,\"message\":\"internal\"}",
+      latestMessage: "{\"route\":\"direct\",\"message\":\"internal\"}",
     }),
   ]);
 
@@ -56,7 +55,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(loaded ? latestUserInput(loaded) : undefined).toBe("second turn");
   expect(loaded?.log).toEqual([]);
   expect(loaded?.messages.map((message) => message.content)).toContain(
-    "{\"needsTask\":false,\"message\":\"internal\"}",
+    "{\"route\":\"direct\",\"message\":\"internal\"}",
   );
 
   await expect(store.create(session)).rejects.toThrow("Session already exists");

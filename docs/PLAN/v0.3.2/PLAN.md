@@ -50,11 +50,11 @@ type Session<TLogEvent = never> = {
 
 要求：
 
-- `userInput` 改名为 `input`。
+- Session 使用 `input` 作为唯一初始输入字段。
 - `input` 只在 `session_created` / `createSession()` 时创建，后续多轮 `appendUserTurn()` 不再更新它。
-- 当前轮 prompt 从最新 user message 或 loop runtime 中读取，不能再依赖会被覆盖的 `session.userInput`。
+- 当前轮 prompt 从最新 user message 或 loop runtime 中读取，不能依赖 Session 初始输入被改写。
 - `task` 和 `goal` 是可选字段，用于表达 child thread 的结构化任务与完成目标。
-- 持久化 JSON 使用同一 schema；不再写出 `userInput`。
+- 持久化 JSON 使用同一 schema，只写出 `input`。
 
 ## 3. Thread Model
 
@@ -78,7 +78,7 @@ type ThreadInput = {
 - 创建 child Session 时写入 `input = prompt`，并透传 `task` / `goal`。
 - child Session 继续使用 `runAgentLoop()`，不引入专门的 sub-agent loop。
 - child thread 可以继续显式创建 nested thread，但默认 worker 路由应优先完成自己的 task / goal。
-- 旧的 `runSubSession()` / `Agent.startSubSession()` 保留为兼容 API，但内部调用新的 thread runner。
+- 公开 API 只提供 `runThread()` / `Agent.startThread()`。
 - 新事件使用 `thread_created` 和 `thread_end`；trace inspector 需要识别 thread parent/child 关系。
 
 ## 4. Routing Rules
@@ -89,7 +89,6 @@ type ThreadInput = {
 type TaskRoutingDecision = {
   route: "direct" | "task" | "thread";
   message: string;
-  needsTask: boolean; // backward-compatible derived field
   thread?: {
     prompt: string;
     task: string;
@@ -129,25 +128,25 @@ Prompt builder 需要显式告诉模型：
 - plan prompt 在 worker Session 中要优先围绕 `session.task` 和 `session.goal` 生成可执行 Task。
 - verify prompt 可以接受 thread results，最终由主 Session 给出用户可见答案。
 
-## 7. Compatibility
+## 7. Breaking Changes
 
-兼容策略：
+v0.3.2 不保留旧 sub-session 兼容层：
 
-- 公开 API 可继续接受 `runSubSession()` / `startSubSession()`，但实现委托到 `runThread()` / `startThread()`。
-- route parser 继续兼容旧 `{ needsTask, message }` 输出。
-- 旧 `needsTask: true` 在主 Session 规范化为 thread；在 worker Session 规范化为 task。
-- trace inspector 兼容旧 `sub_session_start` / `sub_session_end`，新 trace 优先输出 `thread_created` / `thread_end`。
+- 删除旧 sub-session API。
+- 删除 legacy sub-session runner。
+- route parser 只接受 `route: "direct" | "task" | "thread"`。
+- trace inspector 只识别 `thread_created` / `thread_end` 作为 child thread 事件。
 
 ## 8. Acceptance Criteria
 
-- `Session`、持久化 schema、trace snapshot 全部使用 `input`，不再输出 `userInput`。
+- `Session`、持久化 schema、trace snapshot 全部使用 `input`。
 - 多轮 `Agent.prompt()` 不更新 `session.input`，但当前轮 route / plan 仍使用最新 user turn。
 - `createSession()` 支持 optional `task` / `goal`。
 - `Agent.startThread()` 创建 child Session 并运行同一套 Agent loop。
-- `Agent.startSubSession()` 和 `runSubSession()` 通过新 thread 实现保持兼容。
+- 旧 sub-session API 和事件不再暴露。
 - 主 Session 对工具/大任务请求可自动创建 thread，收集 child outcome 后进行 verify。
 - trace 包含 `thread_created` 和 `thread_end`，并能被 inspector 识别 parent/child 关系。
-- OpenAI-compatible prompt 与 parser 支持新 route schema，并兼容旧 route schema。
+- OpenAI-compatible prompt 与 parser 只支持新 route schema。
 - `bun test packages` 和 `bun run build` 通过。
 
 ## 9. Not In v0.3.2

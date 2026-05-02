@@ -57,7 +57,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
       yield {
         type: "structured_output",
         content: {
-          needsTask: true,
+          route: "task",
           message: "Routing from model.",
         },
       };
@@ -162,7 +162,6 @@ test("runAgentLoop can return a direct response without creating a task", async 
     (message) => message.metadata?.kind === "routing_decision" && message.metadata.phase === "route",
   );
   expect(JSON.parse(routeDecision?.content ?? "{}")).toEqual({
-    needsTask: false,
     route: "direct",
     message: "Direct response: hello",
   });
@@ -274,7 +273,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryVerifyStream(model, context) {
     if (context.phase === "route") {
-      yield { type: "structured_output", content: { needsTask: true, message: "Create task." } };
+      yield { type: "structured_output", content: { route: "task", message: "Create task." } };
       yield { type: "done" };
       return;
     }
@@ -346,7 +345,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryExecuteStream(model, context) {
     if (context.phase === "route") {
-      yield { type: "structured_output", content: { needsTask: true, message: "Create task." } };
+      yield { type: "structured_output", content: { route: "task", message: "Create task." } };
       yield { type: "done" };
       return;
     }
@@ -484,7 +483,7 @@ test("invalid tool args do not execute tool", async () => {
       yield {
         type: "structured_output",
         content: {
-          needsTask: true,
+          route: "task",
           message: "Routing invalid args task.",
         },
       };

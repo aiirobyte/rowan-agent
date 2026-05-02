@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import { Agent, runSubSession } from "../src/agent";
+import { createSession } from "@rowan-agent/session";
+import { Agent, runThread } from "../src/agent";
 import { createDefaultCriteria } from "../src/task";
 import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-test("runSubSession creates a session with explicit tools and skills", async () => {
+test("runThread creates a session with explicit tools and skills", async () => {
   const events: AgentEvent[] = [];
   const skill = {
     id: "session-skill",
@@ -16,7 +17,7 @@ test("runSubSession creates a session with explicit tools and skills", async () 
     toolNames: ["echo"],
   };
 
-  const result = await runSubSession({
+  const result = await runThread({
     parentSessionId: "ses_parent",
     prompt: "use echo tool",
     systemPrompt: "Session system",
@@ -66,7 +67,7 @@ test("runSubSession creates a session with explicit tools and skills", async () 
   ).toBe(true);
 });
 
-test("Agent.startSubSession defaults to the current parent session and does not inherit tools implicitly", async () => {
+test("Agent.startThread defaults to the current parent session and does not inherit tools implicitly", async () => {
   const agent = new Agent({
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
@@ -80,11 +81,11 @@ test("Agent.startSubSession defaults to the current parent session and does not 
     throw new Error("Expected parent session id.");
   }
 
-  const withoutTools = await agent.startSubSession({
+  const withoutTools = await agent.startThread({
     prompt: "use echo tool",
     tools: [],
   });
-  const withTools = await agent.startSubSession({
+  const withTools = await agent.startThread({
     prompt: "use echo tool",
     tools: [echoTool],
   });
@@ -96,8 +97,8 @@ test("Agent.startSubSession defaults to the current parent session and does not 
   expect(withTools.outcome.passed).toBe(true);
 });
 
-test("sub-session model budget returns a structured failed outcome", async () => {
-  const result = await runSubSession({
+test("thread model budget returns a structured failed outcome", async () => {
+  const result = await runThread({
     parentSessionId: "ses_parent",
     prompt: "hello",
     systemPrompt: "Session system",
@@ -126,7 +127,7 @@ test("sub-session model budget returns a structured failed outcome", async () =>
   ).toBe(true);
 });
 
-test("sub-session tool budget stops before executing extra tools", async () => {
+test("thread tool budget stops before executing extra tools", async () => {
   let executed = false;
   const trackedEcho: typeof echoTool = {
     ...echoTool,
@@ -136,7 +137,7 @@ test("sub-session tool budget stops before executing extra tools", async () => {
     },
   };
 
-  const result = await runSubSession({
+  const result = await runThread({
     parentSessionId: "ses_parent",
     prompt: "use echo tool",
     systemPrompt: "Session system",
@@ -166,13 +167,13 @@ test("sub-session tool budget stops before executing extra tools", async () => {
   expect(result.session.log.some((event) => event.type === "tool_start")).toBe(false);
 });
 
-test("tools can launch sub-sessions and return outcomes as tool evidence", async () => {
+test("tools can launch threads and return outcomes as tool evidence", async () => {
   const delegateTool: Tool<{ prompt: string }> = {
     name: "delegate",
-    description: "Starts a nested session for a request.",
+    description: "Starts a nested thread for a request.",
     parameters: Type.Object({ prompt: Type.String() }),
     async execute(args, context) {
-      const nested = await context.runSubSession?.({
+      const nested = await context.runThread?.({
         prompt: args.prompt,
         tools: [echoTool],
         budget: { maxToolCalls: 1 },
@@ -183,7 +184,7 @@ test("tools can launch sub-sessions and return outcomes as tool evidence", async
         toolName: "delegate",
         ok: nested?.outcome.passed ?? false,
         content: nested?.outcome ?? null,
-        ...(nested?.outcome.passed ? {} : { error: nested?.outcome.message ?? "Nested session did not run." }),
+        ...(nested?.outcome.passed ? {} : { error: nested?.outcome.message ?? "Nested thread did not run." }),
       };
     },
   };
@@ -197,9 +198,8 @@ test("tools can launch sub-sessions and return outcomes as tool evidence", async
       yield {
         type: "structured_output",
         content: {
-          needsTask: true,
           route: "task",
-          message: "Start a nested session.",
+          message: "Start a nested thread.",
         },
       };
       yield { type: "done" };
@@ -211,9 +211,9 @@ test("tools can launch sub-sessions and return outcomes as tool evidence", async
         type: "structured_output",
         content: {
           id: createId("task"),
-          title: "Delegate session work",
-          instruction: "Ask a nested session to use echo.",
-          acceptanceCriteria: createDefaultCriteria("Nested session outcome must pass."),
+          title: "Delegate thread work",
+          instruction: "Ask a nested thread to use echo.",
+          acceptanceCriteria: createDefaultCriteria("Nested thread outcome must pass."),
           toolNames: ["delegate"],
           skillIds: [],
           status: "pending",
@@ -245,23 +245,30 @@ test("tools can launch sub-sessions and return outcomes as tool evidence", async
       type: "structured_output",
       content: {
         passed,
-        message: passed ? "Nested session outcome was returned." : "Missing nested outcome.",
+        message: passed ? "Nested thread outcome was returned." : "Missing nested outcome.",
       },
     };
     yield { type: "done" };
   };
   const events: AgentEvent[] = [];
+  const session = createSession<AgentEvent>({
+    systemPrompt: "Test system",
+    input: "delegate echo to a nested thread",
+    task: "Delegate echo to a nested thread.",
+    goal: "Nested thread outcome must be returned as delegate evidence.",
+  });
   const agent = new Agent({
     systemPrompt: "Test system",
     model: { provider: "test", name: "parent" },
     stream: parentStream,
     tools: [delegateTool],
+    session,
   });
   agent.subscribe((event) => {
     events.push(event);
   });
 
-  const outcome = await agent.prompt("delegate echo to a nested session");
+  const outcome = await agent.prompt("delegate echo to a nested thread");
 
   expect(outcome.passed).toBe(true);
   expect(outcome).not.toHaveProperty("evidence");

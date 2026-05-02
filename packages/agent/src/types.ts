@@ -53,12 +53,11 @@ export const TaskSchema = Type.Object({
 export type Task = Type.Static<typeof TaskSchema>;
 
 export const TaskRoutingDecisionSchema = Type.Object({
-  needsTask: Type.Boolean(),
-  route: Type.Optional(Type.Union([
+  route: Type.Union([
     Type.Literal("direct"),
     Type.Literal("task"),
     Type.Literal("thread"),
-  ])),
+  ]),
   message: Type.String(),
   thread: Type.Optional(Type.Object({
     prompt: Type.String(),
@@ -118,7 +117,6 @@ export type ToolContext = {
   task: Task;
   toolCallId: string;
   runThread?: RunThread;
-  runSubSession?: RunSubSession;
 };
 
 export type Tool<TArgs = unknown> = {
@@ -175,12 +173,6 @@ export type ThreadRunResult = {
 };
 
 export type RunThread = (input: AgentThreadInput) => Promise<ThreadRunResult>;
-
-export type SubSessionInput = ThreadInput;
-export type AgentSubSessionInput = AgentThreadInput;
-export type SubSessionRunInput = ThreadRunInput;
-export type SubSessionRunResult = ThreadRunResult;
-export type RunSubSession = RunThread;
 
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
@@ -254,15 +246,6 @@ export type AgentEvent =
       budgetUsage: AgentBudgetUsage;
       ts: string;
     }
-  | { type: "sub_session_start"; parentSessionId: string; sessionId: string; prompt: string; ts: string }
-  | {
-      type: "sub_session_end";
-      parentSessionId: string;
-      sessionId: string;
-      outcome: Outcome;
-      budgetUsage: AgentBudgetUsage;
-      ts: string;
-    }
   | { type: "chat_start"; content: AgentMessage[]; ts: string }
   | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; ts: string }
   | { type: "chat_end"; content: AgentMessage[]; ts: string }
@@ -322,7 +305,6 @@ export type AgentLoopInput = {
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   runThread?: RunThread;
-  runSubSession?: RunSubSession;
   emit?: AgentEventListener;
 };
 

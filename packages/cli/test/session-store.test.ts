@@ -30,14 +30,12 @@ test("LocalJsonSessionStore reads and writes sessions inside the workspace", asy
       version?: string;
       id?: string;
       input?: string;
-      userInput?: string;
       messages?: Array<{ content: string }>;
     };
 
     expect(raw.version).toBe("0.3.2");
     expect(raw.id).toBe(session.id);
     expect(raw.input).toBe("hello");
-    expect(raw.userInput).toBeUndefined();
     expect(raw.messages?.some((message) => message.content.includes("Planning"))).toBe(true);
 
     const loaded = await store.load(session.id);

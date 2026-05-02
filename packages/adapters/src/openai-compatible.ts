@@ -582,22 +582,18 @@ function normalizeRoutingOutput(
   }
 
   const routeValue = asString(getRecordValue(raw, "route"))?.toLowerCase();
-  const explicitRoute = routeValue === "direct" || routeValue === "task" || routeValue === "thread"
+  const route = routeValue === "direct" || routeValue === "task" || routeValue === "thread"
     ? routeValue
     : undefined;
-  const needsTask = explicitRoute
-    ? explicitRoute !== "direct"
-    : normalizeBoolean(
-        getRecordValue(raw, "needsTask", "needs_task", "taskRequired", "requiresTask", "shouldCreateTask"),
-        false,
-      );
-  const route = explicitRoute ?? (needsTask ? undefined : "direct");
+  if (!route) {
+    throw validationError("route", "Expected route output to include route.");
+  }
   const message =
     asString(getRecordValue(raw, "message")) ??
     asString(getRecordValue(raw, "answer")) ??
     asString(getRecordValue(raw, "response")) ??
-    (needsTask ? "Creating a task for this request." : latestUserInput(context));
-  const rawThread = getRecordValue(raw, "thread", "subSession", "sub_session");
+    (route === "direct" ? latestUserInput(context) : "Creating a task for this request.");
+  const rawThread = getRecordValue(raw, "thread");
   const thread = isRecord(rawThread)
     ? {
         prompt: asString(getRecordValue(rawThread, "prompt", "input")) ?? latestUserInput(context),
@@ -608,9 +604,8 @@ function normalizeRoutingOutput(
 
   try {
     return Validators.taskRoutingDecision.Parse({
-      needsTask,
+      route,
       message,
-      ...(route ? { route } : {}),
       ...(route === "thread" && thread ? { thread } : {}),
     });
   } catch (error) {

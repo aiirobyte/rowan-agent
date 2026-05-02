@@ -344,7 +344,7 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
   }
 
   const decision = scheduleTaskRouting({
-    userInput: latestUserInput(input.session),
+    input: latestUserInput(input.session),
     tools: input.tools,
     decision: parseTaskRoutingDecision(collected.structured),
     defaultNeedsTaskRoute:
@@ -460,8 +460,7 @@ async function executeToolCall(input: {
       session: input.loop.session,
       task: input.task,
       toolCallId: input.toolCall.id,
-      ...(input.loop.runThread ? { runThread: input.loop.runThread, runSubSession: input.loop.runThread } : {}),
-      ...(!input.loop.runThread && input.loop.runSubSession ? { runSubSession: input.loop.runSubSession } : {}),
+      ...(input.loop.runThread ? { runThread: input.loop.runThread } : {}),
     };
     const rawResult = await tool.execute(
       args,
@@ -781,7 +780,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     await emitChatStart(runtime);
 
     const routed = await routeRequest(runtime);
-    if (routed.route === "direct" || !routed.needsTask) {
+    if (routed.route === "direct") {
       const outcome = createDirectOutcome(routed.message);
       await endChatLog();
       await emit(runtime, { type: "outcome", outcome, ts: nowIso() });

@@ -90,9 +90,7 @@ export function createMessage(
 
 export function createSession<TLogEvent = never>(input: {
   systemPrompt: string;
-  input?: string;
-  prompt?: string;
-  userInput?: string;
+  input: string;
   task?: string;
   goal?: string;
   skills?: Skill[];
@@ -100,10 +98,6 @@ export function createSession<TLogEvent = never>(input: {
   title?: string;
 }): Session<TLogEvent> {
   const createdAt = nowIso();
-  const sessionInput = input.input ?? input.prompt ?? input.userInput;
-  if (!sessionInput) {
-    throw new Error("Session input is required.");
-  }
   const messages = [
     createMessage("system", input.systemPrompt),
     ...(input.skills?.length
@@ -117,7 +111,7 @@ export function createSession<TLogEvent = never>(input: {
           ),
         ]
       : []),
-    createMessage("user", sessionInput),
+    createMessage("user", input.input),
   ];
 
   return {
@@ -125,7 +119,7 @@ export function createSession<TLogEvent = never>(input: {
     id: createId("ses"),
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
     systemPrompt: input.systemPrompt,
-    input: sessionInput,
+    input: input.input,
     ...(input.task ? { task: input.task } : {}),
     ...(input.goal ? { goal: input.goal } : {}),
     messages,

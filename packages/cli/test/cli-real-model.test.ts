@@ -342,7 +342,7 @@ test("CLI writes a default trace without --trace", async () => {
   const responses = [
     {
       message: "Hello from model",
-      needsTask: false,
+      route: "direct",
     },
   ];
   let requestCount = 0;
@@ -404,7 +404,6 @@ test("CLI writes a default trace without --trace", async () => {
     expect(firstEvent.timestamp).toBeUndefined();
     expect(trace).toContain("\"type\":\"session_created\"");
     expect(trace).toContain("\"input\":\"hello\"");
-    expect(trace).not.toContain("\"userInput\"");
     expect(trace).toContain("\"type\":\"model_requested\"");
     expect(trace).toContain("\"phase\":\"route\"");
     expect(trace).not.toContain("\"type\":\"task_created\"");
@@ -429,11 +428,10 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
   const responses = [
     {
       message: "Use bash to check the current date: $(date)",
-      needsTask: false,
+      route: "direct",
     },
     {
       message: "Creating a worker task.",
-      needsTask: true,
       route: "task",
     },
     {
@@ -520,8 +518,8 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
 test("CLI --session continues a saved one-shot session", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-session-"));
   const responses = [
-    { message: "First saved answer", needsTask: false },
-    { message: "Second saved answer", needsTask: false },
+    { message: "First saved answer", route: "direct" },
+    { message: "Second saved answer", route: "direct" },
   ];
   const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
   let requestCount = 0;
@@ -587,8 +585,8 @@ test("CLI --session continues a saved one-shot session", async () => {
 test("CLI initial prompt continues into the default interactive session", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-interactive-"));
   const responses = [
-    { message: "Chat first", needsTask: false },
-    { message: "Chat second", needsTask: false },
+    { message: "Chat first", route: "direct" },
+    { message: "Chat second", route: "direct" },
   ];
   const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
   let requestCount = 0;
@@ -657,9 +655,9 @@ test("CLI initial prompt continues into the default interactive session", async 
 test("CLI --session can continue with additional interactive turns", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-loaded-interactive-"));
   const responses = [
-    { message: "Initial answer", needsTask: false },
-    { message: "Loaded chat first", needsTask: false },
-    { message: "Loaded chat second", needsTask: false },
+    { message: "Initial answer", route: "direct" },
+    { message: "Loaded chat first", route: "direct" },
+    { message: "Loaded chat second", route: "direct" },
   ];
   let requestCount = 0;
   let server: ReturnType<typeof Bun.serve> | undefined;
@@ -743,7 +741,7 @@ test("CLI treats chat as a prompt instead of a command", async () => {
         port: 0,
         async fetch(request) {
           requests.push((await request.json()) as { messages?: Array<{ content?: string }> });
-          return openAIResponse({ message: "chat was handled as a prompt", needsTask: false });
+          return openAIResponse({ message: "chat was handled as a prompt", route: "direct" });
         },
       });
     } catch (error) {

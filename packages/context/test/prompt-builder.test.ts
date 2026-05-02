@@ -49,11 +49,11 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   expect(combined).toContain("Route only the current user request below.");
   expect(combined).toContain("Current user request:");
   expect(combined).toContain("\"What is 2 + 2?\"");
-  expect(combined).toContain('{ "message": string, "needsTask": boolean, "route": "direct" | "task" | "thread"');
-  expect(combined).toContain("Default to answering the user directly with needsTask=false.");
+  expect(combined).toContain('{ "message": string, "route": "direct" | "task" | "thread"');
+  expect(combined).toContain('Default to answering the user directly with route="direct".');
   expect(combined).toContain("normal chat, greetings, explanations, calculations");
   expect(combined).toContain("workspace access");
-  expect(combined).toContain("needsTask must be true");
+  expect(combined).toContain('route must not be "direct"');
   expect(combined).toContain("factual question about the current workspace");
   expect(combined).toContain("cannot know without inspecting the workspace");
   expect(combined).toContain("message must be the complete final user-visible answer");
@@ -170,7 +170,7 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
 test("prompt builder includes the model message stream in later prompts", () => {
   const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
   session.messages.push(
-    createMessage("assistant", "{\"needsTask\":true,\"message\":\"Creating a task.\"}", {
+    createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
       kind: "routing_decision",
       phase: "route",
     }),
@@ -202,7 +202,7 @@ test("prompt builder includes the model message stream in later prompts", () => 
 
   expect(combined).toContain("Use echo.");
   expect(combined).toContain("tool evidence");
-  expect(combined).toContain("needsTask");
+  expect(combined).toContain("\"route\":\"task\"");
   expect(combined).toContain("\"title\":\"Echo\"");
   expect(combined).toContain("\"toolCalls\":[]");
   expect(combined).toContain("Answer text.");

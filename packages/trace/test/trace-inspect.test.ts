@@ -57,7 +57,7 @@ test("trace reader and inspector read session-keyed JSONL events", async () => {
   expect(summary.eventCount).toBe(3);
   expect(summary.eventTypes.model_requested).toBe(1);
   expect(summary.sessionIds).toEqual(["ses_1234abcd"]);
-  expect(summary.subSessions).toEqual([]);
+  expect(summary.threads).toEqual([]);
 });
 
 test("trace inspector lists session-keyed trace files", async () => {
@@ -90,7 +90,7 @@ test("trace inspector lists session-keyed trace files", async () => {
   expect(summary.sessionIds).toEqual(["ses_1234abcd"]);
 });
 
-test("trace inspector associates sub-sessions with parents", async () => {
+test("trace inspector associates threads with parents", async () => {
   const runsDir = await mkdtemp(join(tmpdir(), "rowan-trace-child-"));
   const tracePath = join(runsDir, "2026-05-01T121314-15+08:00-ses_aaaabbbb.jsonl");
   await writeFile(
@@ -108,10 +108,12 @@ test("trace inspector associates sub-sessions with parents", async () => {
         ts: "2026-05-01T121314-15+08:00",
       }),
       JSON.stringify({
-        type: "sub_session_start",
+        type: "thread_created",
         parentSessionId: "ses_aaaabbbb",
         sessionId: "ses_bbbbcccc",
         prompt: "delegate this",
+        task: "Delegate this",
+        goal: "Return child result.",
         ts: "2026-05-01T121315-15+08:00",
       }),
       JSON.stringify({
@@ -126,7 +128,7 @@ test("trace inspector associates sub-sessions with parents", async () => {
         ts: "2026-05-01T121316-15+08:00",
       }),
       JSON.stringify({
-        type: "sub_session_end",
+        type: "thread_end",
         parentSessionId: "ses_aaaabbbb",
         sessionId: "ses_bbbbcccc",
         outcome: { id: "out_child", passed: true, message: "Done." },
@@ -141,7 +143,7 @@ test("trace inspector associates sub-sessions with parents", async () => {
   const summary = await inspectTrace("ses_aaaabbbb", runsDir);
 
   expect(summary.sessionIds).toEqual(["ses_aaaabbbb", "ses_bbbbcccc"]);
-  expect(summary.subSessions).toEqual([
+  expect(summary.threads).toEqual([
     {
       parentSessionId: "ses_aaaabbbb",
       sessionId: "ses_bbbbcccc",
