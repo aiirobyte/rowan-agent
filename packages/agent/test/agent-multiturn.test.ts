@@ -18,7 +18,7 @@ test("Agent.prompt reuses one session for multi-turn direct responses", async ()
     routeContexts.push(context.session.messages.map((message) => message.content));
     const sawFirstAnswer = context.session.messages.some((message) => message.content.includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
-    yield { type: "model_call", phase: "route", model, usage: { inputMessages: context.session.messages.length } };
+    yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.session.messages.length } };
     yield { type: "structured_output", content: { needsTask: false, message } };
     yield { type: "done" };
   };
@@ -112,7 +112,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
       const needsTask = context.session.userInput === "trigger failure" || hasFailedOutcome;
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
-      yield { type: "model_call", phase: "route", model, usage: { inputMessages: context.session.messages.length } };
+      yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.session.messages.length } };
       yield { type: "structured_output", content: { needsTask, message } };
       yield { type: "done" };
       return;

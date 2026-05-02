@@ -36,6 +36,6 @@ bun run rowan "use bash to print the current date"
 预期：
 
 - 普通回答不产生 `task_created`。
-- 工具请求先产生 route `model_call`，再产生 `task_created`。
+- 工具请求先产生 route `model_requested`，再产生 `task_created`。
 - sub_session API 可以记录 parent/sub_session trace 关系。
 - sub_session budget 超限返回结构化 failed outcome。

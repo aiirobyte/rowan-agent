@@ -322,14 +322,14 @@ v0.0.0 事件生命周期：
 
 ```text
 session_start
-message_start
+chat_start
 message_delta
-message_end
-model_call
+chat_end
+model_requested
 task_created
-task_attempt_start
-tool_call_start
-tool_call_end
+task_start
+tool_start
+tool_end
 verification_start
 verification_end
 outcome
@@ -337,9 +337,9 @@ session_end
 error
 ```
 
-`message_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 只记录新增 `AgentMessage`，不重复输出完整 content，`message_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_call` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
+`chat_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 只记录新增 `AgentMessage`，不重复输出完整 content，`chat_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_requested` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
 
-v0.3.0 的 direct response trace 必须包含 `model_call` route 和 `outcome`，但不能包含 `task_created`。需要工具或多步骤执行时，`model_call` route 必须出现在 `task_created` 之前。
+v0.3.0 的 direct response trace 必须包含 `model_requested` route 和 `outcome`，但不能包含 `task_created`。需要工具或多步骤执行时，`model_requested` route 必须出现在 `task_created` 之前。
 
 Trace 是 subscriber：
 

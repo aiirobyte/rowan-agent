@@ -3,8 +3,10 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Outcome } from "@rowan-agent/agent";
+import { createMessage, createSession } from "@rowan-agent/session";
 import { inspectTrace } from "@rowan-agent/trace";
 import { formatOutcomeOutput } from "../src/output";
+import { LocalJsonSessionStore } from "../src/session-store";
 
 async function runCli(
   args: string[],
@@ -105,6 +107,193 @@ test("CLI rejects invalid OpenAI-compatible timeout", async () => {
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("--timeout-ms must be a positive integer.");
+});
+
+test("CLI config shows missing and default configuration without requiring model credentials", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-config-missing-"));
+
+  try {
+    const result = await runCli(["config"], {
+      ROWAN_WORKSPACE: workspace,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("Missing API key");
+    expect(result.stderr).not.toContain("Missing model");
+    const config = JSON.parse(result.stdout) as {
+      command?: string;
+      workspace?: { root?: string; sessionsDir?: string; runsDir?: string; skillsDir?: string };
+      openaiCompatible?: {
+        baseUrl?: string;
+        baseUrlSource?: string;
+        apiKey?: string | null;
+        apiKeyConfigured?: boolean;
+        apiKeySource?: string;
+        modelConfigured?: boolean;
+        modelSource?: string;
+        timeoutMs?: number;
+        timeoutMsSource?: string;
+      };
+    };
+
+    expect(config.command).toBe("config");
+    expect(config.workspace?.root).toBe(workspace);
+    expect(config.workspace?.sessionsDir).toBe(join(workspace, "sessions"));
+    expect(config.workspace?.runsDir).toBe(join(workspace, "runs"));
+    expect(config.workspace?.skillsDir).toBe(join(workspace, "skills"));
+    expect(config.openaiCompatible).toMatchObject({
+      baseUrl: "https://api.openai.com/v1",
+      baseUrlSource: "default",
+      apiKey: null,
+      apiKeyConfigured: false,
+      apiKeySource: "missing",
+      modelConfigured: false,
+      modelSource: "missing",
+      timeoutMs: 60000,
+      timeoutMsSource: "default",
+    });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI config reports resolved flags without exposing API key material", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-config-flags-"));
+
+  try {
+    const result = await runCli(
+      [
+        "--base-url",
+        "https://api.example/v1/",
+        "--api-key",
+        "super-secret-key",
+        "--model",
+        "test-model",
+        "--timeout-ms",
+        "1234",
+        "--session",
+        "ses_example",
+        "--trace",
+        "runs/custom.jsonl",
+        "--skill",
+        "example",
+        "config",
+      ],
+      {
+        ROWAN_WORKSPACE: workspace,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("super-secret-key");
+    const config = JSON.parse(result.stdout) as {
+      openaiCompatible?: Record<string, unknown>;
+      session?: Record<string, unknown>;
+      trace?: Record<string, unknown>;
+      skills?: Array<Record<string, unknown>>;
+      tools?: string[];
+    };
+
+    expect(config.openaiCompatible).toMatchObject({
+      baseUrl: "https://api.example/v1",
+      baseUrlSource: "flag",
+      apiKeyConfigured: true,
+      apiKey: "super********key",
+      apiKeySource: "flag",
+      model: "test-model",
+      modelConfigured: true,
+      modelSource: "flag",
+      timeoutMs: 1234,
+      timeoutMsSource: "flag",
+    });
+    expect(config.session).toEqual({ id: "ses_example", source: "flag" });
+    expect(config.trace).toEqual({ automatic: false, path: "runs/custom.jsonl" });
+    expect(config.skills).toEqual([
+      {
+        idOrPath: "example",
+        path: "skills/example/SKILL.md",
+      },
+    ]);
+    expect(config.tools).toEqual(["read", "write", "edit", "bash"]);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI config rejects trailing prompt text", async () => {
+  const result = await runCli(["config", "hello"]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("config does not accept a prompt.");
+});
+
+test("CLI list returns saved sessions in the current workspace", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-list-"));
+  const store = new LocalJsonSessionStore(join(workspace, "sessions"));
+  const older = createSession({
+    systemPrompt: "Test system",
+    userInput: "old hello",
+    title: "Older session",
+  });
+  older.createdAt = "2026-05-02T120000-00+08:00";
+  older.updatedAt = "2026-05-02T120001-00+08:00";
+  older.messages.push(createMessage("assistant", "Older answer"));
+  const newer = createSession({
+    systemPrompt: "Test system",
+    userInput: "new hello",
+    title: "Newer session",
+  });
+  newer.createdAt = "2026-05-02T130000-00+08:00";
+  newer.updatedAt = "2026-05-02T130001-00+08:00";
+  newer.messages.push(createMessage("assistant", "Newer answer"));
+
+  try {
+    await store.save(older);
+    await store.save(newer);
+
+    const result = await runCli(["list"], {
+      ROWAN_WORKSPACE: workspace,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("Missing API key");
+    expect(result.stderr).not.toContain("Missing model");
+    const sessions = JSON.parse(result.stdout) as Array<{
+      id?: string;
+      title?: string | null;
+      createdAt?: string;
+      updatedAt?: string;
+      messageCount?: number;
+    }>;
+
+    expect(sessions).toHaveLength(2);
+    expect(result.stdout).not.toContain("Newer answer");
+    expect(result.stdout).not.toContain("Older answer");
+    expect(sessions.map((session) => session.id)).toEqual([older.id, newer.id]);
+    expect(sessions[0]).toMatchObject({
+      title: "Older session",
+      createdAt: "2026-05-02T120000-00+08:00",
+      updatedAt: "2026-05-02T120001-00+08:00",
+      messageCount: older.messages.length,
+    });
+    expect(sessions[0]).not.toHaveProperty("latestMessage");
+    expect(sessions[1]).toMatchObject({
+      title: "Newer session",
+      createdAt: "2026-05-02T130000-00+08:00",
+      updatedAt: "2026-05-02T130001-00+08:00",
+      messageCount: newer.messages.length,
+    });
+    expect(sessions[1]).not.toHaveProperty("latestMessage");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI list rejects trailing prompt text", async () => {
+  const result = await runCli(["list", "hello"]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("list does not accept a prompt.");
 });
 
 test("CLI times out stalled OpenAI-compatible requests", async () => {
@@ -215,7 +404,7 @@ test("CLI writes a default trace without --trace", async () => {
     expect(firstEvent.timestamp).toBeUndefined();
     expect(trace).toContain("\"type\":\"session_created\"");
     expect(trace).toContain("\"userInput\":\"hello\"");
-    expect(trace).toContain("\"type\":\"model_call\"");
+    expect(trace).toContain("\"type\":\"model_requested\"");
     expect(trace).toContain("\"phase\":\"route\"");
     expect(trace).not.toContain("\"type\":\"task_created\"");
     expect(trace).toContain("\"type\":\"outcome\"");
@@ -304,12 +493,12 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
       .split("\n")
       .map((line) => JSON.parse(line)) as Array<{ type: string; phase?: string }>;
     const routeCallIndex = traceEvents.findIndex(
-      (event) => event.type === "model_call" && event.phase === "route",
+      (event) => event.type === "model_requested" && event.phase === "route",
     );
     const taskCreatedIndex = traceEvents.findIndex((event) => event.type === "task_created");
     expect(routeCallIndex).toBeGreaterThanOrEqual(0);
     expect(taskCreatedIndex).toBeGreaterThan(routeCallIndex);
-    expect(trace).toContain("\"type\":\"tool_call_start\"");
+    expect(trace).toContain("\"type\":\"tool_start\"");
     expect(trace).toContain("\"toolName\":\"bash\"");
     expect(trace).toContain("cli-bash-ok");
   } finally {
@@ -524,7 +713,9 @@ test("CLI no longer exposes chat, sessions, or trace subcommands in help", async
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("Usage:");
-  expect(result.stdout).toContain("bun run rowan [options] [prompt]");
+  expect(result.stdout).toContain("bun run rowan [options] [command] [prompt]");
+  expect(result.stdout).toContain("config  Show the current resolved configuration");
+  expect(result.stdout).toContain("list    List saved sessions in the current workspace");
   expect(result.stdout).not.toContain("bun run rowan chat");
   expect(result.stdout).not.toContain("sessions list");
   expect(result.stdout).not.toContain("trace list");

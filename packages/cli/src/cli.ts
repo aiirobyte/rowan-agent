@@ -14,18 +14,21 @@ import {
   type AgentEventListener,
   type Outcome,
 } from "@rowan-agent/agent";
-import { type AgentMessage, type Session } from "@rowan-agent/session";
+import { type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
 import { jsonlTraceWriter, type JsonlTracePath } from "@rowan-agent/trace";
 import {
   type RowanWorkspacePaths,
   resolveInRowanWorkspace,
   resolveRowanWorkspacePaths,
 } from "@rowan-agent/workspace";
-import { formatOutcomeOutput } from "./output";
+import { formatJsonOutput, formatOutcomeOutput } from "./output";
 import { LocalJsonSessionStore } from "./session-store";
-import { loadSkills } from "./skills";
+import { loadSkills, resolveSkillPath } from "./skills";
+
+type CliCommand = "config" | "list";
 
 type CliArgs = {
+  command?: CliCommand;
   trace?: string;
   sessionId?: string;
   skills: string[];
@@ -36,7 +39,52 @@ type CliArgs = {
   prompt?: string;
 };
 
+type CliCommandDefinition = {
+  name: CliCommand;
+  summary: string;
+  acceptsPrompt: boolean;
+  run(args: CliArgs): Promise<void>;
+};
+
 const DEFAULT_OPENAI_TIMEOUT_MS = 60_000;
+
+const CLI_COMMANDS = {
+  config: {
+    name: "config",
+    summary: "Show the current resolved configuration without printing secrets.",
+    acceptsPrompt: false,
+    run: runConfigCommand,
+  },
+  list: {
+    name: "list",
+    summary: "List saved sessions in the current workspace.",
+    acceptsPrompt: false,
+    run: runListCommand,
+  },
+} satisfies Record<CliCommand, CliCommandDefinition>;
+
+function cliCommandDefinitions(): CliCommandDefinition[] {
+  return Object.values(CLI_COMMANDS);
+}
+
+function cliCommandFor(input: string): CliCommandDefinition | undefined {
+  return CLI_COMMANDS[input as CliCommand];
+}
+
+function formatCommandHelp(): string {
+  return cliCommandDefinitions()
+    .map((command) => `  ${command.name.padEnd(7)} ${command.summary}`)
+    .join("\n");
+}
+
+async function runRegisteredCommand(args: CliArgs): Promise<boolean> {
+  if (!args.command) {
+    return false;
+  }
+
+  await CLI_COMMANDS[args.command].run(args);
+  return true;
+}
 
 function createDefaultTracePath(workspace: RowanWorkspacePaths, sessionId: string): string {
   return join(workspace.runsDir, `${formatLocalTimestamp()}-${sessionId}.jsonl`);
@@ -90,14 +138,20 @@ function printHelp(): void {
   console.log(`Rowan
 
 Usage:
-  bun run rowan [options] [prompt]
+  bun run rowan [options] [command] [prompt]
 
 Examples:
   bun run rowan "hello"
+  bun run rowan config
+  bun run rowan list
   bun run rowan --session ses_12345678 "continue"
   bun run rowan --model gpt-4.1-mini "hello"
   bun run rowan --skill example "summarize the example skill"
   bun run rowan --trace runs/real.jsonl "list workspace files"
+
+Commands:
+${formatCommandHelp()}
+  When no command is provided, positional text is treated as the prompt.
 
 Trace:
   Source runs use the Rowan project root as the workspace.
@@ -131,6 +185,39 @@ function parsePositiveInteger(value: string, source: string): number {
     throw new Error(`${source} must be a positive integer.`);
   }
   return parsed;
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function configSource(flagValue: string | undefined, envValue: string | undefined, defaultValue?: string): "flag" | "env" | "default" | "missing" {
+  if (nonEmpty(flagValue)) {
+    return "flag";
+  }
+  if (nonEmpty(envValue)) {
+    return "env";
+  }
+  return defaultValue === undefined ? "missing" : "default";
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "");
+}
+
+function maskSecret(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const prefixLength = 5;
+  const suffixLength = 3;
+  if (value.length <= prefixLength + suffixLength) {
+    return "*".repeat(value.length);
+  }
+
+  return `${value.slice(0, prefixLength)}${"*".repeat(value.length - prefixLength - suffixLength)}${value.slice(-suffixLength)}`;
 }
 
 function readOptionValue(args: string[], option: string): string {
@@ -202,6 +289,17 @@ function parseArgs(argv: string[]): CliArgs {
       throw new Error(`Unknown option: ${next}`);
     }
 
+    const command = cliCommandFor(next);
+    if (command && promptParts.length === 0 && !parsed.command) {
+      parsed.command = command.name;
+      continue;
+    }
+
+    const activeCommand = parsed.command ? CLI_COMMANDS[parsed.command] : undefined;
+    if (activeCommand && !activeCommand.acceptsPrompt) {
+      throw new Error(`${activeCommand.name} does not accept a prompt.`);
+    }
+
     promptParts.push(next);
   }
 
@@ -213,6 +311,85 @@ function parseArgs(argv: string[]): CliArgs {
   return parsed;
 }
 type AgentSession = Session<AgentEvent>;
+type CliSessionListItem = Pick<SessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
+
+function configuredValue(flagValue: string | undefined, envValue: string | undefined, defaultValue?: string): string | undefined {
+  return nonEmpty(flagValue) ?? nonEmpty(envValue) ?? defaultValue;
+}
+
+function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Record<string, unknown> {
+  const env = process.env as Record<string, string | undefined>;
+  const baseUrl = configuredValue(args.baseUrl, env.ROWAN_OPENAI_BASE_URL, "https://api.openai.com/v1");
+  const apiKey = configuredValue(args.apiKey, env.ROWAN_OPENAI_API_KEY);
+  const model = configuredValue(args.model, env.ROWAN_MODEL);
+  const timeoutMs =
+    args.timeoutMs ??
+    parseOptionalTimeoutMs(env.ROWAN_OPENAI_TIMEOUT_MS) ??
+    DEFAULT_OPENAI_TIMEOUT_MS;
+  const tracePath = resolveOptionalWorkspacePath(args.trace, workspace);
+  const tools = createCoreTools({ root: workspace.root });
+
+  return {
+    command: "config",
+    workspace: {
+      mode: workspace.mode,
+      root: workspace.root,
+      runsDir: workspace.runsDir,
+      sessionsDir: workspace.sessionsDir,
+      skillsDir: workspace.skillsDir,
+    },
+    openaiCompatible: {
+      baseUrl: baseUrl ? normalizeBaseUrl(baseUrl) : undefined,
+      baseUrlSource: configSource(args.baseUrl, env.ROWAN_OPENAI_BASE_URL, "https://api.openai.com/v1"),
+      apiKeyConfigured: Boolean(apiKey),
+      apiKey: maskSecret(apiKey),
+      apiKeySource: configSource(args.apiKey, env.ROWAN_OPENAI_API_KEY),
+      model,
+      modelConfigured: Boolean(model),
+      modelSource: configSource(args.model, env.ROWAN_MODEL),
+      timeoutMs,
+      timeoutMsSource:
+        args.timeoutMs !== undefined
+          ? "flag"
+          : nonEmpty(env.ROWAN_OPENAI_TIMEOUT_MS)
+            ? "env"
+            : "default",
+    },
+    session: {
+      id: args.sessionId ?? null,
+      source: args.sessionId ? "flag" : "new",
+    },
+    trace: {
+      automatic: !tracePath,
+      path: tracePath ? formatWorkspacePathForDisplay(tracePath, workspace) : null,
+    },
+    skills: args.skills.map((skill) => ({
+      idOrPath: skill,
+      path: formatWorkspacePathForDisplay(resolveSkillPath(skill, workspace), workspace),
+    })),
+    tools: tools.map((tool) => tool.name),
+  };
+}
+
+async function runConfigCommand(args: CliArgs): Promise<void> {
+  const workspace = resolveRowanWorkspacePaths();
+  console.log(formatJsonOutput(createConfigSnapshot(args, workspace)));
+}
+
+async function runListCommand(_args: CliArgs): Promise<void> {
+  const workspace = resolveRowanWorkspacePaths();
+  const sessionStore = new LocalJsonSessionStore<AgentSession>(workspace.sessionsDir);
+  const sessions = [...(await sessionStore.list())]
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+    .map<CliSessionListItem>((session) => ({
+      id: session.id,
+      title: session.title,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      messageCount: session.messageCount,
+    }));
+  console.log(formatJsonOutput(sessions));
+}
 
 async function createConfiguredAgent(
   args: CliArgs,
@@ -260,7 +437,7 @@ async function promptWithTrace(input: {
   const listener: AgentEventListener = ((event: AgentEvent) => {
     traceWriter(event);
 
-    if (event.type === "message_start" && !messageId) {
+    if (event.type === "chat_start" && !messageId) {
       messageId = currentTurnMessageId(event.content);
       if (messageId) {
         input.onMessageId?.(messageId);
@@ -397,6 +574,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (await runRegisteredCommand(args)) {
+    return;
+  }
+
   await runInteractiveCommand(args);
 }
 

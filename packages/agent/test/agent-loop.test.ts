@@ -33,7 +33,7 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
   expect(outcome).not.toHaveProperty("evidence");
   expect(outcome).not.toHaveProperty("failedCriteria");
   expect(events).toContain("task_created");
-  expect(events).toContain("tool_call_end");
+  expect(events).toContain("tool_end");
   expect(events).toContain("verification_end");
   expect(events).toContain("outcome");
   expect(session.messages.some((message) => message.role === "tool")).toBe(true);
@@ -124,7 +124,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     indexOf((event) => event.type === "task_created"),
   );
   expect(messageIndex("Executing from model.")).toBeLessThan(
-    indexOf((event) => event.type === "tool_call_requested"),
+    indexOf((event) => event.type === "tool_requested"),
   );
   expect(messageIndex("Verifying from model.")).toBeLessThan(
     indexOf((event) => event.type === "verification_end"),
@@ -153,11 +153,11 @@ test("runAgentLoop can return a direct response without creating a task", async 
   expect(outcome.passed).toBe(true);
   expect(outcome.taskId).toBeUndefined();
   expect(outcome.message).toBe("Direct response: hello");
-  expect(events).toContain("model_call");
+  expect(events).toContain("model_requested");
   expect(events).toContain("outcome");
   expect(events).not.toContain("task_created");
   expect(events).not.toContain("verification_start");
-  expect(events.indexOf("message_end")).toBeLessThan(events.indexOf("outcome"));
+  expect(events.indexOf("chat_end")).toBeLessThan(events.indexOf("outcome"));
   const routeDecision = session.messages.find(
     (message) => message.metadata?.kind === "routing_decision" && message.metadata.phase === "route",
   );
@@ -177,7 +177,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
   expect(
     emittedEvents.some(
       (event) =>
-        event.type === "message_end" &&
+        event.type === "chat_end" &&
         event.content.some((message) => message.metadata?.kind === "outcome"),
     ),
   ).toBe(false);
@@ -198,7 +198,7 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
   });
 
   expect(outcome.passed).toBe(false);
-  expect(session.log.some((event) => event.type === "tool_call_end")).toBe(true);
+  expect(session.log.some((event) => event.type === "tool_end")).toBe(true);
 });
 
 test("runAgentLoop preserves provider error details in error events", async () => {
@@ -292,7 +292,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     }
 
     verifyCalls += 1;
-    yield { type: "model_call", phase: "verify", model, usage: { inputMessages: 1 } };
+    yield { type: "model_requested", phase: "verify", model, usage: { inputMessages: 1 } };
     if (verifyCalls === 1) {
       throw invalidModelSchemaError("Model output for verify did not match the expected schema.");
     }
@@ -356,7 +356,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
     }
     if (context.phase === "execute") {
       executeCalls += 1;
-      yield { type: "model_call", phase: "execute", model, usage: { inputMessages: 1 } };
+      yield { type: "model_requested", phase: "execute", model, usage: { inputMessages: 1 } };
       if (executeCalls === 1) {
         throw invalidModelSchemaError("Model output for execute did not include toolCalls.");
       }
@@ -419,13 +419,13 @@ test("beforeToolCall hook can block execution", async () => {
   });
 
   expect(outcome.passed).toBe(false);
-  expect(events).toContain("tool_call_approval_requested");
-  expect(events).toContain("tool_call_approval_result");
-  expect(session.log.some((event) => event.type === "tool_call_blocked")).toBe(true);
+  expect(events).toContain("tool_approval_requested");
+  expect(events).toContain("tool_approval_result");
+  expect(session.log.some((event) => event.type === "tool_blocked")).toBe(true);
   expect(
     session.log.some(
       (event) =>
-        event.type === "tool_call_approval_result" &&
+        event.type === "tool_approval_result" &&
         event.toolName === "echo" &&
         !event.decision.allow &&
         event.decision.reason === "blocked in test",
@@ -546,5 +546,5 @@ test("invalid tool args do not execute tool", async () => {
 
   expect(outcome.passed).toBe(false);
   expect(executed).toBe(false);
-  expect(session.log.some((event) => event.type === "tool_call_end")).toBe(true);
+  expect(session.log.some((event) => event.type === "tool_end")).toBe(true);
 });

@@ -295,11 +295,11 @@ v0.2.0 不修改现有事件语义。
 保留：
 
 - `session_created` 不包含 messages、createdAt、updatedAt、messageCount。
-- `message_start.content` 是初始 `AgentMessage[]`。
+- `chat_start.content` 是初始 `AgentMessage[]`。
 - `message_delta.delta` 是新增 `AgentMessage`。
 - `message_delta.content` 是追加后的完整 `AgentMessage[]`。
-- `message_end.content` 是最终完整 `AgentMessage[]`。
-- `model_call` 合并 request/response，只记录 token usage 和 `inputMessages`。
+- `chat_end.content` 是最终完整 `AgentMessage[]`。
+- `model_requested` 合并 request/response，只记录 token usage 和 `inputMessages`。
 - 顶层时间字段为 `ts`。
 
 可新增：

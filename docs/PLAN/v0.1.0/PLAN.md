@@ -223,10 +223,10 @@ v0.1.0 使用 Chat Completions 风格请求：
 
 Conversation history 作为 Chat Completions 的独立 `messages` 传入，不再拼接到 phase prompt 末尾。Phase prompt 只表达当前阶段的结构化输出契约、task/tools/toolResults 等控制信息。
 
-Trace 中的 `model_call` 不记录完整输入输出内容，只记录一次模型调用的消息数量和 provider token usage：
+Trace 中的 `model_requested` 不记录完整输入输出内容，只记录一次模型调用的消息数量和 provider token usage：
 
 ```text
-model_call
+model_requested
   -> phase
   -> model
   -> ts
@@ -236,7 +236,7 @@ model_call
   -> usage.totalTokens        // provider usage, if available
 ```
 
-完整 conversation 由 `message_*` 事件表达：`message_start.content` 是初始 `session.messages` 数组，`message_delta.delta` 是新增的 `AgentMessage`，`message_delta.content` 是追加后的完整数组，`message_end.content` 是最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount，只保留 session 静态元信息。模型事件只保留 token 规模信息，避免 prompt 和 raw response 在 trace 中重复膨胀。
+完整 conversation 由 `message_*` 事件表达：`chat_start.content` 是初始 `session.messages` 数组，`message_delta.delta` 是新增的 `AgentMessage`，`message_delta.content` 是追加后的完整数组，`chat_end.content` 是最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount，只保留 session 静态元信息。模型事件只保留 token 规模信息，避免 prompt 和 raw response 在 trace 中重复膨胀。
 
 `response_format` 可能不是所有 OpenAI-compatible provider 都支持。v0.1.0 策略：
 
@@ -386,7 +386,7 @@ function createOpenAICompatibleStream(config: OpenAICompatibleConfig): StreamFn
 ```text
 phase plan
   -> call chat completions
-  -> yield model_call usage summary
+  -> yield model_requested usage summary
   -> parse JSON
   -> yield text_delta if message exists
   -> yield structured_output Task
@@ -394,7 +394,7 @@ phase plan
 
 phase execute
   -> call chat completions
-  -> yield model_call usage summary
+  -> yield model_requested usage summary
   -> parse JSON
   -> yield text_delta if message exists
   -> yield tool_call for each tool call
@@ -402,7 +402,7 @@ phase execute
 
 phase verify
   -> call chat completions
-  -> yield model_call usage summary
+  -> yield model_requested usage summary
   -> parse JSON
   -> yield text_delta if message exists
   -> yield structured_output VerificationResult
@@ -431,7 +431,7 @@ bun run rowan --trace .rowan/runs/real.jsonl "hello"
   -> 写入指定 trace 文件
 ```
 
-默认 run 文件名和 JSONL 内部事件 `ts` 使用同一个本地时间格式化函数，并显式保留时区偏移；`CC` 是两位厘秒，避免时间戳过长。`--trace` 是覆盖路径，不是开启开关。v0.1.0 起 CLI 每次真实模型运行都应该有 trace，便于复盘 model_call、structured output、tool call、verification、outcome。
+默认 run 文件名和 JSONL 内部事件 `ts` 使用同一个本地时间格式化函数，并显式保留时区偏移；`CC` 是两位厘秒，避免时间戳过长。`--trace` 是覆盖路径，不是开启开关。v0.1.0 起 CLI 每次真实模型运行都应该有 trace，便于复盘 model_requested、structured output、tool call、verification、outcome。
 
 环境变量：
 

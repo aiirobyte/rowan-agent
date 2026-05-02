@@ -166,7 +166,7 @@ export type RunSubSession = (input: AgentSubSessionInput) => Promise<SubSessionR
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
   | {
-      type: "model_call";
+      type: "model_requested";
       phase: LlmPhase;
       model: ModelRef;
       usage: ModelCallUsage;
@@ -227,32 +227,32 @@ export type AgentEvent =
       budgetUsage: AgentBudgetUsage;
       ts: string;
     }
-  | { type: "message_start"; content: AgentMessage[]; ts: string }
+  | { type: "chat_start"; content: AgentMessage[]; ts: string }
   | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; ts: string }
-  | { type: "message_end"; content: AgentMessage[]; ts: string }
+  | { type: "chat_end"; content: AgentMessage[]; ts: string }
   | {
-      type: "model_call";
+      type: "model_requested";
       phase: LlmPhase;
       model: ModelRef;
       usage: ModelCallUsage;
       ts: string;
     }
   | { type: "task_created"; task: Task; ts: string }
-  | { type: "task_attempt_start"; taskId: string; attempt: number; ts: string }
-  | { type: "task_attempt_end"; taskId: string; attempt: number; ts: string }
-  | { type: "tool_call_requested"; toolCall: ToolCall; ts: string }
-  | { type: "tool_call_approval_requested"; taskId: string; toolName: string; args: unknown; ts: string }
+  | { type: "task_start"; taskId: string; attempt: number; ts: string }
+  | { type: "task_end"; taskId: string; attempt: number; ts: string }
+  | { type: "tool_requested"; toolCall: ToolCall; ts: string }
+  | { type: "tool_approval_requested"; taskId: string; toolName: string; args: unknown; ts: string }
   | {
-      type: "tool_call_approval_result";
+      type: "tool_approval_result";
       taskId: string;
       toolName: string;
       args: unknown;
       decision: { allow: true } | { allow: false; reason: string };
       ts: string;
     }
-  | { type: "tool_call_start"; toolName: string; args: unknown; ts: string }
-  | { type: "tool_call_end"; toolName: string; result: ToolResult; ts: string }
-  | { type: "tool_call_blocked"; toolName: string; reason: string; ts: string }
+  | { type: "tool_start"; toolName: string; args: unknown; ts: string }
+  | { type: "tool_end"; toolName: string; result: ToolResult; ts: string }
+  | { type: "tool_blocked"; toolName: string; reason: string; ts: string }
   | { type: "tool_result_review_requested"; taskId: string; toolName: string; result: ToolResult; ts: string }
   | { type: "tool_result_review_result"; taskId: string; toolName: string; result: ToolResult; ts: string }
   | { type: "verification_start"; taskId: string; ts: string }

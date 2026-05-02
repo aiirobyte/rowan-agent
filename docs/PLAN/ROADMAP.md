@@ -207,7 +207,7 @@ v0.3.0 release gates：
 - `bun test`
 - `bun run build`
 - direct response trace 不包含 `task_created`
-- tool request trace 在 `task_created` 前包含 `model_call` route 事件
+- tool request trace 在 `task_created` 前包含 `model_requested` route 事件
 - sub_session API 有单元测试覆盖 parent/sub_session 关系
 
 ## 12. v0.3.1 范围

@@ -162,7 +162,7 @@ test("sub-session tool budget stops before executing extra tools", async () => {
         event.usage.toolCalls === 1,
     ),
   ).toBe(true);
-  expect(result.session.log.some((event) => event.type === "tool_call_start")).toBe(false);
+  expect(result.session.log.some((event) => event.type === "tool_start")).toBe(false);
 });
 
 test("tools can launch sub-sessions and return outcomes as tool evidence", async () => {
@@ -267,7 +267,7 @@ test("tools can launch sub-sessions and return outcomes as tool evidence", async
   expect(
     events.some(
       (event) =>
-        event.type === "tool_call_end" &&
+        event.type === "tool_end" &&
         event.result.toolName === "delegate" &&
         event.result.ok &&
         typeof event.result.content === "object" &&

@@ -46,7 +46,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
     const needsTask = wantsEcho(context.session.userInput);
     const message = needsTask ? "Routing to task execution." : `Direct response: ${context.session.userInput}`;
     yield {
-      type: "model_call",
+      type: "model_requested",
       phase: "route",
       model,
       usage: { inputMessages: context.session.messages.length },

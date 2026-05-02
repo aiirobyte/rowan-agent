@@ -455,10 +455,10 @@ async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   emit("task_created", { task });
 
   for (let attempt = 1; attempt <= input.maxAttempts; attempt++) {
-    emit("task_attempt_start", { task, attempt });
+    emit("task_start", { task, attempt });
 
     const execution = await executeTaskWithTools(task, input);
-    emit("task_attempt_end", { task, attempt, execution });
+    emit("task_end", { task, attempt, execution });
 
     const verification = await verifyTask(task, execution, input);
     emit("verification_end", { task, verification });
@@ -485,23 +485,23 @@ v0.0.0 事件生命周期：
 ```text
 session_start
 session_end
-message_start
+chat_start
 message_delta
-message_end
-model_call
+chat_end
+model_requested
 task_created
-task_attempt_start
-task_attempt_end
-tool_call_start
-tool_call_end
-tool_call_blocked
+task_start
+task_end
+tool_start
+tool_end
+tool_blocked
 verification_start
 verification_end
 outcome
 error
 ```
 
-`message_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 记录新增 `AgentMessage`，`message_delta.content` 记录追加后的完整数组，`message_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_call` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
+`chat_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 记录新增 `AgentMessage`，`message_delta.content` 记录追加后的完整数组，`chat_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_requested` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
 
 Trace 是 event subscriber：
 

@@ -707,7 +707,7 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
       requestBody,
     );
     yield {
-      type: "model_call",
+      type: "model_requested",
       phase: context.phase,
       model,
       usage: {

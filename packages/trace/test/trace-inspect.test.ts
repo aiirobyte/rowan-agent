@@ -27,7 +27,7 @@ test("trace reader and inspector read session-keyed JSONL events", async () => {
         ts: "2026-05-01T121314-15+08:00",
       }),
       JSON.stringify({
-        type: "model_call",
+        type: "model_requested",
         phase: "plan",
         model: { provider: "test", name: "model" },
         usage: { inputMessages: 3, inputTokens: 10, outputTokens: 5, totalTokens: 15 },
@@ -50,12 +50,12 @@ test("trace reader and inspector read session-keyed JSONL events", async () => {
 
   const events = await readTraceFile(tracePath);
   expect(events).toHaveLength(3);
-  expect(filterTraceEvents(events, { type: "model_call" })).toHaveLength(1);
+  expect(filterTraceEvents(events, { type: "model_requested" })).toHaveLength(1);
   expect(filterTraceEvents(events, { sessionId: "ses_1234abcd" })).toHaveLength(1);
 
   const summary = await inspectTrace("ses_1234abcd", runsDir);
   expect(summary.eventCount).toBe(3);
-  expect(summary.eventTypes.model_call).toBe(1);
+  expect(summary.eventTypes.model_requested).toBe(1);
   expect(summary.sessionIds).toEqual(["ses_1234abcd"]);
   expect(summary.subSessions).toEqual([]);
 });

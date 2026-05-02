@@ -209,9 +209,9 @@ function snapshotMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map(snapshotMessage);
 }
 
-async function emitMessageStart(input: AgentLoopRuntime): Promise<void> {
+async function emitChatStart(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
-    type: "message_start",
+    type: "chat_start",
     content: snapshotMessages(input.messageTrace),
     ts: nowIso(),
   });
@@ -231,9 +231,9 @@ async function appendSessionMessage(input: AgentLoopRuntime, message: AgentMessa
   await appendTraceMessage(input, message);
 }
 
-async function emitMessageEnd(input: AgentLoopRuntime): Promise<void> {
+async function emitChatEnd(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
-    type: "message_end",
+    type: "chat_end",
     content: snapshotMessages(input.messageTrace),
     ts: nowIso(),
   });
@@ -269,10 +269,10 @@ async function collectTextAndStructured(input: {
   for await (const event of input.events) {
     assertNotAborted(input.loop.signal);
 
-    if (event.type === "model_call") {
+    if (event.type === "model_requested") {
       const budgetError = consumeBudget(input.loop, "modelCalls");
       await emit(input.loop, {
-        type: "model_call",
+        type: "model_requested",
         phase: event.phase,
         model: event.model,
         usage: event.usage,
@@ -297,7 +297,7 @@ async function collectTextAndStructured(input: {
       const toolCall = Validators.toolCall.Parse(event.toolCall);
       toolCalls.push(toolCall);
       await emit(input.loop, {
-        type: "tool_call_requested",
+        type: "tool_requested",
         toolCall,
         ts: nowIso(),
       });
@@ -370,7 +370,7 @@ async function executeToolCall(input: {
       error: `Unknown tool: ${input.toolCall.name}`,
     };
     await emit(input.loop, {
-      type: "tool_call_end",
+      type: "tool_end",
       toolName: input.toolCall.name,
       result,
       ts: nowIso(),
@@ -390,7 +390,7 @@ async function executeToolCall(input: {
       error: error instanceof Error ? error.message : "Invalid tool arguments.",
     };
     await emit(input.loop, {
-      type: "tool_call_end",
+      type: "tool_end",
       toolName: input.toolCall.name,
       result,
       ts: nowIso(),
@@ -401,7 +401,7 @@ async function executeToolCall(input: {
   let decision: Awaited<ReturnType<NonNullable<AgentLoopInput["beforeToolCall"]>>> | undefined;
   if (input.loop.beforeToolCall) {
     await emit(input.loop, {
-      type: "tool_call_approval_requested",
+      type: "tool_approval_requested",
       taskId: input.task.id,
       toolName: tool.name,
       args,
@@ -409,7 +409,7 @@ async function executeToolCall(input: {
     });
     decision = await input.loop.beforeToolCall({ task: input.task, tool, args });
     await emit(input.loop, {
-      type: "tool_call_approval_result",
+      type: "tool_approval_result",
       taskId: input.task.id,
       toolName: tool.name,
       args,
@@ -427,7 +427,7 @@ async function executeToolCall(input: {
       error: decision.reason,
     };
     await emit(input.loop, {
-      type: "tool_call_blocked",
+      type: "tool_blocked",
       toolName: tool.name,
       reason: decision.reason,
       ts: nowIso(),
@@ -441,7 +441,7 @@ async function executeToolCall(input: {
   }
 
   await emit(input.loop, {
-    type: "tool_call_start",
+    type: "tool_start",
     toolName: tool.name,
     args,
     ts: nowIso(),
@@ -484,7 +484,7 @@ async function executeToolCall(input: {
     }
 
     await emit(input.loop, {
-      type: "tool_call_end",
+      type: "tool_end",
       toolName: tool.name,
       result,
       ts: nowIso(),
@@ -499,7 +499,7 @@ async function executeToolCall(input: {
       error: error instanceof Error ? error.message : "Tool execution failed.",
     };
     await emit(input.loop, {
-      type: "tool_call_end",
+      type: "tool_end",
       toolName: tool.name,
       result,
       ts: nowIso(),
@@ -616,11 +616,11 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   };
   const maxAttempts = input.maxAttempts ?? 2;
   let currentTask: Task | undefined;
-  let messageLogEnded = false;
-  const endMessageLog = async () => {
-    if (!messageLogEnded) {
-      await emitMessageEnd(runtime);
-      messageLogEnded = true;
+  let chatLogEnded = false;
+  const endChatLog = async () => {
+    if (!chatLogEnded) {
+      await emitChatEnd(runtime);
+      chatLogEnded = true;
     }
   };
 
@@ -634,12 +634,12 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         ts: nowIso(),
       });
     }
-    await emitMessageStart(runtime);
+    await emitChatStart(runtime);
 
     const routed = await routeRequest(runtime);
     if (!routed.needsTask) {
       const outcome = createDirectOutcome(routed.message);
-      await endMessageLog();
+      await endChatLog();
       await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       return outcome;
     }
@@ -672,7 +672,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       task.attempts = attempt;
 
       await emit(runtime, {
-        type: "task_attempt_start",
+        type: "task_start",
         taskId: task.id,
         attempt,
         ts: nowIso(),
@@ -681,7 +681,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       await executeTask(runtime, task, toolResults);
 
       await emit(runtime, {
-        type: "task_attempt_end",
+        type: "task_end",
         taskId: task.id,
         attempt,
         ts: nowIso(),
@@ -691,7 +691,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       if (lastVerification.passed) {
         task.status = "passed";
         const outcome = createOutcome(task, lastVerification);
-        await endMessageLog();
+        await endChatLog();
         await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
         return outcome;
       }
@@ -699,7 +699,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
 
     task.status = "failed";
     const outcome = createFailedOutcome(task, lastVerification);
-    await endMessageLog();
+    await endChatLog();
     await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
     return outcome;
   } catch (error) {
@@ -714,13 +714,13 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         ...(currentTask ? { taskId: currentTask.id } : {}),
         ts: nowIso(),
       });
-      await endMessageLog();
+      await endChatLog();
       await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       return outcome;
     }
 
     const errorInfo = makeError(error);
-    await endMessageLog();
+    await endChatLog();
     await emit(runtime, { type: "error", error: errorInfo, ts: nowIso() });
     throw error;
   }

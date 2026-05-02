@@ -30,10 +30,10 @@ test("jsonlTraceWriter writes agent events", async () => {
     .split("\n")
     .map((line) => JSON.parse(line));
   const sessionCreated = events.find((event) => event.type === "session_created");
-  const messageStart = events.find((event) => event.type === "message_start");
+  const chatStart = events.find((event) => event.type === "chat_start");
   const messageDeltas = events.filter((event) => event.type === "message_delta");
-  const messageEnd = events.find((event) => event.type === "message_end");
-  const messageEndIndex = events.findIndex((event) => event.type === "message_end");
+  const chatEnd = events.find((event) => event.type === "chat_end");
+  const chatEndIndex = events.findIndex((event) => event.type === "chat_end");
   const outcomeIndex = events.findIndex((event) => event.type === "outcome");
 
   expect(trace).toContain("\"type\":\"session_created\"");
@@ -45,7 +45,7 @@ test("jsonlTraceWriter writes agent events", async () => {
   expect(trace).toContain("\"userInput\":\"use echo tool\"");
   expect(trace).not.toContain("\"type\":\"session_start\"");
   expect(trace).not.toContain("\"type\":\"session_end\"");
-  expect(messageStart.content).toEqual(
+  expect(chatStart.content).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ role: "system", content: "Test system" }),
       expect.objectContaining({ role: "user", content: "use echo tool" }),
@@ -64,13 +64,13 @@ test("jsonlTraceWriter writes agent events", async () => {
     ),
   ).toBe(false);
   expect(
-    messageEnd.content.some(
+    chatEnd.content.some(
       (message: { metadata?: { kind?: string } }) => message.metadata?.kind === "outcome",
     ),
   ).toBe(false);
-  expect(messageEnd.content.length).toBeGreaterThan(messageStart.content.length);
-  expect(messageEndIndex).toBeLessThan(outcomeIndex);
-  expect(trace).toContain("\"type\":\"tool_call_end\"");
+  expect(chatEnd.content.length).toBeGreaterThan(chatStart.content.length);
+  expect(chatEndIndex).toBeLessThan(outcomeIndex);
+  expect(trace).toContain("\"type\":\"tool_end\"");
   expect(trace).toContain("\"type\":\"outcome\"");
 });
 
@@ -132,7 +132,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  const planCall = events.find((event) => event.type === "model_call" && event.phase === "plan");
+  const planCall = events.find((event) => event.type === "model_requested" && event.phase === "plan");
   const planMessageDelta = events.find(
     (event) =>
       event.type === "message_delta" &&
@@ -140,7 +140,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       event.delta.metadata?.kind === "model_message" &&
       event.delta.metadata.phase === "plan",
   );
-  const planCallIndex = events.findIndex((event) => event.type === "model_call" && event.phase === "plan");
+  const planCallIndex = events.findIndex((event) => event.type === "model_requested" && event.phase === "plan");
   const taskCreatedIndex = events.findIndex(
     (event, index) => index > planCallIndex && event.type === "task_created",
   );
@@ -150,7 +150,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
 
   expect(trace).toContain("\"type\":\"session_created\"");
   expect(trace).toContain("\"userInput\":\"hello\"");
-  expect(trace).toContain("\"type\":\"model_call\"");
+  expect(trace).toContain("\"type\":\"model_requested\"");
   expect(trace).toContain("\"phase\":\"plan\"");
   expect(trace).not.toContain("\"type\":\"model_request\"");
   expect(trace).not.toContain("\"type\":\"model_response\"");
@@ -210,15 +210,15 @@ test("jsonlTraceWriter records model calls and message deltas without structured
   expect(trace).not.toContain("Conversation messages:");
   expect(trace).not.toContain("\"rawContent\"");
   expect(trace).not.toContain("\"type\":\"structured_output\"");
-  expect(trace).toContain("\"type\":\"tool_call_requested\"");
+  expect(trace).toContain("\"type\":\"tool_requested\"");
 });
 
 test("jsonlTraceWriter snapshots event payloads before async writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-trace-snapshot-"));
   const tracePath = join(root, "run.jsonl");
   const writer = jsonlTraceWriter(tracePath);
-  const event: Extract<AgentEvent, { type: "tool_call_start" }> = {
-    type: "tool_call_start",
+  const event: Extract<AgentEvent, { type: "tool_start" }> = {
+    type: "tool_start",
     toolName: "demo",
     args: { status: "pending" },
     ts: "2026-05-01T000000-00+08:00",

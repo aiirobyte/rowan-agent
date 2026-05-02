@@ -7,8 +7,8 @@ export type SubSessionBudgetUsage = {
 
 export type SubSessionBudgetEvent<TBudgetUsage extends SubSessionBudgetUsage = SubSessionBudgetUsage> =
   | { type: "budget_exceeded"; usage: TBudgetUsage }
-  | { type: "model_call" }
-  | { type: "tool_call_start" }
+  | { type: "model_requested" }
+  | { type: "tool_start" }
   | { type: string };
 
 export type SubSessionRunnerInput<TEvent extends object> = {
@@ -95,8 +95,8 @@ export function summarizeSubSessionBudgetUsage<TBudgetUsage extends SubSessionBu
   }
 
   return {
-    modelCalls: events.filter((event) => event.type === "model_call").length,
-    toolCalls: events.filter((event) => event.type === "tool_call_start").length,
+    modelCalls: events.filter((event) => event.type === "model_requested").length,
+    toolCalls: events.filter((event) => event.type === "tool_start").length,
   } as TBudgetUsage;
 }
 
