@@ -1,9 +1,9 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.3.1
-> 日期：2026-05-01
-> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first/sub_session 已实现；v0.3.1 persistent session 已实现
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
+> 版本：v0.3.2
+> 日期：2026-05-02
+> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first/sub_session 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 规划启动
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
 
 ## 1. 一句话定位
 
@@ -87,6 +87,7 @@ v0.0.0 详细执行计划只维护在：
 | v0.2.0 | Monorepo + Workspace ACI Foundation | 完成拆包条件并启动模块化迁移 | packages/agent、adapters、trace、aci、cli，read/list/search tools |
 | v0.3.0 | Agent Mechanism + Sub Session | 优化 task 进入机制，并引入受控 sub_session | route phase、direct response、nested session、nested trace、per-session budget |
 | v0.3.1 | Persistent Session + Multi-turn CLI | 支持跨 CLI 调用持续会话 | SessionStore、multi-turn Agent、`--session`、`sessions` commands、`chat` mode |
+| v0.3.2 | Threaded Sub Agent Sessions | 让 sub-agent/sub-session 回到普通 Session + Agent 同构实现 | immutable input、task/goal Session metadata、thread route、thread_created/thread_end |
 | v0.4.0 | Policy and Safety | 把 hook 升级成策略系统 | approval、permission、dangerous command guard |
 | v0.5.0 | Trace Replay | 让失败 run 可复盘 | trace reader、replay、fork from step |
 | v0.6.0 | Eval Harness | 系统比较 agent 质量 | dataset、scorer、batch report |
@@ -136,12 +137,12 @@ v0.0.0 详细执行计划只维护在：
 
 ## 8. 近期执行顺序
 
-1. 建立 v0.3.1 persistent session 规划文档和任务表。
-2. 定义 SessionStore 和本地 JSON Session 文件格式。
-3. 改造 `Agent.prompt()`，让同一个 Agent 可在同一个 Session 中连续处理多轮输入。
-4. 调整 CLI：支持 `--session <id>`、`sessions list/show/delete` 和最小 `chat` 模式。
-5. 让每轮 trace 能关联同一个 session id。
-6. 跑完 v0.3.1 release checklist。
+1. 建立 v0.3.2 thread/sub-session unification 规划文档和任务表。
+2. 把 Session `userInput` 改成 immutable `input`，并加入 optional `task` / `goal`。
+3. 添加 `runThread()` / `Agent.startThread()`，让旧 sub-session API 委托到新实现。
+4. 扩展 route 决策，让主 Session 的工具/大任务请求进入 child thread。
+5. 用 `thread_created` / `thread_end` 记录 trace，并更新 inspector。
+6. 跑完 v0.3.2 release checklist。
 
 ## 9. v0.1.0 范围
 
@@ -239,9 +240,36 @@ v0.3.1 release gates（已通过）：
 - CLI `chat` smoke test 通过
 - trace inspector 能看到 session id
 
-## 13. Open Questions
+## 13. v0.3.2 范围
 
-这些问题不阻塞 v0.3.1，但会影响 v0.4.0+：
+v0.3.2 详细执行计划维护在：
+
+- `docs/PLAN/v0.3.2/README.md`
+- `docs/PLAN/v0.3.2/PLAN.md`
+- `docs/PLAN/v0.3.2/TASKS.md`
+
+v0.3.2 已确定：
+
+- Session schema 使用 `input` 替代 `userInput`。
+- `input` 是 session 创建时的原始输入，多轮追加不会改写它。
+- Session 增加 optional `task` 和 `goal`，用于 child thread 的结构化上下文。
+- sub-agent/sub-session 不再是专门 loop，而是普通 Agent + 普通 Session 的 child thread。
+- 主 Session 对工具、大规模任务和需要验证的请求走 `thread -> verify`。
+- 新 trace 事件为 `thread_created` 和 `thread_end`。
+- 旧 `runSubSession()` / `startSubSession()` 保留为兼容入口。
+
+v0.3.2 release gates：
+
+- `bun test packages`
+- `bun run build`
+- persisted Session JSON 不包含 `userInput`
+- 多轮 prompt 不改写 `session.input`
+- main Session 能自动创建 child thread 并验证 child outcome
+- trace inspector 能识别 thread parent/child 关系
+
+## 14. Open Questions
+
+这些问题不阻塞 v0.3.2，但会影响 v0.4.0+：
 
 - v0.4.0 policy approval 是 CLI 交互优先，还是配置文件优先？
 - v0.5.0 replay 是否需要 workspace snapshot？

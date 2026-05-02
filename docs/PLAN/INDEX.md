@@ -19,6 +19,8 @@ The main project roadmap now lives in:
 - `docs/PLAN/v0.3.0/PLAN.md`
 - `docs/PLAN/v0.3.1/README.md`
 - `docs/PLAN/v0.3.1/PLAN.md`
+- `docs/PLAN/v0.3.2/README.md`
+- `docs/PLAN/v0.3.2/PLAN.md`
 
 ## Current Status
 
@@ -34,14 +36,15 @@ The main project roadmap now lives in:
 - v0.2.0 monorepo foundation and Workspace ACI seed implemented.
 - v0.3.0 implemented: route-first task gating and sub_session mechanism.
 - v0.3.1 planned: persistent Session, multi-turn Agent semantics, and session-aware CLI.
+- v0.3.2 planned: thread/sub-session unification, immutable Session input, and task/goal metadata.
 
 ## Next Steps
 
-1. Implement `SessionStore` and local JSON persistence under `<workspace>/sessions`.
-2. Make `Agent.prompt()` append turns to an existing Session instead of always creating a new Session.
-3. Add CLI `--session <id>` and `sessions list/show/delete`.
-4. Add minimal `rowan chat` interactive mode.
-5. Link every per-turn trace to the persistent session id.
+1. Rename Session `userInput` to immutable `input`.
+2. Add optional `task` and `goal` metadata to Session.
+3. Replace specialized sub-session internals with normal Agent + Session thread execution.
+4. Route main-session tool and large-task requests into child threads.
+5. Add `thread_created` / `thread_end` trace events and inspector support.
 
 ## Notes
 
