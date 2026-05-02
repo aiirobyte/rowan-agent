@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
+import { createSession as createBaseSession } from "@rowan-agent/session";
 import { verifyTask } from "../src/verifier";
-import { createSession } from "../src/session";
 import { parseTask, createDefaultCriteria } from "../src/task";
-import { createId } from "../src/types";
+import { createId, type AgentEvent } from "../src/types";
 import { scriptedStream } from "./support/scripted-stream";
+
+function createSession(input: Parameters<typeof createBaseSession>[0]) {
+  return createBaseSession<AgentEvent>(input);
+}
 
 test("verifyTask uses stream structured output", async () => {
   const session = createSession({ systemPrompt: "Test", userInput: "hello" });

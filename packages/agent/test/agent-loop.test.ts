@@ -1,12 +1,16 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
+import { createSession as createBaseSession } from "@rowan-agent/session";
 import { runAgentLoop } from "../src/agent-loop";
-import { createSession } from "../src/session";
 import { createDefaultCriteria } from "../src/task";
-import type { StreamFn, Tool } from "../src/types";
+import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
+
+function createSession(input: Parameters<typeof createBaseSession>[0]) {
+  return createBaseSession<AgentEvent>(input);
+}
 
 test("runAgentLoop completes task with echo tool and verification", async () => {
   const session = createSession({
@@ -133,7 +137,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
     systemPrompt: "Test system",
     userInput: "hello",
   });
-  const events: string[] = [];
+  const emittedEvents: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
     session,
@@ -141,9 +145,10 @@ test("runAgentLoop can return a direct response without creating a task", async 
     stream: scriptedStream,
     tools: [echoTool],
     emit: (event) => {
-      events.push(event.type);
+      emittedEvents.push(event);
     },
   });
+  const events = emittedEvents.map((event) => event.type);
 
   expect(outcome.passed).toBe(true);
   expect(outcome.taskId).toBeUndefined();
@@ -152,6 +157,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
   expect(events).toContain("outcome");
   expect(events).not.toContain("task_created");
   expect(events).not.toContain("verification_start");
+  expect(events.indexOf("message_end")).toBeLessThan(events.indexOf("outcome"));
   const routeDecision = session.messages.find(
     (message) => message.metadata?.kind === "routing_decision" && message.metadata.phase === "route",
   );
@@ -159,6 +165,22 @@ test("runAgentLoop can return a direct response without creating a task", async 
     needsTask: false,
     message: "Direct response: hello",
   });
+  expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
+  expect(
+    emittedEvents.some(
+      (event) =>
+        event.type === "message_delta" &&
+        !Array.isArray(event.delta) &&
+        event.delta.metadata?.kind === "outcome",
+    ),
+  ).toBe(false);
+  expect(
+    emittedEvents.some(
+      (event) =>
+        event.type === "message_end" &&
+        event.content.some((message) => message.metadata?.kind === "outcome"),
+    ),
+  ).toBe(false);
 });
 
 test("runAgentLoop returns structured error for unknown tool without crashing", async () => {
@@ -177,6 +199,56 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
 
   expect(outcome.passed).toBe(false);
   expect(session.log.some((event) => event.type === "tool_call_end")).toBe(true);
+});
+
+test("runAgentLoop preserves provider error details in error events", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    userInput: "hello",
+  });
+  const stream: StreamFn = async function* failingStream() {
+    throw Object.assign(new Error("OpenAI-compatible request failed with status 400 Bad Request: Invalid model."), {
+      code: "http_error",
+      status: 400,
+      retryable: false,
+      details: {
+        endpoint: "https://api.example/v1/chat/completions",
+        model: "bad-model",
+        providerError: {
+          message: "Invalid model.",
+          code: "model_not_found",
+        },
+      },
+    });
+  };
+
+  await expect(
+    runAgentLoop({
+      session,
+      model: { provider: "test", name: "failing" },
+      stream,
+      tools: [echoTool],
+    }),
+  ).rejects.toThrow("Invalid model");
+
+  const errorEvent = session.log.find((event) => event.type === "error");
+  expect(errorEvent).toMatchObject({
+    type: "error",
+    error: {
+      code: "http_error",
+      message: "OpenAI-compatible request failed with status 400 Bad Request: Invalid model.",
+      retryable: false,
+      details: {
+        endpoint: "https://api.example/v1/chat/completions",
+        model: "bad-model",
+        status: 400,
+        providerError: {
+          message: "Invalid model.",
+          code: "model_not_found",
+        },
+      },
+    },
+  });
 });
 
 function invalidModelSchemaError(message: string): Error & { code: string } {

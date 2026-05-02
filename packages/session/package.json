@@ -1,5 +1,5 @@
 {
-  "name": "@rowan-agent/agent",
+  "name": "@rowan-agent/session",
   "version": "0.3.1",
   "private": true,
   "type": "module",
@@ -8,7 +8,6 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/session": "workspace:*",
     "typebox": "^1.0.0"
   }
 }

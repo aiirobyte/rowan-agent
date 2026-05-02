@@ -33,6 +33,8 @@ test("jsonlTraceWriter writes agent events", async () => {
   const messageStart = events.find((event) => event.type === "message_start");
   const messageDeltas = events.filter((event) => event.type === "message_delta");
   const messageEnd = events.find((event) => event.type === "message_end");
+  const messageEndIndex = events.findIndex((event) => event.type === "message_end");
+  const outcomeIndex = events.findIndex((event) => event.type === "outcome");
 
   expect(trace).toContain("\"type\":\"session_created\"");
   expect(sessionCreated.session.messages).toBeUndefined();
@@ -41,7 +43,8 @@ test("jsonlTraceWriter writes agent events", async () => {
   expect(sessionCreated.session.createdAt).toBeUndefined();
   expect(sessionCreated.session.updatedAt).toBeUndefined();
   expect(trace).toContain("\"userInput\":\"use echo tool\"");
-  expect(trace).toContain("\"type\":\"session_start\"");
+  expect(trace).not.toContain("\"type\":\"session_start\"");
+  expect(trace).not.toContain("\"type\":\"session_end\"");
   expect(messageStart.content).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ role: "system", content: "Test system" }),
@@ -53,7 +56,20 @@ test("jsonlTraceWriter writes agent events", async () => {
     expect.objectContaining({ role: "assistant", content: expect.any(String) }),
   );
   expect(messageDeltas[0]).not.toHaveProperty("content");
+  expect(
+    messageDeltas.some(
+      (event) =>
+        !Array.isArray(event.delta) &&
+        event.delta.metadata?.kind === "outcome",
+    ),
+  ).toBe(false);
+  expect(
+    messageEnd.content.some(
+      (message: { metadata?: { kind?: string } }) => message.metadata?.kind === "outcome",
+    ),
+  ).toBe(false);
   expect(messageEnd.content.length).toBeGreaterThan(messageStart.content.length);
+  expect(messageEndIndex).toBeLessThan(outcomeIndex);
   expect(trace).toContain("\"type\":\"tool_call_end\"");
   expect(trace).toContain("\"type\":\"outcome\"");
 });
@@ -117,13 +133,6 @@ test("jsonlTraceWriter records model calls and message deltas without structured
     .split("\n")
     .map((line) => JSON.parse(line));
   const planCall = events.find((event) => event.type === "model_call" && event.phase === "plan");
-  const planPromptDelta = events.find(
-    (event) =>
-      event.type === "message_delta" &&
-      !Array.isArray(event.delta) &&
-      event.delta.metadata?.kind === "model_prompt" &&
-      event.delta.metadata.phase === "plan",
-  );
   const planMessageDelta = events.find(
     (event) =>
       event.type === "message_delta" &&
@@ -131,16 +140,12 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       event.delta.metadata?.kind === "model_message" &&
       event.delta.metadata.phase === "plan",
   );
-  const planPromptIndex = events.findIndex((event) => event === planPromptDelta);
   const planCallIndex = events.findIndex((event) => event.type === "model_call" && event.phase === "plan");
   const taskCreatedIndex = events.findIndex(
     (event, index) => index > planCallIndex && event.type === "task_created",
   );
   const deltasAfterPlanCall = events
     .slice(planCallIndex + 1, taskCreatedIndex)
-    .filter((event) => event.type === "message_delta");
-  const deltasBeforePlanCall = events
-    .slice(0, planCallIndex)
     .filter((event) => event.type === "message_delta");
 
   expect(trace).toContain("\"type\":\"session_created\"");
@@ -150,20 +155,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
   expect(trace).not.toContain("\"type\":\"model_request\"");
   expect(trace).not.toContain("\"type\":\"model_response\"");
   expect(deltasAfterPlanCall).toHaveLength(1);
-  expect(deltasBeforePlanCall).toEqual(expect.arrayContaining([planPromptDelta]));
-  expect(planPromptIndex).toBeLessThan(planCallIndex);
   expect(planMessageDelta).toBe(deltasAfterPlanCall[0]);
-  expect(planPromptDelta.delta).toEqual(
-    expect.objectContaining({
-      role: "user",
-      content: expect.stringContaining("JSON-only contract"),
-      metadata: expect.objectContaining({
-        kind: "model_prompt",
-        phase: "plan",
-        source: "context",
-      }),
-    }),
-  );
   expect(planMessageDelta.delta).toEqual(
     expect.objectContaining({
       role: "assistant",
@@ -192,10 +184,12 @@ test("jsonlTraceWriter records model calls and message deltas without structured
       toolNames: ["echo"],
     },
   });
-  expect(planPromptDelta).not.toHaveProperty("content");
   expect(planMessageDelta).not.toHaveProperty("content");
   expect(JSON.stringify(planMessageDelta.delta)).not.toContain("\"request\"");
   expect(JSON.stringify(planMessageDelta.delta)).not.toContain("\"rawResponse\"");
+  expect(trace).not.toContain("\"kind\":\"model_prompt\"");
+  expect(trace).not.toContain("JSON-only contract");
+  expect(trace).not.toContain("Available tools with name");
   expect(trace).not.toContain("\"kind\":\"model_io\"");
   expect(planCall).toMatchObject({
     usage: {

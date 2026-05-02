@@ -1,4 +1,5 @@
-import type { AgentMessage, LlmContext, ModelTraceMessage, Tool } from "@rowan-agent/agent";
+import type { LlmContext, Tool } from "@rowan-agent/agent";
+import type { AgentMessage } from "@rowan-agent/session";
 import {
   buildExecutePrompt,
   buildPlanPrompt,
@@ -11,7 +12,6 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
 
 export type OpenAICompatiblePrompt = {
   messages: ChatMessage[];
-  traceMessages: ModelTraceMessage[];
 };
 
 type SerializableTool = {
@@ -50,15 +50,8 @@ function buildSystemMessage(context: LlmContext): ChatMessage {
   return { role: "system", content: buildSystemPrompt(context.session.systemPrompt) };
 }
 
-function isInternalAssistantMessage(message: AgentMessage): boolean {
-  return (
-    message.role === "assistant" &&
-    (message.metadata?.kind === "model_message" || message.metadata?.kind === "routing_decision")
-  );
-}
-
 function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
-  if (message.role === "system" || isInternalAssistantMessage(message)) {
+  if (message.role === "system") {
     return undefined;
   }
 
@@ -85,6 +78,7 @@ function buildConversationMessages(context: LlmContext): ChatMessage[] {
 
 function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, tools: Tool[]): string {
   return buildPlanPrompt({
+    currentUserInputJson: toJson(context.session.userInput),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
   });
@@ -92,6 +86,7 @@ function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, t
 
 function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>, tools: Tool[]): string {
   return buildRoutePrompt({
+    currentUserInputJson: toJson(context.session.userInput),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
   });
@@ -133,18 +128,6 @@ function buildPhasePromptMessage(context: LlmContext, tools: Tool[]): ChatMessag
   return { role: "user", content: buildPhaseVerifyPrompt(context) };
 }
 
-function toPromptTraceMessage(context: LlmContext, message: ChatMessage): ModelTraceMessage {
-  return {
-    role: message.role,
-    content: message.content,
-    metadata: {
-      kind: "model_prompt",
-      phase: context.phase,
-      source: "context",
-    },
-  };
-}
-
 export function buildOpenAICompatiblePrompt(input: {
   context: LlmContext;
   tools?: Tool[];
@@ -158,7 +141,6 @@ export function buildOpenAICompatiblePrompt(input: {
       ...buildConversationMessages(input.context),
       phasePromptMessage,
     ],
-    traceMessages: [toPromptTraceMessage(input.context, phasePromptMessage)],
   };
 }
 

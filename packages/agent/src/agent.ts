@@ -1,21 +1,80 @@
 import { runAgentLoop } from "./agent-loop";
-import { runSubSession } from "./session";
+import {
+  appendUserTurn,
+  createSession,
+  createSubSessionRunner,
+  summarizeSubSessionBudgetUsage,
+  type Session,
+  type SessionStore,
+  type Skill,
+} from "@rowan-agent/session";
 import type {
   AfterToolCall,
+  AgentBudgetUsage,
   AgentEvent,
   AgentEventListener,
   AgentSubSessionInput,
   BeforeToolCall,
   ModelRef,
   Outcome,
-  Session,
-  Skill,
   StreamFn,
+  SubSessionRunInput,
   SubSessionRunResult,
   Tool,
   Unsubscribe,
 } from "./types";
-import { createSession } from "./types";
+
+type AgentSession = Session<AgentEvent>;
+
+export const runSubSession = createSubSessionRunner<
+  AgentEvent,
+  Outcome,
+  AgentBudgetUsage,
+  SubSessionRunInput,
+  AgentSubSessionInput
+>({
+  summarizeBudgetUsage: (events) => summarizeSubSessionBudgetUsage<AgentBudgetUsage>(events),
+  createStartEvent: ({ input, session, ts }) => ({
+    type: "sub_session_start",
+    parentSessionId: input.parentSessionId,
+    sessionId: session.id,
+    prompt: input.prompt,
+    ts,
+  }),
+  createEndEvent: ({ input, session, outcome, budgetUsage, ts }) => ({
+    type: "sub_session_end",
+    parentSessionId: input.parentSessionId,
+    sessionId: session.id,
+    outcome,
+    budgetUsage,
+    ts,
+  }),
+  createChildInput: ({ parentInput, childInput, session }) => ({
+    ...childInput,
+    parentSessionId: childInput.parentSessionId ?? session.id,
+    systemPrompt: parentInput.systemPrompt,
+    model: parentInput.model,
+    stream: parentInput.stream,
+    signal: parentInput.signal,
+    beforeToolCall: parentInput.beforeToolCall,
+    afterToolCall: parentInput.afterToolCall,
+    emit: parentInput.emit,
+  }),
+  run: ({ input, session, runSubSession }) =>
+    runAgentLoop({
+      session,
+      model: input.model,
+      stream: input.stream,
+      tools: input.tools,
+      maxAttempts: input.maxAttempts,
+      budget: input.budget,
+      signal: input.signal,
+      beforeToolCall: input.beforeToolCall,
+      afterToolCall: input.afterToolCall,
+      runSubSession,
+      emit: input.emit,
+    }),
+});
 
 export type AgentOptions = {
   systemPrompt: string;
@@ -23,13 +82,15 @@ export type AgentOptions = {
   stream: StreamFn;
   tools?: Tool[];
   skills?: Skill[];
+  session?: AgentSession;
+  sessionStore?: SessionStore<AgentSession>;
   maxAttempts?: number;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
 };
 
 export type AgentState = {
-  session?: Session;
+  session?: AgentSession;
   model: ModelRef;
   tools: Tool[];
   isRunning: boolean;
@@ -45,10 +106,13 @@ export class Agent {
   private readonly listenerErrors: unknown[] = [];
   private currentRun?: Promise<Outcome>;
   private abortController?: AbortController;
+  private shouldEmitSessionLoaded: boolean;
 
   constructor(options: AgentOptions) {
     this.options = options;
+    this.shouldEmitSessionLoaded = Boolean(options.session);
     this.state = {
+      ...(options.session ? { session: options.session } : {}),
       model: options.model,
       tools: options.tools ?? [],
       isRunning: false,
@@ -106,11 +170,20 @@ export class Agent {
       throw new Error("Agent is already running.");
     }
 
-    const session = createSession({
-      systemPrompt: this.options.systemPrompt,
-      userInput: input,
-      skills: this.options.skills,
-    });
+    const hadExistingSession = Boolean(this.state.session);
+    const sessionLifecycle = hadExistingSession
+      ? this.shouldEmitSessionLoaded
+        ? "loaded"
+        : "continued"
+      : "created";
+    this.shouldEmitSessionLoaded = false;
+    const session = this.state.session
+      ? appendUserTurn(this.state.session, input)
+      : createSession<AgentEvent>({
+          systemPrompt: this.options.systemPrompt,
+          userInput: input,
+          skills: this.options.skills,
+        });
     this.state.session = session;
     this.state.currentOutcome = undefined;
     this.state.error = undefined;
@@ -123,6 +196,7 @@ export class Agent {
 
     this.currentRun = runAgentLoop({
       session,
+      sessionLifecycle,
       model: this.options.model,
       stream: this.options.stream,
       tools: this.state.tools,
@@ -141,9 +215,11 @@ export class Agent {
     try {
       const outcome = await this.currentRun;
       this.state.currentOutcome = outcome;
+      await this.saveSession();
       return outcome;
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : "Agent run failed.";
+      await this.saveSession().catch(() => undefined);
       throw error;
     } finally {
       this.state.isRunning = false;
@@ -182,5 +258,24 @@ export class Agent {
     }
     await this.currentRun.catch(() => undefined);
     await this.flushTrace().catch(() => undefined);
+  }
+
+  async loadSession(sessionId: string): Promise<void> {
+    if (!this.options.sessionStore) {
+      throw new Error("Agent has no SessionStore.");
+    }
+    const session = await this.options.sessionStore.load(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    this.state.session = session;
+    this.shouldEmitSessionLoaded = true;
+  }
+
+  async saveSession(): Promise<void> {
+    if (!this.options.sessionStore || !this.state.session) {
+      return;
+    }
+    await this.options.sessionStore.save(this.state.session);
   }
 }

@@ -1,11 +1,16 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Outcome } from "@rowan-agent/agent";
+import { inspectTrace } from "@rowan-agent/trace";
 import { formatOutcomeOutput } from "../src/output";
 
-async function runCli(args: string[], env: Record<string, string | undefined> = {}) {
+async function runCli(
+  args: string[],
+  env: Record<string, string | undefined> = {},
+  stdin?: string,
+) {
   const proc = Bun.spawn(["bun", "run", "rowan", ...args], {
     cwd: process.cwd(),
     env: {
@@ -16,9 +21,15 @@ async function runCli(args: string[], env: Record<string, string | undefined> = 
       ROWAN_OPENAI_TIMEOUT_MS: "",
       ...env,
     },
+    stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
+
+  if (stdin !== undefined && proc.stdin) {
+    proc.stdin.write(stdin);
+    proc.stdin.end();
+  }
 
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -47,6 +58,18 @@ function canSkipLocalBindError(error: unknown): boolean {
   }
   const code = "code" in error ? error.code : undefined;
   return code === "EPERM" || code === "EADDRINUSE";
+}
+
+function sessionIdFrom(stderr: string): string {
+  const match = stderr.match(/Session id: (ses_[A-Za-z0-9_-]+)/);
+  if (!match?.[1]) {
+    throw new Error(`Missing session id in stderr: ${stderr}`);
+  }
+  return match[1];
+}
+
+function countMatches(input: string, pattern: RegExp): number {
+  return [...input.matchAll(pattern)].length;
 }
 
 test("CLI requires OpenAI-compatible API key", async () => {
@@ -85,6 +108,7 @@ test("CLI rejects invalid OpenAI-compatible timeout", async () => {
 });
 
 test("CLI times out stalled OpenAI-compatible requests", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-timeout-"));
   let server: ReturnType<typeof Bun.serve> | undefined;
   try {
     server = Bun.serve({
@@ -93,6 +117,7 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
     });
   } catch (error) {
     if (canSkipLocalBindError(error)) {
+      await rm(workspace, { recursive: true, force: true });
       expect(true).toBe(true);
       return;
     }
@@ -104,6 +129,7 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
       ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
       ROWAN_OPENAI_API_KEY: "test-key",
       ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
     });
 
     expect(result.exitCode).toBe(1);
@@ -111,14 +137,19 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
 
     const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
     expect(traceMatch).not.toBeNull();
-    const tracePath = join(process.cwd(), traceMatch?.[1] ?? "");
+    expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+    const tracePath = join(workspace, traceMatch?.[1] ?? "");
     await rm(tracePath, { force: true });
   } finally {
     server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
   }
 });
 
 test("CLI writes a default trace without --trace", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-default-"));
   const responses = [
     {
       message: "Hello from model",
@@ -134,6 +165,7 @@ test("CLI writes a default trace without --trace", async () => {
     });
   } catch (error) {
     if (canSkipLocalBindError(error)) {
+      await rm(workspace, { recursive: true, force: true });
       expect(true).toBe(true);
       return;
     }
@@ -145,6 +177,7 @@ test("CLI writes a default trace without --trace", async () => {
       ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
       ROWAN_OPENAI_API_KEY: "test-key",
       ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
     });
 
     expect(result.exitCode).toBe(0);
@@ -159,12 +192,23 @@ test("CLI writes a default trace without --trace", async () => {
     const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
     expect(traceMatch).not.toBeNull();
     const displayedTracePath = traceMatch?.[1];
+    const sessionId = sessionIdFrom(result.stderr);
+    expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+    const metadataLines = result.stderr
+      .trim()
+      .split("\n")
+      .filter((line) => /^(Session id|Message id|Trace written to)/.test(line));
+    expect(metadataLines[0]).toMatch(/^Session id: ses_[A-Za-z0-9_-]+$/);
+    expect(metadataLines[1]).toMatch(/^Message id: msg_[A-Za-z0-9_-]+$/);
+    expect(metadataLines[2]).toMatch(/^Trace written to runs\/.+\.jsonl$/);
     expect(displayedTracePath?.startsWith("runs/")).toBe(true);
     expect(displayedTracePath).toMatch(
-      /runs\/\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}-run_[a-f0-9]{8}\.jsonl$/,
+      new RegExp(`^runs/\\d{4}-\\d{2}-\\d{2}T\\d{6}-\\d{2}[+-]\\d{2}:\\d{2}-${sessionId}\\.jsonl$`),
     );
 
-    const tracePath = join(process.cwd(), displayedTracePath ?? "");
+    const tracePath = join(workspace, displayedTracePath ?? "");
     const trace = await Bun.file(tracePath ?? "").text();
     const firstEvent = JSON.parse(trace.split("\n")[0] ?? "{}") as { ts?: string; timestamp?: string };
     expect(firstEvent.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
@@ -176,13 +220,22 @@ test("CLI writes a default trace without --trace", async () => {
     expect(trace).not.toContain("\"type\":\"task_created\"");
     expect(trace).toContain("\"type\":\"outcome\"");
 
-    await rm(tracePath, { force: true });
+    const sessionPath = join(workspace, "sessions", `${sessionId}.json`);
+    const session = JSON.parse(await Bun.file(sessionPath).text()) as {
+      version?: string;
+      messages?: Array<{ content?: string }>;
+    };
+    expect(session.version).toBe("0.3.1");
+    expect(session.messages?.some((message) => message.content?.includes("Hello from model"))).toBe(true);
+    expect(session.messages?.some((message) => message.content === "Hello from model")).toBe(false);
   } finally {
     server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
   }
 });
 
 test("CLI exposes core bash during planning and executes returned tool calls", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-bash-"));
   const responses = [
     {
       message: "Use bash to check the current date: $(date)",
@@ -223,6 +276,7 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     });
   } catch (error) {
     if (canSkipLocalBindError(error)) {
+      await rm(workspace, { recursive: true, force: true });
       expect(true).toBe(true);
       return;
     }
@@ -234,6 +288,7 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
       ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
       ROWAN_OPENAI_API_KEY: "test-key",
       ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
     });
 
     expect(result.exitCode).toBe(0);
@@ -242,7 +297,7 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
 
     const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
     expect(traceMatch).not.toBeNull();
-    const tracePath = join(process.cwd(), traceMatch?.[1] ?? "");
+    const tracePath = join(workspace, traceMatch?.[1] ?? "");
     const trace = await Bun.file(tracePath).text();
     const traceEvents = trace
       .trim()
@@ -257,45 +312,263 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     expect(trace).toContain("\"type\":\"tool_call_start\"");
     expect(trace).toContain("\"toolName\":\"bash\"");
     expect(trace).toContain("cli-bash-ok");
-
-    await rm(tracePath, { force: true });
   } finally {
     server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("CLI trace list and show inspect local runs", async () => {
-  const runsDir = await mkdtemp(join(tmpdir(), "rowan-cli-trace-"));
-  const tracePath = join(runsDir, "2026-05-01T120000-00+08:00-run_abcd1234.jsonl");
-  await writeFile(
-    tracePath,
-    [
-      JSON.stringify({ type: "session_start", sessionId: "ses_test", ts: "2026-05-01T120000-00+08:00" }),
-      JSON.stringify({ type: "outcome", outcome: { id: "out_test" }, ts: "2026-05-01T120001-00+08:00" }),
-      "",
-    ].join("\n"),
-    "utf8",
-  );
+test("CLI --session continues a saved one-shot session", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-session-"));
+  const responses = [
+    { message: "First saved answer", needsTask: false },
+    { message: "Second saved answer", needsTask: false },
+  ];
+  const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
+  let requestCount = 0;
+  let server: ReturnType<typeof Bun.serve> | undefined;
 
   try {
-    const list = await runCli(["trace", "list", "--runs-dir", runsDir]);
-    expect(list.exitCode).toBe(0);
-    const runs = JSON.parse(list.stdout) as Array<{ runId?: string; filePath?: string }>;
-    expect(runs[0]?.runId).toBe("run_abcd1234");
-    expect(runs[0]?.filePath).toBe(tracePath);
+    try {
+      server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          requests.push((await request.json()) as { messages?: Array<{ content?: string }> });
+          return openAIResponse(responses[requestCount++] ?? responses.at(-1));
+        },
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
 
-    const show = await runCli(["trace", "show", "run_abcd1234", "--runs-dir", runsDir]);
-    expect(show.exitCode).toBe(0);
-    const summary = JSON.parse(show.stdout) as {
-      eventCount: number;
-      eventTypes: Record<string, number>;
-      sessionIds: string[];
+    const env = {
+      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+      ROWAN_OPENAI_API_KEY: "test-key",
+      ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
     };
-    expect(summary.eventCount).toBe(2);
-    expect(summary.eventTypes.session_start).toBe(1);
-    expect(summary.eventTypes.outcome).toBe(1);
-    expect(summary.sessionIds).toEqual(["ses_test"]);
+
+    const first = await runCli(["hello"], env);
+    expect(first.exitCode).toBe(0);
+    const sessionId = sessionIdFrom(first.stderr);
+
+    const second = await runCli(["--session", sessionId, "continue"], env);
+    expect(second.exitCode).toBe(0);
+    expect(sessionIdFrom(second.stderr)).toBe(sessionId);
+    expect(countMatches(second.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(second.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(second.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+
+    const secondPrompt = requests[1]?.messages?.map((message) => message.content).join("\n") ?? "";
+    expect(secondPrompt).toContain("hello");
+    expect(secondPrompt).toContain("First saved answer");
+    expect(secondPrompt).toContain("continue");
+
+    const runsDir = join(workspace, "runs");
+    const traceFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(traceFiles).toHaveLength(2);
+    expect(traceFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
+    const summaries = await Promise.all(
+      traceFiles.map((file) => inspectTrace(join(runsDir, file), runsDir)),
+    );
+    expect(summaries.every((summary) => summary.sessionIds.includes(sessionId))).toBe(true);
+    expect(summaries.some((summary) => summary.eventTypes.session_created === 1)).toBe(true);
+    expect(summaries.some((summary) => summary.eventTypes.session_loaded === 1)).toBe(true);
+    expect(second.stderr).toContain(`-${sessionId}.jsonl`);
   } finally {
-    await rm(runsDir, { recursive: true, force: true });
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI initial prompt continues into the default interactive session", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-interactive-"));
+  const responses = [
+    { message: "Chat first", needsTask: false },
+    { message: "Chat second", needsTask: false },
+  ];
+  const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
+  let requestCount = 0;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+
+  try {
+    try {
+      server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          requests.push((await request.json()) as { messages?: Array<{ content?: string }> });
+          return openAIResponse(responses[requestCount++] ?? responses.at(-1));
+        },
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli(
+      ["hello"],
+      {
+        ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+        ROWAN_OPENAI_API_KEY: "test-key",
+        ROWAN_MODEL: "test-model",
+        ROWAN_WORKSPACE: workspace,
+      },
+      ":session\nagain\n:quit\n",
+    );
+
+    expect(result.exitCode).toBe(0);
+    const sessionId = sessionIdFrom(result.stderr);
+    expect(result.stdout).toContain("Chat first");
+    expect(result.stdout).toContain("Chat second");
+    expect(result.stdout).toContain(sessionId);
+    expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(2);
+
+    const secondPrompt = requests[1]?.messages?.map((message) => message.content).join("\n") ?? "";
+    expect(secondPrompt).toContain("hello");
+    expect(secondPrompt).toContain("Chat first");
+    expect(secondPrompt).toContain("again");
+
+    const sessionFiles = await readdir(join(workspace, "sessions"));
+    expect(sessionFiles).toEqual([`${sessionId}.json`]);
+
+    const runsDir = join(workspace, "runs");
+    const traceFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(traceFiles).toHaveLength(1);
+    expect(traceFiles[0]?.endsWith(`-${sessionId}.jsonl`)).toBe(true);
+    const summary = await inspectTrace(join(runsDir, traceFiles[0] ?? ""), runsDir);
+    expect(summary.eventTypes.session_created).toBe(1);
+    expect(summary.eventTypes.session_loaded).toBeUndefined();
+    expect(summary.eventTypes.session_start).toBeUndefined();
+    expect(summary.eventTypes.session_end).toBeUndefined();
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI --session can continue with additional interactive turns", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-loaded-interactive-"));
+  const responses = [
+    { message: "Initial answer", needsTask: false },
+    { message: "Loaded chat first", needsTask: false },
+    { message: "Loaded chat second", needsTask: false },
+  ];
+  let requestCount = 0;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+
+  try {
+    try {
+      server = Bun.serve({
+        port: 0,
+        fetch: () => openAIResponse(responses[requestCount++] ?? responses.at(-1)),
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const env = {
+      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+      ROWAN_OPENAI_API_KEY: "test-key",
+      ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
+    };
+    const initial = await runCli(["hello"], env);
+    expect(initial.exitCode).toBe(0);
+    const sessionId = sessionIdFrom(initial.stderr);
+
+    const chat = await runCli(["--session", sessionId, "again"], env, "more\n:quit\n");
+    expect(chat.exitCode).toBe(0);
+    expect(sessionIdFrom(chat.stderr)).toBe(sessionId);
+    expect(countMatches(chat.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(chat.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(chat.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(2);
+
+    const runsDir = join(workspace, "runs");
+    const traceFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(traceFiles).toHaveLength(2);
+    expect(traceFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
+
+    const summaries = await Promise.all(
+      traceFiles.map((file) => inspectTrace(join(runsDir, file), runsDir)),
+    );
+    const loadedSummary = summaries.find((summary) => summary.eventTypes.session_loaded === 1);
+    expect(loadedSummary).toBeDefined();
+    expect(loadedSummary?.eventTypes.session_created).toBeUndefined();
+    expect(loadedSummary?.eventTypes.session_start).toBeUndefined();
+    expect(loadedSummary?.eventTypes.session_end).toBeUndefined();
+
+    const loadedTrace = await Bun.file(loadedSummary?.filePath ?? "").text();
+    const firstEvent = JSON.parse(loadedTrace.split("\n")[0] ?? "{}") as { type?: string };
+    expect(firstEvent.type).toBe("session_loaded");
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI no longer exposes chat, sessions, or trace subcommands in help", async () => {
+  const result = await runCli(["--help"]);
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Usage:");
+  expect(result.stdout).toContain("bun run rowan [options] [prompt]");
+  expect(result.stdout).not.toContain("bun run rowan chat");
+  expect(result.stdout).not.toContain("sessions list");
+  expect(result.stdout).not.toContain("trace list");
+  expect(result.stdout).not.toContain("trace show");
+});
+
+test("CLI treats chat as a prompt instead of a command", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-chat-prompt-"));
+  const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
+  let server: ReturnType<typeof Bun.serve> | undefined;
+
+  try {
+    try {
+      server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          requests.push((await request.json()) as { messages?: Array<{ content?: string }> });
+          return openAIResponse({ message: "chat was handled as a prompt", needsTask: false });
+        },
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli(["chat"], {
+      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+      ROWAN_OPENAI_API_KEY: "test-key",
+      ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("chat was handled as a prompt");
+    expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.messages?.map((message) => message.content).join("\n")).toContain("\"chat\"");
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
   }
 });

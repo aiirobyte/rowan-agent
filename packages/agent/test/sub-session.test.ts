@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import { Agent } from "../src/agent";
-import { runSubSession } from "../src/session";
+import { Agent, runSubSession } from "../src/agent";
 import { createDefaultCriteria } from "../src/task";
 import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";

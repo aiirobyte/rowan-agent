@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { loadSkill, resolveSkillPath } from "../src/skills";
-import { createSession } from "@rowan-agent/agent/session";
+import { createSession } from "@rowan-agent/session";
 
 test("loadSkill reads SKILL.md and infers id from parent directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-skill-"));
@@ -33,6 +33,7 @@ test("loadSkill resolves skill ids from the workspace skills directory", async (
     mode: "source" as const,
     root,
     runsDir: join(root, "runs"),
+    sessionsDir: join(root, "sessions"),
     skillsDir: join(root, "skills"),
   };
 

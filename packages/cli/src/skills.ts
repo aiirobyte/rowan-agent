@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
-import type { Skill } from "@rowan-agent/agent";
+import type { Skill } from "@rowan-agent/session";
 import {
   type RowanWorkspacePaths,
   resolveInRowanWorkspace,

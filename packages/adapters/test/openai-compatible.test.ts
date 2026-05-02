@@ -8,9 +8,8 @@ import {
   resolveOpenAICompatibleConfig,
 } from "../src/openai-compatible";
 import { createDefaultCriteria } from "@rowan-agent/agent/task";
-import { createSession } from "@rowan-agent/agent/session";
+import { createId, createSession } from "@rowan-agent/session";
 import type { LlmContext, ModelStreamEvent, Task, Tool } from "@rowan-agent/agent/types";
-import { createId } from "@rowan-agent/agent/types";
 import { echoTool } from "../../agent/test/support/echo-tool";
 
 function jsonResponse(content: string, usage?: Record<string, number>): Response {
@@ -158,8 +157,63 @@ test("callOpenAICompatibleChatCompletion normalizes HTTP errors", async () => {
   } catch (error) {
     expect(error).toBeInstanceOf(OpenAICompatibleError);
     expect((error as OpenAICompatibleError).code).toBe("http_error");
+    expect((error as OpenAICompatibleError).message).toBe(
+      "OpenAI-compatible request failed with status 429 Too Many Requests: rate limited",
+    );
     expect((error as OpenAICompatibleError).status).toBe(429);
     expect((error as OpenAICompatibleError).retryable).toBe(true);
+    expect((error as OpenAICompatibleError).details).toMatchObject({
+      endpoint: "https://api.example/v1/chat/completions",
+      model: "test-model",
+      status: 429,
+      statusText: "Too Many Requests",
+      providerError: { message: "rate limited" },
+      body: { error: "rate limited" },
+    });
+  }
+});
+
+test("callOpenAICompatibleChatCompletion exposes nested provider error details", async () => {
+  const fetchMock: OpenAICompatibleFetch = async () =>
+    new Response(
+      JSON.stringify({
+        error: {
+          message: "Invalid value for response_format.",
+          type: "invalid_request_error",
+          code: "invalid_response_format",
+          param: "response_format",
+        },
+      }),
+      {
+        status: 400,
+        statusText: "Bad Request",
+        headers: { "content-type": "application/json" },
+      },
+    );
+
+  try {
+    await callOpenAICompatibleChatCompletion(
+      {
+        baseUrl: "https://api.example/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        fetch: fetchMock,
+      },
+      [{ role: "user", content: "hello" }],
+    );
+    throw new Error("Expected request to fail.");
+  } catch (error) {
+    expect(error).toBeInstanceOf(OpenAICompatibleError);
+    expect((error as OpenAICompatibleError).message).toBe(
+      "OpenAI-compatible request failed with status 400 Bad Request: Invalid value for response_format.",
+    );
+    expect((error as OpenAICompatibleError).retryable).toBe(false);
+    expect((error as OpenAICompatibleError).details?.providerError).toEqual({
+      message: "Invalid value for response_format.",
+      type: "invalid_request_error",
+      code: "invalid_response_format",
+      param: "response_format",
+    });
   }
 });
 

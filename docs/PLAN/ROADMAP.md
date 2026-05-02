@@ -2,7 +2,7 @@
 
 > 版本：v0.3.1
 > 日期：2026-05-01
-> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first/sub_session 已实现；v0.3.1 persistent session 规划启动
+> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first/sub_session 已实现；v0.3.1 persistent session 已实现
 > 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
 
 ## 1. 一句话定位
@@ -229,7 +229,7 @@ v0.3.1 已确定：
 - 每轮仍然写独立 trace，但 trace 需要关联 session id。
 - v0.3.1 不做长期 memory、自动摘要、RAG、trace replay 或 UI。
 
-v0.3.1 release gates：
+v0.3.1 release gates（已通过）：
 
 - `bun test packages`
 - `bun run build`

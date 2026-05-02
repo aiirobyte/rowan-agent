@@ -215,8 +215,58 @@ async function readErrorBody(response: Response): Promise<unknown> {
   }
 }
 
+function truncateString(value: string, maxLength = 4_000): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}... [truncated]` : value;
+}
+
+function sanitizeErrorBody(value: unknown): unknown {
+  if (typeof value === "string") {
+    return truncateString(value);
+  }
+
+  return value;
+}
+
 function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function asTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function providerErrorFromBody(body: unknown): Record<string, unknown> | undefined {
+  if (typeof body === "string") {
+    const message = asTrimmedString(body);
+    return message ? { message: truncateString(message) } : undefined;
+  }
+
+  if (!isRecord(body)) {
+    return undefined;
+  }
+
+  const error = getRecordValue(body, "error");
+  if (typeof error === "string") {
+    const message = asTrimmedString(error);
+    return message ? { message } : undefined;
+  }
+
+  const source = isRecord(error) ? error : body;
+  const message = asTrimmedString(getRecordValue(source, "message"));
+  const code = asTrimmedString(getRecordValue(source, "code"));
+  const type = asTrimmedString(getRecordValue(source, "type"));
+  const param = asTrimmedString(getRecordValue(source, "param"));
+
+  if (!message && !code && !type && !param) {
+    return undefined;
+  }
+
+  return {
+    ...(message ? { message } : {}),
+    ...(code ? { code } : {}),
+    ...(type ? { type } : {}),
+    ...(param ? { param } : {}),
+  };
 }
 
 function getResponseContent(data: ChatCompletionResponse): string {
@@ -283,16 +333,32 @@ function summarizeResponseUsage(
   };
 }
 
-function normalizeHttpError(response: Response, body: unknown): OpenAICompatibleError {
+function normalizeHttpError(
+  response: Response,
+  body: unknown,
+  context: { endpoint: string; model: string },
+): OpenAICompatibleError {
+  const providerError = providerErrorFromBody(body);
+  const providerMessage = asTrimmedString(providerError?.message);
+  const statusSummary = response.statusText
+    ? `${response.status} ${response.statusText}`
+    : String(response.status);
+  const message = providerMessage
+    ? `OpenAI-compatible request failed with status ${statusSummary}: ${providerMessage}`
+    : `OpenAI-compatible request failed with status ${statusSummary}.`;
+
   return new OpenAICompatibleError({
     code: "http_error",
-    message: `OpenAI-compatible request failed with status ${response.status}.`,
+    message,
     status: response.status,
     retryable: isRetryableStatus(response.status),
     details: {
+      endpoint: context.endpoint,
+      model: context.model,
       status: response.status,
       statusText: response.statusText,
-      body,
+      ...(providerError ? { providerError } : {}),
+      body: sanitizeErrorBody(body),
     },
   });
 }
@@ -325,7 +391,8 @@ export async function callOpenAICompatibleChatCompletion(
   const requestContent = JSON.stringify(requestBody, null, 2);
 
   try {
-    const response = await fetchImpl(`${normalizeBaseUrl(config.baseUrl)}/chat/completions`, {
+    const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
+    const response = await fetchImpl(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -336,7 +403,10 @@ export async function callOpenAICompatibleChatCompletion(
     });
 
     if (!response.ok) {
-      throw normalizeHttpError(response, await readErrorBody(response));
+      throw normalizeHttpError(response, await readErrorBody(response), {
+        endpoint,
+        model: config.model,
+      });
     }
 
     let responseContent: string;
@@ -629,8 +699,6 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
     const prompt = buildOpenAICompatiblePrompt({ context, tools: normalizedConfig.tools });
     const requestUsage = summarizeRequestUsage(prompt.messages);
     const requestBody = buildChatCompletionBody(normalizedConfig, prompt.messages);
-
-    yield { type: "trace_messages", messages: prompt.traceMessages };
 
     const result = await callOpenAICompatibleChatCompletion(
       normalizedConfig,

@@ -1,5 +1,10 @@
 import Schema from "typebox/schema";
 import {
+  createMessage,
+  type AgentMessage,
+  type Session as CoreSession,
+} from "@rowan-agent/session";
+import {
   createDirectOutcome,
   createFailedOutcome,
   createOutcome,
@@ -11,15 +16,11 @@ import { scheduleTaskRouting } from "./scheduler";
 import type {
   AgentEvent,
   AgentLoopInput,
-  AgentMessage,
   ErrorInfo,
   LlmPhase,
   ModelStreamEvent,
-  ModelTraceMessage,
   Outcome,
   AgentBudgetUsage,
-  Session,
-  SessionSnapshot,
   Task,
   TaskRoutingDecision,
   Tool,
@@ -27,10 +28,13 @@ import type {
   ToolResult,
   VerificationResult,
 } from "./types";
-import { createId, createMessage, nowIso, Validators } from "./types";
+import { createId, nowIso, Validators } from "./types";
+
+type AgentSession = CoreSession<AgentEvent>;
+type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
 type AgentLoopRuntime = AgentLoopInput & {
-  traceMessages: AgentMessage[];
+  messageTrace: AgentMessage[];
   budgetUsage: AgentBudgetUsage;
 };
 
@@ -55,8 +59,51 @@ async function emit(input: AgentLoopRuntime, event: AgentEvent): Promise<void> {
   await input.emit?.(event);
 }
 
-function makeError(code: string, message: string, details?: Record<string, unknown>): ErrorInfo {
-  return { code, message, retryable: false, ...(details ? { details } : {}) };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function detailsFromError(error: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+
+  const details = error.details;
+  const normalizedDetails = isRecord(details) ? { ...details } : {};
+  const status = typeof error.status === "number" ? error.status : undefined;
+  const name = asString(error.name);
+
+  if (status !== undefined) {
+    normalizedDetails.status = status;
+  }
+  if (name && name !== "Error") {
+    normalizedDetails.name = name;
+  }
+
+  return Object.keys(normalizedDetails).length > 0 ? normalizedDetails : undefined;
+}
+
+function makeError(error: unknown): ErrorInfo {
+  const record = isRecord(error) ? error : undefined;
+  const code = asString(record?.code) ?? "agent_loop_failed";
+  const message = error instanceof Error ? error.message : error === undefined ? "Agent loop failed." : String(error);
+  const retryable = asBoolean(record?.retryable) ?? false;
+  const details = detailsFromError(error);
+
+  return {
+    code,
+    message,
+    retryable,
+    ...(details ? { details } : {}),
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -80,13 +127,15 @@ function assertNotAborted(signal?: AbortSignal): void {
   }
 }
 
-function snapshotSession(session: Session): SessionSnapshot {
+function snapshotSession(session: AgentSession): AgentSessionSnapshot {
   return {
+    version: session.version,
     id: session.id,
     ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     systemPrompt: session.systemPrompt,
     userInput: session.userInput,
     skills: session.skills,
+    ...(session.title ? { title: session.title } : {}),
   };
 }
 
@@ -163,29 +212,16 @@ function snapshotMessages(messages: AgentMessage[]): AgentMessage[] {
 async function emitMessageStart(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
     type: "message_start",
-    content: snapshotMessages(input.traceMessages),
+    content: snapshotMessages(input.messageTrace),
     ts: nowIso(),
   });
 }
 
 async function appendTraceMessage(input: AgentLoopRuntime, message: AgentMessage): Promise<void> {
-  input.traceMessages.push(message);
+  input.messageTrace.push(message);
   await emit(input, {
     type: "message_delta",
     delta: snapshotMessage(message),
-    ts: nowIso(),
-  });
-}
-
-async function appendTraceMessages(input: AgentLoopRuntime, messages: AgentMessage[]): Promise<void> {
-  if (messages.length === 0) {
-    return;
-  }
-
-  input.traceMessages.push(...messages);
-  await emit(input, {
-    type: "message_delta",
-    delta: messages.length === 1 ? snapshotMessage(messages[0]) : snapshotMessages(messages),
     ts: nowIso(),
   });
 }
@@ -198,7 +234,7 @@ async function appendSessionMessage(input: AgentLoopRuntime, message: AgentMessa
 async function emitMessageEnd(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
     type: "message_end",
-    content: snapshotMessages(input.traceMessages),
+    content: snapshotMessages(input.messageTrace),
     ts: nowIso(),
   });
 }
@@ -213,11 +249,6 @@ async function collectTextAndStructured(input: {
   let text = "";
   let flushedText = "";
   let structured: unknown;
-  const createTraceMessage = (message: ModelTraceMessage): AgentMessage =>
-    createMessage(message.role, message.content, {
-      ...message.metadata,
-      phase: input.metadataPhase,
-    });
   const flushText = async () => {
     if (text.length === 0) {
       return;
@@ -237,10 +268,6 @@ async function collectTextAndStructured(input: {
 
   for await (const event of input.events) {
     assertNotAborted(input.loop.signal);
-
-    if (event.type === "trace_messages") {
-      await appendTraceMessages(input.loop, event.messages.map(createTraceMessage));
-    }
 
     if (event.type === "model_call") {
       const budgetError = consumeBudget(input.loop, "modelCalls");
@@ -584,7 +611,7 @@ async function verifyTask(
 export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   const runtime: AgentLoopRuntime = {
     ...input,
-    traceMessages: snapshotMessages(input.session.messages),
+    messageTrace: snapshotMessages(input.session.messages),
     budgetUsage: { modelCalls: 0, toolCalls: 0 },
   };
   const maxAttempts = input.maxAttempts ?? 2;
@@ -599,28 +626,21 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
 
   try {
     assertNotAborted(runtime.signal);
-    await emit(runtime, {
-      type: "session_created",
-      session: snapshotSession(runtime.session),
-      ts: nowIso(),
-    });
-    await emit(runtime, {
-      type: "session_start",
-      sessionId: runtime.session.id,
-      ts: nowIso(),
-    });
+    const sessionLifecycle = runtime.sessionLifecycle ?? "created";
+    if (sessionLifecycle !== "continued") {
+      await emit(runtime, {
+        type: sessionLifecycle === "created" ? "session_created" : "session_loaded",
+        session: snapshotSession(runtime.session),
+        ts: nowIso(),
+      });
+    }
     await emitMessageStart(runtime);
 
     const routed = await routeRequest(runtime);
     if (!routed.needsTask) {
       const outcome = createDirectOutcome(routed.message);
-      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       await endMessageLog();
-      await emit(runtime, {
-        type: "session_end",
-        sessionId: runtime.session.id,
-        ts: nowIso(),
-      });
+      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       return outcome;
     }
 
@@ -671,26 +691,16 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       if (lastVerification.passed) {
         task.status = "passed";
         const outcome = createOutcome(task, lastVerification);
-        await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
         await endMessageLog();
-        await emit(runtime, {
-          type: "session_end",
-          sessionId: runtime.session.id,
-          ts: nowIso(),
-        });
+        await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
         return outcome;
       }
     }
 
     task.status = "failed";
     const outcome = createFailedOutcome(task, lastVerification);
-    await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
     await endMessageLog();
-    await emit(runtime, {
-      type: "session_end",
-      sessionId: runtime.session.id,
-      ts: nowIso(),
-    });
+    await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
     return outcome;
   } catch (error) {
     if (error instanceof BudgetExceededError) {
@@ -704,20 +714,12 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         ...(currentTask ? { taskId: currentTask.id } : {}),
         ts: nowIso(),
       });
-      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       await endMessageLog();
-      await emit(runtime, {
-        type: "session_end",
-        sessionId: runtime.session.id,
-        ts: nowIso(),
-      });
+      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       return outcome;
     }
 
-    const errorInfo = makeError(
-      "agent_loop_failed",
-      error instanceof Error ? error.message : "Agent loop failed.",
-    );
+    const errorInfo = makeError(error);
     await endMessageLog();
     await emit(runtime, { type: "error", error: errorInfo, ts: nowIso() });
     throw error;

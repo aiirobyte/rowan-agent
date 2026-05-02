@@ -3,9 +3,13 @@ export type BasePromptInput = {
   availableToolsJson: string;
 };
 
-export type PlanPromptInput = BasePromptInput;
+export type PlanPromptInput = BasePromptInput & {
+  currentUserInputJson: string;
+};
 
-export type RoutePromptInput = BasePromptInput;
+export type RoutePromptInput = BasePromptInput & {
+  currentUserInputJson: string;
+};
 
 export type ExecutePromptInput = {
   taskJson: string;
@@ -39,7 +43,10 @@ export function buildPlanPrompt(input: PlanPromptInput): string {
     "Rowan can fill missing id, status, attempts, skillIds, toolNames, and simple acceptance criteria.",
     "Prefer setting task.status to \"pending\" and task.attempts to 0.",
     "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
-    "Create the task for the user's request in the conversation messages already included in this request.",
+    "Create the task for the current user request below. Use prior conversation only as context.",
+    "",
+    "Current user request:",
+    input.currentUserInputJson,
     "",
     "Loaded skills summary:",
     input.loadedSkillsJson,
@@ -64,6 +71,11 @@ export function buildRoutePrompt(input: RoutePromptInput): string {
     "When needsTask=true, message is only a concise routing status explaining that a tool-backed task is needed.",
     "Do not call tools in this phase; only decide whether a tool-backed task is required.",
     "For needsTask=false, forbidden message values include \"route\", \"routed\", \"direct\", \"done\", \"ok\", and other status labels.",
+    "Route only the current user request below. Use prior conversation only as context.",
+    "",
+    "Current user request:",
+    input.currentUserInputJson,
+    "",
     "Example direct response for user `你好`: `{ \"message\": \"你好！有什么我可以帮你？\", \"needsTask\": false }`.",
     "Example direct response for user `What is 2 + 2?`: `{ \"message\": \"2 + 2 = 4.\", \"needsTask\": false }`.",
     "Example task response for user `使用bash查看当前日期`: `{ \"message\": \"Creating a task to run bash.\", \"needsTask\": true }`.",

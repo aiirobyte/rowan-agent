@@ -2,8 +2,7 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import { buildOpenAICompatibleMessages, buildOpenAICompatiblePrompt } from "../src/prompt-builder";
 import { createDefaultCriteria } from "@rowan-agent/agent/task";
-import { createId, createMessage } from "@rowan-agent/agent/types";
-import { createSession } from "@rowan-agent/agent/session";
+import { createId, createMessage, createSession } from "@rowan-agent/session";
 import type { Task, Tool } from "@rowan-agent/agent/types";
 
 const echoTool: Tool<{ message: string }> = {
@@ -47,6 +46,9 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
 
   expect(messages).toHaveLength(3);
   expect(combined).toContain("Phase: route");
+  expect(combined).toContain("Route only the current user request below.");
+  expect(combined).toContain("Current user request:");
+  expect(combined).toContain("\"What is 2 + 2?\"");
   expect(combined).toContain('{ "message": string, "needsTask": boolean }');
   expect(combined).toContain("Default to answering the user directly with needsTask=false.");
   expect(combined).toContain("normal chat, greetings, explanations, calculations");
@@ -88,6 +90,9 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
   expect(messages).toHaveLength(3);
   expect(messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user", content: "Plan with echo." })]));
   expect(combined).toContain("Phase: plan");
+  expect(combined).toContain("Create the task for the current user request below.");
+  expect(combined).toContain("Current user request:");
+  expect(combined).toContain("\"Plan with echo.\"");
   expect(combined).toContain("only one valid JSON object");
   expect(combined).toContain('{ "message": string, "task": Task }');
   expect(combined).toContain("preserved as plain string message content");
@@ -99,7 +104,7 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
   expect(combined).not.toContain("Conversation messages:");
 });
 
-test("prompt builder exposes trace messages from the prompt construction boundary", () => {
+test("prompt builder keeps phase prompts in request messages only", () => {
   const session = createSession({
     systemPrompt: "Test system",
     userInput: "Plan with echo.",
@@ -111,20 +116,14 @@ test("prompt builder exposes trace messages from the prompt construction boundar
   });
 
   expect(prompt.messages).toHaveLength(3);
-  expect(prompt.traceMessages).toEqual([
+  const phaseMessage = prompt.messages.at(-1);
+  expect(phaseMessage).toEqual(
     expect.objectContaining({
       role: "user",
       content: expect.stringContaining("Phase: plan"),
-      metadata: expect.objectContaining({
-        kind: "model_prompt",
-        phase: "plan",
-        source: "context",
-      }),
     }),
-  ]);
-  const phaseMessage = prompt.messages.at(-1);
-  expect(phaseMessage).toBeDefined();
-  expect(prompt.traceMessages[0]?.content).toBe(phaseMessage?.content ?? "");
+  );
+  expect(prompt).not.toHaveProperty("traceMessages");
 });
 
 test("execute prompt includes phase, JSON-only contract, task, allowed tools, and tool results", () => {
@@ -164,7 +163,7 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
   expect(combined).not.toContain("Use the conversation messages already included in this request as context.");
 });
 
-test("prompt builder excludes internal assistant phase JSON from later prompts", () => {
+test("prompt builder includes the model message stream in later prompts", () => {
   const session = createSession({ systemPrompt: "Test system", userInput: "Use echo." });
   session.messages.push(
     createMessage("assistant", "{\"needsTask\":true,\"message\":\"Creating a task.\"}", {
@@ -199,10 +198,10 @@ test("prompt builder excludes internal assistant phase JSON from later prompts",
 
   expect(combined).toContain("Use echo.");
   expect(combined).toContain("tool evidence");
-  expect(combined).not.toContain("needsTask");
-  expect(combined).not.toContain("\"title\":\"Echo\"");
-  expect(combined).not.toContain("\"toolCalls\":[]");
-  expect(combined).not.toContain("Answer text.");
+  expect(combined).toContain("needsTask");
+  expect(combined).toContain("\"title\":\"Echo\"");
+  expect(combined).toContain("\"toolCalls\":[]");
+  expect(combined).toContain("Answer text.");
 });
 
 test("verify prompt includes phase, lightweight judgement contract, task, criteria, and task output", () => {

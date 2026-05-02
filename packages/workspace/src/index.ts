@@ -7,6 +7,7 @@ export const ROWAN_RUNTIME_ENV = "ROWAN_RUNTIME";
 export const ROWAN_PACKAGED_ENV = "ROWAN_PACKAGED";
 export const ROWAN_BINARY_WORKSPACE_DIR = ".rowan";
 export const ROWAN_RUNS_DIR = "runs";
+export const ROWAN_SESSIONS_DIR = "sessions";
 export const ROWAN_SKILLS_DIR = "skills";
 
 export type RowanRuntimeMode = "source" | "binary";
@@ -15,6 +16,7 @@ export type RowanWorkspacePaths = {
   mode: RowanRuntimeMode;
   root: string;
   runsDir: string;
+  sessionsDir: string;
   skillsDir: string;
 };
 
@@ -150,6 +152,7 @@ export function resolveRowanWorkspacePaths(options: ResolveRowanWorkspaceOptions
     mode,
     root,
     runsDir: join(root, ROWAN_RUNS_DIR),
+    sessionsDir: join(root, ROWAN_SESSIONS_DIR),
     skillsDir: join(root, ROWAN_SKILLS_DIR),
   };
 }

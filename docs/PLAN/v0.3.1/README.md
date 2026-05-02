@@ -2,7 +2,7 @@
 
 > 版本：v0.3.1
 > 日期：2026-05-01
-> 状态：planned
+> 状态：completed
 > 上游文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.3.0/PLAN.md`
 
 ## 文档
@@ -23,7 +23,7 @@ v0.3.1 是 Rowan 从单轮 run 走向持续会话的版本。
 3. CLI 可以通过 `--session <id>` 继续已有会话。
 4. CLI 新增 `sessions` 管理命令。
 5. CLI 新增最小 `chat` 交互模式。
-6. 每轮仍然产生独立 trace，但 trace 能关联同一个 session id。
+6. 每次显式进入 Session 产生 timestamped trace；同一 chat 进程内多轮 append，文件名和内容都关联同一个 session id。
 
 ## 快速验收
 

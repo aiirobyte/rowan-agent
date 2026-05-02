@@ -2,9 +2,14 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSession as createBaseSession } from "@rowan-agent/session";
 import { createDefaultCriteria } from "../src/task";
 import { createCoreTools } from "../src/tools";
-import { createId, createSession, type Task, type Tool } from "../src/types";
+import { createId, type AgentEvent, type Task, type Tool } from "../src/types";
+
+function createSession(input: Parameters<typeof createBaseSession>[0]) {
+  return createBaseSession<AgentEvent>(input);
+}
 
 function createToolContext(toolCallId = createId("call")) {
   const task: Task = {

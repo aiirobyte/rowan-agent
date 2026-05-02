@@ -2,7 +2,7 @@
 
 > 版本：v0.3.1
 > 日期：2026-05-01
-> 状态：planned
+> 状态：completed
 > 基线：v0.3.0 Agent Mechanism + Sub Session
 > 任务表：`docs/PLAN/v0.3.1/TASKS.md`
 
@@ -72,7 +72,7 @@ bun run rowan --session ses_abc123 "继续刚才的问题"
   sessions/
     ses_abc123.json
   runs/
-    2026-05-01T223858-42+08:00-run_xxxxxxxx.jsonl
+    2026-05-01T223858-42+08:00-ses_abc123.jsonl
 ```
 
 Session 文件保存稳定业务状态：
@@ -90,7 +90,7 @@ type PersistedSession = {
 };
 ```
 
-不把完整 trace log 放入 Session 文件。`log` 继续属于每次 run 的运行记录，并写入 JSONL trace。这样 Session 文件负责多轮上下文，trace 文件负责复盘一次执行。
+不把完整 trace log 放入 Session 文件。`log` 继续属于当前执行上下文的运行记录，并写入 JSONL trace。这样 Session 文件负责多轮上下文，trace 文件负责复盘一次执行入口。
 
 ## 4. Agent Multi-turn Semantics
 
@@ -177,27 +177,24 @@ v0.3.1 的 chat 模式可以保持朴素，不需要 readline 高级补全、流
 
 ## 7. Trace Relationship
 
-每轮运行仍然产生独立 run trace。为了把多轮 trace 串回同一个会话，trace 必须包含 session id。
+每次进入一个 Session 执行上下文都会产生一份带时间戳的 trace 文件，文件名使用 session id，而不是额外的 run id。`rowan chat` 同一进程内的多轮对话 append 到同一份 trace；重新通过 CLI 显式 load 同一个 Session 时，会新增一份带新时间戳、相同 session id、以 `session_loaded` 开头的 JSONL。
 
 要求：
 
 - `session_created` 或新增 `session_loaded` 事件包含 session id。
-- 每个 run trace 文件可通过 inspector 看到 session id。
+- 每个 trace 文件可通过 inspector 看到 session id。
+- 同一 chat 进程内的后续 prompt 不再产生新的 trace 文件，也不再产生新的 `session_loaded` 起始事件。
 - `sessions list` 可显示最近更新时间和最近一条消息摘要。
 - 不要求 trace replay 能恢复完整 Session；replay 留给后续版本。
 
 ## 8. Package Boundary
 
-建议新增 `@rowan-agent/session-store` 或先放在 `packages/agent`：
+Session 数据模型和 Store 抽象已拆到独立 `@rowan-agent/session` 包：
 
-- 如果只做 JSON 读写，可以先在 `packages/agent/src/session-store.ts`。
-- 如果要让 CLI、未来 server、未来 replay 都共用，建议拆成 `packages/session-store`。
-
-v0.3.1 推荐保守路线：
-
-1. 先在 `packages/agent` 定义接口和内存实现。
-2. 在 `packages/cli` 放文件实现，避免过早扩包。
-3. 如果 `trace` 或未来 replay 也要读 Session，再抽到独立 package。
+- `packages/session/src/session.ts` 定义 `Session`、`AgentMessage`、`Skill`、schema version 和构造工具。
+- `packages/session/src/session-store.ts` 定义 `SessionStore`、持久化 JSON schema、序列化/反序列化和内存实现。
+- `packages/cli/src/session-store.ts` 只保留 workspace 本地 JSON 文件实现。
+- `packages/agent` 依赖 `@rowan-agent/session`，只负责 agent loop 与 sub-session 执行语义。
 
 ## 9. Not In v0.3.1
 
@@ -217,5 +214,5 @@ v0.3.1 推荐保守路线：
 - CLI 支持 `sessions list/show/delete`。
 - CLI 支持最小 `chat` 交互模式。
 - Session 文件写入 `<workspace>/sessions/<session-id>.json`。
-- 每轮仍写独立 trace，trace 可关联 session id。
+- 每次 CLI 显式进入 Session 写一份 timestamped trace；同一 chat 进程内后续轮次 append 到当前 trace。
 - `bun test packages` 和 `bun run build` 通过。

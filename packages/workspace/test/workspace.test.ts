@@ -25,6 +25,7 @@ test("source runtime resolves workspace to the project root", async () => {
   expect(paths.mode).toBe("source");
   expect(paths.root).toBe(root);
   expect(paths.runsDir).toBe(join(root, "runs"));
+  expect(paths.sessionsDir).toBe(join(root, "sessions"));
   expect(paths.skillsDir).toBe(join(root, "skills"));
 });
 
@@ -38,6 +39,7 @@ test("binary runtime resolves workspace to ~/.rowan", () => {
   expect(paths.mode).toBe("binary");
   expect(paths.root).toBe("/Users/tester/.rowan");
   expect(paths.runsDir).toBe("/Users/tester/.rowan/runs");
+  expect(paths.sessionsDir).toBe("/Users/tester/.rowan/sessions");
   expect(paths.skillsDir).toBe("/Users/tester/.rowan/skills");
 });
 

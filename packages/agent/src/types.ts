@@ -1,5 +1,6 @@
 import Type from "typebox";
 import Schema from "typebox/schema";
+import type { AgentMessage, Session as CoreSession, Skill } from "@rowan-agent/session";
 
 export type ModelRef = {
   provider: string;
@@ -14,34 +15,6 @@ export type ModelCallUsage = {
   outputTokens?: number;
   totalTokens?: number;
 };
-
-export type ModelTraceMessage = Pick<AgentMessage, "role" | "content"> & {
-  metadata?: Record<string, unknown>;
-};
-
-export const AgentMessageSchema = Type.Object({
-  id: Type.String(),
-  role: Type.Union([
-    Type.Literal("system"),
-    Type.Literal("user"),
-    Type.Literal("assistant"),
-    Type.Literal("tool"),
-  ]),
-  content: Type.String(),
-  createdAt: Type.String(),
-  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-});
-
-export type AgentMessage = Type.Static<typeof AgentMessageSchema>;
-
-export const SkillSchema = Type.Object({
-  id: Type.String(),
-  path: Type.String(),
-  content: Type.String(),
-  toolNames: Type.Optional(Type.Array(Type.String())),
-});
-
-export type Skill = Type.Static<typeof SkillSchema>;
 
 export const AcceptanceCriterionSchema = Type.Union([
   Type.Object({
@@ -131,7 +104,7 @@ export const ToolResultSchema = Type.Object({
 export type ToolResult = Type.Static<typeof ToolResultSchema>;
 
 export type ToolContext = {
-  session: Session;
+  session: CoreSession<AgentEvent>;
   task: Task;
   toolCallId: string;
   runSubSession?: RunSubSession;
@@ -156,19 +129,7 @@ export type AfterToolCall = (input: {
   result: ToolResult;
 }) => Promise<ToolResult>;
 
-export type Session = {
-  id: string;
-  parentSessionId?: string;
-  systemPrompt: string;
-  userInput: string;
-  messages: AgentMessage[];
-  log: AgentEvent[];
-  skills: Skill[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type SessionSnapshot = Omit<Session, "log" | "messages" | "createdAt" | "updatedAt">;
+type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
 export type SubSessionInput = {
   parentSessionId: string;
@@ -195,7 +156,7 @@ export type SubSessionRunInput = SubSessionInput & {
 
 export type SubSessionRunResult = {
   parentSessionId: string;
-  session: Session;
+  session: CoreSession<AgentEvent>;
   outcome: Outcome;
   budgetUsage: AgentBudgetUsage;
 };
@@ -203,7 +164,6 @@ export type SubSessionRunResult = {
 export type RunSubSession = (input: AgentSubSessionInput) => Promise<SubSessionRunResult>;
 
 export type ModelStreamEvent =
-  | { type: "trace_messages"; messages: ModelTraceMessage[] }
   | { type: "text_delta"; text: string }
   | {
       type: "model_call";
@@ -218,21 +178,21 @@ export type ModelStreamEvent =
 export type LlmContext =
   | {
       phase: "route";
-      session: Session;
+      session: CoreSession<AgentEvent>;
     }
   | {
       phase: "plan";
-      session: Session;
+      session: CoreSession<AgentEvent>;
     }
   | {
       phase: "execute";
-      session: Session;
+      session: CoreSession<AgentEvent>;
       task: Task;
       toolResults: ToolResult[];
     }
   | {
       phase: "verify";
-      session: Session;
+      session: CoreSession<AgentEvent>;
       task: Task;
       toolResults: ToolResult[];
       criteria: AcceptanceCriterion[];
@@ -256,9 +216,8 @@ export type ErrorInfo = {
 };
 
 export type AgentEvent =
-  | { type: "session_created"; session: SessionSnapshot; ts: string }
-  | { type: "session_start"; sessionId: string; ts: string }
-  | { type: "session_end"; sessionId: string; ts: string }
+  | { type: "session_created"; session: AgentSessionSnapshot; ts: string }
+  | { type: "session_loaded"; session: AgentSessionSnapshot; ts: string }
   | { type: "sub_session_start"; parentSessionId: string; sessionId: string; prompt: string; ts: string }
   | {
       type: "sub_session_end";
@@ -316,7 +275,8 @@ export type AgentEventListener = ((event: AgentEvent) => void | Promise<void>) &
 export type Unsubscribe = () => void;
 
 export type AgentLoopInput = {
-  session: Session;
+  session: CoreSession<AgentEvent>;
+  sessionLifecycle?: "created" | "loaded" | "continued";
   model: ModelRef;
   stream: StreamFn;
   tools: Tool[];
@@ -368,54 +328,4 @@ export function formatLocalTimestamp(date = new Date()): string {
 
 export function nowIso(): string {
   return formatLocalTimestamp();
-}
-
-export function createMessage(
-  role: AgentMessage["role"],
-  content: string,
-  metadata?: Record<string, unknown>,
-): AgentMessage {
-  return {
-    id: createId("msg"),
-    role,
-    content,
-    createdAt: nowIso(),
-    ...(metadata ? { metadata } : {}),
-  };
-}
-
-export function createSession(input: {
-  systemPrompt: string;
-  userInput: string;
-  skills?: Skill[];
-  parentSessionId?: string;
-}): Session {
-  const createdAt = nowIso();
-  const messages = [
-    createMessage("system", input.systemPrompt),
-    ...(input.skills?.length
-      ? [
-          createMessage(
-            "system",
-            `Loaded skills:\n\n${input.skills
-              .map((skill) => `# ${skill.id}\n${skill.content}`)
-              .join("\n\n")}`,
-            { kind: "skills" },
-          ),
-        ]
-      : []),
-    createMessage("user", input.userInput),
-  ];
-
-  return {
-    id: createId("ses"),
-    ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
-    systemPrompt: input.systemPrompt,
-    userInput: input.userInput,
-    messages,
-    log: [],
-    skills: input.skills ?? [],
-    createdAt,
-    updatedAt: createdAt,
-  };
 }

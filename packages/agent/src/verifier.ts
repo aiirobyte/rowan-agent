@@ -1,5 +1,5 @@
+import type { AgentMessage } from "@rowan-agent/session";
 import type {
-  AgentMessage,
   ModelRef,
   StreamFn,
   Task,

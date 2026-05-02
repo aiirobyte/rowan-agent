@@ -16,28 +16,56 @@ export function redactSecrets(value: unknown): unknown {
   return JSON.parse(redacted);
 }
 
-export function jsonlTraceWriter(path: string): AgentEventListener {
+export type JsonlTracePath = string | ((event: AgentEvent) => string | undefined);
+
+export type JsonlTraceWriterOptions = {
+  mode?: "replace" | "append";
+};
+
+export type JsonlTraceWriter = AgentEventListener & {
+  path(): string | undefined;
+};
+
+export function jsonlTraceWriter(
+  path: JsonlTracePath,
+  options: JsonlTraceWriterOptions = {},
+): JsonlTraceWriter {
+  const mode = options.mode ?? "replace";
+  let resolvedPath = typeof path === "string" ? path : undefined;
   let ready: Promise<string | undefined> | undefined;
   let pending: Promise<void> = Promise.resolve();
   let failure: unknown;
 
-  const write = async (event: unknown) => {
-    ready ??= mkdir(dirname(path), { recursive: true }).then(async (made) => {
-      await writeFile(path, "", "utf8");
+  const resolvePath = (event: AgentEvent): string => {
+    resolvedPath ??= typeof path === "string" ? path : path(event);
+    if (!resolvedPath) {
+      throw new Error("Trace path could not be resolved from the agent event.");
+    }
+    return resolvedPath;
+  };
+
+  const write = async (event: AgentEvent) => {
+    const eventPath = resolvePath(event);
+    ready ??= mkdir(dirname(eventPath), { recursive: true }).then(async (made) => {
+      if (mode === "replace") {
+        await writeFile(eventPath, "", "utf8");
+      }
       return made;
     });
     await ready;
-    await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
+    await appendFile(eventPath, `${JSON.stringify(event)}\n`, "utf8");
   };
 
-  const listener: AgentEventListener = ((event: AgentEvent) => {
-    const snapshot = redactSecrets(event);
+  const listener: JsonlTraceWriter = ((event: AgentEvent) => {
+    const snapshot = redactSecrets(event) as AgentEvent;
     pending = pending
       .then(() => write(snapshot))
       .catch((error) => {
         failure ??= error;
       });
-  }) as AgentEventListener;
+  }) as JsonlTraceWriter;
+
+  listener.path = () => resolvedPath;
 
   listener.flush = async () => {
     await pending;

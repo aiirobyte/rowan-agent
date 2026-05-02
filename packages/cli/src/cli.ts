@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { createInterface } from "node:readline";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
   createOpenAICompatibleStream,
@@ -7,59 +8,62 @@ import {
 } from "@rowan-agent/adapters";
 import {
   Agent,
-  createId,
   createCoreTools,
   formatLocalTimestamp,
+  type AgentEvent,
+  type AgentEventListener,
+  type Outcome,
 } from "@rowan-agent/agent";
-import { inspectTraceRun, jsonlTraceWriter, listTraceRuns } from "@rowan-agent/trace";
+import { type AgentMessage, type Session } from "@rowan-agent/session";
+import { jsonlTraceWriter, type JsonlTracePath } from "@rowan-agent/trace";
 import {
   type RowanWorkspacePaths,
   resolveInRowanWorkspace,
   resolveRowanWorkspacePaths,
 } from "@rowan-agent/workspace";
-import { formatJsonOutput, formatOutcomeOutput } from "./output";
+import { formatOutcomeOutput } from "./output";
+import { LocalJsonSessionStore } from "./session-store";
 import { loadSkills } from "./skills";
 
-type RunArgs = {
-  kind: "run";
+type CliArgs = {
   trace?: string;
+  sessionId?: string;
   skills: string[];
   baseUrl?: string;
   apiKey?: string;
   model?: string;
   timeoutMs?: number;
-  prompt: string;
+  prompt?: string;
 };
-
-type TraceListArgs = {
-  kind: "trace-list";
-  runsDir?: string;
-};
-
-type TraceShowArgs = {
-  kind: "trace-show";
-  runsDir?: string;
-  target: string;
-};
-
-type CliArgs = RunArgs | TraceListArgs | TraceShowArgs;
 
 const DEFAULT_OPENAI_TIMEOUT_MS = 60_000;
 
-function createDefaultTracePath(workspace: RowanWorkspacePaths): string {
-  return join(workspace.runsDir, `${formatLocalTimestamp()}-${createId("run")}.jsonl`);
+function createDefaultTracePath(workspace: RowanWorkspacePaths, sessionId: string): string {
+  return join(workspace.runsDir, `${formatLocalTimestamp()}-${sessionId}.jsonl`);
+}
+
+function traceSessionIdFromEvent(event: AgentEvent): string | undefined {
+  if (event.type === "session_created" || event.type === "session_loaded") {
+    return event.session.parentSessionId ?? event.session.id;
+  }
+  if (event.type === "sub_session_start" || event.type === "sub_session_end") {
+    return event.parentSessionId;
+  }
+  if ("sessionId" in event && typeof event.sessionId === "string") {
+    return event.sessionId;
+  }
+  return undefined;
+}
+
+function createDefaultTracePathResolver(workspace: RowanWorkspacePaths): JsonlTracePath {
+  return (event) => {
+    const sessionId = traceSessionIdFromEvent(event);
+    return sessionId ? createDefaultTracePath(workspace, sessionId) : undefined;
+  };
 }
 
 function resolveOptionalWorkspacePath(path: string | undefined, workspace: RowanWorkspacePaths): string | undefined {
   return path ? resolveInRowanWorkspace(path, workspace) : undefined;
-}
-
-function resolveTraceTarget(target: string, workspace: RowanWorkspacePaths): string {
-  if (target.endsWith(".jsonl") || target.includes("/") || target.includes("\\")) {
-    return resolveInRowanWorkspace(target, workspace);
-  }
-
-  return target;
 }
 
 function formatWorkspacePathForDisplay(path: string, workspace: RowanWorkspacePaths): string {
@@ -71,27 +75,42 @@ function formatWorkspacePathForDisplay(path: string, workspace: RowanWorkspacePa
   return path;
 }
 
+function currentTurnMessageId(messages: AgentMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user") {
+      return message.id;
+    }
+  }
+
+  return undefined;
+}
+
 function printHelp(): void {
   console.log(`Rowan
 
 Usage:
-  bun run rowan [--base-url url] [--api-key key] [--model name] [--timeout-ms ms] [--trace path] [--skill id-or-path] "prompt"
-  bun run rowan trace list [--runs-dir path]
-  bun run rowan trace show <run-id-or-file> [--runs-dir path]
+  bun run rowan [options] [prompt]
 
 Examples:
   bun run rowan "hello"
+  bun run rowan --session ses_12345678 "continue"
   bun run rowan --model gpt-4.1-mini "hello"
   bun run rowan --skill example "summarize the example skill"
   bun run rowan --trace runs/real.jsonl "list workspace files"
-  bun run rowan trace list
-  bun run rowan trace show run_12345678
 
 Trace:
   Source runs use the Rowan project root as the workspace.
   Packaged binary runs use ~/.rowan as the workspace.
-  Runs are logged automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-run_<id>.jsonl.
-  Relative --trace and --runs-dir paths are resolved from <workspace>.
+  Session traces are logged automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
+  Turns in one process append to the same trace; explicit session loads start a new trace.
+  Relative --trace paths are resolved from <workspace>.
+  CLI output prints Session id once, Message id before each turn result, and Trace path last once per entry.
+
+Sessions:
+  Sessions are saved automatically to <workspace>/sessions/<session-id>.json.
+  Use --session <id> to continue a saved conversation.
+  Interactive controls: :session, :exit, :quit.
 
 Skills:
   --skill example resolves to <workspace>/skills/example/SKILL.md.
@@ -114,63 +133,22 @@ function parsePositiveInteger(value: string, source: string): number {
   return parsed;
 }
 
+function readOptionValue(args: string[], option: string): string {
+  const value = args.shift();
+  if (!value) {
+    throw new Error(`${option} requires a value.`);
+  }
+  return value;
+}
+
 function parseOptionalTimeoutMs(value: string | undefined): number | undefined {
   const normalized = value?.trim();
   return normalized ? parsePositiveInteger(normalized, "ROWAN_OPENAI_TIMEOUT_MS") : undefined;
 }
 
-function parseTraceArgs(args: string[]): TraceListArgs | TraceShowArgs {
-  const command = args.shift();
-  let runsDir: string | undefined;
-
-  if (!command || command === "--help" || command === "-h") {
-    printHelp();
-    process.exit(0);
-  }
-
-  const readRunsDir = () => {
-    const path = args.shift();
-    if (!path) {
-      throw new Error("--runs-dir requires a path.");
-    }
-    runsDir = path;
-  };
-
-  if (command === "list") {
-    while (args.length > 0) {
-      const next = args.shift();
-      if (next === "--runs-dir") {
-        readRunsDir();
-        continue;
-      }
-      throw new Error(`Unknown option for trace list: ${next}`);
-    }
-    return { kind: "trace-list", runsDir };
-  }
-
-  if (command === "show") {
-    const target = args.shift();
-    if (!target) {
-      throw new Error("trace show requires a run id or trace file path.");
-    }
-
-    while (args.length > 0) {
-      const next = args.shift();
-      if (next === "--runs-dir") {
-        readRunsDir();
-        continue;
-      }
-      throw new Error(`Unknown option for trace show: ${next}`);
-    }
-    return { kind: "trace-show", runsDir, target };
-  }
-
-  throw new Error(`Unknown trace command: ${command}`);
-}
-
-function parseRunArgs(argv: string[]): RunArgs {
+function parseArgs(argv: string[]): CliArgs {
   const args = [...argv];
-  const parsed: RunArgs = { kind: "run", skills: [], prompt: "" };
+  const parsed: CliArgs = { skills: [] };
   const promptParts: string[] = [];
 
   while (args.length > 0) {
@@ -185,55 +163,37 @@ function parseRunArgs(argv: string[]): RunArgs {
     }
 
     if (next === "--trace") {
-      const path = args.shift();
-      if (!path) {
-        throw new Error("--trace requires a path.");
-      }
-      parsed.trace = path;
+      parsed.trace = readOptionValue(args, "--trace");
+      continue;
+    }
+
+    if (next === "--session") {
+      parsed.sessionId = readOptionValue(args, "--session");
       continue;
     }
 
     if (next === "--skill") {
-      const path = args.shift();
-      if (!path) {
-        throw new Error("--skill requires a path.");
-      }
-      parsed.skills.push(path);
+      parsed.skills.push(readOptionValue(args, "--skill"));
       continue;
     }
 
     if (next === "--base-url") {
-      const value = args.shift();
-      if (!value) {
-        throw new Error("--base-url requires a URL.");
-      }
-      parsed.baseUrl = value;
+      parsed.baseUrl = readOptionValue(args, "--base-url");
       continue;
     }
 
     if (next === "--api-key") {
-      const value = args.shift();
-      if (!value) {
-        throw new Error("--api-key requires a value.");
-      }
-      parsed.apiKey = value;
+      parsed.apiKey = readOptionValue(args, "--api-key");
       continue;
     }
 
     if (next === "--model") {
-      const value = args.shift();
-      if (!value) {
-        throw new Error("--model requires a name.");
-      }
-      parsed.model = value;
+      parsed.model = readOptionValue(args, "--model");
       continue;
     }
 
     if (next === "--timeout-ms") {
-      const value = args.shift();
-      if (!value) {
-        throw new Error("--timeout-ms requires a value.");
-      }
+      const value = readOptionValue(args, "--timeout-ms");
       parsed.timeoutMs = parsePositiveInteger(value, "--timeout-ms");
       continue;
     }
@@ -245,28 +205,22 @@ function parseRunArgs(argv: string[]): RunArgs {
     promptParts.push(next);
   }
 
-  parsed.prompt = promptParts.join(" ").trim();
-  if (!parsed.prompt) {
-    throw new Error("A prompt is required.");
+  const prompt = promptParts.join(" ").trim();
+  if (prompt) {
+    parsed.prompt = prompt;
   }
 
   return parsed;
 }
+type AgentSession = Session<AgentEvent>;
 
-function parseArgs(argv: string[]): CliArgs {
-  const args = [...argv];
-  if (args[0] === "trace") {
-    args.shift();
-    return parseTraceArgs(args);
-  }
-
-  return parseRunArgs(args);
-}
-
-async function runAgentCommand(args: RunArgs): Promise<void> {
-  const workspace = resolveRowanWorkspacePaths();
+async function createConfiguredAgent(
+  args: CliArgs,
+  workspace: RowanWorkspacePaths,
+): Promise<Agent> {
   const skills = await loadSkills(args.skills, workspace);
   const tools = createCoreTools({ root: workspace.root });
+  const sessionStore = new LocalJsonSessionStore<AgentSession>(workspace.sessionsDir);
   const config = resolveOpenAICompatibleConfig({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
@@ -283,38 +237,167 @@ async function runAgentCommand(args: RunArgs): Promise<void> {
     stream: createOpenAICompatibleStream(config),
     tools,
     skills,
+    sessionStore,
   });
 
-  const tracePath = resolveOptionalWorkspacePath(args.trace, workspace) ?? createDefaultTracePath(workspace);
-  const traceWriter = jsonlTraceWriter(tracePath);
-  agent.subscribe(traceWriter);
+  if (args.sessionId) {
+    await agent.loadSession(args.sessionId);
+  }
+
+  return agent;
+}
+
+async function promptWithTrace(input: {
+  agent: Agent;
+  prompt: string;
+  tracePath: JsonlTracePath;
+  traceMode?: "replace" | "append";
+  onTracePath?: (path: string | undefined) => void;
+  onMessageId?: (messageId: string) => void;
+}): Promise<Outcome> {
+  const traceWriter = jsonlTraceWriter(input.tracePath, { mode: input.traceMode });
+  let messageId: string | undefined;
+  const listener: AgentEventListener = ((event: AgentEvent) => {
+    traceWriter(event);
+
+    if (event.type === "message_start" && !messageId) {
+      messageId = currentTurnMessageId(event.content);
+      if (messageId) {
+        input.onMessageId?.(messageId);
+      }
+    }
+  }) as AgentEventListener;
+  listener.flush = traceWriter.flush;
+
+  const unsubscribe = input.agent.subscribe(listener);
+  try {
+    return await input.agent.prompt(input.prompt);
+  } finally {
+    try {
+      await input.agent.flushTrace();
+    } finally {
+      input.onTracePath?.(traceWriter.path());
+      unsubscribe();
+    }
+  }
+}
+
+async function runInteractiveCommand(args: CliArgs): Promise<void> {
+  const workspace = resolveRowanWorkspacePaths();
+  const agent = await createConfiguredAgent(args, workspace);
+
+  const explicitTracePath = resolveOptionalWorkspacePath(args.trace, workspace);
+  let activeTracePath: string | undefined = explicitTracePath;
+  let hasWrittenTrace = false;
+  let hasPrintedSession = false;
+  let hasPrintedTrace = false;
+
+  const printSessionOnce = () => {
+    const sessionId = agent.state.session?.id;
+    if (!hasPrintedSession && sessionId) {
+      console.error(`Session id: ${sessionId}`);
+      hasPrintedSession = true;
+    }
+  };
+
+  const printTraceOnce = (tracePath: string | undefined) => {
+    if (!hasPrintedTrace && tracePath) {
+      console.error(`Trace written to ${formatWorkspacePathForDisplay(tracePath, workspace)}`);
+      hasPrintedTrace = true;
+    }
+  };
+
+  if (agent.state.session) {
+    printSessionOnce();
+  }
+
+  const runPrompt = async (prompt: string) => {
+    let writtenTracePath: string | undefined;
+    let messageId: string | undefined;
+    const printRunHeader = () => {
+      printSessionOnce();
+      if (messageId) {
+        console.error(`Message id: ${messageId}`);
+      }
+      printTraceOnce(writtenTracePath);
+    };
+
+    try {
+      const outcome = await promptWithTrace({
+        agent,
+        prompt,
+        tracePath: activeTracePath ?? createDefaultTracePathResolver(workspace),
+        traceMode: hasWrittenTrace ? "append" : "replace",
+        onTracePath: (path) => {
+          activeTracePath = path ?? activeTracePath;
+          hasWrittenTrace = true;
+          writtenTracePath = activeTracePath;
+        },
+        onMessageId: (id) => {
+          messageId = id;
+        },
+      });
+      printRunHeader();
+      console.log(formatOutcomeOutput(outcome));
+    } catch (error) {
+      printRunHeader();
+      throw error;
+    }
+  };
+
+  if (args.prompt) {
+    await runPrompt(args.prompt);
+  }
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: process.stdin.isTTY,
+  });
 
   try {
-    const outcome = await agent.prompt(args.prompt);
-    console.log(formatOutcomeOutput(outcome));
+    if (process.stdin.isTTY) {
+      process.stdout.write("> ");
+    }
+
+    for await (const line of rl) {
+      const prompt = line.trim();
+      if (!prompt) {
+        if (process.stdin.isTTY) {
+          process.stdout.write("> ");
+        }
+        continue;
+      }
+      if (prompt === ":exit" || prompt === ":quit") {
+        return;
+      }
+      if (prompt === ":session") {
+        console.log(agent.state.session?.id ?? "(no session yet)");
+        if (process.stdin.isTTY) {
+          process.stdout.write("> ");
+        }
+        continue;
+      }
+
+      try {
+        await runPrompt(prompt);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        throw error;
+      }
+
+      if (process.stdin.isTTY) {
+        process.stdout.write("> ");
+      }
+    }
   } finally {
-    await agent.flushTrace();
-    console.error(`Trace written to ${formatWorkspacePathForDisplay(tracePath, workspace)}`);
+    rl.close();
   }
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const workspace = resolveRowanWorkspacePaths();
-
-  if (args.kind === "trace-list") {
-    const runsDir = resolveOptionalWorkspacePath(args.runsDir, workspace) ?? workspace.runsDir;
-    console.log(formatJsonOutput(await listTraceRuns(runsDir)));
-    return;
-  }
-
-  if (args.kind === "trace-show") {
-    const runsDir = resolveOptionalWorkspacePath(args.runsDir, workspace) ?? workspace.runsDir;
-    console.log(formatJsonOutput(await inspectTraceRun(resolveTraceTarget(args.target, workspace), runsDir)));
-    return;
-  }
-
-  await runAgentCommand(args);
+  await runInteractiveCommand(args);
 }
 
 main().catch((error) => {
