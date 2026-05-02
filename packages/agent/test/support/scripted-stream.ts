@@ -1,4 +1,4 @@
-import type { StreamFn, Task, ToolResult } from "../../src/types";
+import type { StreamFn, Task, TaskOutput, ToolResult } from "../../src/types";
 import { createId } from "../../src/types";
 import { createDefaultCriteria } from "../../src/task";
 import { latestUserInput } from "@rowan-agent/session";
@@ -25,8 +25,13 @@ function createScriptedTask(input: string, skillIds: string[]): Task {
   };
 }
 
-function createScriptedVerification(task: Task, toolResults: ToolResult[]): { passed: boolean; message: string } {
+function toolResultsFromTaskOutput(taskOutput: TaskOutput): ToolResult[] {
+  return taskOutput.kind === "tools" ? taskOutput.toolResults : [];
+}
+
+function createScriptedVerification(task: Task, taskOutput: TaskOutput): { passed: boolean; message: string } {
   const requiredEcho = task.toolNames.includes("echo");
+  const toolResults = toolResultsFromTaskOutput(taskOutput);
   const hasEcho = toolResults.some((result) => result.toolName === "echo" && result.ok);
   const passed = requiredEcho ? hasEcho : true;
 
@@ -97,7 +102,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
   yield { type: "text_delta", text: "Verifying task outcome..." };
   yield {
     type: "structured_output",
-    content: createScriptedVerification(context.task, context.toolResults),
+    content: createScriptedVerification(context.task, context.taskOutput),
   };
   yield { type: "done" };
 };

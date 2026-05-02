@@ -84,9 +84,12 @@ export const OutcomeSchema = Type.Object({
 
 export type Outcome = Type.Static<typeof OutcomeSchema>;
 
+export const DEFAULT_MAX_THREAD_DEPTH = 4;
+
 export type AgentRunBudget = {
   maxToolCalls?: number;
   maxModelCalls?: number;
+  maxThreadDepth?: number;
 };
 
 export type AgentBudgetUsage = {
@@ -140,6 +143,11 @@ export type AfterToolCall = (input: {
 
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
+export type RuntimeDepth = {
+  threadDepth: number;
+  maxThreadDepth: number;
+};
+
 export type ThreadInput = {
   parentSessionId: string;
   prompt: string;
@@ -149,6 +157,8 @@ export type ThreadInput = {
   skills?: Skill[];
   maxAttempts?: number;
   budget?: AgentRunBudget;
+  threadDepth?: number;
+  verify?: boolean;
 };
 
 export type AgentThreadInput = Omit<ThreadInput, "parentSessionId"> & {
@@ -170,12 +180,39 @@ export type ThreadRunResult = {
   session: CoreSession<AgentEvent>;
   outcome: Outcome;
   budgetUsage: AgentBudgetUsage;
+  threadDepth: number;
+  maxThreadDepth: number;
 };
 
 export type RunThread = (input: AgentThreadInput) => Promise<ThreadRunResult>;
 
+export type ToolTaskOutput = {
+  kind: "tools";
+  toolResults: ToolResult[];
+};
+
+export type ThreadTaskOutput = {
+  kind: "thread";
+  sessionId: string;
+  parentSessionId: string;
+  prompt: string;
+  task: string;
+  goal: string;
+  outcome: Outcome;
+  budgetUsage: AgentBudgetUsage;
+  threadDepth: number;
+  maxThreadDepth: number;
+};
+
+export type TaskOutput = ToolTaskOutput | ThreadTaskOutput;
+
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
+  | {
+      type: "prompt_message";
+      phase: LlmPhase;
+      message: Pick<AgentMessage, "role" | "content">;
+    }
   | {
       type: "model_requested";
       phase: LlmPhase;
@@ -190,23 +227,27 @@ export type LlmContext =
   | {
       phase: "route";
       session: CoreSession<AgentEvent>;
+      runtime?: RuntimeDepth;
     }
   | {
       phase: "plan";
       session: CoreSession<AgentEvent>;
+      runtime?: RuntimeDepth;
     }
   | {
       phase: "execute";
       session: CoreSession<AgentEvent>;
       task: Task;
       toolResults: ToolResult[];
+      runtime?: RuntimeDepth;
     }
   | {
       phase: "verify";
       session: CoreSession<AgentEvent>;
       task: Task;
-      toolResults: ToolResult[];
+      taskOutput: TaskOutput;
       criteria: AcceptanceCriterion[];
+      runtime?: RuntimeDepth;
     };
 
 export type StreamOptions = {
@@ -236,6 +277,8 @@ export type AgentEvent =
       prompt: string;
       task?: string;
       goal?: string;
+      threadDepth?: number;
+      maxThreadDepth?: number;
       ts: string;
     }
   | {
@@ -244,6 +287,8 @@ export type AgentEvent =
       sessionId: string;
       outcome: Outcome;
       budgetUsage: AgentBudgetUsage;
+      threadDepth?: number;
+      maxThreadDepth?: number;
       ts: string;
     }
   | { type: "chat_start"; content: AgentMessage[]; ts: string }
@@ -301,12 +346,22 @@ export type AgentLoopInput = {
   tools: Tool[];
   maxAttempts?: number;
   budget?: AgentRunBudget;
+  threadDepth?: number;
+  verifyTasks?: boolean;
   signal?: AbortSignal;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   runThread?: RunThread;
   emit?: AgentEventListener;
 };
+
+export function resolveMaxThreadDepth(budget?: AgentRunBudget): number {
+  const value = budget?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error("maxThreadDepth must be a non-negative integer.");
+  }
+  return value;
+}
 
 export const Validators = {
   task: Schema.Compile(TaskSchema),

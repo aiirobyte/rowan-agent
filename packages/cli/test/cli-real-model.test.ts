@@ -134,6 +134,10 @@ test("CLI config shows missing and default configuration without requiring model
         timeoutMs?: number;
         timeoutMsSource?: string;
       };
+      agent?: {
+        maxThreadDepth?: number;
+        maxThreadDepthSource?: string;
+      };
     };
 
     expect(config.command).toBe("config");
@@ -151,6 +155,10 @@ test("CLI config shows missing and default configuration without requiring model
       modelSource: "missing",
       timeoutMs: 60000,
       timeoutMsSource: "default",
+    });
+    expect(config.agent).toMatchObject({
+      maxThreadDepth: 4,
+      maxThreadDepthSource: "default",
     });
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -171,6 +179,8 @@ test("CLI config reports resolved flags without exposing API key material", asyn
         "test-model",
         "--timeout-ms",
         "1234",
+        "--max-thread-depth",
+        "7",
         "--session",
         "ses_example",
         "--trace",
@@ -188,6 +198,7 @@ test("CLI config reports resolved flags without exposing API key material", asyn
     expect(result.stdout).not.toContain("super-secret-key");
     const config = JSON.parse(result.stdout) as {
       openaiCompatible?: Record<string, unknown>;
+      agent?: Record<string, unknown>;
       session?: Record<string, unknown>;
       trace?: Record<string, unknown>;
       skills?: Array<Record<string, unknown>>;
@@ -205,6 +216,10 @@ test("CLI config reports resolved flags without exposing API key material", asyn
       modelSource: "flag",
       timeoutMs: 1234,
       timeoutMsSource: "flag",
+    });
+    expect(config.agent).toMatchObject({
+      maxThreadDepth: 7,
+      maxThreadDepthSource: "flag",
     });
     expect(config.session).toEqual({ id: "ses_example", source: "flag" });
     expect(config.trace).toEqual({ automatic: false, path: "runs/custom.jsonl" });
@@ -431,10 +446,6 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
       route: "direct",
     },
     {
-      message: "Creating a worker task.",
-      route: "task",
-    },
-    {
       task: {
         title: "Run bash",
         instruction: "run a bash command",
@@ -450,10 +461,6 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
           args: { command: "printf cli-bash-ok" },
         },
       ],
-    },
-    {
-      passed: true,
-      message: "cli-bash-ok",
     },
     {
       passed: true,

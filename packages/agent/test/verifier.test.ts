@@ -27,7 +27,7 @@ test("verifyTask uses stream structured output", async () => {
     stream: scriptedStream,
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
   });
 
   expect(result.passed).toBe(true);

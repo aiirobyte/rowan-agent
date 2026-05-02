@@ -1,4 +1,5 @@
 import { runAgentLoop } from "./agent-loop";
+import { createId, resolveMaxThreadDepth, Validators } from "./types";
 import {
   appendUserTurn,
   createSession,
@@ -14,6 +15,7 @@ import type {
   AgentEventListener,
   AgentThreadInput,
   BeforeToolCall,
+  AgentRunBudget,
   ModelRef,
   Outcome,
   StreamFn,
@@ -50,6 +52,9 @@ async function emitThreadEvent(
 }
 
 export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult> {
+  const threadDepth = input.threadDepth ?? 1;
+  const maxThreadDepth = resolveMaxThreadDepth(input.budget);
+  const verifyTasks = input.verify ?? true;
   const session = createSession<AgentEvent>({
     systemPrompt: input.systemPrompt,
     input: input.prompt,
@@ -68,15 +73,51 @@ export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult>
       prompt: input.prompt,
       ...(input.task ? { task: input.task } : {}),
       ...(input.goal ? { goal: input.goal } : {}),
+      threadDepth,
+      maxThreadDepth,
       ts: nowIso(),
     },
     input.emit,
   );
 
+  if (threadDepth > maxThreadDepth) {
+    const outcome = Validators.outcome.Parse({
+      id: createId("out"),
+      passed: false,
+      message: `Thread depth limit exceeded (${threadDepth}/${maxThreadDepth}).`,
+    });
+    const budgetUsage = summarizeThreadBudgetUsage(session.log);
+    await emitThreadEvent(
+      session,
+      {
+        type: "thread_end",
+        parentSessionId: input.parentSessionId,
+        sessionId: session.id,
+        outcome,
+        budgetUsage,
+        threadDepth,
+        maxThreadDepth,
+        ts: nowIso(),
+      },
+      input.emit,
+    );
+
+    return {
+      parentSessionId: input.parentSessionId,
+      session,
+      outcome,
+      budgetUsage,
+      threadDepth,
+      maxThreadDepth,
+    };
+  }
+
   const runNestedThread = (childInput: AgentThreadInput): Promise<ThreadRunResult> =>
     runThread({
       ...childInput,
       parentSessionId: childInput.parentSessionId ?? session.id,
+      threadDepth: threadDepth + 1,
+      verify: childInput.verify ?? false,
       systemPrompt: input.systemPrompt,
       model: input.model,
       stream: input.stream,
@@ -93,6 +134,8 @@ export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult>
     tools: input.tools,
     maxAttempts: input.maxAttempts,
     budget: input.budget,
+    threadDepth,
+    verifyTasks,
     signal: input.signal,
     beforeToolCall: input.beforeToolCall,
     afterToolCall: input.afterToolCall,
@@ -109,6 +152,8 @@ export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult>
       sessionId: session.id,
       outcome,
       budgetUsage,
+      threadDepth,
+      maxThreadDepth,
       ts: nowIso(),
     },
     input.emit,
@@ -119,6 +164,8 @@ export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult>
     session,
     outcome,
     budgetUsage,
+    threadDepth,
+    maxThreadDepth,
   };
 }
 
@@ -131,6 +178,7 @@ export type AgentOptions = {
   session?: AgentSession;
   sessionStore?: SessionStore<AgentSession>;
   maxAttempts?: number;
+  budget?: AgentRunBudget;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
 };
@@ -247,6 +295,8 @@ export class Agent {
       stream: this.options.stream,
       tools: this.state.tools,
       maxAttempts: this.options.maxAttempts,
+      budget: this.options.budget,
+      threadDepth: 0,
       signal: this.abortController.signal,
       beforeToolCall: this.options.beforeToolCall,
       afterToolCall: this.options.afterToolCall,
@@ -290,6 +340,9 @@ export class Agent {
       model: this.options.model,
       stream: this.options.stream,
       signal: this.abortController?.signal,
+      budget: input.budget ?? this.options.budget,
+      threadDepth: input.threadDepth ?? 1,
+      verify: input.verify,
       beforeToolCall: this.options.beforeToolCall,
       afterToolCall: this.options.afterToolCall,
       emit: (event) => {

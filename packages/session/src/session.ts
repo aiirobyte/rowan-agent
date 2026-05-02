@@ -140,7 +140,7 @@ export function appendUserTurn<TLogEvent>(session: Session<TLogEvent>, input: st
 export function latestUserInput(session: Session<unknown>): string {
   for (let index = session.messages.length - 1; index >= 0; index -= 1) {
     const message = session.messages[index];
-    if (message.role === "user") {
+    if (message.role === "user" && message.metadata?.kind !== "phase_prompt") {
       return message.content;
     }
   }

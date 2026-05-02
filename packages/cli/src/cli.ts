@@ -8,6 +8,7 @@ import {
 } from "@rowan-agent/adapters";
 import {
   Agent,
+  DEFAULT_MAX_THREAD_DEPTH,
   createCoreTools,
   formatLocalTimestamp,
   type AgentEvent,
@@ -36,6 +37,7 @@ type CliArgs = {
   apiKey?: string;
   model?: string;
   timeoutMs?: number;
+  maxThreadDepth?: number;
   prompt?: string;
 };
 
@@ -151,6 +153,7 @@ Examples:
   bun run rowan --model gpt-4.1-mini "hello"
   bun run rowan --skill example "summarize the example skill"
   bun run rowan --trace runs/real.jsonl "list workspace files"
+  bun run rowan --max-thread-depth 6 "delegate deeply"
 
 Commands:
 ${formatCommandHelp()}
@@ -177,6 +180,7 @@ Environment:
   ROWAN_OPENAI_API_KEY   Required unless --api-key is passed
   ROWAN_MODEL            Required unless --model is passed
   ROWAN_OPENAI_TIMEOUT_MS Optional request timeout in milliseconds, defaults to 60000
+  ROWAN_MAX_THREAD_DEPTH Optional maximum nested thread depth, defaults to 4
   ROWAN_RUNTIME          Optional override: source or binary
   ROWAN_WORKSPACE        Optional workspace root override
 `);
@@ -186,6 +190,14 @@ function parsePositiveInteger(value: string, source: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${source} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string, source: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${source} must be a non-negative integer.`);
   }
   return parsed;
 }
@@ -234,6 +246,11 @@ function readOptionValue(args: string[], option: string): string {
 function parseOptionalTimeoutMs(value: string | undefined): number | undefined {
   const normalized = value?.trim();
   return normalized ? parsePositiveInteger(normalized, "ROWAN_OPENAI_TIMEOUT_MS") : undefined;
+}
+
+function parseOptionalMaxThreadDepth(value: string | undefined): number | undefined {
+  const normalized = value?.trim();
+  return normalized ? parseNonNegativeInteger(normalized, "ROWAN_MAX_THREAD_DEPTH") : undefined;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -288,6 +305,12 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
+    if (next === "--max-thread-depth") {
+      const value = readOptionValue(args, "--max-thread-depth");
+      parsed.maxThreadDepth = parseNonNegativeInteger(value, "--max-thread-depth");
+      continue;
+    }
+
     if (next.startsWith("--")) {
       throw new Error(`Unknown option: ${next}`);
     }
@@ -329,6 +352,10 @@ function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Re
     args.timeoutMs ??
     parseOptionalTimeoutMs(env.ROWAN_OPENAI_TIMEOUT_MS) ??
     DEFAULT_OPENAI_TIMEOUT_MS;
+  const maxThreadDepth =
+    args.maxThreadDepth ??
+    parseOptionalMaxThreadDepth(env.ROWAN_MAX_THREAD_DEPTH) ??
+    DEFAULT_MAX_THREAD_DEPTH;
   const tracePath = resolveOptionalWorkspacePath(args.trace, workspace);
   const tools = createCoreTools({ root: workspace.root });
 
@@ -361,6 +388,15 @@ function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Re
     session: {
       id: args.sessionId ?? null,
       source: args.sessionId ? "flag" : "new",
+    },
+    agent: {
+      maxThreadDepth,
+      maxThreadDepthSource:
+        args.maxThreadDepth !== undefined
+          ? "flag"
+          : nonEmpty(env.ROWAN_MAX_THREAD_DEPTH)
+            ? "env"
+            : "default",
     },
     trace: {
       automatic: !tracePath,
@@ -418,6 +454,12 @@ async function createConfiguredAgent(
     tools,
     skills,
     sessionStore,
+    budget: {
+      maxThreadDepth:
+        args.maxThreadDepth ??
+        parseOptionalMaxThreadDepth(process.env.ROWAN_MAX_THREAD_DEPTH) ??
+        DEFAULT_MAX_THREAD_DEPTH,
+    },
   });
 
   if (args.sessionId) {

@@ -3,7 +3,7 @@ import type {
   ModelRef,
   StreamFn,
   Task,
-  ToolResult,
+  TaskOutput,
   VerificationResult,
 } from "./types";
 import { parseVerificationResult } from "./task";
@@ -13,7 +13,7 @@ export async function verifyTask(input: {
   stream: StreamFn;
   session: { messages: AgentMessage[] } & Parameters<StreamFn>[1]["session"];
   task: Task;
-  toolResults: ToolResult[];
+  taskOutput: TaskOutput;
   signal?: AbortSignal;
 }): Promise<VerificationResult> {
   let structured: unknown;
@@ -24,7 +24,7 @@ export async function verifyTask(input: {
       phase: "verify",
       session: input.session,
       task: input.task,
-      toolResults: input.toolResults,
+      taskOutput: input.taskOutput,
       criteria: input.task.acceptanceCriteria,
     },
     { signal: input.signal },

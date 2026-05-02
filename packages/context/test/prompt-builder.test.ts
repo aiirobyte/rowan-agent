@@ -52,16 +52,17 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   expect(combined).toContain('{ "message": string, "route": "direct" | "task" | "thread"');
   expect(combined).toContain('Default to answering the user directly with route="direct".');
   expect(combined).toContain("normal chat, greetings, explanations, calculations");
-  expect(combined).toContain("workspace access");
+  expect(combined).toContain("workspace inspection");
   expect(combined).toContain('route must not be "direct"');
   expect(combined).toContain("factual question about the current workspace");
   expect(combined).toContain("cannot know without inspecting the workspace");
   expect(combined).toContain("message must be the complete final user-visible answer");
-  expect(combined).toContain('Set route="thread" in a main Session');
-  expect(combined).toContain('Set route="task" when Session task or Session goal is present');
+  expect(combined).toContain('Set route="task" for ordinary tool-backed work');
+  expect(combined).toContain('Set route="thread" only when the user explicitly asks');
   expect(combined).toContain("Session initial input");
   expect(combined).toContain("Session task");
   expect(combined).toContain("Session goal");
+  expect(combined).toContain("Runtime thread depth");
   expect(combined).toContain("Do not call tools in this phase");
   expect(combined).toContain("forbidden message values");
   expect(combined).toContain("\"routed\"");
@@ -108,7 +109,7 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
   expect(combined).not.toContain("Conversation messages:");
 });
 
-test("prompt builder keeps phase prompts in request messages only", () => {
+test("prompt builder exposes the generated phase prompt message", () => {
   const session = createSession({
     systemPrompt: "Test system",
     input: "Plan with echo.",
@@ -127,6 +128,7 @@ test("prompt builder keeps phase prompts in request messages only", () => {
       content: expect.stringContaining("Phase: plan"),
     }),
   );
+  expect(prompt.phasePromptMessage).toEqual(phaseMessage!);
   expect(prompt).not.toHaveProperty("traceMessages");
 });
 
@@ -194,7 +196,7 @@ test("prompt builder includes the model message stream in later prompts", () => 
       session,
       task,
       criteria: task.acceptanceCriteria,
-      toolResults: [],
+      taskOutput: { kind: "tools", toolResults: [] },
     },
     tools: [echoTool],
   });
@@ -208,9 +210,41 @@ test("prompt builder includes the model message stream in later prompts", () => 
   expect(combined).toContain("Answer text.");
 });
 
+test("prompt builder does not replay recorded phase prompts as conversation", () => {
+  const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
+  session.messages.push(
+    createMessage("user", "Phase: route\n\nInternal routing prompt.", {
+      kind: "phase_prompt",
+      phase: "route",
+    }),
+    createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
+      kind: "routing_decision",
+      phase: "route",
+    }),
+  );
+
+  const messages = buildOpenAICompatibleMessages({
+    context: { phase: "plan", session },
+    tools: [echoTool],
+  });
+  const combined = messages.map((message) => message.content).join("\n");
+
+  expect(combined).toContain("Phase: plan");
+  expect(combined).toContain("\"route\":\"task\"");
+  expect(combined).not.toContain("Internal routing prompt.");
+});
+
 test("verify prompt includes phase, lightweight judgement contract, task, criteria, and task output", () => {
   const session = createSession({ systemPrompt: "Test system", input: "Verify echo." });
   const task = createTestTask();
+  const toolResults = [
+    {
+      toolCallId: "call_echo",
+      toolName: "echo",
+      ok: true,
+      content: "echo evidence",
+    },
+  ];
 
   const messages = buildOpenAICompatibleMessages({
     context: {
@@ -218,14 +252,7 @@ test("verify prompt includes phase, lightweight judgement contract, task, criter
       session,
       task,
       criteria: task.acceptanceCriteria,
-      toolResults: [
-        {
-          toolCallId: "call_echo",
-          toolName: "echo",
-          ok: true,
-          content: "echo evidence",
-        },
-      ],
+      taskOutput: { kind: "tools", toolResults },
     },
     tools: [echoTool],
   });
@@ -244,5 +271,6 @@ test("verify prompt includes phase, lightweight judgement contract, task, criter
   expect(combined).toContain("Task output");
   expect(combined).toContain(task.acceptanceCriteria[0]?.description);
   expect(combined).toContain("echo evidence");
+  expect(combined).toContain("\"toolResults\"");
   expect(combined).not.toContain("Conversation messages:");
 });

@@ -23,14 +23,18 @@ import type {
   Outcome,
   AgentBudgetUsage,
   Task,
+  TaskOutput,
   TaskRoutingDecision,
   ThreadRunResult,
+  ThreadTaskOutput,
   Tool,
   ToolCall,
+  ToolTaskOutput,
   ToolResult,
   VerificationResult,
+  RuntimeDepth,
 } from "./types";
-import { createId, nowIso, Validators } from "./types";
+import { createId, nowIso, resolveMaxThreadDepth, Validators } from "./types";
 
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
@@ -38,6 +42,8 @@ type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "cre
 type AgentLoopRuntime = AgentLoopInput & {
   messageTrace: AgentMessage[];
   budgetUsage: AgentBudgetUsage;
+  threadDepth: number;
+  maxThreadDepth: number;
 };
 
 class BudgetExceededError extends Error {
@@ -143,6 +149,13 @@ function snapshotSession(session: AgentSession): AgentSessionSnapshot {
   };
 }
 
+function runtimeDepth(input: AgentLoopRuntime): RuntimeDepth {
+  return {
+    threadDepth: input.threadDepth,
+    maxThreadDepth: input.maxThreadDepth,
+  };
+}
+
 function cloneBudgetUsage(usage: AgentBudgetUsage): AgentBudgetUsage {
   return {
     modelCalls: usage.modelCalls,
@@ -182,6 +195,77 @@ function createBudgetExceededOutcome(error: BudgetExceededError, task?: Task): O
     passed: false,
     message: error.message,
   });
+}
+
+function stringifyTaskOutput(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return JSON.stringify(value) ?? String(value);
+}
+
+function latestExecuteMessage(session: AgentSession): string | undefined {
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+    if (message.role !== "assistant") {
+      continue;
+    }
+
+    const metadata = message.metadata;
+    if (metadata?.kind !== "model_message" || metadata.phase !== "execute") {
+      continue;
+    }
+
+    const content = asString(message.content);
+    if (content) {
+      return content;
+    }
+  }
+
+  return undefined;
+}
+
+function createUnverifiedTaskOutcome(input: AgentLoopRuntime, task: Task, toolResults: ToolResult[]): Outcome {
+  const failedResult = toolResults.find((result) => !result.ok);
+  const outputResult = failedResult ?? [...toolResults].reverse().find((result) => result.ok);
+  const message = outputResult
+    ? (outputResult.error ?? stringifyTaskOutput(outputResult.content))
+    : (latestExecuteMessage(input.session) ?? "Task completed without local verification.");
+
+  return Validators.outcome.Parse({
+    id: createId("out"),
+    taskId: task.id,
+    passed: !failedResult,
+    message,
+  });
+}
+
+function createToolTaskOutput(toolResults: ToolResult[]): ToolTaskOutput {
+  return {
+    kind: "tools",
+    toolResults,
+  };
+}
+
+function createThreadTaskOutput(input: {
+  thread: ThreadRunResult;
+  prompt: string;
+  task: string;
+  goal: string;
+}): ThreadTaskOutput {
+  return {
+    kind: "thread",
+    sessionId: input.thread.session.id,
+    parentSessionId: input.thread.parentSessionId,
+    prompt: input.prompt,
+    task: input.task,
+    goal: input.goal,
+    outcome: input.thread.outcome,
+    budgetUsage: input.thread.budgetUsage,
+    threadDepth: input.thread.threadDepth,
+    maxThreadDepth: input.thread.maxThreadDepth,
+  };
 }
 
 function createInvalidModelVerification(_task: Task, _error: unknown): VerificationResult {
@@ -273,6 +357,16 @@ async function collectTextAndStructured(input: {
   for await (const event of input.events) {
     assertNotAborted(input.loop.signal);
 
+    if (event.type === "prompt_message") {
+      await appendSessionMessage(
+        input.loop,
+        createMessage(event.message.role, event.message.content, {
+          kind: "phase_prompt",
+          phase: event.phase,
+        }),
+      );
+    }
+
     if (event.type === "model_requested") {
       const budgetError = consumeBudget(input.loop, "modelCalls");
       await emit(input.loop, {
@@ -320,7 +414,11 @@ async function collectTextAndStructured(input: {
 async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: string }> {
   const collected = await collectTextAndStructured({
     loop: input,
-    events: input.stream(input.model, { phase: "plan", session: input.session }, { signal: input.signal }),
+    events: input.stream(
+      input.model,
+      { phase: "plan", session: input.session, runtime: runtimeDepth(input) },
+      { signal: input.signal },
+    ),
     metadataPhase: "plan",
   });
 
@@ -334,7 +432,11 @@ async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: st
 async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecision & { text: string }> {
   const collected = await collectTextAndStructured({
     loop: input,
-    events: input.stream(input.model, { phase: "route", session: input.session }, { signal: input.signal }),
+    events: input.stream(
+      input.model,
+      { phase: "route", session: input.session, runtime: runtimeDepth(input) },
+      { signal: input.signal },
+    ),
     metadataPhase: "route",
     recordText: false,
   });
@@ -343,14 +445,15 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
     throw new Error("Router did not produce a structured task routing decision.");
   }
 
+  const canStartThreadRoute = Boolean(input.runThread) && input.threadDepth < input.maxThreadDepth;
+  const shouldDefaultToThreadRoute =
+    canStartThreadRoute && !input.session.parentSessionId && !input.session.task && !input.session.goal;
   const decision = scheduleTaskRouting({
     input: latestUserInput(input.session),
     tools: input.tools,
     decision: parseTaskRoutingDecision(collected.structured),
-    defaultNeedsTaskRoute:
-      input.runThread && !input.session.parentSessionId && !input.session.task && !input.session.goal
-        ? "thread"
-        : "task",
+    defaultNeedsTaskRoute: shouldDefaultToThreadRoute ? "thread" : "task",
+    allowThreadRoute: canStartThreadRoute,
   });
   await appendSessionMessage(
     input,
@@ -523,7 +626,7 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
       loop: input,
       events: input.stream(
         input.model,
-        { phase: "execute", session: input.session, task, toolResults },
+        { phase: "execute", session: input.session, task, toolResults, runtime: runtimeDepth(input) },
         { signal: input.signal },
       ),
       metadataPhase: "execute",
@@ -560,7 +663,7 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
 async function verifyTask(
   input: AgentLoopRuntime,
   task: Task,
-  toolResults: ToolResult[],
+  taskOutput: TaskOutput,
 ): Promise<VerificationResult> {
   await emit(input, {
     type: "verification_start",
@@ -578,8 +681,9 @@ async function verifyTask(
           phase: "verify",
           session: input.session,
           task,
-          toolResults,
+          taskOutput,
           criteria: task.acceptanceCriteria,
+          runtime: runtimeDepth(input),
         },
         { signal: input.signal },
       ),
@@ -645,34 +749,19 @@ function createThreadTask(decision: TaskRoutingDecision, fallbackPrompt: string)
   });
 }
 
-function threadResultToToolResult(input: {
-  task: Task;
-  thread: ThreadRunResult;
-  prompt: string;
-  threadTask: string;
-  goal: string;
-}): ToolResult {
-  return Validators.toolResult.Parse({
-    toolCallId: createId("call"),
-    toolName: "thread",
-    ok: input.thread.outcome.passed,
-    content: {
-      sessionId: input.thread.session.id,
-      parentSessionId: input.thread.parentSessionId,
-      prompt: input.prompt,
-      task: input.threadTask,
-      goal: input.goal,
-      outcome: input.thread.outcome,
-      budgetUsage: input.thread.budgetUsage,
-    },
-    ...(input.thread.outcome.passed ? {} : { error: input.thread.outcome.message }),
-  });
-}
-
 async function executeThreadRoute(
   input: AgentLoopRuntime,
   decision: TaskRoutingDecision,
 ): Promise<Outcome> {
+  if (input.threadDepth >= input.maxThreadDepth) {
+    const task = createThreadTask(decision, latestUserInput(input.session));
+    task.status = "failed";
+    return createFailedOutcome(task, {
+      passed: false,
+      message: `Thread depth limit reached (${input.threadDepth}/${input.maxThreadDepth}).`,
+    });
+  }
+
   if (!input.runThread) {
     const task = createThreadTask(decision, latestUserInput(input.session));
     task.status = "failed";
@@ -717,18 +806,19 @@ async function executeThreadRoute(
     skills: input.session.skills,
     maxAttempts: input.maxAttempts,
     budget: input.budget,
+    threadDepth: input.threadDepth + 1,
+    verify: false,
   });
-  const threadResult = threadResultToToolResult({
-    task,
+  const threadOutput = createThreadTaskOutput({
     thread,
     prompt,
-    threadTask,
+    task: threadTask,
     goal,
   });
   await appendSessionMessage(
     input,
-    createMessage("tool", JSON.stringify(threadResult), {
-      toolName: "thread",
+    createMessage("assistant", JSON.stringify(threadOutput), {
+      kind: "thread_output",
       threadSessionId: thread.session.id,
       parentSessionId: thread.parentSessionId,
     }),
@@ -741,7 +831,17 @@ async function executeThreadRoute(
     ts: nowIso(),
   });
 
-  const verification = await verifyTask(input, task, [threadResult]);
+  if (!input.verifyTasks) {
+    task.status = thread.outcome.passed ? "passed" : "failed";
+    return Validators.outcome.Parse({
+      id: createId("out"),
+      taskId: task.id,
+      passed: thread.outcome.passed,
+      message: thread.outcome.message,
+    });
+  }
+
+  const verification = await verifyTask(input, task, threadOutput);
   if (verification.passed) {
     task.status = "passed";
     return createOutcome(task, verification);
@@ -756,6 +856,9 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     ...input,
     messageTrace: snapshotMessages(input.session.messages),
     budgetUsage: { modelCalls: 0, toolCalls: 0 },
+    threadDepth: input.threadDepth ?? 0,
+    maxThreadDepth: resolveMaxThreadDepth(input.budget),
+    verifyTasks: input.verifyTasks ?? true,
   };
   const maxAttempts = input.maxAttempts ?? 2;
   let currentTask: Task | undefined;
@@ -837,7 +940,15 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         ts: nowIso(),
       });
 
-      lastVerification = await verifyTask(runtime, task, toolResults);
+      if (!runtime.verifyTasks) {
+        const outcome = createUnverifiedTaskOutcome(runtime, task, toolResults);
+        task.status = outcome.passed ? "passed" : "failed";
+        await endChatLog();
+        await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
+        return outcome;
+      }
+
+      lastVerification = await verifyTask(runtime, task, createToolTaskOutput(toolResults));
       if (lastVerification.passed) {
         task.status = "passed";
         const outcome = createOutcome(task, lastVerification);

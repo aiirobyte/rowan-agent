@@ -8,6 +8,7 @@ export type PlanPromptInput = BasePromptInput & {
   sessionInputJson: string;
   sessionTaskJson: string;
   sessionGoalJson: string;
+  runtimeDepthJson: string;
 };
 
 export type RoutePromptInput = BasePromptInput & {
@@ -15,6 +16,7 @@ export type RoutePromptInput = BasePromptInput & {
   sessionInputJson: string;
   sessionTaskJson: string;
   sessionGoalJson: string;
+  runtimeDepthJson: string;
 };
 
 export type ExecutePromptInput = {
@@ -64,6 +66,9 @@ export function buildPlanPrompt(input: PlanPromptInput): string {
     "Session goal:",
     input.sessionGoalJson,
     "",
+    "Runtime thread depth:",
+    input.runtimeDepthJson,
+    "",
     "Loaded skills summary:",
     input.loadedSkillsJson,
     "",
@@ -80,12 +85,13 @@ export function buildRoutePrompt(input: RoutePromptInput): string {
     "Default to answering the user directly with route=\"direct\".",
     "For normal chat, greetings, explanations, calculations, summaries, writing, and advice that do not require tools, set route=\"direct\".",
     "When route=\"direct\", message must be the complete final user-visible answer in the user's language.",
-    "Set route=\"thread\" in a main Session when satisfying the request requires tools, workspace access, command execution, file inspection or modification, loaded-skill execution, explicit tool-backed verification, or a large delegated task.",
-    "For route=\"thread\", include thread.prompt, thread.task, and thread.goal. The thread task is what the child Session should do; the goal is the condition the main Session will verify.",
-    "Set route=\"task\" when Session task or Session goal is present; this means the current worker thread should complete its own task using plan/execute/verify.",
+    "Set route=\"task\" for ordinary tool-backed work in this runtime, including simple command execution, file reads/writes, workspace inspection, and one-step tool use.",
+    "Set route=\"thread\" only when the user explicitly asks to create/delegate to a thread, or when the work is large enough to need an isolated child runtime.",
+    "For route=\"thread\", include thread.prompt, thread.task, and thread.goal. The child thread executes and returns an outcome; this runtime verifies whether that outcome satisfies the goal.",
+    "Nested worker threads are allowed while runtime threadDepth is below maxThreadDepth. At maxThreadDepth, do not route to another thread; set route=\"task\" instead.",
     "If the user explicitly names an available tool, asks to use bash/shell/terminal, or asks Rowan to inspect or modify the workspace, route must not be \"direct\".",
     "If the user asks a factual question about the current workspace, project, repository, codebase, files, languages, dependencies, configuration, structure, versions, assets, or whether something exists there, route must not be \"direct\".",
-    "If your answer would say you cannot know without inspecting the workspace, set route=\"thread\" in a main Session or route=\"task\" in a worker thread instead of returning that as the final answer.",
+    "If your answer would say you cannot know without inspecting the workspace, set route=\"task\" instead of returning that as the final answer.",
     "When route is \"task\" or \"thread\", message is only a concise routing status explaining that tool-backed or thread-backed work is needed.",
     "Do not call tools in this phase; only decide whether a tool-backed task is required.",
     "For route=\"direct\", forbidden message values include \"route\", \"routed\", \"direct\", \"done\", \"ok\", and other status labels.",
@@ -103,10 +109,13 @@ export function buildRoutePrompt(input: RoutePromptInput): string {
     "Session goal:",
     input.sessionGoalJson,
     "",
+    "Runtime thread depth:",
+    input.runtimeDepthJson,
+    "",
     "Example direct response for user `你好`: `{ \"message\": \"你好！有什么我可以帮你？\", \"route\": \"direct\" }`.",
     "Example direct response for user `What is 2 + 2?`: `{ \"message\": \"2 + 2 = 4.\", \"route\": \"direct\" }`.",
-    "Example thread response for main Session user `使用bash查看当前日期`: `{ \"message\": \"Creating a thread to run bash.\", \"route\": \"thread\", \"thread\": { \"prompt\": \"使用bash查看当前日期\", \"task\": \"Run bash to check the current date.\", \"goal\": \"Return the current date from bash output.\" } }`.",
-    "Example task response for worker Session with Session task present: `{ \"message\": \"Creating a task for this worker thread.\", \"route\": \"task\" }`.",
+    "Example task response for user `使用bash查看当前日期`: `{ \"message\": \"Creating a task to run bash.\", \"route\": \"task\" }`.",
+    "Example thread response for user `创建一个thread并让它查看当前日期`: `{ \"message\": \"Creating a thread to run bash.\", \"route\": \"thread\", \"thread\": { \"prompt\": \"使用bash查看当前日期\", \"task\": \"Run bash to check the current date.\", \"goal\": \"Return the current date from bash output.\" } }`.",
     "Do not include a task, toolCalls, Markdown fences, or extra keys.",
     "",
     "Loaded skills summary:",
@@ -156,6 +165,7 @@ export function buildVerifyPrompt(input: VerifyPromptInput): string {
     "Return no extra keys beyond passed and message.",
     "If more information is needed, return passed=false and explain what is missing in message.",
     "Evaluate the task against the acceptance criteria using the task output and the conversation messages already included in this request.",
+    "Task output may be direct tool results for a normal task or a child thread output for a delegated thread task.",
     "",
     "Task:",
     input.taskJson,

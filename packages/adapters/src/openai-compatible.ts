@@ -726,6 +726,11 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
     const prompt = buildOpenAICompatiblePrompt({ context, tools: normalizedConfig.tools });
     const requestUsage = summarizeRequestUsage(prompt.messages);
     const requestBody = buildChatCompletionBody(normalizedConfig, prompt.messages);
+    yield {
+      type: "prompt_message",
+      phase: context.phase,
+      message: prompt.phasePromptMessage,
+    };
 
     const result = await callOpenAICompatibleChatCompletion(
       normalizedConfig,

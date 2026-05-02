@@ -77,7 +77,7 @@ test("Agent keeps the model message stream, not outcome display results", async 
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining([
       "use echo tool",
-      expect.stringContaining("\"toolName\":\"thread\""),
+      expect.stringContaining("\"toolName\":\"echo\""),
       "use echo tool again",
     ]),
   );

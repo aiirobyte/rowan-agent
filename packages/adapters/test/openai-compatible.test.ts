@@ -262,9 +262,23 @@ test("createOpenAICompatibleStream maps route response to a task routing decisio
   const events = await collect(
     stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", session }, {}),
   );
+  const promptMessage = events.find((event) => event.type === "prompt_message");
   const modelCall = events.find((event) => event.type === "model_requested");
   const structured = events.find((event) => event.type === "structured_output");
 
+  expect(promptMessage).toEqual(
+    expect.objectContaining({
+      type: "prompt_message",
+      phase: "route",
+      message: expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("Phase: route"),
+      }),
+    }),
+  );
+  expect(events.findIndex((event) => event.type === "prompt_message")).toBeLessThan(
+    events.findIndex((event) => event.type === "model_requested"),
+  );
   expect(modelCall?.type).toBe("model_requested");
   expect((modelCall as Extract<ModelStreamEvent, { type: "model_requested" }>).phase).toBe("route");
   expect(events.some((event) => event.type === "text_delta")).toBe(false);
@@ -580,7 +594,7 @@ test("createOpenAICompatibleStream maps verify response to verification result",
     phase: "verify",
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
   };
   const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
@@ -622,7 +636,7 @@ test("createOpenAICompatibleStream rejects legacy status verify output", async (
     phase: "verify",
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
   };
 
@@ -652,7 +666,7 @@ test("createOpenAICompatibleStream rejects execute-shaped verify output", async 
     phase: "verify",
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
   };
 
@@ -681,7 +695,7 @@ test("createOpenAICompatibleStream rejects message-only verify output", async ()
     phase: "verify",
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
   };
 
@@ -713,7 +727,7 @@ test("createOpenAICompatibleStream rejects legacy verify wrappers", async () => 
     phase: "verify",
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
   };
 
@@ -743,7 +757,7 @@ test("createOpenAICompatibleStream maps failed verify output without criteria de
     phase: "verify",
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
   };
   const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
@@ -782,7 +796,7 @@ test("createOpenAICompatibleStream rejects plan-shaped verify outputs", async ()
     phase: "verify",
     session,
     task,
-    toolResults: [],
+    taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
   };
 

@@ -132,6 +132,67 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
   expect(session.messages.some((message) => message.content === "Planned task: Ordered messages")).toBe(false);
 });
 
+test("runAgentLoop records prompt messages emitted by the model adapter", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    input: "hello",
+  });
+  const emittedEvents: AgentEvent[] = [];
+  const stream: StreamFn = async function* promptRecordingStream(model) {
+    yield {
+      type: "prompt_message",
+      phase: "route",
+      message: {
+        role: "user",
+        content: "Phase: route\n\nCurrent user request:\n\"hello\"",
+      },
+    };
+    yield { type: "model_requested", phase: "route", model, usage: { inputMessages: 3 } };
+    yield {
+      type: "structured_output",
+      content: {
+        route: "direct",
+        message: "Hello.",
+      },
+    };
+    yield { type: "done" };
+  };
+
+  await runAgentLoop({
+    session,
+    model: { provider: "test", name: "prompt-recording" },
+    stream,
+    tools: [],
+    emit: (event) => {
+      emittedEvents.push(event);
+    },
+  });
+
+  const promptMessage = session.messages.find(
+    (message) => message.metadata?.kind === "phase_prompt" && message.metadata.phase === "route",
+  );
+  const promptIndex = emittedEvents.findIndex(
+    (event) =>
+      event.type === "message_delta" &&
+      !Array.isArray(event.delta) &&
+      event.delta.metadata?.kind === "phase_prompt",
+  );
+  const modelRequestedIndex = emittedEvents.findIndex((event) => event.type === "model_requested");
+
+  expect(promptMessage).toEqual(
+    expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining("Phase: route"),
+      metadata: expect.objectContaining({
+        kind: "phase_prompt",
+        phase: "route",
+      }),
+    }),
+  );
+  expect(promptIndex).toBeGreaterThan(-1);
+  expect(promptIndex).toBeLessThan(modelRequestedIndex);
+});
+
 test("runAgentLoop can return a direct response without creating a task", async () => {
   const session = createSession({
     systemPrompt: "Test system",

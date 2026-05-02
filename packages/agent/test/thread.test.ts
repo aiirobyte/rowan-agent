@@ -167,6 +167,122 @@ test("thread tool budget stops before executing extra tools", async () => {
   expect(result.session.log.some((event) => event.type === "tool_start")).toBe(false);
 });
 
+test("worker threads can recursively route until the thread depth limit", async () => {
+  const events: AgentEvent[] = [];
+  let routeCalls = 0;
+  let planCalls = 0;
+
+  const recursiveThreadStream: StreamFn = async function* recursiveThreadStream(model, context) {
+    if (context.phase === "route") {
+      routeCalls += 1;
+      if (routeCalls > 3) {
+        throw new Error("Thread depth limit was not enforced.");
+      }
+
+      yield {
+        type: "model_requested",
+        phase: "route",
+        model,
+        usage: { inputMessages: context.session.messages.length },
+      };
+      yield {
+        type: "structured_output",
+        content: {
+          route: "thread",
+          message: "Creating another worker thread.",
+          thread: {
+            prompt: "create a thread to use echo tool",
+            task: "Delegate echo evidence to a child thread.",
+            goal: "Return echo evidence.",
+          },
+        },
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (context.phase === "plan") {
+      planCalls += 1;
+      yield {
+        type: "structured_output",
+        content: {
+          id: createId("task"),
+          title: "Use echo tool",
+          instruction: context.session.task ?? "Use echo tool.",
+          acceptanceCriteria: createDefaultCriteria("Echo evidence is returned."),
+          toolNames: ["echo"],
+          skillIds: [],
+          status: "pending",
+          attempts: 0,
+        },
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (context.phase === "execute") {
+      yield {
+        type: "tool_call",
+        toolCall: {
+          id: createId("call"),
+          name: "echo",
+          args: { message: context.task.instruction },
+        },
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    const output = context.taskOutput;
+    const hasPassingEvidence =
+      output.kind === "thread" &&
+      output.outcome.passed === true &&
+      output.outcome.message.includes("Delegate echo evidence");
+    yield {
+      type: "structured_output",
+      content: {
+        passed: hasPassingEvidence,
+        message: "Echo evidence returned.",
+      },
+    };
+    yield { type: "done" };
+  };
+
+  const agent = new Agent({
+    systemPrompt: "Test system",
+    model: { provider: "test", name: "recursive-route" },
+    stream: recursiveThreadStream,
+    tools: [echoTool],
+    budget: { maxThreadDepth: 2 },
+  });
+  agent.subscribe((event) => {
+    events.push(event);
+  });
+
+  const outcome = await agent.prompt("create a thread to use echo tool");
+  const threadCreatedEvents = events.filter((event) => event.type === "thread_created");
+  const verificationEvents = events.filter((event) => event.type === "verification_start");
+
+  expect(outcome.passed).toBe(true);
+  expect(routeCalls).toBe(3);
+  expect(planCalls).toBe(1);
+  expect(threadCreatedEvents).toHaveLength(2);
+  expect(threadCreatedEvents.map((event) => event.threadDepth)).toEqual([1, 2]);
+  expect(threadCreatedEvents.every((event) => event.maxThreadDepth === 2)).toBe(true);
+  expect(verificationEvents).toHaveLength(1);
+  expect(
+    events.some(
+      (event) =>
+        event.type === "message_delta" &&
+        (Array.isArray(event.delta) ? event.delta : [event.delta]).some(
+          (delta) =>
+            delta.metadata?.kind === "routing_decision" &&
+            delta.content.includes("\"route\":\"task\""),
+        ),
+    ),
+  ).toBe(true);
+});
+
 test("tools can launch threads and return outcomes as tool evidence", async () => {
   const delegateTool: Tool<{ prompt: string }> = {
     name: "delegate",
@@ -237,7 +353,9 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       return;
     }
 
-    const nestedOutcome = context.toolResults.find((result) => result.toolName === "delegate")?.content as
+    const output = context.taskOutput;
+    const toolResults = output.kind === "tools" ? output.toolResults : [];
+    const nestedOutcome = toolResults.find((result) => result.toolName === "delegate")?.content as
       | { passed?: boolean }
       | undefined;
     const passed = nestedOutcome?.passed === true;

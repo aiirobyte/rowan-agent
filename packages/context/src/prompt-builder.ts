@@ -12,6 +12,7 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
 
 export type OpenAICompatiblePrompt = {
   messages: ChatMessage[];
+  phasePromptMessage: ChatMessage;
 };
 
 type SerializableTool = {
@@ -55,6 +56,10 @@ function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
     return undefined;
   }
 
+  if (message.metadata?.kind === "phase_prompt") {
+    return undefined;
+  }
+
   if (message.role === "tool") {
     const toolName = typeof message.metadata?.toolName === "string" ? ` (${message.metadata.toolName})` : "";
     return {
@@ -82,6 +87,7 @@ function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, t
     sessionInputJson: toJson(context.session.input),
     sessionTaskJson: toJson(context.session.task ?? null),
     sessionGoalJson: toJson(context.session.goal ?? null),
+    runtimeDepthJson: toJson(context.runtime ?? null),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
   });
@@ -93,6 +99,7 @@ function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>,
     sessionInputJson: toJson(context.session.input),
     sessionTaskJson: toJson(context.session.task ?? null),
     sessionGoalJson: toJson(context.session.goal ?? null),
+    runtimeDepthJson: toJson(context.runtime ?? null),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
   });
@@ -114,7 +121,7 @@ function buildPhaseVerifyPrompt(context: Extract<LlmContext, { phase: "verify" }
   return buildVerifyPrompt({
     taskJson: toJson(context.task),
     criteriaJson: toJson(context.criteria),
-    taskOutputJson: toJson(context.toolResults),
+    taskOutputJson: toJson(context.taskOutput),
   });
 }
 
@@ -142,6 +149,7 @@ export function buildOpenAICompatiblePrompt(input: {
   const phasePromptMessage = buildPhasePromptMessage(input.context, tools);
 
   return {
+    phasePromptMessage,
     messages: [
       buildSystemMessage(input.context),
       ...buildConversationMessages(input.context),
