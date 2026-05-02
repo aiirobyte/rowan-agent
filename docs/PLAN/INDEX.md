@@ -35,16 +35,14 @@ The main project roadmap now lives in:
 - v0.1.0 real model runtime implemented with mock tests; real API manual verification remains.
 - v0.2.0 monorepo foundation and Workspace ACI seed implemented.
 - v0.3.0 implemented: route-first task gating and sub_session mechanism.
-- v0.3.1 planned: persistent Session, multi-turn Agent semantics, and session-aware CLI.
-- v0.3.2 planned: thread/sub-session unification, immutable Session input, and task/goal metadata.
+- v0.3.1 implemented: persistent Session, multi-turn Agent semantics, and session-aware CLI.
+- v0.3.2 implemented: thread/sub-session unification, immutable Session input, and task/goal metadata.
 
 ## Next Steps
 
-1. Rename Session `userInput` to immutable `input`.
-2. Add optional `task` and `goal` metadata to Session.
-3. Replace specialized sub-session internals with normal Agent + Session thread execution.
-4. Route main-session tool and large-task requests into child threads.
-5. Add `thread_created` / `thread_end` trace events and inspector support.
+1. Keep v0.3.2 release gates green after follow-up changes.
+2. Use `docs/PLAN/ROADMAP.md` to scope v0.4.0 policy and safety work.
+3. Preserve the thread/sub-session compatibility API until a later migration window.
 
 ## Notes
 

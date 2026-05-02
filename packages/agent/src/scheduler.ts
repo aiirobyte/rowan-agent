@@ -4,6 +4,7 @@ export type TaskRoutingScheduleInput = {
   userInput: string;
   tools: Tool[];
   decision: TaskRoutingDecision;
+  defaultNeedsTaskRoute?: "task" | "thread";
 };
 
 function includesAny(text: string, values: string[]): boolean {
@@ -49,12 +50,24 @@ export function hasExplicitToolRequest(userInput: string, tools: Tool[] = []): b
 }
 
 export function scheduleTaskRouting(input: TaskRoutingScheduleInput): TaskRoutingDecision {
-  if (input.decision.needsTask || !hasExplicitToolRequest(input.userInput, input.tools)) {
-    return input.decision;
+  const defaultRoute = input.defaultNeedsTaskRoute ?? "task";
+  if (input.decision.needsTask) {
+    return {
+      ...input.decision,
+      route: input.decision.route ?? defaultRoute,
+    };
+  }
+
+  if (!hasExplicitToolRequest(input.userInput, input.tools)) {
+    return {
+      ...input.decision,
+      route: input.decision.route ?? "direct",
+    };
   }
 
   return {
     needsTask: true,
+    route: defaultRoute,
     message: "Creating a task for this request.",
   };
 }

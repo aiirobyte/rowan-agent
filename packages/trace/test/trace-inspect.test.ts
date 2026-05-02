@@ -18,10 +18,10 @@ test("trace reader and inspector read session-keyed JSONL events", async () => {
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.1",
+          version: "0.3.2",
           id: "ses_1234abcd",
           systemPrompt: "Test",
-          userInput: "hello",
+          input: "hello",
           skills: [],
         },
         ts: "2026-05-01T121314-15+08:00",
@@ -69,10 +69,10 @@ test("trace inspector lists session-keyed trace files", async () => {
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.1",
+          version: "0.3.2",
           id: "ses_1234abcd",
           systemPrompt: "Test",
-          userInput: "hello",
+          input: "hello",
           skills: [],
         },
         ts: "2026-05-01T121314-15+08:00",
@@ -99,10 +99,10 @@ test("trace inspector associates sub-sessions with parents", async () => {
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.1",
+          version: "0.3.2",
           id: "ses_aaaabbbb",
           systemPrompt: "Parent",
-          userInput: "delegate this",
+          input: "delegate this",
           skills: [],
         },
         ts: "2026-05-01T121314-15+08:00",
@@ -120,7 +120,7 @@ test("trace inspector associates sub-sessions with parents", async () => {
           id: "ses_bbbbcccc",
           parentSessionId: "ses_aaaabbbb",
           systemPrompt: "Child",
-          userInput: "delegate this",
+          input: "delegate this",
           skills: [],
         },
         ts: "2026-05-01T121316-15+08:00",
@@ -160,10 +160,10 @@ test("trace inspector maps separate turn traces to the same persisted session", 
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.1",
+          version: "0.3.2",
           id: "ses_1234abcd",
           systemPrompt: "Test",
-          userInput: "first",
+          input: "first",
           skills: [],
         },
         ts: "2026-05-01T121314-15+08:00",
@@ -178,10 +178,10 @@ test("trace inspector maps separate turn traces to the same persisted session", 
       JSON.stringify({
         type: "session_loaded",
         session: {
-          version: "0.3.1",
+          version: "0.3.2",
           id: "ses_1234abcd",
           systemPrompt: "Test",
-          userInput: "second",
+          input: "second",
           skills: [],
         },
         ts: "2026-05-01T121315-15+08:00",

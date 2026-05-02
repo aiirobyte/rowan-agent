@@ -5,10 +5,16 @@ export type BasePromptInput = {
 
 export type PlanPromptInput = BasePromptInput & {
   currentUserInputJson: string;
+  sessionInputJson: string;
+  sessionTaskJson: string;
+  sessionGoalJson: string;
 };
 
 export type RoutePromptInput = BasePromptInput & {
   currentUserInputJson: string;
+  sessionInputJson: string;
+  sessionTaskJson: string;
+  sessionGoalJson: string;
 };
 
 export type ExecutePromptInput = {
@@ -44,9 +50,19 @@ export function buildPlanPrompt(input: PlanPromptInput): string {
     "Prefer setting task.status to \"pending\" and task.attempts to 0.",
     "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
     "Create the task for the current user request below. Use prior conversation only as context.",
+    "If Session task or Session goal is present, this is a worker thread; prioritize that task/goal over broad delegation.",
     "",
     "Current user request:",
     input.currentUserInputJson,
+    "",
+    "Session initial input:",
+    input.sessionInputJson,
+    "",
+    "Session task:",
+    input.sessionTaskJson,
+    "",
+    "Session goal:",
+    input.sessionGoalJson,
     "",
     "Loaded skills summary:",
     input.loadedSkillsJson,
@@ -60,15 +76,17 @@ export function buildRoutePrompt(input: RoutePromptInput): string {
   return [
     "Phase: route",
     "",
-    "JSON-only contract: output exactly an object shaped like `{ \"message\": string, \"needsTask\": boolean }`.",
+    "JSON-only contract: output exactly an object shaped like `{ \"message\": string, \"needsTask\": boolean, \"route\": \"direct\" | \"task\" | \"thread\", \"thread\"?: { \"prompt\": string, \"task\": string, \"goal\": string } }`.",
     "Default to answering the user directly with needsTask=false.",
     "For normal chat, greetings, explanations, calculations, summaries, writing, and advice that do not require tools, set needsTask=false.",
-    "When needsTask=false, message must be the complete final user-visible answer in the user's language.",
-    "Set needsTask=true only when satisfying the request requires tools, workspace access, command execution, file inspection or modification, loaded-skill execution, or explicit tool-backed verification.",
+    "When needsTask=false, set route=\"direct\" and message must be the complete final user-visible answer in the user's language.",
+    "Set route=\"thread\" in a main Session when satisfying the request requires tools, workspace access, command execution, file inspection or modification, loaded-skill execution, explicit tool-backed verification, or a large delegated task.",
+    "For route=\"thread\", include thread.prompt, thread.task, and thread.goal. The thread task is what the child Session should do; the goal is the condition the main Session will verify.",
+    "Set route=\"task\" when Session task or Session goal is present; this means the current worker thread should complete its own task using plan/execute/verify.",
     "If the user explicitly names an available tool, asks to use bash/shell/terminal, or asks Rowan to inspect or modify the workspace, needsTask must be true.",
     "If the user asks a factual question about the current workspace, project, repository, codebase, files, languages, dependencies, configuration, structure, versions, assets, or whether something exists there, needsTask must be true.",
-    "If your answer would say you cannot know without inspecting the workspace, set needsTask=true instead of returning that as the final answer.",
-    "When needsTask=true, message is only a concise routing status explaining that a tool-backed task is needed.",
+    "If your answer would say you cannot know without inspecting the workspace, set route=\"thread\" in a main Session or route=\"task\" in a worker thread instead of returning that as the final answer.",
+    "When needsTask=true, message is only a concise routing status explaining that tool-backed or thread-backed work is needed.",
     "Do not call tools in this phase; only decide whether a tool-backed task is required.",
     "For needsTask=false, forbidden message values include \"route\", \"routed\", \"direct\", \"done\", \"ok\", and other status labels.",
     "Route only the current user request below. Use prior conversation only as context.",
@@ -76,10 +94,19 @@ export function buildRoutePrompt(input: RoutePromptInput): string {
     "Current user request:",
     input.currentUserInputJson,
     "",
-    "Example direct response for user `你好`: `{ \"message\": \"你好！有什么我可以帮你？\", \"needsTask\": false }`.",
-    "Example direct response for user `What is 2 + 2?`: `{ \"message\": \"2 + 2 = 4.\", \"needsTask\": false }`.",
-    "Example task response for user `使用bash查看当前日期`: `{ \"message\": \"Creating a task to run bash.\", \"needsTask\": true }`.",
-    "Example task response for user `我的workspace程序是js语言写的吗`: `{ \"message\": \"Creating a task to inspect the workspace.\", \"needsTask\": true }`.",
+    "Session initial input:",
+    input.sessionInputJson,
+    "",
+    "Session task:",
+    input.sessionTaskJson,
+    "",
+    "Session goal:",
+    input.sessionGoalJson,
+    "",
+    "Example direct response for user `你好`: `{ \"message\": \"你好！有什么我可以帮你？\", \"needsTask\": false, \"route\": \"direct\" }`.",
+    "Example direct response for user `What is 2 + 2?`: `{ \"message\": \"2 + 2 = 4.\", \"needsTask\": false, \"route\": \"direct\" }`.",
+    "Example thread response for main Session user `使用bash查看当前日期`: `{ \"message\": \"Creating a thread to run bash.\", \"needsTask\": true, \"route\": \"thread\", \"thread\": { \"prompt\": \"使用bash查看当前日期\", \"task\": \"Run bash to check the current date.\", \"goal\": \"Return the current date from bash output.\" } }`.",
+    "Example task response for worker Session with Session task present: `{ \"message\": \"Creating a task for this worker thread.\", \"needsTask\": true, \"route\": \"task\" }`.",
     "Do not include a task, toolCalls, Markdown fences, or extra keys.",
     "",
     "Loaded skills summary:",

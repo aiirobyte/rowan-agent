@@ -133,7 +133,7 @@ export function createSubSessionRunner<
   ): Promise<SessionSubSessionRunResult<TEvent, TOutcome, TBudgetUsage>> => {
     const session = createSession<TEvent>({
       systemPrompt: input.systemPrompt,
-      userInput: input.prompt,
+      input: input.prompt,
       skills: input.skills ?? [],
       parentSessionId: input.parentSessionId,
     });

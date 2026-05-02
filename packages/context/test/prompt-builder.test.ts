@@ -35,7 +35,7 @@ function createTestTask(): Task {
 test("route prompt defaults to direct answers unless tools are needed", () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "What is 2 + 2?",
+    input: "What is 2 + 2?",
   });
 
   const messages = buildOpenAICompatibleMessages({
@@ -49,7 +49,7 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   expect(combined).toContain("Route only the current user request below.");
   expect(combined).toContain("Current user request:");
   expect(combined).toContain("\"What is 2 + 2?\"");
-  expect(combined).toContain('{ "message": string, "needsTask": boolean }');
+  expect(combined).toContain('{ "message": string, "needsTask": boolean, "route": "direct" | "task" | "thread"');
   expect(combined).toContain("Default to answering the user directly with needsTask=false.");
   expect(combined).toContain("normal chat, greetings, explanations, calculations");
   expect(combined).toContain("workspace access");
@@ -57,20 +57,24 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   expect(combined).toContain("factual question about the current workspace");
   expect(combined).toContain("cannot know without inspecting the workspace");
   expect(combined).toContain("message must be the complete final user-visible answer");
-  expect(combined).toContain("only when satisfying the request requires tools");
+  expect(combined).toContain('Set route="thread" in a main Session');
+  expect(combined).toContain('Set route="task" when Session task or Session goal is present');
+  expect(combined).toContain("Session initial input");
+  expect(combined).toContain("Session task");
+  expect(combined).toContain("Session goal");
   expect(combined).toContain("Do not call tools in this phase");
   expect(combined).toContain("forbidden message values");
   expect(combined).toContain("\"routed\"");
   expect(combined).toContain("你好！有什么我可以帮你？");
   expect(combined).toContain("2 + 2 = 4.");
-  expect(combined).toContain("我的workspace程序是js语言写的吗");
+  expect(combined).toContain("thread.prompt");
   expect(combined).toContain("echo");
 });
 
 test("plan prompt includes phase, JSON-only contract, tools, and skills", () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "Plan with echo.",
+    input: "Plan with echo.",
     skills: [
       {
         id: "writer",
@@ -107,7 +111,7 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
 test("prompt builder keeps phase prompts in request messages only", () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "Plan with echo.",
+    input: "Plan with echo.",
   });
 
   const prompt = buildOpenAICompatiblePrompt({
@@ -127,7 +131,7 @@ test("prompt builder keeps phase prompts in request messages only", () => {
 });
 
 test("execute prompt includes phase, JSON-only contract, task, allowed tools, and tool results", () => {
-  const session = createSession({ systemPrompt: "Test system", userInput: "Use echo." });
+  const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
   const task = createTestTask();
 
   const messages = buildOpenAICompatibleMessages({
@@ -164,7 +168,7 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
 });
 
 test("prompt builder includes the model message stream in later prompts", () => {
-  const session = createSession({ systemPrompt: "Test system", userInput: "Use echo." });
+  const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
   session.messages.push(
     createMessage("assistant", "{\"needsTask\":true,\"message\":\"Creating a task.\"}", {
       kind: "routing_decision",
@@ -205,7 +209,7 @@ test("prompt builder includes the model message stream in later prompts", () => 
 });
 
 test("verify prompt includes phase, lightweight judgement contract, task, criteria, and task output", () => {
-  const session = createSession({ systemPrompt: "Test system", userInput: "Verify echo." });
+  const session = createSession({ systemPrompt: "Test system", input: "Verify echo." });
   const task = createTestTask();
 
   const messages = buildOpenAICompatibleMessages({

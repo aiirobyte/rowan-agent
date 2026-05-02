@@ -1,6 +1,6 @@
 import Type from "typebox";
 
-export const SESSION_SCHEMA_VERSION = "0.3.1";
+export const SESSION_SCHEMA_VERSION = "0.3.2";
 
 export const AgentMessageSchema = Type.Object({
   id: Type.String(),
@@ -31,7 +31,9 @@ export type Session<TLogEvent = never> = {
   id: string;
   parentSessionId?: string;
   systemPrompt: string;
-  userInput: string;
+  input: string;
+  task?: string;
+  goal?: string;
   messages: AgentMessage[];
   log: TLogEvent[];
   skills: Skill[];
@@ -88,12 +90,20 @@ export function createMessage(
 
 export function createSession<TLogEvent = never>(input: {
   systemPrompt: string;
-  userInput: string;
+  input?: string;
+  prompt?: string;
+  userInput?: string;
+  task?: string;
+  goal?: string;
   skills?: Skill[];
   parentSessionId?: string;
   title?: string;
 }): Session<TLogEvent> {
   const createdAt = nowIso();
+  const sessionInput = input.input ?? input.prompt ?? input.userInput;
+  if (!sessionInput) {
+    throw new Error("Session input is required.");
+  }
   const messages = [
     createMessage("system", input.systemPrompt),
     ...(input.skills?.length
@@ -107,7 +117,7 @@ export function createSession<TLogEvent = never>(input: {
           ),
         ]
       : []),
-    createMessage("user", input.userInput),
+    createMessage("user", sessionInput),
   ];
 
   return {
@@ -115,7 +125,9 @@ export function createSession<TLogEvent = never>(input: {
     id: createId("ses"),
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
     systemPrompt: input.systemPrompt,
-    userInput: input.userInput,
+    input: sessionInput,
+    ...(input.task ? { task: input.task } : {}),
+    ...(input.goal ? { goal: input.goal } : {}),
     messages,
     log: [],
     skills: input.skills ?? [],
@@ -126,8 +138,18 @@ export function createSession<TLogEvent = never>(input: {
 }
 
 export function appendUserTurn<TLogEvent>(session: Session<TLogEvent>, input: string): Session<TLogEvent> {
-  session.userInput = input;
   session.messages.push(createMessage("user", input));
   session.updatedAt = nowIso();
   return session;
+}
+
+export function latestUserInput(session: Session<unknown>): string {
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+    if (message.role === "user") {
+      return message.content;
+    }
+  }
+
+  return session.input;
 }

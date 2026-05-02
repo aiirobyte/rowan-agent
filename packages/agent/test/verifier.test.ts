@@ -10,7 +10,7 @@ function createSession(input: Parameters<typeof createBaseSession>[0]) {
 }
 
 test("verifyTask uses stream structured output", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "hello" });
+  const session = createSession({ systemPrompt: "Test", input: "hello" });
   const task = parseTask({
     id: createId("task"),
     title: "No tool task",

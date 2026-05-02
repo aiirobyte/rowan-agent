@@ -2,8 +2,10 @@ import { expect, test } from "bun:test";
 import {
   InMemorySessionStore,
   SESSION_SCHEMA_VERSION,
+  appendUserTurn,
   createMessage,
   createSession,
+  latestUserInput,
   toPersistedSession,
 } from "../src";
 
@@ -11,9 +13,12 @@ test("SessionStore persists versioned conversation messages and metadata", async
   const store = new InMemorySessionStore();
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "hello",
+    input: "hello",
+    task: "Say hello",
+    goal: "A greeting is returned.",
     title: "Greeting",
   });
+  appendUserTurn(session, "second turn");
   session.messages.push(
     createMessage("assistant", "{\"needsTask\":false,\"message\":\"internal\"}", {
       kind: "routing_decision",
@@ -26,6 +31,10 @@ test("SessionStore persists versioned conversation messages and metadata", async
 
   expect(persisted.version).toBe(SESSION_SCHEMA_VERSION);
   expect(persisted.id).toBe(session.id);
+  expect(persisted.input).toBe("hello");
+  expect(persisted).not.toHaveProperty("userInput");
+  expect(persisted.task).toBe("Say hello");
+  expect(persisted.goal).toBe("A greeting is returned.");
   expect(persisted.title).toBe("Greeting");
   expect(persisted.messages.some((message) => message.content.includes("needsTask"))).toBe(true);
 
@@ -41,6 +50,10 @@ test("SessionStore persists versioned conversation messages and metadata", async
 
   const loaded = await store.load(session.id);
   expect(loaded?.id).toBe(session.id);
+  expect(loaded?.input).toBe("hello");
+  expect(loaded?.task).toBe("Say hello");
+  expect(loaded?.goal).toBe("A greeting is returned.");
+  expect(loaded ? latestUserInput(loaded) : undefined).toBe("second turn");
   expect(loaded?.log).toEqual([]);
   expect(loaded?.messages.map((message) => message.content)).toContain(
     "{\"needsTask\":false,\"message\":\"internal\"}",

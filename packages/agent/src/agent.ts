@@ -2,7 +2,7 @@ import { runAgentLoop } from "./agent-loop";
 import {
   appendUserTurn,
   createSession,
-  createSubSessionRunner,
+  nowIso,
   summarizeSubSessionBudgetUsage,
   type Session,
   type SessionStore,
@@ -13,68 +13,106 @@ import type {
   AgentBudgetUsage,
   AgentEvent,
   AgentEventListener,
+  AgentThreadInput,
   AgentSubSessionInput,
   BeforeToolCall,
   ModelRef,
   Outcome,
   StreamFn,
-  SubSessionRunInput,
   SubSessionRunResult,
+  ThreadRunInput,
+  ThreadRunResult,
   Tool,
   Unsubscribe,
 } from "./types";
 
 type AgentSession = Session<AgentEvent>;
 
-export const runSubSession = createSubSessionRunner<
-  AgentEvent,
-  Outcome,
-  AgentBudgetUsage,
-  SubSessionRunInput,
-  AgentSubSessionInput
->({
-  summarizeBudgetUsage: (events) => summarizeSubSessionBudgetUsage<AgentBudgetUsage>(events),
-  createStartEvent: ({ input, session, ts }) => ({
-    type: "sub_session_start",
+async function emitThreadEvent(
+  session: AgentSession,
+  event: AgentEvent,
+  emit?: AgentEventListener,
+): Promise<void> {
+  session.log.push(event);
+  session.updatedAt = event.ts;
+  await emit?.(event);
+}
+
+export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult> {
+  const session = createSession<AgentEvent>({
+    systemPrompt: input.systemPrompt,
+    input: input.prompt,
+    skills: input.skills ?? [],
     parentSessionId: input.parentSessionId,
-    sessionId: session.id,
-    prompt: input.prompt,
-    ts,
-  }),
-  createEndEvent: ({ input, session, outcome, budgetUsage, ts }) => ({
-    type: "sub_session_end",
-    parentSessionId: input.parentSessionId,
-    sessionId: session.id,
-    outcome,
-    budgetUsage,
-    ts,
-  }),
-  createChildInput: ({ parentInput, childInput, session }) => ({
-    ...childInput,
-    parentSessionId: childInput.parentSessionId ?? session.id,
-    systemPrompt: parentInput.systemPrompt,
-    model: parentInput.model,
-    stream: parentInput.stream,
-    signal: parentInput.signal,
-    beforeToolCall: parentInput.beforeToolCall,
-    afterToolCall: parentInput.afterToolCall,
-    emit: parentInput.emit,
-  }),
-  run: ({ input, session, runSubSession }) =>
-    runAgentLoop({
-      session,
+    task: input.task,
+    goal: input.goal,
+  });
+
+  await emitThreadEvent(
+    session,
+    {
+      type: "thread_created",
+      parentSessionId: input.parentSessionId,
+      sessionId: session.id,
+      prompt: input.prompt,
+      ...(input.task ? { task: input.task } : {}),
+      ...(input.goal ? { goal: input.goal } : {}),
+      ts: nowIso(),
+    },
+    input.emit,
+  );
+
+  const runNestedThread = (childInput: AgentThreadInput): Promise<ThreadRunResult> =>
+    runThread({
+      ...childInput,
+      parentSessionId: childInput.parentSessionId ?? session.id,
+      systemPrompt: input.systemPrompt,
       model: input.model,
       stream: input.stream,
-      tools: input.tools,
-      maxAttempts: input.maxAttempts,
-      budget: input.budget,
       signal: input.signal,
       beforeToolCall: input.beforeToolCall,
       afterToolCall: input.afterToolCall,
-      runSubSession,
       emit: input.emit,
-    }),
-});
+    });
+
+  const outcome = await runAgentLoop({
+    session,
+    model: input.model,
+    stream: input.stream,
+    tools: input.tools,
+    maxAttempts: input.maxAttempts,
+    budget: input.budget,
+    signal: input.signal,
+    beforeToolCall: input.beforeToolCall,
+    afterToolCall: input.afterToolCall,
+    runThread: runNestedThread,
+    runSubSession: runNestedThread,
+    emit: input.emit,
+  });
+
+  const budgetUsage = summarizeSubSessionBudgetUsage<AgentBudgetUsage>(session.log);
+  await emitThreadEvent(
+    session,
+    {
+      type: "thread_end",
+      parentSessionId: input.parentSessionId,
+      sessionId: session.id,
+      outcome,
+      budgetUsage,
+      ts: nowIso(),
+    },
+    input.emit,
+  );
+
+  return {
+    parentSessionId: input.parentSessionId,
+    session,
+    outcome,
+    budgetUsage,
+  };
+}
+
+export const runSubSession = runThread;
 
 export type AgentOptions = {
   systemPrompt: string;
@@ -181,7 +219,7 @@ export class Agent {
       ? appendUserTurn(this.state.session, input)
       : createSession<AgentEvent>({
           systemPrompt: this.options.systemPrompt,
-          userInput: input,
+          input,
           skills: this.options.skills,
         });
     this.state.session = session;
@@ -204,8 +242,13 @@ export class Agent {
       signal: this.abortController.signal,
       beforeToolCall: this.options.beforeToolCall,
       afterToolCall: this.options.afterToolCall,
+      runThread: (input) =>
+        this.startThread({
+          ...input,
+          parentSessionId: input.parentSessionId ?? session.id,
+        }),
       runSubSession: (input) =>
-        this.startSubSession({
+        this.startThread({
           ...input,
           parentSessionId: input.parentSessionId ?? session.id,
         }),
@@ -231,13 +274,13 @@ export class Agent {
     this.abortController?.abort(reason);
   }
 
-  async startSubSession(input: AgentSubSessionInput): Promise<SubSessionRunResult> {
+  async startThread(input: AgentThreadInput): Promise<ThreadRunResult> {
     const parentSessionId = input.parentSessionId ?? this.state.session?.id;
     if (!parentSessionId) {
-      throw new Error("Sub sessions require a parent session.");
+      throw new Error("Threads require a parent session.");
     }
 
-    return runSubSession({
+    return runThread({
       ...input,
       parentSessionId,
       systemPrompt: this.options.systemPrompt,
@@ -250,6 +293,10 @@ export class Agent {
         this.emitToListeners(event);
       },
     });
+  }
+
+  async startSubSession(input: AgentSubSessionInput): Promise<SubSessionRunResult> {
+    return this.startThread(input);
   }
 
   async waitForIdle(): Promise<void> {

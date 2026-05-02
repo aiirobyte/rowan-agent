@@ -1,6 +1,7 @@
 import Schema from "typebox/schema";
 import {
   createMessage,
+  latestUserInput,
   type AgentMessage,
   type Session as CoreSession,
 } from "@rowan-agent/session";
@@ -23,6 +24,7 @@ import type {
   AgentBudgetUsage,
   Task,
   TaskRoutingDecision,
+  ThreadRunResult,
   Tool,
   ToolCall,
   ToolResult,
@@ -133,7 +135,9 @@ function snapshotSession(session: AgentSession): AgentSessionSnapshot {
     id: session.id,
     ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     systemPrompt: session.systemPrompt,
-    userInput: session.userInput,
+    input: session.input,
+    ...(session.task ? { task: session.task } : {}),
+    ...(session.goal ? { goal: session.goal } : {}),
     skills: session.skills,
     ...(session.title ? { title: session.title } : {}),
   };
@@ -340,9 +344,13 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
   }
 
   const decision = scheduleTaskRouting({
-    userInput: input.session.userInput,
+    userInput: latestUserInput(input.session),
     tools: input.tools,
     decision: parseTaskRoutingDecision(collected.structured),
+    defaultNeedsTaskRoute:
+      input.runThread && !input.session.parentSessionId && !input.session.task && !input.session.goal
+        ? "thread"
+        : "task",
   });
   await appendSessionMessage(
     input,
@@ -452,7 +460,8 @@ async function executeToolCall(input: {
       session: input.loop.session,
       task: input.task,
       toolCallId: input.toolCall.id,
-      ...(input.loop.runSubSession ? { runSubSession: input.loop.runSubSession } : {}),
+      ...(input.loop.runThread ? { runThread: input.loop.runThread, runSubSession: input.loop.runThread } : {}),
+      ...(!input.loop.runThread && input.loop.runSubSession ? { runSubSession: input.loop.runSubSession } : {}),
     };
     const rawResult = await tool.execute(
       args,
@@ -608,6 +617,141 @@ async function verifyTask(
   return result;
 }
 
+function shortThreadTitle(text: string): string {
+  const compact = text.trim().replace(/\s+/g, " ");
+  return compact.length > 60 ? `${compact.slice(0, 57)}...` : compact;
+}
+
+function createThreadTask(decision: TaskRoutingDecision, fallbackPrompt: string): Task {
+  const thread = decision.thread;
+  const taskText = thread?.task ?? decision.message;
+  const goalText = thread?.goal ?? `Thread outcome must satisfy: ${taskText || fallbackPrompt}`;
+
+  return Validators.task.Parse({
+    id: createId("task"),
+    title: `Thread: ${shortThreadTitle(taskText || fallbackPrompt)}`,
+    instruction: taskText || fallbackPrompt,
+    acceptanceCriteria: [
+      {
+        id: createId("crit"),
+        type: "model_judge",
+        description: goalText,
+        required: true,
+      },
+    ],
+    toolNames: [],
+    skillIds: [],
+    status: "pending",
+    attempts: 0,
+  });
+}
+
+function threadResultToToolResult(input: {
+  task: Task;
+  thread: ThreadRunResult;
+  prompt: string;
+  threadTask: string;
+  goal: string;
+}): ToolResult {
+  return Validators.toolResult.Parse({
+    toolCallId: createId("call"),
+    toolName: "thread",
+    ok: input.thread.outcome.passed,
+    content: {
+      sessionId: input.thread.session.id,
+      parentSessionId: input.thread.parentSessionId,
+      prompt: input.prompt,
+      task: input.threadTask,
+      goal: input.goal,
+      outcome: input.thread.outcome,
+      budgetUsage: input.thread.budgetUsage,
+    },
+    ...(input.thread.outcome.passed ? {} : { error: input.thread.outcome.message }),
+  });
+}
+
+async function executeThreadRoute(
+  input: AgentLoopRuntime,
+  decision: TaskRoutingDecision,
+): Promise<Outcome> {
+  if (!input.runThread) {
+    const task = createThreadTask(decision, latestUserInput(input.session));
+    task.status = "failed";
+    return createFailedOutcome(task, {
+      passed: false,
+      message: "Thread route was selected, but no thread runner is configured.",
+    });
+  }
+
+  const currentInput = latestUserInput(input.session);
+  const prompt = decision.thread?.prompt ?? currentInput;
+  const threadTask = decision.thread?.task ?? currentInput;
+  const goal = decision.thread?.goal ?? `Complete the delegated work and return a verifiable outcome for: ${threadTask}`;
+  const task = createThreadTask(
+    {
+      ...decision,
+      thread: { prompt, task: threadTask, goal },
+    },
+    currentInput,
+  );
+
+  await emit(input, {
+    type: "task_created",
+    task,
+    ts: nowIso(),
+  });
+
+  task.status = "running";
+  task.attempts = 1;
+  await emit(input, {
+    type: "task_start",
+    taskId: task.id,
+    attempt: 1,
+    ts: nowIso(),
+  });
+
+  const thread = await input.runThread({
+    prompt,
+    task: threadTask,
+    goal,
+    tools: input.tools,
+    skills: input.session.skills,
+    maxAttempts: input.maxAttempts,
+    budget: input.budget,
+  });
+  const threadResult = threadResultToToolResult({
+    task,
+    thread,
+    prompt,
+    threadTask,
+    goal,
+  });
+  await appendSessionMessage(
+    input,
+    createMessage("tool", JSON.stringify(threadResult), {
+      toolName: "thread",
+      threadSessionId: thread.session.id,
+      parentSessionId: thread.parentSessionId,
+    }),
+  );
+
+  await emit(input, {
+    type: "task_end",
+    taskId: task.id,
+    attempt: 1,
+    ts: nowIso(),
+  });
+
+  const verification = await verifyTask(input, task, [threadResult]);
+  if (verification.passed) {
+    task.status = "passed";
+    return createOutcome(task, verification);
+  }
+
+  task.status = "failed";
+  return createFailedOutcome(task, verification);
+}
+
 export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   const runtime: AgentLoopRuntime = {
     ...input,
@@ -637,8 +781,15 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     await emitChatStart(runtime);
 
     const routed = await routeRequest(runtime);
-    if (!routed.needsTask) {
+    if (routed.route === "direct" || !routed.needsTask) {
       const outcome = createDirectOutcome(routed.message);
+      await endChatLog();
+      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
+      return outcome;
+    }
+
+    if (routed.route === "thread") {
+      const outcome = await executeThreadRoute(runtime, routed);
       await endChatLog();
       await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       return outcome;

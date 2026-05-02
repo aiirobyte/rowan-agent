@@ -2,7 +2,7 @@
 
 > 版本：v0.3.2
 > 日期：2026-05-02
-> 状态：planned
+> 状态：completed
 > 基线：v0.3.1 Persistent Session + Multi-turn CLI
 > 任务表：`docs/PLAN/v0.3.2/TASKS.md`
 

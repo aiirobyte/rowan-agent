@@ -15,7 +15,7 @@ test("loadSkill reads SKILL.md and infers id from parent directory", async () =>
   const skill = await loadSkill(skillPath);
   const session = createSession({
     systemPrompt: "Test",
-    userInput: "hello",
+    input: "hello",
     skills: [skill],
   });
 

@@ -242,7 +242,7 @@ test("callOpenAICompatibleChatCompletion supports abort signal", async () => {
 });
 
 test("createOpenAICompatibleStream maps route response to a task routing decision", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "hello" });
+  const session = createSession({ systemPrompt: "Test", input: "hello" });
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
@@ -271,11 +271,12 @@ test("createOpenAICompatibleStream maps route response to a task routing decisio
   expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
     message: "Hello directly.",
     needsTask: false,
+    route: "direct",
   });
 });
 
 test("createOpenAICompatibleStream normalizes case-insensitive route keys", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "hello" });
+  const session = createSession({ systemPrompt: "Test", input: "hello" });
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
@@ -300,11 +301,12 @@ test("createOpenAICompatibleStream normalizes case-insensitive route keys", asyn
   expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
     message: "Hello directly.",
     needsTask: false,
+    route: "direct",
   });
 });
 
 test("createOpenAICompatibleStream preserves model route decisions without scheduling policy", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "使用bash查看当前日期" });
+  const session = createSession({ systemPrompt: "Test", input: "使用bash查看当前日期" });
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
@@ -328,11 +330,12 @@ test("createOpenAICompatibleStream preserves model route decisions without sched
   expect((structured as Extract<ModelStreamEvent, { type: "structured_output" }>).content).toEqual({
     message: "Use bash to check the current date: $(date)",
     needsTask: false,
+    route: "direct",
   });
 });
 
 test("createOpenAICompatibleStream maps plan response to structured task", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
@@ -387,7 +390,7 @@ test("createOpenAICompatibleStream maps plan response to structured task", async
 });
 
 test("createOpenAICompatibleStream fills common omitted task fields", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "hello" });
+  const session = createSession({ systemPrompt: "Test", input: "hello" });
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
@@ -421,7 +424,7 @@ test("createOpenAICompatibleStream fills common omitted task fields", async () =
 });
 
 test("createOpenAICompatibleStream normalizes case-insensitive plan keys", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({
@@ -465,7 +468,7 @@ test("createOpenAICompatibleStream normalizes case-insensitive plan keys", async
 });
 
 test("createOpenAICompatibleStream maps execute response to text and tool calls", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -503,7 +506,7 @@ test("createOpenAICompatibleStream maps execute response to text and tool calls"
 });
 
 test("createOpenAICompatibleStream normalizes case-insensitive execute keys", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -532,7 +535,7 @@ test("createOpenAICompatibleStream normalizes case-insensitive execute keys", as
 });
 
 test("createOpenAICompatibleStream rejects execute outputs without a toolCalls array", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -560,7 +563,7 @@ test("createOpenAICompatibleStream rejects execute outputs without a toolCalls a
 });
 
 test("createOpenAICompatibleStream maps verify response to verification result", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -602,7 +605,7 @@ test("createOpenAICompatibleStream maps verify response to verification result",
 });
 
 test("createOpenAICompatibleStream rejects legacy status verify output", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -632,7 +635,7 @@ test("createOpenAICompatibleStream rejects legacy status verify output", async (
 });
 
 test("createOpenAICompatibleStream rejects execute-shaped verify output", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -662,7 +665,7 @@ test("createOpenAICompatibleStream rejects execute-shaped verify output", async 
 });
 
 test("createOpenAICompatibleStream rejects message-only verify output", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -691,7 +694,7 @@ test("createOpenAICompatibleStream rejects message-only verify output", async ()
 });
 
 test("createOpenAICompatibleStream rejects legacy verify wrappers", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -723,7 +726,7 @@ test("createOpenAICompatibleStream rejects legacy verify wrappers", async () => 
 });
 
 test("createOpenAICompatibleStream maps failed verify output without criteria details", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -759,7 +762,7 @@ test("createOpenAICompatibleStream maps failed verify output without criteria de
 });
 
 test("createOpenAICompatibleStream rejects plan-shaped verify outputs", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "use echo tool" });
+  const session = createSession({ systemPrompt: "Test", input: "use echo tool" });
   const task = createTask();
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
@@ -792,7 +795,7 @@ test("createOpenAICompatibleStream rejects plan-shaped verify outputs", async ()
 });
 
 test("createOpenAICompatibleStream reports invalid model schema", async () => {
-  const session = createSession({ systemPrompt: "Test", userInput: "hello" });
+  const session = createSession({ systemPrompt: "Test", input: "hello" });
   const fetchMock: OpenAICompatibleFetch = async () =>
     jsonResponse(
       JSON.stringify({

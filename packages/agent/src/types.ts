@@ -54,7 +54,17 @@ export type Task = Type.Static<typeof TaskSchema>;
 
 export const TaskRoutingDecisionSchema = Type.Object({
   needsTask: Type.Boolean(),
+  route: Type.Optional(Type.Union([
+    Type.Literal("direct"),
+    Type.Literal("task"),
+    Type.Literal("thread"),
+  ])),
   message: Type.String(),
+  thread: Type.Optional(Type.Object({
+    prompt: Type.String(),
+    task: Type.String(),
+    goal: Type.String(),
+  })),
 });
 
 export type TaskRoutingDecision = Type.Static<typeof TaskRoutingDecisionSchema>;
@@ -107,6 +117,7 @@ export type ToolContext = {
   session: CoreSession<AgentEvent>;
   task: Task;
   toolCallId: string;
+  runThread?: RunThread;
   runSubSession?: RunSubSession;
 };
 
@@ -131,20 +142,22 @@ export type AfterToolCall = (input: {
 
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
-export type SubSessionInput = {
+export type ThreadInput = {
   parentSessionId: string;
   prompt: string;
+  task?: string;
+  goal?: string;
   tools: Tool[];
   skills?: Skill[];
   maxAttempts?: number;
   budget?: AgentRunBudget;
 };
 
-export type AgentSubSessionInput = Omit<SubSessionInput, "parentSessionId"> & {
+export type AgentThreadInput = Omit<ThreadInput, "parentSessionId"> & {
   parentSessionId?: string;
 };
 
-export type SubSessionRunInput = SubSessionInput & {
+export type ThreadRunInput = ThreadInput & {
   systemPrompt: string;
   model: ModelRef;
   stream: StreamFn;
@@ -154,14 +167,20 @@ export type SubSessionRunInput = SubSessionInput & {
   emit?: AgentEventListener;
 };
 
-export type SubSessionRunResult = {
+export type ThreadRunResult = {
   parentSessionId: string;
   session: CoreSession<AgentEvent>;
   outcome: Outcome;
   budgetUsage: AgentBudgetUsage;
 };
 
-export type RunSubSession = (input: AgentSubSessionInput) => Promise<SubSessionRunResult>;
+export type RunThread = (input: AgentThreadInput) => Promise<ThreadRunResult>;
+
+export type SubSessionInput = ThreadInput;
+export type AgentSubSessionInput = AgentThreadInput;
+export type SubSessionRunInput = ThreadRunInput;
+export type SubSessionRunResult = ThreadRunResult;
+export type RunSubSession = RunThread;
 
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
@@ -218,6 +237,23 @@ export type ErrorInfo = {
 export type AgentEvent =
   | { type: "session_created"; session: AgentSessionSnapshot; ts: string }
   | { type: "session_loaded"; session: AgentSessionSnapshot; ts: string }
+  | {
+      type: "thread_created";
+      parentSessionId: string;
+      sessionId: string;
+      prompt: string;
+      task?: string;
+      goal?: string;
+      ts: string;
+    }
+  | {
+      type: "thread_end";
+      parentSessionId: string;
+      sessionId: string;
+      outcome: Outcome;
+      budgetUsage: AgentBudgetUsage;
+      ts: string;
+    }
   | { type: "sub_session_start"; parentSessionId: string; sessionId: string; prompt: string; ts: string }
   | {
       type: "sub_session_end";
@@ -285,6 +321,7 @@ export type AgentLoopInput = {
   signal?: AbortSignal;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
+  runThread?: RunThread;
   runSubSession?: RunSubSession;
   emit?: AgentEventListener;
 };

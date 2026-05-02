@@ -10,7 +10,7 @@ test("LocalJsonSessionStore reads and writes sessions inside the workspace", asy
   const store = new LocalJsonSessionStore(join(root, "sessions"));
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "hello",
+    input: "hello",
     title: "Local session",
   });
   session.messages.push(
@@ -29,11 +29,15 @@ test("LocalJsonSessionStore reads and writes sessions inside the workspace", asy
     const raw = JSON.parse(await readFile(filePath, "utf8")) as {
       version?: string;
       id?: string;
+      input?: string;
+      userInput?: string;
       messages?: Array<{ content: string }>;
     };
 
-    expect(raw.version).toBe("0.3.1");
+    expect(raw.version).toBe("0.3.2");
     expect(raw.id).toBe(session.id);
+    expect(raw.input).toBe("hello");
+    expect(raw.userInput).toBeUndefined();
     expect(raw.messages?.some((message) => message.content.includes("Planning"))).toBe(true);
 
     const loaded = await store.load(session.id);

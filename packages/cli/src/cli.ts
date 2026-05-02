@@ -94,7 +94,12 @@ function traceSessionIdFromEvent(event: AgentEvent): string | undefined {
   if (event.type === "session_created" || event.type === "session_loaded") {
     return event.session.parentSessionId ?? event.session.id;
   }
-  if (event.type === "sub_session_start" || event.type === "sub_session_end") {
+  if (
+    event.type === "thread_created" ||
+    event.type === "thread_end" ||
+    event.type === "sub_session_start" ||
+    event.type === "sub_session_end"
+  ) {
     return event.parentSessionId;
   }
   if ("sessionId" in event && typeof event.sessionId === "string") {

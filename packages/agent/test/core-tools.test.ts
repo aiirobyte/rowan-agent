@@ -24,7 +24,7 @@ function createToolContext(toolCallId = createId("call")) {
   };
 
   return {
-    session: createSession({ systemPrompt: "test", userInput: "inspect" }),
+    session: createSession({ systemPrompt: "test", input: "inspect" }),
     task,
     toolCallId,
   };

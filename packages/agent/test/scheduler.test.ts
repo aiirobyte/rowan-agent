@@ -36,6 +36,7 @@ test("scheduler upgrades model direct routing when user explicitly asks for a to
     }),
   ).toEqual({
     needsTask: true,
+    route: "task",
     message: "Creating a task for this request.",
   });
 });
@@ -52,6 +53,25 @@ test("scheduler upgrades model direct routing for workspace fact questions", () 
     }),
   ).toEqual({
     needsTask: true,
+    route: "task",
+    message: "Creating a task for this request.",
+  });
+});
+
+test("scheduler can upgrade explicit tool requests to thread routes", () => {
+  expect(
+    scheduleTaskRouting({
+      userInput: "使用bash查看当前日期",
+      tools: [bashTool],
+      defaultNeedsTaskRoute: "thread",
+      decision: {
+        needsTask: false,
+        message: "Use bash to check the current date: $(date)",
+      },
+    }),
+  ).toEqual({
+    needsTask: true,
+    route: "thread",
     message: "Creating a task for this request.",
   });
 });

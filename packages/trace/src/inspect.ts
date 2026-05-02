@@ -50,7 +50,12 @@ function eventSessionId(event: AgentEvent): string | undefined {
   if (event.type === "session_created" || event.type === "session_loaded") {
     return event.session.id;
   }
-  if (event.type === "sub_session_start" || event.type === "sub_session_end") {
+  if (
+    event.type === "thread_created" ||
+    event.type === "thread_end" ||
+    event.type === "sub_session_start" ||
+    event.type === "sub_session_end"
+  ) {
     return event.sessionId;
   }
   return undefined;
@@ -131,7 +136,12 @@ export function summarizeTraceEvents(filePath: string, events: AgentEvent[]): Tr
     if (sessionId) {
       sessionIds.add(sessionId);
     }
-    if (event.type === "sub_session_start" || event.type === "sub_session_end") {
+    if (
+      event.type === "thread_created" ||
+      event.type === "thread_end" ||
+      event.type === "sub_session_start" ||
+      event.type === "sub_session_end"
+    ) {
       sessionIds.add(event.parentSessionId);
       sessionIds.add(event.sessionId);
       addSubSession(event.parentSessionId, event.sessionId);

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { InMemorySessionStore, type Session } from "@rowan-agent/session";
+import { InMemorySessionStore, latestUserInput, type Session } from "@rowan-agent/session";
 import { Agent, type AgentEvent, type StreamFn } from "../src";
 import { createDefaultCriteria } from "../src/task";
 import { createId } from "../src/types";
@@ -53,7 +53,7 @@ test("Agent keeps the model message stream, not outcome display results", async 
   const store = new InMemorySessionStore<AgentSession>();
   const routeContexts: string[][] = [];
   const stream: StreamFn = async function* taskMultiTurnStream(model, context, options) {
-    if (context.phase === "route") {
+    if (context.phase === "route" && !context.session.parentSessionId) {
       routeContexts.push(context.session.messages.map((message) => message.content));
     }
     yield* scriptedStream(model, context, options);
@@ -77,8 +77,7 @@ test("Agent keeps the model message stream, not outcome display results", async 
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining([
       "use echo tool",
-      "Planning task...",
-      "Verifying task outcome...",
+      expect.stringContaining("\"toolName\":\"thread\""),
       "use echo tool again",
     ]),
   );
@@ -109,7 +108,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
         .map((message) => message.content);
       routeOutcomeContexts.push(outcomeMessages);
       const hasFailedOutcome = outcomeMessages.includes("Missing some functions to finish the task");
-      const needsTask = context.session.userInput === "trigger failure" || hasFailedOutcome;
+      const needsTask = latestUserInput(context.session) === "trigger failure" || hasFailedOutcome;
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
       yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.session.messages.length } };

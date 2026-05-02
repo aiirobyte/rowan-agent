@@ -37,7 +37,7 @@ test("runSubSession creates a session with explicit tools and skills", async () 
   expect(events).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
-        type: "sub_session_start",
+        type: "thread_created",
         parentSessionId: "ses_parent",
         sessionId: result.session.id,
       }),
@@ -46,10 +46,11 @@ test("runSubSession creates a session with explicit tools and skills", async () 
         session: expect.objectContaining({
           id: result.session.id,
           parentSessionId: "ses_parent",
+          input: "use echo tool",
         }),
       }),
       expect.objectContaining({
-        type: "sub_session_end",
+        type: "thread_end",
         parentSessionId: "ses_parent",
         sessionId: result.session.id,
       }),
@@ -197,6 +198,7 @@ test("tools can launch sub-sessions and return outcomes as tool evidence", async
         type: "structured_output",
         content: {
           needsTask: true,
+          route: "task",
           message: "Start a nested session.",
         },
       };
@@ -276,6 +278,6 @@ test("tools can launch sub-sessions and return outcomes as tool evidence", async
         event.result.content.passed === true,
     ),
   ).toBe(true);
-  expect(events.some((event) => event.type === "sub_session_start")).toBe(true);
-  expect(events.some((event) => event.type === "sub_session_end")).toBe(true);
+  expect(events.some((event) => event.type === "thread_created")).toBe(true);
+  expect(events.some((event) => event.type === "thread_end")).toBe(true);
 });

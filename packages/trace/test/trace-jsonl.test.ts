@@ -42,7 +42,8 @@ test("jsonlTraceWriter writes agent events", async () => {
   expect(sessionCreated.session.logLength).toBeUndefined();
   expect(sessionCreated.session.createdAt).toBeUndefined();
   expect(sessionCreated.session.updatedAt).toBeUndefined();
-  expect(trace).toContain("\"userInput\":\"use echo tool\"");
+  expect(trace).toContain("\"input\":\"use echo tool\"");
+  expect(trace).not.toContain("\"userInput\"");
   expect(trace).not.toContain("\"type\":\"session_start\"");
   expect(trace).not.toContain("\"type\":\"session_end\"");
   expect(chatStart.content).toEqual(
@@ -81,6 +82,7 @@ test("jsonlTraceWriter records model calls and message deltas without structured
     {
       message: "A task is needed for echo.",
       needsTask: true,
+      route: "task",
     },
     {
       message: "Planning echo.",
@@ -149,7 +151,8 @@ test("jsonlTraceWriter records model calls and message deltas without structured
     .filter((event) => event.type === "message_delta");
 
   expect(trace).toContain("\"type\":\"session_created\"");
-  expect(trace).toContain("\"userInput\":\"hello\"");
+  expect(trace).toContain("\"input\":\"hello\"");
+  expect(trace).not.toContain("\"userInput\"");
   expect(trace).toContain("\"type\":\"model_requested\"");
   expect(trace).toContain("\"phase\":\"plan\"");
   expect(trace).not.toContain("\"type\":\"model_request\"");

@@ -22,7 +22,10 @@ test("Agent.prompt returns an outcome and emits events", async () => {
   expect(agent.state.isRunning).toBe(false);
   expect(agent.state.session?.messages.length).toBeGreaterThan(0);
   expect(agent.state.session?.log.length).toBeGreaterThan(0);
+  expect(agent.state.session?.input).toBe("use echo tool");
   expect(events).toContain("outcome");
+  expect(events).toContain("thread_created");
+  expect(events).toContain("thread_end");
 });
 
 test("Agent.prompt does not wait for async trace listeners", async () => {

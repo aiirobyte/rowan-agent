@@ -232,7 +232,7 @@ test("CLI list returns saved sessions in the current workspace", async () => {
   const store = new LocalJsonSessionStore(join(workspace, "sessions"));
   const older = createSession({
     systemPrompt: "Test system",
-    userInput: "old hello",
+    input: "old hello",
     title: "Older session",
   });
   older.createdAt = "2026-05-02T120000-00+08:00";
@@ -240,7 +240,7 @@ test("CLI list returns saved sessions in the current workspace", async () => {
   older.messages.push(createMessage("assistant", "Older answer"));
   const newer = createSession({
     systemPrompt: "Test system",
-    userInput: "new hello",
+    input: "new hello",
     title: "Newer session",
   });
   newer.createdAt = "2026-05-02T130000-00+08:00";
@@ -403,7 +403,8 @@ test("CLI writes a default trace without --trace", async () => {
     expect(firstEvent.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
     expect(firstEvent.timestamp).toBeUndefined();
     expect(trace).toContain("\"type\":\"session_created\"");
-    expect(trace).toContain("\"userInput\":\"hello\"");
+    expect(trace).toContain("\"input\":\"hello\"");
+    expect(trace).not.toContain("\"userInput\"");
     expect(trace).toContain("\"type\":\"model_requested\"");
     expect(trace).toContain("\"phase\":\"route\"");
     expect(trace).not.toContain("\"type\":\"task_created\"");
@@ -414,7 +415,7 @@ test("CLI writes a default trace without --trace", async () => {
       version?: string;
       messages?: Array<{ content?: string }>;
     };
-    expect(session.version).toBe("0.3.1");
+    expect(session.version).toBe("0.3.2");
     expect(session.messages?.some((message) => message.content?.includes("Hello from model"))).toBe(true);
     expect(session.messages?.some((message) => message.content === "Hello from model")).toBe(false);
   } finally {
@@ -429,6 +430,11 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     {
       message: "Use bash to check the current date: $(date)",
       needsTask: false,
+    },
+    {
+      message: "Creating a worker task.",
+      needsTask: true,
+      route: "task",
     },
     {
       task: {
@@ -446,6 +452,10 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
           args: { command: "printf cli-bash-ok" },
         },
       ],
+    },
+    {
+      passed: true,
+      message: "cli-bash-ok",
     },
     {
       passed: true,

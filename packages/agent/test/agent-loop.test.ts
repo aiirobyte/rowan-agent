@@ -15,7 +15,7 @@ function createSession(input: Parameters<typeof createBaseSession>[0]) {
 test("runAgentLoop completes task with echo tool and verification", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "use echo tool",
+    input: "use echo tool",
   });
   const events: string[] = [];
 
@@ -98,7 +98,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
   };
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "use echo tool",
+    input: "use echo tool",
   });
 
   await runAgentLoop({
@@ -135,7 +135,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
 test("runAgentLoop can return a direct response without creating a task", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "hello",
+    input: "hello",
   });
   const emittedEvents: AgentEvent[] = [];
 
@@ -163,6 +163,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
   );
   expect(JSON.parse(routeDecision?.content ?? "{}")).toEqual({
     needsTask: false,
+    route: "direct",
     message: "Direct response: hello",
   });
   expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
@@ -186,7 +187,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
 test("runAgentLoop returns structured error for unknown tool without crashing", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "use echo tool",
+    input: "use echo tool",
   });
 
   const outcome = await runAgentLoop({
@@ -204,7 +205,7 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
 test("runAgentLoop preserves provider error details in error events", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "hello",
+    input: "hello",
   });
   const stream: StreamFn = async function* failingStream() {
     throw Object.assign(new Error("OpenAI-compatible request failed with status 400 Bad Request: Invalid model."), {
@@ -258,7 +259,7 @@ function invalidModelSchemaError(message: string): Error & { code: string } {
 test("runAgentLoop retries when verify returns invalid model schema", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "use echo tool",
+    input: "use echo tool",
   });
   const task = {
     id: createId("task"),
@@ -329,7 +330,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
 test("runAgentLoop retries when execute returns invalid model schema", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "use echo tool",
+    input: "use echo tool",
   });
   const task = {
     id: createId("task"),
@@ -402,7 +403,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
 test("beforeToolCall hook can block execution", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "use echo tool",
+    input: "use echo tool",
   });
   const events: string[] = [];
 
@@ -436,7 +437,7 @@ test("beforeToolCall hook can block execution", async () => {
 test("afterToolCall hook review is logged with original and reviewed result", async () => {
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "use echo tool",
+    input: "use echo tool",
   });
 
   const outcome = await runAgentLoop({
@@ -533,7 +534,7 @@ test("invalid tool args do not execute tool", async () => {
   };
   const session = createSession({
     systemPrompt: "Test system",
-    userInput: "call strict",
+    input: "call strict",
   });
 
   const outcome = await runAgentLoop({

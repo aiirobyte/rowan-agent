@@ -1,5 +1,5 @@
 import type { LlmContext, Tool } from "@rowan-agent/agent";
-import type { AgentMessage } from "@rowan-agent/session";
+import { latestUserInput, type AgentMessage } from "@rowan-agent/session";
 import {
   buildExecutePrompt,
   buildPlanPrompt,
@@ -78,7 +78,10 @@ function buildConversationMessages(context: LlmContext): ChatMessage[] {
 
 function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, tools: Tool[]): string {
   return buildPlanPrompt({
-    currentUserInputJson: toJson(context.session.userInput),
+    currentUserInputJson: toJson(latestUserInput(context.session)),
+    sessionInputJson: toJson(context.session.input),
+    sessionTaskJson: toJson(context.session.task ?? null),
+    sessionGoalJson: toJson(context.session.goal ?? null),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
   });
@@ -86,7 +89,10 @@ function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, t
 
 function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>, tools: Tool[]): string {
   return buildRoutePrompt({
-    currentUserInputJson: toJson(context.session.userInput),
+    currentUserInputJson: toJson(latestUserInput(context.session)),
+    sessionInputJson: toJson(context.session.input),
+    sessionTaskJson: toJson(context.session.task ?? null),
+    sessionGoalJson: toJson(context.session.goal ?? null),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
   });

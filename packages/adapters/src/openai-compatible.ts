@@ -561,6 +561,17 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
+function latestUserInput(context: Pick<LlmContext, "session">): string {
+  for (let index = context.session.messages.length - 1; index >= 0; index -= 1) {
+    const message = context.session.messages[index];
+    if (message.role === "user") {
+      return message.content;
+    }
+  }
+
+  return context.session.input;
+}
+
 function normalizeRoutingOutput(
   value: unknown,
   context: Extract<LlmContext, { phase: "route" }>,
@@ -570,20 +581,37 @@ function normalizeRoutingOutput(
     throw validationError("route", "Expected a routing decision object.");
   }
 
-  const needsTask = normalizeBoolean(
-    getRecordValue(raw, "needsTask", "needs_task", "taskRequired", "requiresTask", "shouldCreateTask"),
-    true,
-  );
+  const routeValue = asString(getRecordValue(raw, "route"))?.toLowerCase();
+  const explicitRoute = routeValue === "direct" || routeValue === "task" || routeValue === "thread"
+    ? routeValue
+    : undefined;
+  const needsTask = explicitRoute
+    ? explicitRoute !== "direct"
+    : normalizeBoolean(
+        getRecordValue(raw, "needsTask", "needs_task", "taskRequired", "requiresTask", "shouldCreateTask"),
+        false,
+      );
+  const route = explicitRoute ?? (needsTask ? undefined : "direct");
   const message =
     asString(getRecordValue(raw, "message")) ??
     asString(getRecordValue(raw, "answer")) ??
     asString(getRecordValue(raw, "response")) ??
-    (needsTask ? "Creating a task for this request." : context.session.userInput);
+    (needsTask ? "Creating a task for this request." : latestUserInput(context));
+  const rawThread = getRecordValue(raw, "thread", "subSession", "sub_session");
+  const thread = isRecord(rawThread)
+    ? {
+        prompt: asString(getRecordValue(rawThread, "prompt", "input")) ?? latestUserInput(context),
+        task: asString(getRecordValue(rawThread, "task", "instruction")) ?? message,
+        goal: asString(getRecordValue(rawThread, "goal", "acceptanceGoal", "acceptance_goal")) ?? message,
+      }
+    : undefined;
 
   try {
     return Validators.taskRoutingDecision.Parse({
       needsTask,
       message,
+      ...(route ? { route } : {}),
+      ...(route === "thread" && thread ? { thread } : {}),
     });
   } catch (error) {
     throw validationError("route", error);
@@ -600,14 +628,18 @@ function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phas
     asString(getRecordValue(raw, "instruction")) ??
     asString(getRecordValue(raw, "description")) ??
     asString(getRecordValue(raw, "message")) ??
-    context.session.userInput;
+    context.session.task ??
+    latestUserInput(context);
   const defaultSkillIds = context.session.skills.map((skill) => skill.id);
   const normalized = {
     ...raw,
     id: asString(getRecordValue(raw, "id")) ?? createId("task"),
     title: asString(getRecordValue(raw, "title")) ?? asString(getRecordValue(raw, "name")) ?? shortTitle(instruction),
     instruction,
-    acceptanceCriteria: normalizeAcceptanceCriteria(getRecordValue(raw, "acceptanceCriteria"), instruction),
+    acceptanceCriteria: normalizeAcceptanceCriteria(
+      getRecordValue(raw, "acceptanceCriteria"),
+      context.session.goal ?? instruction,
+    ),
     toolNames: normalizeStringArray(getRecordValue(raw, "toolNames", "tools"), []),
     skillIds: normalizeStringArray(getRecordValue(raw, "skillIds", "skills"), defaultSkillIds),
     status: asString(getRecordValue(raw, "status")) ?? "pending",
