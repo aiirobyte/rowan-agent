@@ -3,10 +3,10 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Outcome } from "@rowan-agent/agent";
+import { LocalJsonAgentStore } from "@rowan-agent/store";
 import { createMessage, createSession } from "@rowan-agent/session";
 import { inspectTrace } from "@rowan-agent/trace";
 import { formatOutcomeOutput } from "../src/output";
-import { LocalJsonAgentStore } from "../src/session-store";
 
 async function runCli(
   args: string[],

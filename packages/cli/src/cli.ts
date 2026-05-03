@@ -16,6 +16,7 @@ import {
   type Outcome,
 } from "@rowan-agent/agent";
 import { type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
+import { LocalJsonAgentStore } from "@rowan-agent/store";
 import { jsonlTraceWriter, type JsonlTracePath } from "@rowan-agent/trace";
 import {
   type RowanWorkspacePaths,
@@ -23,7 +24,6 @@ import {
   resolveRowanWorkspacePaths,
 } from "@rowan-agent/workspace";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
-import { LocalJsonAgentStore } from "./session-store";
 import { loadSkills, resolveSkillPath } from "./skills";
 
 type CliCommand = "config" | "list";

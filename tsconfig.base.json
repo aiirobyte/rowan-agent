@@ -11,6 +11,8 @@
       "@rowan-agent/agent/*": ["./packages/agent/src/*"],
       "@rowan-agent/session": ["./packages/session/src/index.ts"],
       "@rowan-agent/session/*": ["./packages/session/src/*"],
+      "@rowan-agent/store": ["./packages/store/src/index.ts"],
+      "@rowan-agent/store/*": ["./packages/store/src/*"],
       "@rowan-agent/adapters": ["./packages/adapters/src/index.ts"],
       "@rowan-agent/adapters/*": ["./packages/adapters/src/*"],
       "@rowan-agent/trace": ["./packages/trace/src/index.ts"],

@@ -1,7 +1,7 @@
 import Type from "typebox";
 import Schema from "typebox/schema";
 import type { AgentMessage, Session as CoreSession, Skill } from "@rowan-agent/session";
-import type { ExecutionTurn } from "./store";
+import type { ExecutionTurn } from "@rowan-agent/store";
 
 export type ModelRef = {
   provider: string;

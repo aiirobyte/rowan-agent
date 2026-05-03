@@ -1,5 +1,5 @@
 {
-  "name": "@rowan-agent/adapters",
+  "name": "@rowan-agent/store",
   "version": "0.3.4",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/agent": "workspace:*",
-    "@rowan-agent/context": "workspace:*"
+    "@rowan-agent/session": "workspace:*",
+    "typebox": "^1.0.0"
   }
 }

@@ -37,7 +37,7 @@ import type {
   RuntimeDepth,
 } from "./types";
 import { createId, nowIso, resolveMaxThreadDepth, Validators } from "./types";
-import type { ExecutionTurnEntry } from "./store";
+import type { ExecutionTurnEntry } from "@rowan-agent/store";
 
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;

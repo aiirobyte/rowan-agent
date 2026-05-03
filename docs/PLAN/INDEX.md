@@ -41,13 +41,13 @@ The main project roadmap now lives in:
 - v0.3.1 implemented: persistent Session, multi-turn Agent conversations, and session-aware CLI.
 - v0.3.2 implemented: thread/sub-session unification, immutable Session input, and task/goal metadata.
 - v0.3.3 implemented: AgentStore port, JSON-backed step storage, and scoped context.
-- v0.3.4 planned: store package consolidation.
+- v0.3.4 implemented: store package consolidation.
 
 ## Next Steps
 
-1. Implement v0.3.4 `@rowan-agent/store` package consolidation.
-2. Move `AgentStore`, `ExecutionTurn`, in-memory store, and JSON store into `packages/store`.
-3. Keep v0.3.3 persisted JSON schema stable while changing package ownership.
+1. Scope v0.4.0 policy and safety work.
+2. Keep `@rowan-agent/store` as the single owner of store ports and JSON persistence.
+3. Keep v0.3.3 persisted JSON schema stable until a future storage version requires a new schema.
 
 ## Notes
 

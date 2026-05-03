@@ -7,7 +7,7 @@ import {
   type Session,
   type Skill,
 } from "@rowan-agent/session";
-import type { AgentStore } from "./store";
+import type { AgentStore } from "@rowan-agent/store";
 import type {
   AfterToolCall,
   AgentBudgetUsage,

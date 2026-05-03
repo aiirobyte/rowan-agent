@@ -2,7 +2,7 @@
 
 > 版本：v0.3.4
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 基线：v0.3.3 Storage Port + Scoped Context
 > 任务表：`docs/PLAN/v0.3.4/TASKS.md`
 

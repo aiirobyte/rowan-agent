@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createMessage, createSession } from "@rowan-agent/session";
-import { LocalJsonAgentStore } from "../src/session-store";
+import { LocalJsonAgentStore } from "@rowan-agent/store";
 
 test("LocalJsonAgentStore reads and writes sessions and steps inside the workspace", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-local-session-"));

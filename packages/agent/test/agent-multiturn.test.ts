@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { latestUserInput, type Session } from "@rowan-agent/session";
-import { Agent, InMemoryAgentStore, type AgentEvent, type StreamFn } from "../src";
+import { InMemoryAgentStore } from "@rowan-agent/store";
+import { Agent, type AgentEvent, type StreamFn } from "../src";
 import { createDefaultCriteria } from "../src/task";
 import { createId } from "../src/types";
 import { createEchoTools } from "./support/echo-tool";

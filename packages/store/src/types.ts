@@ -3,36 +3,53 @@ import Schema from "typebox/schema";
 import {
   AgentMessageSchema,
   ContextScopeSchema,
-  sessionFromPersisted,
-  summarizePersistedSession,
-  toPersistedSession,
-  nowIso,
   type AgentMessage,
-  type PersistedSession,
   type Session,
-  type SessionListItem,
   type SessionStore,
 } from "@rowan-agent/session";
-import { ToolCallSchema, ToolResultSchema, type LlmPhase } from "./types";
 
-const LlmPhaseSchema = Type.Union([
+export const LlmPhaseSchema = Type.Union([
   Type.Literal("route"),
   Type.Literal("plan"),
   Type.Literal("execute"),
   Type.Literal("verify"),
 ]);
 
-const ModelRefSchema = Type.Object({
+export type LlmPhase = Type.Static<typeof LlmPhaseSchema>;
+
+export const ModelRefSchema = Type.Object({
   provider: Type.String(),
   name: Type.String(),
 });
 
-const ModelCallUsageSchema = Type.Object({
+export type ModelRef = Type.Static<typeof ModelRefSchema>;
+
+export const ModelCallUsageSchema = Type.Object({
   inputMessages: Type.Number(),
   inputTokens: Type.Optional(Type.Number()),
   outputTokens: Type.Optional(Type.Number()),
   totalTokens: Type.Optional(Type.Number()),
 });
+
+export type ModelCallUsage = Type.Static<typeof ModelCallUsageSchema>;
+
+export const ToolCallSchema = Type.Object({
+  id: Type.String(),
+  name: Type.String(),
+  args: Type.Unknown(),
+});
+
+export type ToolCall = Type.Static<typeof ToolCallSchema>;
+
+export const ToolResultSchema = Type.Object({
+  toolCallId: Type.String(),
+  toolName: Type.String(),
+  ok: Type.Boolean(),
+  content: Type.Unknown(),
+  error: Type.Optional(Type.String()),
+});
+
+export type ToolResult = Type.Static<typeof ToolResultSchema>;
 
 const PromptStepMessageSchema = Type.Object({
   role: AgentMessageSchema.properties.role,
@@ -91,14 +108,9 @@ export type AgentStore<TSession extends Session<unknown> = Session<unknown>> =
     loadSteps(sessionId: string, filter?: StepFilter): Promise<ExecutionTurn[]>;
   };
 
-const ExecutionTurnValidator = Schema.Compile(ExecutionTurnSchema);
+export const ExecutionTurnValidator = Schema.Compile(ExecutionTurnSchema);
 
-type StoredAgentState = {
-  session: PersistedSession;
-  steps: ExecutionTurn[];
-};
-
-function cloneStep(step: ExecutionTurn): ExecutionTurn {
+export function cloneStep(step: ExecutionTurn): ExecutionTurn {
   return ExecutionTurnValidator.Parse(JSON.parse(JSON.stringify(step)));
 }
 
@@ -113,60 +125,4 @@ export function filterSteps(steps: readonly ExecutionTurn[], filter: StepFilter 
     .map(cloneStep);
 }
 
-export class InMemoryAgentStore<TSession extends Session<unknown> = Session<unknown>>
-  implements AgentStore<TSession>
-{
-  private readonly states = new Map<string, StoredAgentState>();
-
-  async create(session: TSession): Promise<TSession> {
-    if (this.states.has(session.id)) {
-      throw new Error(`Session already exists: ${session.id}`);
-    }
-
-    const persisted = toPersistedSession(session);
-    this.states.set(session.id, { session: persisted, steps: [] });
-    return sessionFromPersisted(persisted) as TSession;
-  }
-
-  async load(id: string): Promise<TSession | undefined> {
-    const state = this.states.get(id);
-    return state ? (sessionFromPersisted(state.session) as TSession) : undefined;
-  }
-
-  async save(session: TSession): Promise<void> {
-    const existing = this.states.get(session.id);
-    this.states.set(session.id, {
-      session: toPersistedSession(session),
-      steps: existing?.steps.map(cloneStep) ?? [],
-    });
-  }
-
-  async list(): Promise<SessionListItem[]> {
-    return [...this.states.values()]
-      .map((state) => summarizePersistedSession(state.session))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  }
-
-  async delete(id: string): Promise<boolean> {
-    return this.states.delete(id);
-  }
-
-  async appendStep(sessionId: string, step: ExecutionTurn): Promise<void> {
-    const state = this.states.get(sessionId);
-    if (!state) {
-      throw new Error(`Session not found: ${sessionId}`);
-    }
-
-    const normalized = ExecutionTurnValidator.Parse({
-      ...step,
-      sessionId,
-    });
-    state.steps.push(cloneStep(normalized));
-    state.session.updatedAt = nowIso();
-  }
-
-  async loadSteps(sessionId: string, filter?: StepFilter): Promise<ExecutionTurn[]> {
-    const state = this.states.get(sessionId);
-    return state ? filterSteps(state.steps, filter) : [];
-  }
-}
+export type PromptStepMessage = Pick<AgentMessage, "role" | "content">;

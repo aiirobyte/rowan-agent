@@ -2,7 +2,7 @@
 
 > 版本：v0.3.4
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 上游文档：`docs/PLAN/v0.3.3/PLAN.md`、`.agent/docs/2026-05-03-cahciua-dcp-reuse-plan.md`
 
 ## 文档
@@ -36,7 +36,7 @@ bun run build
 预期：
 
 - `packages/store` 存在并导出 store port 与 JSON-backed store。
-- `packages/cli/src/session-store.ts` 被移除或只保留兼容 re-export。
+- `packages/cli/src/session-store.ts` 已移除。
 - CLI 继续能创建、加载、列出 v0.3.3 session JSON。
 - `session` 不依赖 `store`。
 - `store` 不依赖 `agent`，避免 store/agent 循环。

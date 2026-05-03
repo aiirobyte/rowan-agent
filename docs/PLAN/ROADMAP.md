@@ -2,7 +2,7 @@
 
 > 版本：v0.3.4
 > 日期：2026-05-03
-> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first child-session predecessor 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 已实现；v0.3.3 storage port 已实现；v0.3.4 store package consolidation planned
+> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first child-session predecessor 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 已实现；v0.3.3 storage port 已实现；v0.3.4 store package consolidation 已实现
 > 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`
 
 ## 1. 一句话定位
@@ -304,7 +304,7 @@ v0.3.4 详细执行计划维护在：
 - `docs/PLAN/v0.3.4/PLAN.md`
 - `docs/PLAN/v0.3.4/TASKS.md`
 
-v0.3.4 已确定：
+v0.3.4 已实现：
 
 - 新增 `packages/store`。
 - `AgentStore`、`ExecutionTurn`、`StepFilter`、`InMemoryAgentStore` 移入 `store`。

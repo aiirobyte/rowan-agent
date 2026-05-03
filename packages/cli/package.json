@@ -1,6 +1,6 @@
 {
   "name": "@rowan-agent/cli",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "bin": {
@@ -14,6 +14,7 @@
     "@rowan-agent/adapters": "workspace:*",
     "@rowan-agent/agent": "workspace:*",
     "@rowan-agent/session": "workspace:*",
+    "@rowan-agent/store": "workspace:*",
     "@rowan-agent/trace": "workspace:*",
     "@rowan-agent/workspace": "workspace:*"
   }

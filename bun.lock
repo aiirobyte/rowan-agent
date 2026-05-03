@@ -14,7 +14,7 @@
     },
     "packages/adapters": {
       "name": "@rowan-agent/adapters",
-      "version": "0.3.1",
+      "version": "0.3.4",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/context": "workspace:*",
@@ -22,15 +22,16 @@
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.3.1",
+      "version": "0.3.4",
       "dependencies": {
         "@rowan-agent/session": "workspace:*",
+        "@rowan-agent/store": "workspace:*",
         "typebox": "^1.0.0",
       },
     },
     "packages/cli": {
       "name": "@rowan-agent/cli",
-      "version": "0.3.1",
+      "version": "0.3.4",
       "bin": {
         "rowan": "./src/cli.ts",
       },
@@ -38,13 +39,14 @@
         "@rowan-agent/adapters": "workspace:*",
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/session": "workspace:*",
+        "@rowan-agent/store": "workspace:*",
         "@rowan-agent/trace": "workspace:*",
         "@rowan-agent/workspace": "workspace:*",
       },
     },
     "packages/context": {
       "name": "@rowan-agent/context",
-      "version": "0.3.1",
+      "version": "0.3.4",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/session": "workspace:*",
@@ -52,14 +54,22 @@
     },
     "packages/session": {
       "name": "@rowan-agent/session",
-      "version": "0.3.1",
+      "version": "0.3.4",
       "dependencies": {
+        "typebox": "^1.0.0",
+      },
+    },
+    "packages/store": {
+      "name": "@rowan-agent/store",
+      "version": "0.3.4",
+      "dependencies": {
+        "@rowan-agent/session": "workspace:*",
         "typebox": "^1.0.0",
       },
     },
     "packages/trace": {
       "name": "@rowan-agent/trace",
-      "version": "0.3.1",
+      "version": "0.3.4",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/workspace": "workspace:*",
@@ -67,7 +77,7 @@
     },
     "packages/workspace": {
       "name": "@rowan-agent/workspace",
-      "version": "0.3.1",
+      "version": "0.3.4",
     },
   },
   "packages": {
@@ -80,6 +90,8 @@
     "@rowan-agent/context": ["@rowan-agent/context@workspace:packages/context"],
 
     "@rowan-agent/session": ["@rowan-agent/session@workspace:packages/session"],
+
+    "@rowan-agent/store": ["@rowan-agent/store@workspace:packages/store"],
 
     "@rowan-agent/trace": ["@rowan-agent/trace@workspace:packages/trace"],
 

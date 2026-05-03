@@ -16,11 +16,12 @@ import {
 } from "@rowan-agent/session";
 import {
   ExecutionTurnSchema,
+  ExecutionTurnValidator,
   filterSteps,
   type AgentStore,
   type ExecutionTurn,
   type StepFilter,
-} from "@rowan-agent/agent";
+} from "./types";
 
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9_-]+$/;
 
@@ -34,7 +35,6 @@ type PersistedAgentState = PersistedSession & {
 };
 
 const PersistedAgentStateValidator = Schema.Compile(PersistedAgentStateSchema);
-const ExecutionTurnValidator = Schema.Compile(ExecutionTurnSchema);
 
 function isPathInside(parent: string, child: string): boolean {
   const relativePath = relative(parent, child);
@@ -48,8 +48,7 @@ function parsePersistedAgentState(value: unknown): PersistedAgentState {
   if (version !== SESSION_SCHEMA_VERSION) {
     throw new Error(`Unsupported session schema version: ${String(version ?? "unknown")}`);
   }
-  const parsed = PersistedAgentStateValidator.Parse(value) as PersistedAgentState;
-  return parsed;
+  return PersistedAgentStateValidator.Parse(value) as PersistedAgentState;
 }
 
 function toPersistedAgentState(
