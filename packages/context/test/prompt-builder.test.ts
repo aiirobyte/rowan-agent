@@ -169,7 +169,7 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
   expect(combined).not.toContain("Use the conversation messages already included in this request as context.");
 });
 
-test("prompt builder includes the model message stream in later prompts", () => {
+test("prompt builder excludes execution-scoped messages from later prompts", () => {
   const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
   session.messages.push(
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
@@ -203,11 +203,11 @@ test("prompt builder includes the model message stream in later prompts", () => 
   const combined = messages.map((message) => message.content).join("\n");
 
   expect(combined).toContain("Use echo.");
-  expect(combined).toContain("tool evidence");
-  expect(combined).toContain("\"route\":\"task\"");
-  expect(combined).toContain("\"title\":\"Echo\"");
-  expect(combined).toContain("\"toolCalls\":[]");
-  expect(combined).toContain("Answer text.");
+  expect(combined).not.toContain("tool evidence");
+  expect(combined).not.toContain("\"route\":\"task\"");
+  expect(combined).not.toContain("\"title\":\"Echo\"");
+  expect(combined).not.toContain("\"toolCalls\":[]");
+  expect(combined).not.toContain("Answer text.");
 });
 
 test("prompt builder does not replay recorded phase prompts as conversation", () => {
@@ -230,7 +230,7 @@ test("prompt builder does not replay recorded phase prompts as conversation", ()
   const combined = messages.map((message) => message.content).join("\n");
 
   expect(combined).toContain("Phase: plan");
-  expect(combined).toContain("\"route\":\"task\"");
+  expect(combined).not.toContain("\"route\":\"task\"");
   expect(combined).not.toContain("Internal routing prompt.");
 });
 

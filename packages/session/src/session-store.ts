@@ -4,6 +4,7 @@ import {
   AgentMessageSchema,
   SESSION_SCHEMA_VERSION,
   SkillSchema,
+  isConversationMessage,
   type AgentMessage,
   type Session,
 } from "./session";
@@ -25,21 +26,6 @@ export const PersistedSessionSchema = Type.Object({
 
 export type PersistedSession = Type.Static<typeof PersistedSessionSchema>;
 
-const LegacyPersistedSession031Schema = Type.Object({
-  version: Type.Literal("0.3.1"),
-  id: Type.String(),
-  parentSessionId: Type.Optional(Type.String()),
-  systemPrompt: Type.String(),
-  userInput: Type.String(),
-  messages: Type.Array(AgentMessageSchema),
-  skills: Type.Array(SkillSchema),
-  createdAt: Type.String(),
-  updatedAt: Type.String(),
-  title: Type.Optional(Type.String()),
-});
-
-type LegacyPersistedSession031 = Type.Static<typeof LegacyPersistedSession031Schema>;
-
 export type SessionListItem = {
   id: string;
   title: string | null;
@@ -58,39 +44,12 @@ export type SessionStore<TSession extends Session<unknown> = Session<unknown>> =
 };
 
 const PersistedSessionValidator = Schema.Compile(PersistedSessionSchema);
-const LegacyPersistedSession031Validator = Schema.Compile(LegacyPersistedSession031Schema);
 
 function cloneMessage(message: AgentMessage): AgentMessage {
   return {
     ...message,
     ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
   };
-}
-
-function isLegacyPersistedSession031(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    (value as Record<string, unknown>).version === "0.3.1" &&
-    typeof (value as Record<string, unknown>).userInput === "string" &&
-    !("input" in value)
-  );
-}
-
-function migrateLegacyPersistedSession031(session: LegacyPersistedSession031): PersistedSession {
-  return PersistedSessionValidator.Parse({
-    version: SESSION_SCHEMA_VERSION,
-    id: session.id,
-    ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-    systemPrompt: session.systemPrompt,
-    input: session.userInput,
-    messages: session.messages.map(cloneMessage),
-    skills: session.skills,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    ...(session.title ? { title: session.title } : {}),
-  });
 }
 
 export function toPersistedSession(session: Session<unknown>): PersistedSession {
@@ -102,7 +61,7 @@ export function toPersistedSession(session: Session<unknown>): PersistedSession 
     input: session.input,
     ...(session.task ? { task: session.task } : {}),
     ...(session.goal ? { goal: session.goal } : {}),
-    messages: session.messages.map(cloneMessage),
+    messages: session.messages.filter(isConversationMessage).map(cloneMessage),
     skills: session.skills,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -111,10 +70,6 @@ export function toPersistedSession(session: Session<unknown>): PersistedSession 
 }
 
 export function parsePersistedSession(value: unknown): PersistedSession {
-  if (isLegacyPersistedSession031(value)) {
-    return migrateLegacyPersistedSession031(LegacyPersistedSession031Validator.Parse(value));
-  }
-
   const parsed = PersistedSessionValidator.Parse(value);
   if (parsed.version !== SESSION_SCHEMA_VERSION) {
     throw new Error(`Unsupported session schema version: ${parsed.version}`);

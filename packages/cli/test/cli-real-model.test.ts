@@ -6,7 +6,7 @@ import type { Outcome } from "@rowan-agent/agent";
 import { createMessage, createSession } from "@rowan-agent/session";
 import { inspectTrace } from "@rowan-agent/trace";
 import { formatOutcomeOutput } from "../src/output";
-import { LocalJsonSessionStore } from "../src/session-store";
+import { LocalJsonAgentStore } from "../src/session-store";
 
 async function runCli(
   args: string[],
@@ -244,7 +244,7 @@ test("CLI config rejects trailing prompt text", async () => {
 
 test("CLI list returns saved sessions in the current workspace", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-list-"));
-  const store = new LocalJsonSessionStore(join(workspace, "sessions"));
+  const store = new LocalJsonAgentStore(join(workspace, "sessions"));
   const older = createSession({
     systemPrompt: "Test system",
     input: "old hello",
@@ -429,9 +429,9 @@ test("CLI writes a default trace without --trace", async () => {
       version?: string;
       messages?: Array<{ content?: string }>;
     };
-    expect(session.version).toBe("0.3.2");
+    expect(session.version).toBe("0.3.3");
     expect(session.messages?.some((message) => message.content?.includes("Hello from model"))).toBe(true);
-    expect(session.messages?.some((message) => message.content === "Hello from model")).toBe(false);
+    expect(session.messages?.some((message) => message.content === "Hello from model")).toBe(true);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 import type { LlmContext, Tool } from "@rowan-agent/agent";
-import { latestUserInput, type AgentMessage } from "@rowan-agent/session";
+import { isConversationMessage, latestUserInput, type AgentMessage } from "@rowan-agent/session";
 import {
   buildExecutePrompt,
   buildPlanPrompt,
@@ -52,20 +52,12 @@ function buildSystemMessage(context: LlmContext): ChatMessage {
 }
 
 function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
-  if (message.role === "system") {
+  if (!isConversationMessage(message)) {
     return undefined;
   }
 
-  if (message.metadata?.kind === "phase_prompt") {
+  if (message.role !== "user" && message.role !== "assistant") {
     return undefined;
-  }
-
-  if (message.role === "tool") {
-    const toolName = typeof message.metadata?.toolName === "string" ? ` (${message.metadata.toolName})` : "";
-    return {
-      role: "user",
-      content: `Tool result${toolName}:\n${message.content}`,
-    };
   }
 
   return {
@@ -74,8 +66,22 @@ function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
   };
 }
 
+function conversationForPhase(context: LlmContext): AgentMessage[] {
+  const conversation = context.session.messages.filter(isConversationMessage);
+
+  if (context.phase === "route") {
+    return conversation.slice(-12);
+  }
+
+  if (context.phase === "plan") {
+    return conversation.slice(-20);
+  }
+
+  return conversation.slice(-8);
+}
+
 function buildConversationMessages(context: LlmContext): ChatMessage[] {
-  return context.session.messages.flatMap((message) => {
+  return conversationForPhase(context).flatMap((message) => {
     const chatMessage = toConversationMessage(message);
     return chatMessage ? [chatMessage] : [];
   });

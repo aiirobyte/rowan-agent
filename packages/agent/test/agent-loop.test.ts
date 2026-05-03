@@ -36,7 +36,7 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
   expect(events).toContain("tool_end");
   expect(events).toContain("verification_end");
   expect(events).toContain("outcome");
-  expect(session.messages.some((message) => message.role === "tool")).toBe(true);
+  expect(session.messages.some((message) => message.role === "tool")).toBe(false);
   expect(session.log.length).toBeGreaterThan(0);
 });
 
@@ -168,7 +168,14 @@ test("runAgentLoop records prompt messages emitted by the model adapter", async 
     },
   });
 
-  const promptMessage = session.messages.find(
+  const promptMessage = session.log.find(
+    (event) =>
+      event.type === "message_delta" &&
+      !Array.isArray(event.delta) &&
+      event.delta.metadata?.kind === "phase_prompt" &&
+      event.delta.metadata.phase === "route",
+  );
+  const sessionPromptMessage = session.messages.find(
     (message) => message.metadata?.kind === "phase_prompt" && message.metadata.phase === "route",
   );
   const promptIndex = emittedEvents.findIndex(
@@ -179,13 +186,17 @@ test("runAgentLoop records prompt messages emitted by the model adapter", async 
   );
   const modelRequestedIndex = emittedEvents.findIndex((event) => event.type === "model_requested");
 
+  expect(sessionPromptMessage).toBeUndefined();
   expect(promptMessage).toEqual(
     expect.objectContaining({
-      role: "user",
-      content: expect.stringContaining("Phase: route"),
-      metadata: expect.objectContaining({
-        kind: "phase_prompt",
-        phase: "route",
+      type: "message_delta",
+      delta: expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("Phase: route"),
+        metadata: expect.objectContaining({
+          kind: "phase_prompt",
+          phase: "route",
+        }),
       }),
     }),
   );
@@ -219,13 +230,26 @@ test("runAgentLoop can return a direct response without creating a task", async 
   expect(events).not.toContain("task_created");
   expect(events).not.toContain("verification_start");
   expect(events.indexOf("chat_end")).toBeLessThan(events.indexOf("outcome"));
-  const routeDecision = session.messages.find(
+  const routeDecision = session.log.find(
+    (event) =>
+      event.type === "message_delta" &&
+      !Array.isArray(event.delta) &&
+      event.delta.metadata?.kind === "routing_decision" &&
+      event.delta.metadata.phase === "route",
+  );
+  const sessionRouteDecision = session.messages.find(
     (message) => message.metadata?.kind === "routing_decision" && message.metadata.phase === "route",
   );
-  expect(JSON.parse(routeDecision?.content ?? "{}")).toEqual({
+  expect(sessionRouteDecision).toBeUndefined();
+  expect(routeDecision?.type).toBe("message_delta");
+  if (routeDecision?.type !== "message_delta" || Array.isArray(routeDecision.delta)) {
+    throw new Error("Expected routing decision message_delta.");
+  }
+  expect(JSON.parse(routeDecision.delta.content)).toEqual({
     route: "direct",
     message: "Direct response: hello",
   });
+  expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
   expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
   expect(
     emittedEvents.some(
@@ -457,7 +481,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   expect(outcome.passed).toBe(true);
   expect(outcome.message).toBe("Verified after execute retry.");
   expect(executeCalls).toBe(2);
-  expect(session.messages.some((message) => message.metadata?.toolName === "model.execute")).toBe(true);
+  expect(session.messages.some((message) => message.metadata?.toolName === "model.execute")).toBe(false);
 });
 
 test("beforeToolCall hook can block execution", async () => {

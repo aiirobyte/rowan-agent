@@ -5,9 +5,9 @@ import {
   createSession,
   nowIso,
   type Session,
-  type SessionStore,
   type Skill,
 } from "@rowan-agent/session";
+import type { AgentStore } from "./store";
 import type {
   AfterToolCall,
   AgentBudgetUsage,
@@ -176,7 +176,7 @@ export type AgentOptions = {
   tools?: Tool[];
   skills?: Skill[];
   session?: AgentSession;
-  sessionStore?: SessionStore<AgentSession>;
+  agentStore?: AgentStore<AgentSession>;
   maxAttempts?: number;
   budget?: AgentRunBudget;
   beforeToolCall?: BeforeToolCall;
@@ -283,6 +283,7 @@ export class Agent {
     this.state.error = undefined;
     this.state.isRunning = true;
     this.abortController = new AbortController();
+    await this.options.agentStore?.save(session);
 
     const emit = (event: AgentEvent) => {
       this.emitToListeners(event);
@@ -305,6 +306,9 @@ export class Agent {
           ...input,
           parentSessionId: input.parentSessionId ?? session.id,
         }),
+      ...(this.options.agentStore
+        ? { recordStep: (step) => this.options.agentStore!.appendStep(session.id, step) }
+        : {}),
       emit,
     });
 
@@ -360,10 +364,10 @@ export class Agent {
   }
 
   async loadSession(sessionId: string): Promise<void> {
-    if (!this.options.sessionStore) {
-      throw new Error("Agent has no SessionStore.");
+    if (!this.options.agentStore) {
+      throw new Error("Agent has no AgentStore.");
     }
-    const session = await this.options.sessionStore.load(sessionId);
+    const session = await this.options.agentStore.load(sessionId);
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
@@ -372,9 +376,9 @@ export class Agent {
   }
 
   async saveSession(): Promise<void> {
-    if (!this.options.sessionStore || !this.state.session) {
+    if (!this.options.agentStore || !this.state.session) {
       return;
     }
-    await this.options.sessionStore.save(this.state.session);
+    await this.options.agentStore.save(this.state.session);
   }
 }

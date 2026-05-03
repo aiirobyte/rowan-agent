@@ -2,6 +2,7 @@ import Schema from "typebox/schema";
 import {
   createMessage,
   latestUserInput,
+  type ContextScope,
   type AgentMessage,
   type Session as CoreSession,
 } from "@rowan-agent/session";
@@ -19,6 +20,7 @@ import type {
   AgentLoopInput,
   ErrorInfo,
   LlmPhase,
+  ModelCallUsage,
   ModelStreamEvent,
   Outcome,
   AgentBudgetUsage,
@@ -35,6 +37,7 @@ import type {
   RuntimeDepth,
 } from "./types";
 import { createId, nowIso, resolveMaxThreadDepth, Validators } from "./types";
+import type { ExecutionTurnEntry } from "./store";
 
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
@@ -44,6 +47,7 @@ type AgentLoopRuntime = AgentLoopInput & {
   budgetUsage: AgentBudgetUsage;
   threadDepth: number;
   maxThreadDepth: number;
+  lastExecuteText?: string;
 };
 
 class BudgetExceededError extends Error {
@@ -205,33 +209,12 @@ function stringifyTaskOutput(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
-function latestExecuteMessage(session: AgentSession): string | undefined {
-  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-    const message = session.messages[index];
-    if (message.role !== "assistant") {
-      continue;
-    }
-
-    const metadata = message.metadata;
-    if (metadata?.kind !== "model_message" || metadata.phase !== "execute") {
-      continue;
-    }
-
-    const content = asString(message.content);
-    if (content) {
-      return content;
-    }
-  }
-
-  return undefined;
-}
-
 function createUnverifiedTaskOutcome(input: AgentLoopRuntime, task: Task, toolResults: ToolResult[]): Outcome {
   const failedResult = toolResults.find((result) => !result.ok);
   const outputResult = failedResult ?? [...toolResults].reverse().find((result) => result.ok);
   const message = outputResult
     ? (outputResult.error ?? stringifyTaskOutput(outputResult.content))
-    : (latestExecuteMessage(input.session) ?? "Task completed without local verification.");
+    : (input.lastExecuteText ?? "Task completed without local verification.");
 
   return Validators.outcome.Parse({
     id: createId("out"),
@@ -319,6 +302,17 @@ async function appendSessionMessage(input: AgentLoopRuntime, message: AgentMessa
   await appendTraceMessage(input, message);
 }
 
+async function publishConversationAssistantMessage(
+  input: AgentLoopRuntime,
+  content: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  await appendSessionMessage(input, createMessage("assistant", content, {
+    ...metadata,
+    scope: "conversation",
+  }));
+}
+
 async function emitChatEnd(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
     type: "chat_end",
@@ -332,24 +326,45 @@ async function collectTextAndStructured(input: {
   events: AsyncIterable<ModelStreamEvent>;
   metadataPhase: LlmPhase;
   recordText?: boolean;
-}): Promise<{ text: string; structured?: unknown; toolCalls: ToolCall[] }> {
+}): Promise<{
+  text: string;
+  structured?: unknown;
+  toolCalls: ToolCall[];
+  stepEntries: ExecutionTurnEntry[];
+  usage?: ModelCallUsage;
+}> {
   const toolCalls: ToolCall[] = [];
+  const stepEntries: ExecutionTurnEntry[] = [];
   let text = "";
   let flushedText = "";
   let structured: unknown;
+  let usage: ModelCallUsage | undefined;
   const flushText = async () => {
     if (text.length === 0) {
       return;
     }
 
     flushedText += text;
+    stepEntries.push({ kind: "assistant_text", text });
     if (input.recordText === false) {
+      await appendTraceMessage(
+        input.loop,
+        createMessage("assistant", text, {
+          kind: "model_message",
+          phase: input.metadataPhase,
+          scope: "execution",
+        }),
+      );
       text = "";
       return;
     }
-    await appendSessionMessage(
+    await appendTraceMessage(
       input.loop,
-      createMessage("assistant", text, { kind: "model_message", phase: input.metadataPhase }),
+      createMessage("assistant", text, {
+        kind: "model_message",
+        phase: input.metadataPhase,
+        scope: "execution",
+      }),
     );
     text = "";
   };
@@ -358,17 +373,20 @@ async function collectTextAndStructured(input: {
     assertNotAborted(input.loop.signal);
 
     if (event.type === "prompt_message") {
-      await appendSessionMessage(
+      stepEntries.push({ kind: "prompt", message: event.message });
+      await appendTraceMessage(
         input.loop,
         createMessage(event.message.role, event.message.content, {
           kind: "phase_prompt",
           phase: event.phase,
+          scope: "execution",
         }),
       );
     }
 
     if (event.type === "model_requested") {
       const budgetError = consumeBudget(input.loop, "modelCalls");
+      usage = event.usage;
       await emit(input.loop, {
         type: "model_requested",
         phase: event.phase,
@@ -388,12 +406,14 @@ async function collectTextAndStructured(input: {
     if (event.type === "structured_output") {
       await flushText();
       structured = event.content;
+      stepEntries.push({ kind: "structured_output", content: event.content });
     }
 
     if (event.type === "tool_call") {
       await flushText();
       const toolCall = Validators.toolCall.Parse(event.toolCall);
       toolCalls.push(toolCall);
+      stepEntries.push({ kind: "tool_call", toolCall });
       await emit(input.loop, {
         type: "tool_requested",
         toolCall,
@@ -408,10 +428,37 @@ async function collectTextAndStructured(input: {
 
   await flushText();
 
-  return { text: flushedText, structured, toolCalls };
+  return { text: flushedText, structured, toolCalls, stepEntries, usage };
+}
+
+async function recordPhaseStep(input: {
+  loop: AgentLoopRuntime;
+  phase: LlmPhase;
+  requestedAtMs: number;
+  entries: ExecutionTurnEntry[];
+  usage?: ModelCallUsage;
+  scope?: ContextScope;
+}): Promise<void> {
+  if (!input.loop.recordStep || input.entries.length === 0) {
+    return;
+  }
+
+  await input.loop.recordStep({
+    id: createId("step"),
+    sessionId: input.loop.session.id,
+    ...(input.loop.session.parentSessionId ? { parentSessionId: input.loop.session.parentSessionId } : {}),
+    phase: input.phase,
+    requestedAtMs: input.requestedAtMs,
+    completedAtMs: Date.now(),
+    model: input.loop.model,
+    ...(input.usage ? { usage: input.usage } : {}),
+    scope: input.scope ?? "execution",
+    entries: input.entries,
+  });
 }
 
 async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: string }> {
+  const requestedAtMs = Date.now();
   const collected = await collectTextAndStructured({
     loop: input,
     events: input.stream(
@@ -426,10 +473,20 @@ async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: st
     throw new Error("Planner did not produce a structured task.");
   }
 
-  return { task: parseTask(collected.structured), text: collected.text };
+  const task = parseTask(collected.structured);
+  await recordPhaseStep({
+    loop: input,
+    phase: "plan",
+    requestedAtMs,
+    entries: collected.stepEntries,
+    usage: collected.usage,
+  });
+
+  return { task, text: collected.text };
 }
 
 async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecision & { text: string }> {
+  const requestedAtMs = Date.now();
   const collected = await collectTextAndStructured({
     loop: input,
     events: input.stream(
@@ -455,10 +512,22 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
     defaultNeedsTaskRoute: shouldDefaultToThreadRoute ? "thread" : "task",
     allowThreadRoute: canStartThreadRoute,
   });
-  await appendSessionMessage(
+  collected.stepEntries.push({ kind: "structured_output", content: decision });
+  await appendTraceMessage(
     input,
-    createMessage("assistant", JSON.stringify(decision), { kind: "routing_decision", phase: "route" }),
+    createMessage("assistant", JSON.stringify(decision), {
+      kind: "routing_decision",
+      phase: "route",
+      scope: "execution",
+    }),
   );
+  await recordPhaseStep({
+    loop: input,
+    phase: "route",
+    requestedAtMs,
+    entries: collected.stepEntries,
+    usage: collected.usage,
+  });
   return { ...decision, text: decision.message };
 }
 
@@ -621,6 +690,7 @@ async function executeToolCall(input: {
 
 async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: ToolResult[]): Promise<void> {
   let collected: Awaited<ReturnType<typeof collectTextAndStructured>>;
+  const requestedAtMs = Date.now();
   try {
     collected = await collectTextAndStructured({
       loop: input,
@@ -637,27 +707,49 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
     }
     const result = createInvalidExecuteToolResult(error);
     toolResults.push(result);
-    await appendSessionMessage(
+    await appendTraceMessage(
       input,
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
         toolName: result.toolName,
+        scope: "execution",
       }),
     );
+    await recordPhaseStep({
+      loop: input,
+      phase: "execute",
+      requestedAtMs,
+      entries: [{ kind: "tool_result", result }],
+      scope: "diagnostic",
+    });
     return;
+  }
+
+  if (collected.text.trim().length > 0) {
+    input.lastExecuteText = collected.text;
   }
 
   for (const toolCall of collected.toolCalls) {
     const result = await executeToolCall({ loop: input, task, toolCall });
     toolResults.push(result);
-    await appendSessionMessage(
+    collected.stepEntries.push({ kind: "tool_result", result });
+    await appendTraceMessage(
       input,
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
         toolName: result.toolName,
+        scope: "execution",
       }),
     );
   }
+
+  await recordPhaseStep({
+    loop: input,
+    phase: "execute",
+    requestedAtMs,
+    entries: collected.stepEntries,
+    usage: collected.usage,
+  });
 }
 
 async function verifyTask(
@@ -672,6 +764,7 @@ async function verifyTask(
   });
 
   let collected: Awaited<ReturnType<typeof collectTextAndStructured>>;
+  const requestedAtMs = Date.now();
   try {
     collected = await collectTextAndStructured({
       loop: input,
@@ -694,6 +787,13 @@ async function verifyTask(
       throw error;
     }
     const result = createInvalidModelVerification(task, error);
+    await recordPhaseStep({
+      loop: input,
+      phase: "verify",
+      requestedAtMs,
+      entries: [{ kind: "structured_output", content: result }],
+      scope: "diagnostic",
+    });
     await emit(input, {
       type: "verification_end",
       taskId: task.id,
@@ -709,6 +809,13 @@ async function verifyTask(
         passed: false,
         message: "Verifier did not produce structured output.",
       };
+  await recordPhaseStep({
+    loop: input,
+    phase: "verify",
+    requestedAtMs,
+    entries: collected.stepEntries,
+    usage: collected.usage,
+  });
 
   await emit(input, {
     type: "verification_end",
@@ -815,14 +922,21 @@ async function executeThreadRoute(
     task: threadTask,
     goal,
   });
-  await appendSessionMessage(
+  await appendTraceMessage(
     input,
     createMessage("assistant", JSON.stringify(threadOutput), {
       kind: "thread_output",
       threadSessionId: thread.session.id,
       parentSessionId: thread.parentSessionId,
+      scope: "execution",
     }),
   );
+  await recordPhaseStep({
+    loop: input,
+    phase: "execute",
+    requestedAtMs: Date.now(),
+    entries: [{ kind: "structured_output", content: threadOutput }],
+  });
 
   await emit(input, {
     type: "task_end",
@@ -885,6 +999,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     const routed = await routeRequest(runtime);
     if (routed.route === "direct") {
       const outcome = createDirectOutcome(routed.message);
+      await publishConversationAssistantMessage(runtime, outcome.message, { kind: "direct_answer" });
       await endChatLog();
       await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       return outcome;
@@ -892,6 +1007,12 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
 
     if (routed.route === "thread") {
       const outcome = await executeThreadRoute(runtime, routed);
+      if (outcome.passed) {
+        await publishConversationAssistantMessage(runtime, outcome.message, {
+          kind: "task_outcome",
+          ...(outcome.taskId ? { taskId: outcome.taskId } : {}),
+        });
+      }
       await endChatLog();
       await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
       return outcome;
@@ -900,15 +1021,6 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     const planned = await planTask(runtime);
     const task = planned.task;
     currentTask = task;
-    if (planned.text.length === 0) {
-      await appendSessionMessage(
-        runtime,
-        createMessage("assistant", `Planned task: ${task.title}`, {
-          kind: "model_message",
-          taskId: task.id,
-        }),
-      );
-    }
 
     await emit(runtime, {
       type: "task_created",
@@ -943,6 +1055,12 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       if (!runtime.verifyTasks) {
         const outcome = createUnverifiedTaskOutcome(runtime, task, toolResults);
         task.status = outcome.passed ? "passed" : "failed";
+        if (outcome.passed) {
+          await publishConversationAssistantMessage(runtime, outcome.message, {
+            kind: "task_outcome",
+            taskId: task.id,
+          });
+        }
         await endChatLog();
         await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
         return outcome;
@@ -952,6 +1070,10 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       if (lastVerification.passed) {
         task.status = "passed";
         const outcome = createOutcome(task, lastVerification);
+        await publishConversationAssistantMessage(runtime, outcome.message, {
+          kind: "task_outcome",
+          taskId: task.id,
+        });
         await endChatLog();
         await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
         return outcome;

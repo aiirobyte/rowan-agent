@@ -1,6 +1,30 @@
 import Type from "typebox";
 
-export const SESSION_SCHEMA_VERSION = "0.3.2";
+export const SESSION_SCHEMA_VERSION = "0.3.3";
+
+export const CONTEXT_SCOPES = ["conversation", "execution", "diagnostic"] as const;
+
+export type ContextScope = (typeof CONTEXT_SCOPES)[number];
+
+export const ContextScopeSchema = Type.Union([
+  Type.Literal("conversation"),
+  Type.Literal("execution"),
+  Type.Literal("diagnostic"),
+]);
+
+export function isContextScope(value: unknown): value is ContextScope {
+  return (
+    value === "conversation" ||
+    value === "execution" ||
+    value === "diagnostic"
+  );
+}
+
+export type AgentMessageMetadata = Record<string, unknown> & {
+  kind?: string;
+  phase?: string;
+  scope?: ContextScope;
+};
 
 export const AgentMessageSchema = Type.Object({
   id: Type.String(),
@@ -16,6 +40,43 @@ export const AgentMessageSchema = Type.Object({
 });
 
 export type AgentMessage = Type.Static<typeof AgentMessageSchema>;
+
+function defaultScopeForMessage(
+  role: AgentMessage["role"],
+  metadata?: Record<string, unknown>,
+): ContextScope | undefined {
+  if (
+    metadata?.kind === "phase_prompt" ||
+    metadata?.kind === "routing_decision" ||
+    metadata?.kind === "model_message" ||
+    metadata?.kind === "thread_output"
+  ) {
+    return "execution";
+  }
+
+  if (metadata?.kind === "error" || metadata?.kind === "budget_exceeded") {
+    return "diagnostic";
+  }
+
+  if (role === "user" || role === "assistant") {
+    return "conversation";
+  }
+
+  if (role === "tool") {
+    return "execution";
+  }
+
+  return undefined;
+}
+
+export function messageScope(message: AgentMessage): ContextScope | undefined {
+  const metadata = message.metadata as AgentMessageMetadata | undefined;
+  return isContextScope(metadata?.scope) ? metadata.scope : undefined;
+}
+
+export function isConversationMessage(message: AgentMessage): boolean {
+  return messageScope(message) === "conversation";
+}
 
 export const SkillSchema = Type.Object({
   id: Type.String(),
@@ -79,12 +140,17 @@ export function createMessage(
   content: string,
   metadata?: Record<string, unknown>,
 ): AgentMessage {
+  const scope = isContextScope(metadata?.scope) ? metadata.scope : defaultScopeForMessage(role, metadata);
+  const normalizedMetadata = scope === undefined
+    ? metadata
+    : { ...metadata, scope };
+
   return {
     id: createId("msg"),
     role,
     content,
     createdAt: nowIso(),
-    ...(metadata ? { metadata } : {}),
+    ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
   };
 }
 
@@ -99,19 +165,7 @@ export function createSession<TLogEvent = never>(input: {
 }): Session<TLogEvent> {
   const createdAt = nowIso();
   const messages = [
-    createMessage("system", input.systemPrompt),
-    ...(input.skills?.length
-      ? [
-          createMessage(
-            "system",
-            `Loaded skills:\n\n${input.skills
-              .map((skill) => `# ${skill.id}\n${skill.content}`)
-              .join("\n\n")}`,
-            { kind: "skills" },
-          ),
-        ]
-      : []),
-    createMessage("user", input.input),
+    createMessage("user", input.input, { scope: "conversation" }),
   ];
 
   return {
@@ -132,7 +186,7 @@ export function createSession<TLogEvent = never>(input: {
 }
 
 export function appendUserTurn<TLogEvent>(session: Session<TLogEvent>, input: string): Session<TLogEvent> {
-  session.messages.push(createMessage("user", input));
+  session.messages.push(createMessage("user", input, { scope: "conversation" }));
   session.updatedAt = nowIso();
   return session;
 }
@@ -140,7 +194,7 @@ export function appendUserTurn<TLogEvent>(session: Session<TLogEvent>, input: st
 export function latestUserInput(session: Session<unknown>): string {
   for (let index = session.messages.length - 1; index >= 0; index -= 1) {
     const message = session.messages[index];
-    if (message.role === "user" && message.metadata?.kind !== "phase_prompt") {
+    if (message.role === "user" && isConversationMessage(message)) {
       return message.content;
     }
   }

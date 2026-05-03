@@ -20,7 +20,8 @@ test("loadSkill reads SKILL.md and infers id from parent directory", async () =>
   });
 
   expect(skill.id).toBe("example");
-  expect(session.messages.some((message) => message.content.includes("Use echo."))).toBe(true);
+  expect(session.skills[0]?.content).toContain("Use echo.");
+  expect(session.messages.some((message) => message.content.includes("Use echo."))).toBe(false);
 });
 
 test("loadSkill resolves skill ids from the workspace skills directory", async () => {

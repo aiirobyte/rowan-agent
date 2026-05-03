@@ -23,7 +23,7 @@ import {
   resolveRowanWorkspacePaths,
 } from "@rowan-agent/workspace";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
-import { LocalJsonSessionStore } from "./session-store";
+import { LocalJsonAgentStore } from "./session-store";
 import { loadSkills, resolveSkillPath } from "./skills";
 
 type CliCommand = "config" | "list";
@@ -417,8 +417,8 @@ async function runConfigCommand(args: CliArgs): Promise<void> {
 
 async function runListCommand(_args: CliArgs): Promise<void> {
   const workspace = resolveRowanWorkspacePaths();
-  const sessionStore = new LocalJsonSessionStore<AgentSession>(workspace.sessionsDir);
-  const sessions = [...(await sessionStore.list())]
+  const agentStore = new LocalJsonAgentStore<AgentSession>(workspace.sessionsDir);
+  const sessions = [...(await agentStore.list())]
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
     .map<CliSessionListItem>((session) => ({
       id: session.id,
@@ -436,7 +436,7 @@ async function createConfiguredAgent(
 ): Promise<Agent> {
   const skills = await loadSkills(args.skills, workspace);
   const tools = createCoreTools({ root: workspace.root });
-  const sessionStore = new LocalJsonSessionStore<AgentSession>(workspace.sessionsDir);
+  const agentStore = new LocalJsonAgentStore<AgentSession>(workspace.sessionsDir);
   const config = resolveOpenAICompatibleConfig({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
@@ -453,7 +453,7 @@ async function createConfiguredAgent(
     stream: createOpenAICompatibleStream(config),
     tools,
     skills,
-    sessionStore,
+    agentStore,
     budget: {
       maxThreadDepth:
         args.maxThreadDepth ??

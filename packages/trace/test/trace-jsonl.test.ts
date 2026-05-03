@@ -47,14 +47,10 @@ test("jsonlTraceWriter writes agent events", async () => {
   expect(trace).not.toContain("\"type\":\"session_end\"");
   expect(chatStart.content).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ role: "system", content: "Test system" }),
       expect.objectContaining({ role: "user", content: "use echo tool" }),
     ]),
   );
   expect(messageDeltas.length).toBeGreaterThan(0);
-  expect(messageDeltas[0].delta).toEqual(
-    expect.objectContaining({ role: "assistant", content: expect.any(String) }),
-  );
   expect(messageDeltas[0]).not.toHaveProperty("content");
   expect(
     messageDeltas.some(
@@ -196,14 +192,7 @@ test("jsonlTraceWriter records model calls and prompt/model message deltas witho
   const planSessionMessage = result.session.messages.find(
     (message) => message.metadata?.kind === "model_message" && message.metadata.phase === "plan",
   );
-  expect(planSessionMessage?.content).toBe(planMessageDelta.delta.content);
-  expect(JSON.parse(planSessionMessage?.content ?? "{}")).toMatchObject({
-    message: "Planning echo.",
-    task: {
-      title: "Echo hello",
-      toolNames: ["echo"],
-    },
-  });
+  expect(planSessionMessage).toBeUndefined();
   expect(planMessageDelta).not.toHaveProperty("content");
   expect(JSON.stringify(planMessageDelta.delta)).not.toContain("\"request\"");
   expect(JSON.stringify(planMessageDelta.delta)).not.toContain("\"rawResponse\"");

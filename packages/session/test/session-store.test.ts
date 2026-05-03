@@ -38,7 +38,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(persisted.task).toBe("Say hello");
   expect(persisted.goal).toBe("A greeting is returned.");
   expect(persisted.title).toBe("Greeting");
-  expect(persisted.messages.some((message) => message.content.includes("\"route\":\"direct\""))).toBe(true);
+  expect(persisted.messages.some((message) => message.content.includes("\"route\":\"direct\""))).toBe(false);
 
   const list = await store.list();
   expect(list).toEqual([
@@ -46,7 +46,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
       id: session.id,
       title: "Greeting",
       messageCount: persisted.messages.length,
-      latestMessage: "{\"route\":\"direct\",\"message\":\"internal\"}",
+      latestMessage: "second turn",
     }),
   ]);
 
@@ -57,7 +57,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(loaded?.goal).toBe("A greeting is returned.");
   expect(loaded ? latestUserInput(loaded) : undefined).toBe("second turn");
   expect(loaded?.log).toEqual([]);
-  expect(loaded?.messages.map((message) => message.content)).toContain(
+  expect(loaded?.messages.map((message) => message.content)).not.toContain(
     "{\"route\":\"direct\",\"message\":\"internal\"}",
   );
 
@@ -67,7 +67,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(await store.load(session.id)).toBeUndefined();
 });
 
-test("session persistence migrates v0.3.1 userInput sessions on read", () => {
+test("session persistence rejects old userInput schema", () => {
   const legacy = {
     version: "0.3.1",
     id: "ses_legacy",
@@ -84,26 +84,8 @@ test("session persistence migrates v0.3.1 userInput sessions on read", () => {
     title: "Legacy session",
   };
 
-  const loaded = sessionFromPersisted(legacy);
-  expect(loaded.version).toBe(SESSION_SCHEMA_VERSION);
-  expect(loaded.input).toBe("hello from legacy");
-  expect(loaded).not.toHaveProperty("userInput");
-  expect(loaded.title).toBe("Legacy session");
-  expect(latestUserInput(loaded)).toBe("hello from legacy");
-
-  const listItem = summarizePersistedSession(legacy);
-  expect(listItem).toEqual(
-    expect.objectContaining({
-      id: "ses_legacy",
-      title: "Legacy session",
-      latestMessage: "legacy answer",
-    }),
-  );
-
-  const persisted = toPersistedSession(loaded);
-  expect(persisted.version).toBe(SESSION_SCHEMA_VERSION);
-  expect(persisted.input).toBe("hello from legacy");
-  expect(persisted).not.toHaveProperty("userInput");
+  expect(() => sessionFromPersisted(legacy)).toThrow();
+  expect(() => summarizePersistedSession(legacy)).toThrow();
 });
 
 test("latestUserInput ignores recorded phase prompts", () => {

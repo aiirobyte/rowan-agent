@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { InMemorySessionStore, latestUserInput, type Session } from "@rowan-agent/session";
-import { Agent, type AgentEvent, type StreamFn } from "../src";
+import { latestUserInput, type Session } from "@rowan-agent/session";
+import { Agent, InMemoryAgentStore, type AgentEvent, type StreamFn } from "../src";
 import { createDefaultCriteria } from "../src/task";
 import { createId } from "../src/types";
 import { createEchoTools } from "./support/echo-tool";
@@ -49,8 +49,8 @@ test("Agent.prompt reuses one session for multi-turn direct responses", async ()
   expect(events).not.toContain("session_loaded");
 });
 
-test("Agent keeps the model message stream, not outcome display results", async () => {
-  const store = new InMemorySessionStore<AgentSession>();
+test("Agent keeps conversation messages separate from execution steps", async () => {
+  const store = new InMemoryAgentStore<AgentSession>();
   const routeContexts: string[][] = [];
   const stream: StreamFn = async function* taskMultiTurnStream(model, context, options) {
     if (context.phase === "route" && !context.session.parentSessionId) {
@@ -63,7 +63,7 @@ test("Agent keeps the model message stream, not outcome display results", async 
     model: { provider: "test", name: "scripted" },
     stream,
     tools: createEchoTools(),
-    sessionStore: store,
+    agentStore: store,
   });
 
   const first = await agent.prompt("use echo tool");
@@ -77,26 +77,30 @@ test("Agent keeps the model message stream, not outcome display results", async 
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining([
       "use echo tool",
-      expect.stringContaining("\"toolName\":\"echo\""),
+      expect.stringContaining("Task passed"),
       "use echo tool again",
     ]),
   );
-  expect(loaded?.messages.some((message) => message.content === "Task passed: Use echo tool")).toBe(false);
+  expect(loaded?.messages.some((message) => message.content === "Task passed: Use echo tool")).toBe(true);
   expect(
     loaded?.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "routing_decision",
     ),
-  ).toBe(true);
+  ).toBe(false);
   expect(
     loaded?.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "model_message",
     ),
-  ).toBe(true);
+  ).toBe(false);
   expect(
     loaded?.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "outcome",
     ),
   ).toBe(false);
+  const steps = sessionId ? await store.loadSteps(sessionId) : [];
+  expect(steps.some((step) => step.phase === "route")).toBe(true);
+  expect(steps.some((step) => step.phase === "execute")).toBe(true);
+  expect(steps.some((step) => step.entries.some((entry) => entry.kind === "tool_result"))).toBe(true);
 });
 
 test("Agent does not carry failed task outcomes into later turns", async () => {

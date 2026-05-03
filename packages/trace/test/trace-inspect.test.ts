@@ -18,7 +18,7 @@ test("trace reader and inspector read session-keyed JSONL events", async () => {
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.2",
+          version: "0.3.3",
           id: "ses_1234abcd",
           systemPrompt: "Test",
           input: "hello",
@@ -69,7 +69,7 @@ test("trace inspector lists session-keyed trace files", async () => {
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.2",
+          version: "0.3.3",
           id: "ses_1234abcd",
           systemPrompt: "Test",
           input: "hello",
@@ -99,7 +99,7 @@ test("trace inspector associates threads with parents", async () => {
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.2",
+          version: "0.3.3",
           id: "ses_aaaabbbb",
           systemPrompt: "Parent",
           input: "delegate this",
@@ -162,7 +162,7 @@ test("trace inspector maps separate turn traces to the same persisted session", 
       JSON.stringify({
         type: "session_created",
         session: {
-          version: "0.3.2",
+          version: "0.3.3",
           id: "ses_1234abcd",
           systemPrompt: "Test",
           input: "first",
@@ -180,7 +180,7 @@ test("trace inspector maps separate turn traces to the same persisted session", 
       JSON.stringify({
         type: "session_loaded",
         session: {
-          version: "0.3.2",
+          version: "0.3.3",
           id: "ses_1234abcd",
           systemPrompt: "Test",
           input: "second",
