@@ -21,6 +21,8 @@ The main project roadmap now lives in:
 - `docs/PLAN/v0.3.1/PLAN.md`
 - `docs/PLAN/v0.3.2/README.md`
 - `docs/PLAN/v0.3.2/PLAN.md`
+- `docs/PLAN/v0.3.3/README.md`
+- `docs/PLAN/v0.3.3/PLAN.md`
 
 ## Current Status
 
@@ -35,14 +37,15 @@ The main project roadmap now lives in:
 - v0.1.0 real model runtime implemented with mock tests; real API manual verification remains.
 - v0.2.0 monorepo foundation and Workspace ACI seed implemented.
 - v0.3.0 implemented: route-first task gating and child-session predecessor mechanism.
-- v0.3.1 implemented: persistent Session, multi-turn Agent semantics, and session-aware CLI.
+- v0.3.1 implemented: persistent Session, multi-turn Agent conversations, and session-aware CLI.
 - v0.3.2 implemented: thread/sub-session unification, immutable Session input, and task/goal metadata.
+- v0.3.3 planned: AgentStore port, JSON-backed step storage, and scoped context.
 
 ## Next Steps
 
-1. Keep v0.3.2 release gates green after follow-up changes.
-2. Use `docs/PLAN/ROADMAP.md` to scope v0.4.0 policy and safety work.
-3. Treat `runThread()` / `Agent.startThread()` as the only public child-thread API.
+1. Implement v0.3.3 storage port and JSON-backed AgentStore.
+2. Upgrade persisted Session schema so `messages` only contains conversation-scoped messages.
+3. Keep v0.3.2 thread APIs stable while v0.3.3 changes storage internals.
 
 ## Notes
 
