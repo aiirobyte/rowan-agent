@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  detectRowanRuntimeMode,
-  findRowanSourceWorkspaceRoot,
-  resolveInRowanWorkspace,
-  resolveRowanWorkspacePaths,
+  detectRuntimeMode,
+  findSourceWorkspaceRoot,
+  resolveInWorkspace,
+  resolveWorkspacePaths,
   resolveWorkspacePath,
 } from "../src";
 
@@ -15,9 +15,9 @@ test("source runtime resolves workspace to the project root", async () => {
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
   await mkdir(join(root, "packages", "cli"), { recursive: true });
 
-  expect(findRowanSourceWorkspaceRoot(join(root, "packages", "cli"))).toBe(root);
+  expect(findSourceWorkspaceRoot(join(root, "packages", "cli"))).toBe(root);
 
-  const paths = resolveRowanWorkspacePaths({
+  const paths = resolveWorkspacePaths({
     cwd: join(root, "packages", "cli"),
     env: {},
     execPath: "/usr/local/bin/bun",
@@ -30,7 +30,7 @@ test("source runtime resolves workspace to the project root", async () => {
 });
 
 test("binary runtime resolves workspace to ~/.rowan", () => {
-  const paths = resolveRowanWorkspacePaths({
+  const paths = resolveWorkspacePaths({
     env: {},
     execPath: "/usr/local/bin/rowan",
     homeDir: "/Users/tester",
@@ -50,7 +50,7 @@ test("source runtime can resolve workspace from the running entrypoint path", as
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
   await writeFile(join(entrypointDir, "cli.ts"), "");
 
-  const paths = resolveRowanWorkspacePaths({
+  const paths = resolveWorkspacePaths({
     env: {},
     execPath: "/usr/local/bin/bun",
     entrypoint: join(entrypointDir, "cli.ts"),
@@ -60,11 +60,11 @@ test("source runtime can resolve workspace from the running entrypoint path", as
 });
 
 test("runtime and workspace env vars can override detection", () => {
-  expect(detectRowanRuntimeMode({ env: { ROWAN_RUNTIME: "binary" }, execPath: "/usr/local/bin/bun" })).toBe(
+  expect(detectRuntimeMode({ env: { ROWAN_RUNTIME: "binary" }, execPath: "/usr/local/bin/bun" })).toBe(
     "binary",
   );
 
-  const paths = resolveRowanWorkspacePaths({
+  const paths = resolveWorkspacePaths({
     env: { ROWAN_WORKSPACE: "~/custom-rowan" },
     execPath: "/usr/local/bin/rowan",
     homeDir: "/Users/tester",
@@ -73,8 +73,8 @@ test("runtime and workspace env vars can override detection", () => {
 });
 
 test("relative paths resolve inside the workspace", () => {
-  expect(resolveInRowanWorkspace("runs/example.jsonl", "/tmp/rowan")).toBe("/tmp/rowan/runs/example.jsonl");
-  expect(resolveInRowanWorkspace("/var/tmp/example.jsonl", "/tmp/rowan")).toBe("/var/tmp/example.jsonl");
+  expect(resolveInWorkspace("runs/example.jsonl", "/tmp/rowan")).toBe("/tmp/rowan/runs/example.jsonl");
+  expect(resolveInWorkspace("/var/tmp/example.jsonl", "/tmp/rowan")).toBe("/var/tmp/example.jsonl");
 });
 
 test("workspace paths resolve safely inside the current working directory", () => {

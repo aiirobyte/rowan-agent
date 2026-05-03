@@ -24,10 +24,10 @@ import {
 import { type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
 import { LocalJsonAgentStore } from "@rowan-agent/store";
 import {
-  type RowanWorkspacePaths,
-  resolveInRowanWorkspace,
-  resolveRowanWorkspacePaths,
-} from "@rowan-agent/workspace";
+  type WorkspacePaths,
+  resolveInWorkspace,
+  resolveWorkspacePaths,
+} from "@rowan-agent/runtime";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
 import { loadSkills, resolveSkillPath } from "./skills";
 
@@ -95,7 +95,7 @@ async function runRegisteredCommand(args: CliArgs): Promise<boolean> {
   return true;
 }
 
-function createDefaultLogPath(workspace: RowanWorkspacePaths, sessionId: string): string {
+function createDefaultLogPath(workspace: WorkspacePaths, sessionId: string): string {
   return join(workspace.runsDir, `${formatLocalTimestamp()}-${sessionId}.jsonl`);
 }
 
@@ -115,18 +115,18 @@ function logSessionIdFromEvent(event: AgentEvent): string | undefined {
   return undefined;
 }
 
-function createDefaultLogPathResolver(workspace: RowanWorkspacePaths): AgentEventLogPath {
+function createDefaultLogPathResolver(workspace: WorkspacePaths): AgentEventLogPath {
   return (event) => {
     const sessionId = logSessionIdFromEvent(event);
     return sessionId ? createDefaultLogPath(workspace, sessionId) : undefined;
   };
 }
 
-function resolveOptionalWorkspacePath(path: string | undefined, workspace: RowanWorkspacePaths): string | undefined {
-  return path ? resolveInRowanWorkspace(path, workspace) : undefined;
+function resolveOptionalWorkspacePath(path: string | undefined, workspace: WorkspacePaths): string | undefined {
+  return path ? resolveInWorkspace(path, workspace) : undefined;
 }
 
-function formatWorkspacePathForDisplay(path: string, workspace: RowanWorkspacePaths): string {
+function formatWorkspacePathForDisplay(path: string, workspace: WorkspacePaths): string {
   const workspaceRelativePath = relative(workspace.root, path);
   if (workspaceRelativePath && !workspaceRelativePath.startsWith("..") && !isAbsolute(workspaceRelativePath)) {
     return workspaceRelativePath.split(sep).join("/");
@@ -377,7 +377,7 @@ function configuredValue(flagValue: string | undefined, envValue: string | undef
   return nonEmpty(flagValue) ?? nonEmpty(envValue) ?? defaultValue;
 }
 
-function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Record<string, unknown> {
+function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<string, unknown> {
   const env = process.env as Record<string, string | undefined>;
   const baseUrl = configuredValue(args.baseUrl, env.ROWAN_OPENAI_BASE_URL, "https://api.openai.com/v1");
   const apiKey = configuredValue(args.apiKey, env.ROWAN_OPENAI_API_KEY);
@@ -453,12 +453,12 @@ function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Re
 }
 
 async function runConfigCommand(args: CliArgs): Promise<void> {
-  const workspace = resolveRowanWorkspacePaths();
+  const workspace = resolveWorkspacePaths();
   console.log(formatJsonOutput(createConfigSnapshot(args, workspace)));
 }
 
 async function runListCommand(_args: CliArgs): Promise<void> {
-  const workspace = resolveRowanWorkspacePaths();
+  const workspace = resolveWorkspacePaths();
   const agentStore = new LocalJsonAgentStore<AgentSession>(workspace.sessionsDir);
   const sessions = [...(await agentStore.list())]
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
@@ -474,7 +474,7 @@ async function runListCommand(_args: CliArgs): Promise<void> {
 
 async function createConfiguredAgent(
   args: CliArgs,
-  workspace: RowanWorkspacePaths,
+  workspace: WorkspacePaths,
 ): Promise<Agent> {
   const skills = await loadSkills(args.skills, workspace);
   const tools = createCoreTools({ root: workspace.root });
@@ -553,7 +553,7 @@ async function promptWithLog(input: {
 }
 
 async function runInteractiveCommand(args: CliArgs): Promise<void> {
-  const workspace = resolveRowanWorkspacePaths();
+  const workspace = resolveWorkspacePaths();
   const agent = await createConfiguredAgent(args, workspace);
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);

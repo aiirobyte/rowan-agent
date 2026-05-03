@@ -3,10 +3,10 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 import { readFile } from "node:fs/promises";
 import type { Skill } from "@rowan-agent/session";
 import {
-  type RowanWorkspacePaths,
-  resolveInRowanWorkspace,
-  resolveRowanWorkspacePaths,
-} from "@rowan-agent/workspace";
+  type WorkspacePaths,
+  resolveInWorkspace,
+  resolveWorkspacePaths,
+} from "@rowan-agent/runtime";
 
 function inferSkillId(path: string): string {
   const file = basename(path);
@@ -22,7 +22,7 @@ function isExplicitPath(input: string): boolean {
   return input.includes("/") || input.includes("\\") || Boolean(extname(input));
 }
 
-export function resolveSkillPath(input: string, workspace = resolveRowanWorkspacePaths()): string {
+export function resolveSkillPath(input: string, workspace = resolveWorkspacePaths()): string {
   if (isAbsolute(input)) {
     return input;
   }
@@ -31,7 +31,7 @@ export function resolveSkillPath(input: string, workspace = resolveRowanWorkspac
     return join(workspace.skillsDir, input, "SKILL.md");
   }
 
-  const workspacePath = resolveInRowanWorkspace(input, workspace);
+  const workspacePath = resolveInWorkspace(input, workspace);
   if (existsSync(workspacePath)) {
     return workspacePath;
   }
@@ -39,7 +39,7 @@ export function resolveSkillPath(input: string, workspace = resolveRowanWorkspac
   return resolve(input);
 }
 
-export async function loadSkill(path: string, workspace?: RowanWorkspacePaths): Promise<Skill> {
+export async function loadSkill(path: string, workspace?: WorkspacePaths): Promise<Skill> {
   const resolved = resolveSkillPath(path, workspace);
   const content = await readFile(resolved, "utf8");
   return {
@@ -49,6 +49,6 @@ export async function loadSkill(path: string, workspace?: RowanWorkspacePaths): 
   };
 }
 
-export async function loadSkills(paths: string[] = [], workspace?: RowanWorkspacePaths): Promise<Skill[]> {
+export async function loadSkills(paths: string[] = [], workspace?: WorkspacePaths): Promise<Skill[]> {
   return Promise.all(paths.map((path) => loadSkill(path, workspace)));
 }

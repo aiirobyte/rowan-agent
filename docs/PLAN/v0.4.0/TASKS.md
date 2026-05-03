@@ -49,7 +49,7 @@
 | V040-403 | M4 | Move execute phase into runtime | runtime/agent | P0 | V040-402 | planned | text/tool call/tool result tests pass |
 | V040-404 | M4 | Move verify phase into runtime | runtime/agent | P0 | V040-403 | planned | verify retry and outcome tests pass |
 | V040-405 | M4 | Move scheduler and thread execution helpers | runtime/agent | P0 | V040-401 | planned | thread lifecycle tests pass through public Agent API |
-| V040-406 | M4 | Move skills application, hooks, MCP ownership, and core tool execution | runtime/workspace/agent | P0 | V040-403 | planned | default workspace tools still work through CLI and MCP ownership is reserved under `runtime/mcp` |
+| V040-406 | M4 | Move skills application, hooks, MCP ownership, and core tool execution | runtime/agent | P0 | V040-403 | planned | default workspace tools still work through CLI and MCP ownership is reserved under `runtime/mcp` |
 | V040-407 | M4 | Move turn recording into runtime | runtime/store | P0 | V040-404 | planned | `ExecutionTurn` entries are recorded with protocol types |
 | V040-501 | M5 | Update package boundary tests | test/build | P0 | V040-407 | planned | no reversed dependency from runtime to agent or context to agent |
 | V040-502 | M5 | Update docs and examples | docs | P1 | V040-501 | planned | README/ROADMAP/ARCHITECTURE match shipped package boundaries |

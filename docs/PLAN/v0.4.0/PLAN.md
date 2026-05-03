@@ -82,6 +82,7 @@ packages/protocol/src/
 
 packages/runtime/src/
   index.ts
+  dir.ts
   runner.ts
   runtime.ts
   run-agent-loop.ts
@@ -111,14 +112,13 @@ v0.4.0 target:
 ```text
 protocol    -> none
 session     -> none
-workspace   -> none
 store       -> protocol, session
 context     -> protocol, session
-runtime     -> protocol, session, store, context, workspace
+runtime     -> protocol, session, store, context
 agent       -> protocol, session, store, runtime
 adapters    -> protocol, context
 logging     -> agent
-cli         -> adapters, agent, logging, protocol, runtime, session, store, workspace
+cli         -> adapters, agent, logging, protocol, runtime, session, store
 ```
 
 Rules:
@@ -127,6 +127,7 @@ Rules:
 - `store` may persist protocol types, but must not define phase/model/tool/turn contracts.
 - `context` is an input-rendering package and must not import `agent`.
 - `runtime` owns execution mechanics, but must not import the public `Agent` facade.
+- `runtime` also owns local workspace root/path helpers; there is no separate `workspace` package in the target.
 - `runtime` exposes the one-run executor as `AgentRunner` / `runner.ts`; package name stays `runtime`.
 - `runtime` owns MCP tool-provider implementation; MCP tools must flow through the same tool runner, hooks, events, and policy path as local tools.
 - `agent` owns lifecycle, state, event fanout, abort/waitForIdle, and persistence orchestration.

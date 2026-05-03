@@ -61,7 +61,7 @@ packages/
   context/    phase prompt templates and OpenAI-compatible prompt builder
   adapters/   OpenAI-compatible provider adapter and JSON extraction
   logging/    Pino AgentEvent logger and redaction
-  workspace/  workspace root/path helpers
+  runtime/    directory root/path helpers, future execution runtime
   cli/        composition root for model, tools, store, logging, skills, output
 ```
 
@@ -69,13 +69,13 @@ Current dependency direction:
 
 ```text
 session      -> none
-workspace    -> none
+runtime      -> none
 store        -> session
 agent        -> session, store
 context      -> agent, session
 adapters     -> agent, context
 logging      -> agent
-cli          -> adapters, agent, logging, session, store, workspace
+cli          -> adapters, agent, logging, runtime, session, store
 ```
 
 This direction is workable for v0.3.5, but it still has three pressure points:
@@ -233,7 +233,6 @@ packages/
   adapters/        provider wire adapters
   store/           AgentStore implementations
   logging/         AgentEvent log sinks
-  workspace/       workspace root/path helpers
   cli/             composition root
 ```
 
@@ -242,14 +241,13 @@ Target dependency direction after v0.4.0:
 ```text
 protocol    -> none
 session     -> none
-workspace   -> none
 store       -> protocol, session
 context     -> protocol, session
-runtime     -> protocol, session, store, context, workspace
+runtime     -> protocol, session, store, context
 agent       -> protocol, session, store, runtime
 adapters    -> protocol, context
 logging     -> agent
-cli         -> adapters, agent, logging, protocol, runtime, session, store, workspace
+cli         -> adapters, agent, logging, protocol, runtime, session, store
 ```
 
 The key correction is that `context` should be an upstream input-rendering package, not an `agent` downstream package. After `protocol` exists, `context` may use protocol contracts and session state, but it should not import the public `Agent` facade or runtime implementation details.

@@ -40,7 +40,7 @@ Planning docs use this status enum:
 |---|---|---|---|
 | v0.0.0 | Minimal Agent Kernel | implemented | `Agent`、`Session`、`Task`、`Tool`、acceptance criteria、same-model verifier、`Outcome`、`AgentEvent`、CLI seed |
 | v0.1.0 | Real Model Runtime | implemented | OpenAI-compatible Chat Completions `StreamFn`、JSON extraction、model schema validation |
-| v0.2.0 | Monorepo + Workspace Foundation | implemented | workspace packages, core read/write/edit/bash tools seed, package boundary tests |
+| v0.2.0 | Monorepo + Workspace Foundation | implemented | workspace root/helpers, core read/write/edit/bash tools seed, package boundary tests |
 | v0.3.0 | Route-first Thread Predecessor | implemented | route phase, direct answer path, task path, thread predecessor |
 | v0.3.1 | Persistent Session + Multi-turn CLI | implemented | JSON sessions, `Agent.prompt()` multi-turn, `--session`, list/delete/session CLI flows |
 | v0.3.2 | Threaded Agent Sessions | implemented | ordinary child `Session`, `parentSessionId`, `task`/`goal`, `thread_created`/`thread_end` |
@@ -123,6 +123,7 @@ packages/agent/src/
 
 packages/runtime/src/
   index.ts
+  dir.ts
   runner.ts
   run-agent-loop.ts
   runtime.ts

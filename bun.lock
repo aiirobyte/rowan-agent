@@ -39,9 +39,9 @@
         "@rowan-agent/adapters": "workspace:*",
         "@rowan-agent/agent": "workspace:*",
         "@rowan-agent/logging": "workspace:*",
+        "@rowan-agent/runtime": "workspace:*",
         "@rowan-agent/session": "workspace:*",
         "@rowan-agent/store": "workspace:*",
-        "@rowan-agent/workspace": "workspace:*",
       },
     },
     "packages/context": {
@@ -60,6 +60,10 @@
         "pino": "^10.3.1",
       },
     },
+    "packages/runtime": {
+      "name": "@rowan-agent/runtime",
+      "version": "0.3.5",
+    },
     "packages/session": {
       "name": "@rowan-agent/session",
       "version": "0.3.5",
@@ -75,10 +79,6 @@
         "typebox": "^1.0.0",
       },
     },
-    "packages/workspace": {
-      "name": "@rowan-agent/workspace",
-      "version": "0.3.5",
-    },
   },
   "packages": {
     "@pinojs/redact": ["@pinojs/redact@0.4.0", "", {}, "sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg=="],
@@ -93,11 +93,11 @@
 
     "@rowan-agent/logging": ["@rowan-agent/logging@workspace:packages/logging"],
 
+    "@rowan-agent/runtime": ["@rowan-agent/runtime@workspace:packages/runtime"],
+
     "@rowan-agent/session": ["@rowan-agent/session@workspace:packages/session"],
 
     "@rowan-agent/store": ["@rowan-agent/store@workspace:packages/store"],
-
-    "@rowan-agent/workspace": ["@rowan-agent/workspace@workspace:packages/workspace"],
 
     "@types/bun": ["@types/bun@1.3.13", "", { "dependencies": { "bun-types": "1.3.13" } }, "sha512-9fqXWk5YIHGGnUau9TEi+qdlTYDAnOj+xLCmSTwXfAIqXr2x4tytJb43E9uCvt09zJURKXwAtkoH4nLQfzeTXw=="],
 
