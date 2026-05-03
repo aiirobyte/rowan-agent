@@ -1,10 +1,10 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.4.1
+> 版本：v0.4.2
 > 日期：2026-05-03
-> 状态：implemented
-> 进度：v0.0.0 到 v0.4.1 已实现；下一步进入 v0.5.0 context projection/provider IR
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`
+> 状态：planned
+> 进度：v0.0.0 到 v0.4.1 已实现；下一步进入 v0.4.2 Agent loop IO atomization
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`docs/PLAN/v0.4.2/PLAN.md`
 
 ## 1. Product Positioning
 
@@ -23,7 +23,7 @@ Session
   -> Pino run log
 ```
 
-下一阶段的主线不是继续堆功能，而是先把上下文、运行历史、provider 适配和持久化边界整理成 DCP-style pipeline。
+下一阶段的主线不是继续堆功能，而是先把 Agent loop 内部的每个环节拆成明确的输入/输出原子，再在这个基础上整理上下文、provider 适配、policy 和 replay。
 
 ## 2. Implemented Baseline
 
@@ -49,6 +49,7 @@ Planning docs use this status enum:
 | v0.3.5 | Pino Runtime Logging | implemented | `packages/logging`, run logs, redaction, removal of self-owned trace package |
 | v0.4.0 | Protocol Boundary + Runtime Split | implemented | `packages/protocol`, runtime-owned runner/loop/tools/scheduler/skills/hooks/MCP boundary, `context -> protocol`, and small `agent` facade |
 | v0.4.1 | Agent Boundary Correction | implemented | Agent loop/thread/phases, task outcomes, and turn recording moved back into `packages/agent/src/`; runtime trimmed to glue/integration; no `core/` folder or compatibility runtime re-exports |
+| v0.4.2 | Agent Loop IO Atomization | planned | typed phase inputs/outputs, runtime phase ports, orchestration-only loop, tool runner port seam |
 
 ## 3. Current Architecture Principles
 
@@ -61,6 +62,9 @@ Planning docs use this status enum:
 7. The Agent loop, phases, thread semantics, retry, verification, and outcome rules belong to `packages/agent`, not `packages/runtime`.
 8. Runtime should act as glue for tools, skills, hooks, MCP, workspace helpers, policy integration, and future plugin surfaces.
 9. Workflow, eval, replay, and policy should layer around the Agent kernel instead of expanding `runAgentLoop()` into a platform.
+10. The Agent loop should be an orchestration-only state machine: it owns ordering and retry semantics, while each phase consumes a typed input and returns a typed output.
+11. Runtime may adjust phase input/output only through explicit ports; it should not mutate session, task, or loop internals through hidden shared state.
+12. Tool execution should use context/result contracts so approval, manual execution, dry-run, retries, MCP tools, and local tools all share one execution path.
 
 ## 4. New Version Roadmap
 
@@ -70,8 +74,9 @@ The old long-term roadmap placed Policy, Replay, Eval, and Workflow immediately 
 |---|---|---|---|
 | v0.4.0 | Protocol Boundary + Runtime Split | remove reversed dependencies and extract execution engine | `packages/protocol`, `packages/runtime`, shared turn/model/tool types, `AgentRunner`, phase modules, routing, skills, hooks, MCP boundary, core tools |
 | v0.4.1 | Agent Boundary Correction | correct the over-moved runtime boundary before context work | Agent-owned loop/thread/phases, runtime as glue/integration, no `core/` folder, no compatibility runtime re-exports |
-| v0.5.0 | Context Projection + Provider IR | make context deterministic and provider-neutral | `IntermediateAgentContext`, `RenderedAgentContext`, phase policy, token budget hooks, `ConversationEntry[]`, SSE streaming parser |
-| v0.6.0 | Policy and Safety | upgrade hooks into explicit tool execution policy | approvals, permission scopes, dangerous command guard, policy events |
+| v0.4.2 | Agent Loop IO Atomization | decouple loop steps into typed phase inputs/outputs and runtime ports | `AgentLoopConfig`, `AgentRunState`, `AgentContext`, `PhaseInputMap`, `PhaseOutputMap`, `PhaseResult`, `beforePhase`/`afterPhase`, orchestration-only loop |
+| v0.5.0 | Context Projection + Provider IR | make context deterministic and provider-neutral on top of phase IO | `IntermediateAgentContext`, `RenderedAgentContext`, phase policy, token budget hooks, `ConversationEntry[]`, SSE streaming parser |
+| v0.6.0 | Tool Runtime Policy Ports | upgrade tool hooks into explicit context/result contracts | `BeforeToolCallContext`, `BeforeToolCallResult`, `AfterToolCallContext`, `AfterToolCallResult`, `ToolExecutionMode`, shared local/MCP `ToolRunner`, permission scopes |
 | v0.7.0 | Replay, Fork, and Compaction | make failed runs reconstructable and long sessions manageable | canonical events, replay from events+turns, fork from step, compaction cursor+summary |
 | v0.8.0 | Eval Harness | compare models/prompts/tools using repeatable runs | datasets, scorer interface, batch runner, reports, static fixtures, optional replay-backed fixtures |
 | v0.9.0 | Workflow Orchestration | compose multiple Agent runs externally | graph executor, checkpoints, human approval nodes, workflow events |
@@ -168,7 +173,7 @@ packages/runtime/src/
 
 ## 6. v0.4.1 Scope
 
-v0.4.1 corrects the Agent/runtime boundary before v0.5.0 builds context projection on top of it.
+v0.4.1 corrects the Agent/runtime boundary before v0.4.2 atomizes Agent loop inputs and outputs.
 
 v0.4.0 intentionally shrank `agent`, but it moved too much Agent definition into `runtime`. The corrected ownership is:
 
@@ -210,11 +215,169 @@ Acceptance:
 - No `core/` folder exists.
 - `bun test packages` and `bun run build` pass.
 
-## 7. v0.5.0 Scope
+## 7. v0.4.2 Scope
 
-v0.5.0 makes the Cahciua-inspired DCP direction real in Rowan.
+v0.4.2 makes the corrected Agent/runtime ownership actionable by atomizing the Agent loop.
 
-### 7.1 Goals
+The guiding rule is:
+
+```text
+agent
+  -> owns the ordered chain, state machine, attempts, thread semantics, and outcomes
+
+runtime
+  -> adjusts each phase input/output through explicit ports
+  -> owns tool execution glue, policy hooks, MCP/plugin integration, and workspace helpers
+```
+
+### 7.1 Target Flow
+
+```text
+Agent.prompt()
+  -> AgentLoopConfig
+  -> AgentRunState
+  -> runAgentLoop()
+
+runAgentLoop()
+  -> route(input) -> route(output)
+  -> direct | thread | task
+  -> plan(input) -> plan(output)
+  -> attempt loop:
+       execute(input) -> execute(output)
+       executeTools(tool input) -> tool output
+       verify(input) -> verify(output)
+  -> outcome
+```
+
+Each node has one typed input and one typed output. Runtime can participate only through explicit hooks:
+
+```text
+PhaseInput
+  -> runtime.beforePhase()
+  -> phase runner
+  -> runtime.afterPhase()
+  -> PhaseOutput
+```
+
+### 7.2 Core Contracts
+
+v0.4.2 introduces the minimal contracts needed to stop passing the whole mutable loop runtime into every helper:
+
+```ts
+type AgentLoopConfig = {
+  model: ModelRef;
+  stream: StreamFn;
+  maxAttempts: number;
+  verifyTasks: boolean;
+  budget?: AgentRunBudget;
+  runtime?: AgentRuntimePort;
+};
+
+type AgentRunState = {
+  session: Session<AgentEvent>;
+  status: "routing" | "planning" | "executing" | "verifying" | "completed";
+  task?: Task;
+  attempt: number;
+  toolResults: ToolResult[];
+  budgetUsage: AgentBudgetUsage;
+  depth: RuntimeDepth;
+  lastExecuteText?: string;
+};
+
+type AgentContext = {
+  config: AgentLoopConfig;
+  state: Readonly<AgentRunState>;
+  signal?: AbortSignal;
+  emit(event: AgentEvent): Promise<void>;
+  record(step: ExecutionTurn): Promise<void>;
+  runThread?: RunThread;
+};
+
+type PhaseInputMap = {
+  route: RouteInput;
+  plan: PlanInput;
+  execute: ExecuteInput;
+  verify: VerifyInput;
+};
+
+type PhaseOutputMap = {
+  route: TaskRoutingDecision;
+  plan: { task: Task };
+  execute: { text?: string; toolCalls: ToolCall[]; taskOutput: TaskOutput };
+  verify: VerificationResult;
+};
+
+type PhaseResult<K extends LlmPhase> =
+  | { action: "continue"; output: PhaseOutputMap[K]; effects?: AgentEffect[] }
+  | { action: "skip"; output: PhaseOutputMap[K]; reason?: string }
+  | { action: "retry"; input?: PhaseInputMap[K]; reason?: string }
+  | { action: "abort"; outcome: Outcome; reason?: string };
+```
+
+The exact names may change during implementation, but the shape is locked: config, state, context, phase input, phase output, phase result.
+
+### 7.3 Runtime Phase Port
+
+Runtime should not own the loop, but it can transform phase IO:
+
+```ts
+type AgentRuntimePort = {
+  beforePhase?<K extends LlmPhase>(
+    context: AgentContext,
+    phase: K,
+    input: PhaseInputMap[K],
+  ): Promise<
+    | { input?: PhaseInputMap[K] }
+    | { skip: PhaseOutputMap[K] }
+    | { abort: Outcome }
+  >;
+
+  afterPhase?<K extends LlmPhase>(
+    context: AgentContext,
+    phase: K,
+    output: PhaseOutputMap[K],
+  ): Promise<
+    | { output?: PhaseOutputMap[K] }
+    | { retry?: PhaseInputMap[K] }
+    | { abort: Outcome }
+  >;
+
+  tools?: ToolRunner;
+};
+```
+
+Runtime examples:
+
+- inject or redact phase input;
+- switch verification behavior for a runtime mode;
+- short-circuit a phase in tests or deterministic replay;
+- attach policy, MCP, plugin, or workspace evidence without mutating loop state directly.
+
+### 7.4 Required Changes
+
+- split the current private `AgentLoopRuntime` into immutable config, mutable state, and narrow context;
+- change route / plan / execute / verify helpers so they accept only their phase input;
+- centralize event/session/message/step effects so phase helpers return effects instead of mutating session directly;
+- extract a model turn collector that returns text, structured output, tool calls, usage, and turn entries without owning phase policy;
+- add a `runPhase()` helper that applies runtime `beforePhase` / `afterPhase` around the core phase runner;
+- split execute into model execution and tool execution so runtime can own `ToolRunner` without owning task retry semantics;
+- keep `runAgentLoop()` as the only owner of phase order, retry loop, verification branching, and final outcome publishing;
+- preserve public `Agent.prompt()` / `Agent.startThread()` behavior.
+
+### 7.5 Acceptance Criteria
+
+- no phase helper receives the whole mutable loop runtime;
+- loop order is readable as a chain of route / branch / plan / attempt execute / verify / outcome;
+- runtime hooks can adjust phase input and output without mutating `session.messages` directly;
+- tool execution is callable through a runtime-owned `ToolRunner` port;
+- existing direct, task, thread, budget, and verify retry tests still pass;
+- new tests cover `beforePhase` input adjustment, `afterPhase` output adjustment, skip, retry, abort, and unchanged default behavior.
+
+## 8. v0.5.0 Scope
+
+v0.5.0 makes the Cahciua-inspired DCP direction real in Rowan, now on top of phase IO boundaries.
+
+### 8.1 Goals
 
 ```text
 Session + source events + driver turns
@@ -236,7 +399,7 @@ Required changes:
 - add an adapter-level SSE streaming parser that maps provider chunks into `ModelStreamEvent`;
 - preserve non-streaming JSON response handling as a compatibility fallback.
 
-### 7.2 Token Budget Contract
+### 8.2 Token Budget Contract
 
 v0.5.0 does not need a full compaction strategy, but it must define the hard budget hook before context rendering is considered stable:
 
@@ -261,7 +424,7 @@ Rules:
 - `conversation` segments are preferred over `execution` and `diagnostic` segments unless a phase policy explicitly requires evidence;
 - compaction in v0.7.0 consumes this budget report but does not own first-line hard truncation.
 
-### 7.3 Streaming Contract
+### 8.3 Streaming Contract
 
 SSE streaming belongs to v0.5.0 because provider IR is where Rowan can cleanly separate provider wire chunks from model-visible context.
 
@@ -272,7 +435,7 @@ Required behavior:
 - expose stream parser fixtures independent of live network calls;
 - keep current non-streaming response path for deterministic tests and providers that do not support streaming.
 
-### 7.4 Phase Visibility Policy
+### 8.4 Phase Visibility Policy
 
 | Phase | Should see | Should not see |
 |---|---|---|
@@ -281,27 +444,64 @@ Required behavior:
 | execute | task, allowed tools, current attempt tool results, necessary semantic context | route examples as history, old verifier text |
 | verify | task, criteria, task output, necessary evidence | route/plan format examples, unrelated conversation chatter |
 
-### 7.5 Acceptance Criteria
+### 8.5 Acceptance Criteria
 
-- prompt tests snapshot each phase viewport.
-- route contamination tests cover routing decision, failed outcome, verifier text, and tool result leakage.
-- token budget tests cover counting hook invocation, hard-limit failure, and oldest/lowest-priority truncation behavior.
-- SSE parser fixture tests cover text delta, tool call delta, usage, error, and done events.
-- OpenAI-compatible tests still pass through the new IR.
+- prompt tests snapshot each phase viewport;
+- route contamination tests cover routing decision, failed outcome, verifier text, and tool result leakage;
+- token budget tests cover counting hook invocation, hard-limit failure, and oldest/lowest-priority truncation behavior;
+- SSE parser fixture tests cover text delta, tool call delta, usage, error, and done events;
+- OpenAI-compatible tests still pass through the new IR;
 - no provider adapter chooses which session history is visible.
 
-## 8. v0.6.0 Scope
+## 9. v0.6.0 Scope
 
-v0.6.0 returns to the previously planned policy and safety work, now on cleaner driver boundaries.
+v0.6.0 upgrades the current tool hooks into explicit runtime policy ports inspired by pi Agent's context/result shape.
+
+### 9.1 Tool Execution Contract
+
+```ts
+type ToolExecutionMode = "auto" | "approval" | "manual" | "dryRun" | "disabled";
+
+type BeforeToolCallContext = {
+  agent: AgentContext;
+  task: Task;
+  tool: Tool;
+  toolCall: ToolCall;
+  args: unknown;
+  mode: ToolExecutionMode;
+};
+
+type BeforeToolCallResult =
+  | { allow: true; args?: unknown; mode?: ToolExecutionMode }
+  | { allow: false; reason: string }
+  | { result: ToolResult };
+
+type AfterToolCallContext = {
+  agent: AgentContext;
+  task: Task;
+  tool: Tool;
+  toolCall: ToolCall;
+  args: unknown;
+  result: ToolResult;
+  mode: ToolExecutionMode;
+};
+
+type AfterToolCallResult =
+  | { result: ToolResult }
+  | { retry: true; args?: unknown; reason?: string }
+  | { abort: true; reason: string };
+```
 
 Required changes:
 
-- turn `beforeToolCall` / `afterToolCall` into a PolicyEngine-compatible port;
-- define permission scopes for read/write/edit/bash/thread;
-- route MCP-provided tools through the same runtime `ToolRunner`, hook pipeline, and permission scopes as local tools;
+- introduce a runtime-owned `ToolRunner` that resolves tools, validates args, applies policy, executes local or MCP tools, normalizes results, and emits tool events;
+- replace thin `beforeToolCall` / `afterToolCall` callbacks with context/result contracts while preserving compatibility adapters if useful;
+- define permission scopes for read/write/edit/bash/thread/MCP;
+- route MCP-provided tools through the same `ToolRunner`, hook pipeline, and permission scopes as local tools;
+- support `auto`, `approval`, `manual`, `dryRun`, and `disabled` execution modes;
 - add dangerous command detection for destructive shell actions;
 - add CLI approval prompts where interactive execution is available;
-- emit policy events for approvals, denials, and overrides;
+- emit policy events for approvals, denials, overrides, retries, and manual completions;
 - keep non-interactive mode deterministic.
 
 Dangerous command detection strategy:
@@ -317,10 +517,11 @@ Dangerous command detection strategy:
 Acceptance:
 
 - policy decisions happen before tool execution;
-- denials are recorded as tool results and AgentEvents;
-- tests cover approval allow, approval deny, non-interactive default, and dangerous command guard.
+- denials and dry-runs are recorded as tool results and AgentEvents;
+- local tools and MCP tools share the same runner path;
+- tests cover approval allow, approval deny, arg rewrite, short-circuit result, retry, manual mode, dry-run, non-interactive default, and dangerous command guard.
 
-## 9. v0.7.0 Scope
+## 10. v0.7.0 Scope
 
 v0.7.0 turns `ExecutionTurn` and future source events into real replay/fork infrastructure.
 
@@ -339,7 +540,7 @@ Acceptance:
 - fork starts a new session from a selected point without copying internal noise into conversation;
 - compaction never summarizes `execution` or `diagnostic` content unless explicitly selected by policy.
 
-## 10. v0.8.0 Scope
+## 11. v0.8.0 Scope
 
 v0.8.0 builds the eval harness on provider-neutral runs. Replay-backed fixtures are preferred, but eval must also support static fixtures so v0.8.0 is not blocked if v0.7.0 replay ships in a smaller form.
 
@@ -359,7 +560,7 @@ Acceptance:
 - evals can run from static fixtures without replay state;
 - scoring does not require parsing Pino logs as state.
 
-## 11. v0.9.0 Scope
+## 12. v0.9.0 Scope
 
 v0.9.0 introduces workflow as an outer orchestration layer.
 
@@ -377,7 +578,7 @@ Acceptance:
 - workflow state references Agent sessions rather than embedding duplicate run history;
 - Agent kernel remains usable without workflow.
 
-## 12. v1.0.0 Scope
+## 13. v1.0.0 Scope
 
 v1.0.0 stabilizes Rowan as a modular harness runtime.
 
@@ -389,16 +590,17 @@ Required changes:
 - documented tool and policy contract;
 - examples for CLI, embedded runtime, custom tools, custom model adapter, and replay/eval.
 
-## 13. Updated Execution Order
+## 14. Updated Execution Order
 
 Near-term order:
 
-1. Implement v0.5.0 context projection/rendering and provider IR.
-2. Then resume policy/safety work as v0.6.0, with local and MCP tools sharing runtime integration paths.
-3. Build replay/compaction after source events and driver turns are clean.
-4. Build eval and workflow on replayable state.
+1. Implement v0.4.2 Agent loop IO atomization and runtime phase ports.
+2. Implement v0.5.0 context projection/rendering and provider IR on top of typed phase IO.
+3. Upgrade tool execution and policy as v0.6.0, with local and MCP tools sharing one runtime path.
+4. Build replay/compaction after source events, driver turns, and rendered contexts are clean.
+5. Build eval and workflow on replayable state.
 
-## 14. Deferred Decisions
+## 15. Deferred Decisions
 
 Deferred decisions must be triaged after each version is implemented. Current triage:
 

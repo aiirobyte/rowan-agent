@@ -1,10 +1,10 @@
 # Rowan Agent Technical Architecture
 
-> 版本：v0.4.1
+> 版本：v0.4.2
 > 日期：2026-05-03
-> 状态：implemented
-> 进度：v0.0.0 到 v0.4.1 已实现；v0.5.0+ 进入 context projection/provider IR
-> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`.agent/docs/2026-05-03-cahciua-dcp-reuse-plan.md`
+> 状态：planned
+> 进度：v0.0.0 到 v0.4.1 已实现；v0.4.2 进入 Agent loop IO atomization
+> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`docs/PLAN/v0.4.2/PLAN.md`、`.agent/docs/2026-05-03-cahciua-dcp-reuse-plan.md`
 
 ## 1. Architecture Goal
 
@@ -27,8 +27,8 @@ source input
   -> Adaptation: CanonicalAgentEvent
   -> Projection: IntermediateAgentContext
   -> Rendering: RenderedAgentContext / ConversationEntry[]
-  -> Agent core: Agent facade + route / plan / execute / verify + thread semantics
-  -> Ports: ModelClient / ToolRunner / AgentStore / EventLogger
+  -> Agent core: Agent facade + orchestration-only loop + route / plan / execute / verify + thread semantics
+  -> Ports: phase IO hooks / ModelClient / ToolRunner / AgentStore / EventLogger
   -> Runtime glue: local tools / skills / hooks / MCP / plugins / workspace helpers
   -> Adapters: OpenAI-compatible / JSON store / Pino log
 ```
@@ -50,6 +50,7 @@ DCP 在这里指 deterministic context pipeline：外部输入、模型/工具�
 | v0.3.5 | implemented | `packages/logging`, Pino run logs, removal of self-owned trace package |
 | v0.4.0 | implemented | `packages/protocol`, runtime-owned execution mechanics, context import cleanup, small `agent` facade |
 | v0.4.1 | implemented | Corrected v0.4.0 over-move: Agent-owned loop/thread/phases/task outcomes/turn recording, runtime as glue/integration, no `core/` folder, no runtime compatibility re-exports |
+| v0.4.2 | planned | Agent loop IO atomization: typed phase inputs/outputs, runtime phase ports, orchestration-only loop |
 
 ## 3. Current Package Architecture
 
@@ -204,6 +205,46 @@ class Agent {
 }
 ```
 
+### 5.1 v0.4.2 Target Agent Loop Boundary
+
+v0.4.2 keeps the Agent loop in `packages/agent`, but changes its internal shape. The loop should read like an ordered chain and stop passing the whole mutable runtime object into every helper.
+
+Target ownership:
+
+```text
+agent
+  -> AgentLoopConfig
+  -> AgentRunState
+  -> AgentContext
+  -> PhaseInputMap / PhaseOutputMap
+  -> runPhase() orchestration
+  -> route / plan / execute / verify ordering
+  -> attempts, thread branching, verification branching, outcome publishing
+
+runtime
+  -> AgentRuntimePort implementation
+  -> beforePhase / afterPhase input-output adjustments
+  -> ToolRunner port implementation
+  -> policy, MCP, plugin, workspace integration
+```
+
+The phase runner contract is:
+
+```text
+PhaseInput
+  -> runtime.beforePhase()
+  -> Agent-owned phase runner
+  -> runtime.afterPhase()
+  -> PhaseOutput
+```
+
+Rules:
+
+- phase helpers accept only their typed phase input, not the whole loop runtime;
+- runtime hooks may return adjusted input/output, skip, retry, or abort outcomes through explicit result objects;
+- session messages, AgentEvents, and ExecutionTurns are written through Agent-owned effect helpers;
+- tool execution is reachable through a runtime-owned `ToolRunner` port, but task retry and verification stay Agent-owned.
+
 ## 6. Current Context Rendering
 
 Current prompt building is still transitional:
@@ -327,6 +368,8 @@ runtime
 6. `runtime` owns tools, skills, hooks, MCP tool providers, policy/plugin integration points, and workspace helpers.
 7. Source input and Driver output remain orthogonal streams and are merged only by phase-specific rendering.
 8. Filtering happens before compaction; never summarize internal execution noise into long-term context.
+9. The Agent loop owns ordering, not hidden shared IO; each phase consumes typed input and returns typed output.
+10. Runtime may transform phase IO through ports, but must not own the loop state machine.
 
 ## 9. Planned Refactor Sequence
 
@@ -382,7 +425,33 @@ Acceptance:
 - core tools, hooks, skills, workspace helpers, and MCP tool-provider boundaries remain exported from `runtime`;
 - budget, thread, verify retry, and multi-turn tests still pass.
 
-### Phase C: Context Projection and Rendering
+### Phase C: Agent Loop IO Atomization
+
+Goal: make `runAgentLoop()` orchestration-only by giving every phase a typed input and output, with runtime participation through explicit ports.
+
+Target shape:
+
+```text
+packages/agent/src/
+  loop.ts             # ordered state machine and outcome flow
+  phases/types.ts     # AgentLoopConfig, AgentRunState, AgentContext, phase IO maps/results
+  phases/runner.ts    # runPhase() before/after runtime port wrapper
+  phases/routing.ts   # route scheduler helpers
+  phases/verifying.ts # verifier helper
+
+packages/runtime/src/
+  types.ts            # ToolRunner and runtime integration contracts
+```
+
+Acceptance:
+
+- no phase helper receives the whole mutable loop runtime;
+- runtime can adjust phase input/output via `beforePhase` / `afterPhase`;
+- `runAgentLoop()` visibly owns route / branch / plan / attempt execute / verify / outcome ordering;
+- tool execution can be routed through a runtime-owned `ToolRunner` port without moving task retry semantics into runtime;
+- direct, task, thread, budget, and verify retry tests still pass.
+
+### Phase D: Context Projection and Rendering
 
 Goal: replace direct message scanning with explicit phase rendering.
 
@@ -406,7 +475,7 @@ Acceptance:
 - verify sees task output and criteria, not unrelated session noise.
 - token budget reports are produced after filtering and before provider wire conversion.
 
-### Phase D: Provider IR
+### Phase E: Provider IR
 
 Goal: isolate model provider wire formats.
 
@@ -427,7 +496,7 @@ Acceptance:
 - non-streaming JSON responses remain supported as a fallback;
 - future Responses / Anthropic adapters can share Rowan context rendering.
 
-### Phase E: Replay, Compaction, and Policy
+### Phase F: Replay, Compaction, and Policy
 
 Goal: build durable long-session and safety capabilities on top of clean streams.
 
