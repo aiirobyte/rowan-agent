@@ -2,7 +2,7 @@
 
 > 版本：v0.3.5
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 上游文档：`docs/PLAN/v0.3.4/PLAN.md`、`.agent/docs/2026-05-03-cahciua-dcp-reuse-plan.md`
 
 ## 文档

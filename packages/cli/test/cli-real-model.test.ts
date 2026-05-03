@@ -2,11 +2,23 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { Outcome } from "@rowan-agent/agent";
+import type { AgentEvent, Outcome } from "@rowan-agent/agent";
 import { LocalJsonAgentStore } from "@rowan-agent/store";
 import { createMessage, createSession } from "@rowan-agent/session";
-import { inspectTrace } from "@rowan-agent/trace";
 import { formatOutcomeOutput } from "../src/output";
+
+type AgentEventLogRecord = Record<string, unknown> & {
+  event?: AgentEvent;
+  eventType?: AgentEvent["type"];
+  eventTs?: string;
+  phase?: string;
+};
+
+type LogSummary = {
+  filePath: string;
+  eventTypes: Record<string, number>;
+  sessionIds: string[];
+};
 
 async function runCli(
   args: string[],
@@ -74,6 +86,51 @@ function countMatches(input: string, pattern: RegExp): number {
   return [...input.matchAll(pattern)].length;
 }
 
+async function readLogRecords(path: string): Promise<AgentEventLogRecord[]> {
+  const content = await Bun.file(path).text();
+  return content
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as AgentEventLogRecord);
+}
+
+async function readLogEvents(path: string): Promise<AgentEvent[]> {
+  return (await readLogRecords(path)).map((record) => {
+    if (!record.event) {
+      throw new Error(`Missing event payload in log record: ${JSON.stringify(record)}`);
+    }
+    return record.event;
+  });
+}
+
+function eventSessionId(event: AgentEvent): string | undefined {
+  if (event.type === "session_created" || event.type === "session_loaded") {
+    return event.session.id;
+  }
+  if (event.type === "thread_created" || event.type === "thread_end") {
+    return event.sessionId;
+  }
+  return undefined;
+}
+
+async function summarizeLogFile(filePath: string): Promise<LogSummary> {
+  const eventTypes: Record<string, number> = {};
+  const sessionIds = new Set<string>();
+  for (const event of await readLogEvents(filePath)) {
+    eventTypes[event.type] = (eventTypes[event.type] ?? 0) + 1;
+    const sessionId = eventSessionId(event);
+    if (sessionId) {
+      sessionIds.add(sessionId);
+    }
+    if (event.type === "thread_created" || event.type === "thread_end") {
+      sessionIds.add(event.parentSessionId);
+      sessionIds.add(event.sessionId);
+    }
+  }
+  return { filePath, eventTypes, sessionIds: [...sessionIds] };
+}
+
 test("CLI requires OpenAI-compatible API key", async () => {
   const result = await runCli(["--model", "test-model", "hello"]);
 
@@ -100,6 +157,13 @@ test("CLI rejects removed OpenAI-compatible flag", async () => {
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("Unknown option: --openai-compatible");
+});
+
+test("CLI rejects removed trace flag", async () => {
+  const result = await runCli(["--trace", "runs/custom.jsonl", "hello"]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("Unknown option: --trace");
 });
 
 test("CLI rejects invalid OpenAI-compatible timeout", async () => {
@@ -138,6 +202,7 @@ test("CLI config shows missing and default configuration without requiring model
         maxThreadDepth?: number;
         maxThreadDepthSource?: string;
       };
+      logging?: Record<string, unknown>;
     };
 
     expect(config.command).toBe("config");
@@ -160,6 +225,7 @@ test("CLI config shows missing and default configuration without requiring model
       maxThreadDepth: 4,
       maxThreadDepthSource: "default",
     });
+    expect(config.logging).toEqual({ automatic: true, path: null });
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -183,7 +249,7 @@ test("CLI config reports resolved flags without exposing API key material", asyn
         "7",
         "--session",
         "ses_example",
-        "--trace",
+        "--log",
         "runs/custom.jsonl",
         "--skill",
         "example",
@@ -200,7 +266,7 @@ test("CLI config reports resolved flags without exposing API key material", asyn
       openaiCompatible?: Record<string, unknown>;
       agent?: Record<string, unknown>;
       session?: Record<string, unknown>;
-      trace?: Record<string, unknown>;
+      logging?: Record<string, unknown>;
       skills?: Array<Record<string, unknown>>;
       tools?: string[];
     };
@@ -222,7 +288,7 @@ test("CLI config reports resolved flags without exposing API key material", asyn
       maxThreadDepthSource: "flag",
     });
     expect(config.session).toEqual({ id: "ses_example", source: "flag" });
-    expect(config.trace).toEqual({ automatic: false, path: "runs/custom.jsonl" });
+    expect(config.logging).toEqual({ automatic: false, path: "runs/custom.jsonl" });
     expect(config.skills).toEqual([
       {
         idOrPath: "example",
@@ -339,20 +405,20 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("Request timed out after 1ms.");
 
-    const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
-    expect(traceMatch).not.toBeNull();
+    const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
+    expect(logMatch).not.toBeNull();
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
-    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
-    const tracePath = join(workspace, traceMatch?.[1] ?? "");
-    await rm(tracePath, { force: true });
+    const logPath = join(workspace, logMatch?.[1] ?? "");
+    await rm(logPath, { force: true });
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("CLI writes a default trace without --trace", async () => {
+test("CLI writes a default log without --log", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-default-"));
   const responses = [
     {
@@ -393,36 +459,38 @@ test("CLI writes a default trace without --trace", async () => {
     expect(outcome.taskId).toBeUndefined();
     expect(result.stdout.trim()).toBe(formatOutcomeOutput(outcome));
 
-    const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
-    expect(traceMatch).not.toBeNull();
-    const displayedTracePath = traceMatch?.[1];
+    const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
+    expect(logMatch).not.toBeNull();
+    const displayedLogPath = logMatch?.[1];
     const sessionId = sessionIdFrom(result.stderr);
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
-    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
     const metadataLines = result.stderr
       .trim()
       .split("\n")
-      .filter((line) => /^(Session id|Message id|Trace written to)/.test(line));
+      .filter((line) => /^(Session id|Message id|Log written to)/.test(line));
     expect(metadataLines[0]).toMatch(/^Session id: ses_[A-Za-z0-9_-]+$/);
     expect(metadataLines[1]).toMatch(/^Message id: msg_[A-Za-z0-9_-]+$/);
-    expect(metadataLines[2]).toMatch(/^Trace written to runs\/.+\.jsonl$/);
-    expect(displayedTracePath?.startsWith("runs/")).toBe(true);
-    expect(displayedTracePath).toMatch(
+    expect(metadataLines[2]).toMatch(/^Log written to runs\/.+\.jsonl$/);
+    expect(displayedLogPath?.startsWith("runs/")).toBe(true);
+    expect(displayedLogPath).toMatch(
       new RegExp(`^runs/\\d{4}-\\d{2}-\\d{2}T\\d{6}-\\d{2}[+-]\\d{2}:\\d{2}-${sessionId}\\.jsonl$`),
     );
 
-    const tracePath = join(workspace, displayedTracePath ?? "");
-    const trace = await Bun.file(tracePath ?? "").text();
-    const firstEvent = JSON.parse(trace.split("\n")[0] ?? "{}") as { ts?: string; timestamp?: string };
-    expect(firstEvent.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
-    expect(firstEvent.timestamp).toBeUndefined();
-    expect(trace).toContain("\"type\":\"session_created\"");
-    expect(trace).toContain("\"input\":\"hello\"");
-    expect(trace).toContain("\"type\":\"model_requested\"");
-    expect(trace).toContain("\"phase\":\"route\"");
-    expect(trace).not.toContain("\"type\":\"task_created\"");
-    expect(trace).toContain("\"type\":\"outcome\"");
+    const logPath = join(workspace, displayedLogPath ?? "");
+    const logText = await Bun.file(logPath ?? "").text();
+    const [firstRecord] = await readLogRecords(logPath);
+    const [firstEvent] = await readLogEvents(logPath);
+    expect(firstRecord?.time).toEqual(expect.any(Number));
+    expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
+    expect(firstRecord?.timestamp).toBeUndefined();
+    expect(logText).toContain("\"type\":\"session_created\"");
+    expect(logText).toContain("\"input\":\"hello\"");
+    expect(logText).toContain("\"type\":\"model_requested\"");
+    expect(logText).toContain("\"phase\":\"route\"");
+    expect(logText).not.toContain("\"type\":\"task_created\"");
+    expect(logText).toContain("\"type\":\"outcome\"");
 
     const sessionPath = join(workspace, "sessions", `${sessionId}.json`);
     const session = JSON.parse(await Bun.file(sessionPath).text()) as {
@@ -499,23 +567,20 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     expect(result.stdout).toContain("\"passed\": true");
     expect(requests[0]?.messages?.at(-1)?.content).toContain("\"name\": \"bash\"");
 
-    const traceMatch = result.stderr.match(/Trace written to (.+\.jsonl)/);
-    expect(traceMatch).not.toBeNull();
-    const tracePath = join(workspace, traceMatch?.[1] ?? "");
-    const trace = await Bun.file(tracePath).text();
-    const traceEvents = trace
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line)) as Array<{ type: string; phase?: string }>;
-    const routeCallIndex = traceEvents.findIndex(
+    const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
+    expect(logMatch).not.toBeNull();
+    const logPath = join(workspace, logMatch?.[1] ?? "");
+    const logText = await Bun.file(logPath).text();
+    const logEvents = await readLogEvents(logPath);
+    const routeCallIndex = logEvents.findIndex(
       (event) => event.type === "model_requested" && event.phase === "route",
     );
-    const taskCreatedIndex = traceEvents.findIndex((event) => event.type === "task_created");
+    const taskCreatedIndex = logEvents.findIndex((event) => event.type === "task_created");
     expect(routeCallIndex).toBeGreaterThanOrEqual(0);
     expect(taskCreatedIndex).toBeGreaterThan(routeCallIndex);
-    expect(trace).toContain("\"type\":\"tool_start\"");
-    expect(trace).toContain("\"toolName\":\"bash\"");
-    expect(trace).toContain("cli-bash-ok");
+    expect(logText).toContain("\"type\":\"tool_start\"");
+    expect(logText).toContain("\"toolName\":\"bash\"");
+    expect(logText).toContain("cli-bash-ok");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
@@ -564,7 +629,7 @@ test("CLI --session continues a saved one-shot session", async () => {
     expect(second.exitCode).toBe(0);
     expect(sessionIdFrom(second.stderr)).toBe(sessionId);
     expect(countMatches(second.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
-    expect(countMatches(second.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(second.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(second.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
 
     const secondPrompt = requests[1]?.messages?.map((message) => message.content).join("\n") ?? "";
@@ -573,11 +638,11 @@ test("CLI --session continues a saved one-shot session", async () => {
     expect(secondPrompt).toContain("continue");
 
     const runsDir = join(workspace, "runs");
-    const traceFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
-    expect(traceFiles).toHaveLength(2);
-    expect(traceFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
+    const logFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(logFiles).toHaveLength(2);
+    expect(logFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
     const summaries = await Promise.all(
-      traceFiles.map((file) => inspectTrace(join(runsDir, file), runsDir)),
+      logFiles.map((file) => summarizeLogFile(join(runsDir, file))),
     );
     expect(summaries.every((summary) => summary.sessionIds.includes(sessionId))).toBe(true);
     expect(summaries.some((summary) => summary.eventTypes.session_created === 1)).toBe(true);
@@ -633,7 +698,7 @@ test("CLI initial prompt continues into the default interactive session", async 
     expect(result.stdout).toContain("Chat second");
     expect(result.stdout).toContain(sessionId);
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
-    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(2);
 
     const secondPrompt = requests[1]?.messages?.map((message) => message.content).join("\n") ?? "";
@@ -645,10 +710,10 @@ test("CLI initial prompt continues into the default interactive session", async 
     expect(sessionFiles).toEqual([`${sessionId}.json`]);
 
     const runsDir = join(workspace, "runs");
-    const traceFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
-    expect(traceFiles).toHaveLength(1);
-    expect(traceFiles[0]?.endsWith(`-${sessionId}.jsonl`)).toBe(true);
-    const summary = await inspectTrace(join(runsDir, traceFiles[0] ?? ""), runsDir);
+    const logFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(logFiles).toHaveLength(1);
+    expect(logFiles[0]?.endsWith(`-${sessionId}.jsonl`)).toBe(true);
+    const summary = await summarizeLogFile(join(runsDir, logFiles[0] ?? ""));
     expect(summary.eventTypes.session_created).toBe(1);
     expect(summary.eventTypes.session_loaded).toBeUndefined();
     expect(summary.eventTypes.session_start).toBeUndefined();
@@ -697,16 +762,16 @@ test("CLI --session can continue with additional interactive turns", async () =>
     expect(chat.exitCode).toBe(0);
     expect(sessionIdFrom(chat.stderr)).toBe(sessionId);
     expect(countMatches(chat.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
-    expect(countMatches(chat.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(chat.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(chat.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(2);
 
     const runsDir = join(workspace, "runs");
-    const traceFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
-    expect(traceFiles).toHaveLength(2);
-    expect(traceFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
+    const logFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(logFiles).toHaveLength(2);
+    expect(logFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
 
     const summaries = await Promise.all(
-      traceFiles.map((file) => inspectTrace(join(runsDir, file), runsDir)),
+      logFiles.map((file) => summarizeLogFile(join(runsDir, file))),
     );
     const loadedSummary = summaries.find((summary) => summary.eventTypes.session_loaded === 1);
     expect(loadedSummary).toBeDefined();
@@ -714,16 +779,15 @@ test("CLI --session can continue with additional interactive turns", async () =>
     expect(loadedSummary?.eventTypes.session_start).toBeUndefined();
     expect(loadedSummary?.eventTypes.session_end).toBeUndefined();
 
-    const loadedTrace = await Bun.file(loadedSummary?.filePath ?? "").text();
-    const firstEvent = JSON.parse(loadedTrace.split("\n")[0] ?? "{}") as { type?: string };
-    expect(firstEvent.type).toBe("session_loaded");
+    const [firstEvent] = await readLogEvents(loadedSummary?.filePath ?? "");
+    expect(firstEvent?.type).toBe("session_loaded");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test("CLI no longer exposes chat, sessions, or trace subcommands in help", async () => {
+test("CLI no longer exposes chat, sessions, or log subcommands in help", async () => {
   const result = await runCli(["--help"]);
 
   expect(result.exitCode).toBe(0);
@@ -769,7 +833,7 @@ test("CLI treats chat as a prompt instead of a command", async () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("chat was handled as a prompt");
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
-    expect(countMatches(result.stderr, /Trace written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.messages?.map((message) => message.content).join("\n")).toContain("\"chat\"");

@@ -43,7 +43,7 @@ type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
 type AgentLoopRuntime = AgentLoopInput & {
-  messageTrace: AgentMessage[];
+  messageLog: AgentMessage[];
   budgetUsage: AgentBudgetUsage;
   threadDepth: number;
   maxThreadDepth: number;
@@ -283,13 +283,13 @@ function snapshotMessages(messages: AgentMessage[]): AgentMessage[] {
 async function emitChatStart(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
     type: "chat_start",
-    content: snapshotMessages(input.messageTrace),
+    content: snapshotMessages(input.messageLog),
     ts: nowIso(),
   });
 }
 
-async function appendTraceMessage(input: AgentLoopRuntime, message: AgentMessage): Promise<void> {
-  input.messageTrace.push(message);
+async function appendEventMessage(input: AgentLoopRuntime, message: AgentMessage): Promise<void> {
+  input.messageLog.push(message);
   await emit(input, {
     type: "message_delta",
     delta: snapshotMessage(message),
@@ -299,7 +299,7 @@ async function appendTraceMessage(input: AgentLoopRuntime, message: AgentMessage
 
 async function appendSessionMessage(input: AgentLoopRuntime, message: AgentMessage): Promise<void> {
   input.session.messages.push(message);
-  await appendTraceMessage(input, message);
+  await appendEventMessage(input, message);
 }
 
 async function publishConversationAssistantMessage(
@@ -316,7 +316,7 @@ async function publishConversationAssistantMessage(
 async function emitChatEnd(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
     type: "chat_end",
-    content: snapshotMessages(input.messageTrace),
+    content: snapshotMessages(input.messageLog),
     ts: nowIso(),
   });
 }
@@ -347,7 +347,7 @@ async function collectTextAndStructured(input: {
     flushedText += text;
     stepEntries.push({ kind: "assistant_text", text });
     if (input.recordText === false) {
-      await appendTraceMessage(
+      await appendEventMessage(
         input.loop,
         createMessage("assistant", text, {
           kind: "model_message",
@@ -358,7 +358,7 @@ async function collectTextAndStructured(input: {
       text = "";
       return;
     }
-    await appendTraceMessage(
+    await appendEventMessage(
       input.loop,
       createMessage("assistant", text, {
         kind: "model_message",
@@ -374,7 +374,7 @@ async function collectTextAndStructured(input: {
 
     if (event.type === "prompt_message") {
       stepEntries.push({ kind: "prompt", message: event.message });
-      await appendTraceMessage(
+      await appendEventMessage(
         input.loop,
         createMessage(event.message.role, event.message.content, {
           kind: "phase_prompt",
@@ -516,7 +516,7 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
   });
   collected.stepEntries.push({ kind: "structured_output", content: decision });
   if (decision.route !== "direct") {
-    await appendTraceMessage(
+    await appendEventMessage(
       input,
       createMessage("assistant", JSON.stringify(decision), {
         kind: "routing_decision",
@@ -711,7 +711,7 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
     }
     const result = createInvalidExecuteToolResult(error);
     toolResults.push(result);
-    await appendTraceMessage(
+    await appendEventMessage(
       input,
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
@@ -737,7 +737,7 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
     const result = await executeToolCall({ loop: input, task, toolCall });
     toolResults.push(result);
     collected.stepEntries.push({ kind: "tool_result", result });
-    await appendTraceMessage(
+    await appendEventMessage(
       input,
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
@@ -926,7 +926,7 @@ async function executeThreadRoute(
     task: threadTask,
     goal,
   });
-  await appendTraceMessage(
+  await appendEventMessage(
     input,
     createMessage("assistant", JSON.stringify(threadOutput), {
       kind: "thread_output",
@@ -972,7 +972,7 @@ async function executeThreadRoute(
 export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   const runtime: AgentLoopRuntime = {
     ...input,
-    messageTrace: snapshotMessages(input.session.messages),
+    messageLog: snapshotMessages(input.session.messages),
     budgetUsage: { modelCalls: 0, toolCalls: 0 },
     threadDepth: input.threadDepth ?? 0,
     maxThreadDepth: resolveMaxThreadDepth(input.budget),

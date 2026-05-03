@@ -240,7 +240,7 @@ export class Agent {
     }
   }
 
-  async flushTrace(): Promise<void> {
+  async flushEvents(): Promise<void> {
     while (this.pendingListenerTasks.size > 0) {
       await Promise.all([...this.pendingListenerTasks]);
     }
@@ -360,7 +360,7 @@ export class Agent {
       return;
     }
     await this.currentRun.catch(() => undefined);
-    await this.flushTrace().catch(() => undefined);
+    await this.flushEvents().catch(() => undefined);
   }
 
   async loadSession(sessionId: string): Promise<void> {

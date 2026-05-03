@@ -29,7 +29,7 @@ test("Agent.prompt returns an outcome and emits events", async () => {
   expect(events).not.toContain("thread_created");
 });
 
-test("Agent.prompt does not wait for async trace listeners", async () => {
+test("Agent.prompt does not wait for async event listeners", async () => {
   const agent = new Agent({
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
@@ -54,7 +54,7 @@ test("Agent.prompt does not wait for async trace listeners", async () => {
   expect(outcome.passed).toBe(true);
   expect(blocked).toBe(true);
   release?.();
-  await agent.flushTrace();
+  await agent.flushEvents();
 });
 
 test("Agent rejects concurrent runs", async () => {

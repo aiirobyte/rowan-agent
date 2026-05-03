@@ -24,6 +24,8 @@ The main project roadmap now lives in:
 - `docs/PLAN/v0.3.3/PLAN.md`
 - `docs/PLAN/v0.3.4/README.md`
 - `docs/PLAN/v0.3.4/PLAN.md`
+- `docs/PLAN/v0.3.5/README.md`
+- `docs/PLAN/v0.3.5/PLAN.md`
 
 ## Current Status
 
@@ -42,12 +44,13 @@ The main project roadmap now lives in:
 - v0.3.2 implemented: thread/sub-session unification, immutable Session input, and task/goal metadata.
 - v0.3.3 implemented: AgentStore port, JSON-backed step storage, and scoped context.
 - v0.3.4 implemented: store package consolidation.
+- v0.3.5 implemented: Pino runtime logging and trace package removal.
 
 ## Next Steps
 
 1. Scope v0.4.0 policy and safety work.
-2. Keep `@rowan-agent/store` as the single owner of store ports and JSON persistence.
-3. Keep v0.3.3 persisted JSON schema stable until a future storage version requires a new schema.
+2. Keep `@rowan-agent/logging` as the event log sink package.
+3. Keep `@rowan-agent/store` as the single owner of store ports and JSON persistence.
 
 ## Notes
 

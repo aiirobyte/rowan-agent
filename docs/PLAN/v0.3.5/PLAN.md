@@ -2,7 +2,7 @@
 
 > 版本：v0.3.5
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 基线：v0.3.4 Store Package Consolidation
 > 任务表：`docs/PLAN/v0.3.5/TASKS.md`
 

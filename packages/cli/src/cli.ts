@@ -15,9 +15,9 @@ import {
   type AgentEventListener,
   type Outcome,
 } from "@rowan-agent/agent";
+import { pinoAgentEventLogger, type AgentEventLogPath } from "@rowan-agent/logging";
 import { type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
 import { LocalJsonAgentStore } from "@rowan-agent/store";
-import { jsonlTraceWriter, type JsonlTracePath } from "@rowan-agent/trace";
 import {
   type RowanWorkspacePaths,
   resolveInRowanWorkspace,
@@ -30,7 +30,7 @@ type CliCommand = "config" | "list";
 
 type CliArgs = {
   command?: CliCommand;
-  trace?: string;
+  log?: string;
   sessionId?: string;
   skills: string[];
   baseUrl?: string;
@@ -88,11 +88,11 @@ async function runRegisteredCommand(args: CliArgs): Promise<boolean> {
   return true;
 }
 
-function createDefaultTracePath(workspace: RowanWorkspacePaths, sessionId: string): string {
+function createDefaultLogPath(workspace: RowanWorkspacePaths, sessionId: string): string {
   return join(workspace.runsDir, `${formatLocalTimestamp()}-${sessionId}.jsonl`);
 }
 
-function traceSessionIdFromEvent(event: AgentEvent): string | undefined {
+function logSessionIdFromEvent(event: AgentEvent): string | undefined {
   if (event.type === "session_created" || event.type === "session_loaded") {
     return event.session.parentSessionId ?? event.session.id;
   }
@@ -108,10 +108,10 @@ function traceSessionIdFromEvent(event: AgentEvent): string | undefined {
   return undefined;
 }
 
-function createDefaultTracePathResolver(workspace: RowanWorkspacePaths): JsonlTracePath {
+function createDefaultLogPathResolver(workspace: RowanWorkspacePaths): AgentEventLogPath {
   return (event) => {
-    const sessionId = traceSessionIdFromEvent(event);
-    return sessionId ? createDefaultTracePath(workspace, sessionId) : undefined;
+    const sessionId = logSessionIdFromEvent(event);
+    return sessionId ? createDefaultLogPath(workspace, sessionId) : undefined;
   };
 }
 
@@ -152,20 +152,20 @@ Examples:
   bun run rowan --session ses_12345678 "continue"
   bun run rowan --model gpt-4.1-mini "hello"
   bun run rowan --skill example "summarize the example skill"
-  bun run rowan --trace runs/real.jsonl "list workspace files"
+  bun run rowan --log runs/real.jsonl "list workspace files"
   bun run rowan --max-thread-depth 6 "delegate deeply"
 
 Commands:
 ${formatCommandHelp()}
   When no command is provided, positional text is treated as the prompt.
 
-Trace:
+Run logs:
   Source runs use the Rowan project root as the workspace.
   Packaged binary runs use ~/.rowan as the workspace.
-  Session traces are logged automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
-  Turns in one process append to the same trace; explicit session loads start a new trace.
-  Relative --trace paths are resolved from <workspace>.
-  CLI output prints Session id once, Message id before each turn result, and Trace path last once per entry.
+  Session run logs are written automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
+  Turns in one process append to the same run log; explicit session loads start a new run log.
+  Relative --log paths are resolved from <workspace>.
+  CLI output prints Session id once, Message id before each turn result, and Log path last once per entry.
 
 Sessions:
   Sessions are saved automatically to <workspace>/sessions/<session-id>.json.
@@ -269,8 +269,8 @@ function parseArgs(argv: string[]): CliArgs {
       process.exit(0);
     }
 
-    if (next === "--trace") {
-      parsed.trace = readOptionValue(args, "--trace");
+    if (next === "--log") {
+      parsed.log = readOptionValue(args, "--log");
       continue;
     }
 
@@ -356,7 +356,7 @@ function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Re
     args.maxThreadDepth ??
     parseOptionalMaxThreadDepth(env.ROWAN_MAX_THREAD_DEPTH) ??
     DEFAULT_MAX_THREAD_DEPTH;
-  const tracePath = resolveOptionalWorkspacePath(args.trace, workspace);
+  const logPath = resolveOptionalWorkspacePath(args.log, workspace);
   const tools = createCoreTools({ root: workspace.root });
 
   return {
@@ -398,9 +398,9 @@ function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Re
             ? "env"
             : "default",
     },
-    trace: {
-      automatic: !tracePath,
-      path: tracePath ? formatWorkspacePathForDisplay(tracePath, workspace) : null,
+    logging: {
+      automatic: !logPath,
+      path: logPath ? formatWorkspacePathForDisplay(logPath, workspace) : null,
     },
     skills: args.skills.map((skill) => ({
       idOrPath: skill,
@@ -469,18 +469,18 @@ async function createConfiguredAgent(
   return agent;
 }
 
-async function promptWithTrace(input: {
+async function promptWithLog(input: {
   agent: Agent;
   prompt: string;
-  tracePath: JsonlTracePath;
-  traceMode?: "replace" | "append";
-  onTracePath?: (path: string | undefined) => void;
+  logPath: AgentEventLogPath;
+  logMode?: "replace" | "append";
+  onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
 }): Promise<Outcome> {
-  const traceWriter = jsonlTraceWriter(input.tracePath, { mode: input.traceMode });
+  const eventLogger = pinoAgentEventLogger(input.logPath, { mode: input.logMode });
   let messageId: string | undefined;
   const listener: AgentEventListener = ((event: AgentEvent) => {
-    traceWriter(event);
+    eventLogger(event);
 
     if (event.type === "chat_start" && !messageId) {
       messageId = currentTurnMessageId(event.content);
@@ -489,16 +489,16 @@ async function promptWithTrace(input: {
       }
     }
   }) as AgentEventListener;
-  listener.flush = traceWriter.flush;
+  listener.flush = eventLogger.flush;
 
   const unsubscribe = input.agent.subscribe(listener);
   try {
     return await input.agent.prompt(input.prompt);
   } finally {
     try {
-      await input.agent.flushTrace();
+      await input.agent.flushEvents();
     } finally {
-      input.onTracePath?.(traceWriter.path());
+      input.onLogPath?.(eventLogger.path());
       unsubscribe();
     }
   }
@@ -508,11 +508,11 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const workspace = resolveRowanWorkspacePaths();
   const agent = await createConfiguredAgent(args, workspace);
 
-  const explicitTracePath = resolveOptionalWorkspacePath(args.trace, workspace);
-  let activeTracePath: string | undefined = explicitTracePath;
-  let hasWrittenTrace = false;
+  const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
+  let activeLogPath: string | undefined = explicitLogPath;
+  let hasWrittenLog = false;
   let hasPrintedSession = false;
-  let hasPrintedTrace = false;
+  let hasPrintedLog = false;
 
   const printSessionOnce = () => {
     const sessionId = agent.state.session?.id;
@@ -522,10 +522,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     }
   };
 
-  const printTraceOnce = (tracePath: string | undefined) => {
-    if (!hasPrintedTrace && tracePath) {
-      console.error(`Trace written to ${formatWorkspacePathForDisplay(tracePath, workspace)}`);
-      hasPrintedTrace = true;
+  const printLogOnce = (logPath: string | undefined) => {
+    if (!hasPrintedLog && logPath) {
+      console.error(`Log written to ${formatWorkspacePathForDisplay(logPath, workspace)}`);
+      hasPrintedLog = true;
     }
   };
 
@@ -534,26 +534,26 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   }
 
   const runPrompt = async (prompt: string) => {
-    let writtenTracePath: string | undefined;
+    let writtenLogPath: string | undefined;
     let messageId: string | undefined;
     const printRunHeader = () => {
       printSessionOnce();
       if (messageId) {
         console.error(`Message id: ${messageId}`);
       }
-      printTraceOnce(writtenTracePath);
+      printLogOnce(writtenLogPath);
     };
 
     try {
-      const outcome = await promptWithTrace({
+      const outcome = await promptWithLog({
         agent,
         prompt,
-        tracePath: activeTracePath ?? createDefaultTracePathResolver(workspace),
-        traceMode: hasWrittenTrace ? "append" : "replace",
-        onTracePath: (path) => {
-          activeTracePath = path ?? activeTracePath;
-          hasWrittenTrace = true;
-          writtenTracePath = activeTracePath;
+        logPath: activeLogPath ?? createDefaultLogPathResolver(workspace),
+        logMode: hasWrittenLog ? "append" : "replace",
+        onLogPath: (path) => {
+          activeLogPath = path ?? activeLogPath;
+          hasWrittenLog = true;
+          writtenLogPath = activeLogPath;
         },
         onMessageId: (id) => {
           messageId = id;
