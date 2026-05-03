@@ -197,8 +197,7 @@ The public API stays intentionally small:
 
 ```ts
 class Agent {
-  prompt(input: string): Promise<Outcome>;
-  startThread(input: AgentThreadInput): Promise<ThreadRunResult>;
+  prompt(input: string): Promise<AgentRunResult>;
   abort(reason?: string): void;
   waitForIdle(): Promise<void>;
   subscribe(listener: AgentEventListener): Unsubscribe;
@@ -400,7 +399,6 @@ Target shape:
 packages/agent/src/
   agent.ts
   loop.ts
-  thread.ts
   phases/index.ts
   phases/types.ts
   phases/routing.ts

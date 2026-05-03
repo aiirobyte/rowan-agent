@@ -1,5 +1,6 @@
 import Schema from "typebox/schema";
 import {
+  createSession,
   createMessage,
   latestUserInput,
   type AgentMessage,
@@ -18,6 +19,7 @@ import { scheduleTaskRouting } from "./phases/routing";
 import type {
   AgentEvent,
   AgentLoopInput,
+  AgentRunResult,
   AgentContext,
   ErrorInfo,
   LlmPhase,
@@ -28,7 +30,7 @@ import type {
   Task,
   TaskOutput,
   TaskRoutingDecision,
-  ThreadRunResult,
+  RunThread,
   ThreadTaskOutput,
   Tool,
   ToolCall,
@@ -52,13 +54,38 @@ import type {
 
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
+type ThreadRunResult = Extract<AgentRunResult, { kind: "thread" }>;
+
+type NormalizedAgentLoopInput = {
+  kind: AgentRunResult["kind"];
+  session: AgentSession;
+  sessionLifecycle?: Extract<AgentLoopInput, { kind: "session" }>["sessionLifecycle"];
+  parentSessionId?: string;
+  prompt?: string;
+  task?: string;
+  goal?: string;
+  model: AgentLoopInput["model"];
+  stream: AgentLoopInput["stream"];
+  tools: AgentLoopInput["tools"];
+  maxAttempts?: AgentLoopInput["maxAttempts"];
+  limits?: AgentLoopInput["limits"];
+  threadDepth?: AgentLoopInput["threadDepth"];
+  verifyTasks?: boolean;
+  signal?: AgentLoopInput["signal"];
+  runtime?: AgentLoopInput["runtime"];
+  beforeToolCall?: AgentLoopInput["beforeToolCall"];
+  afterToolCall?: AgentLoopInput["afterToolCall"];
+  runThread?: RunThread;
+  recordStep?: Extract<AgentLoopInput, { kind: "session" }>["recordStep"];
+  emit?: AgentLoopInput["emit"];
+};
 
 const routePhase = agentPhases.route.phase;
 const planPhase = agentPhases.plan.phase;
 const executePhase = agentPhases.execute.phase;
 const verifyPhase = agentPhases.verify.phase;
 
-type AgentLoopRuntime = AgentLoopInput & {
+type AgentLoopRuntime = NormalizedAgentLoopInput & {
   messageLog: AgentMessage[];
   limitUsage: AgentLimitUsage;
   threadDepth: number;
@@ -180,8 +207,40 @@ function runtimeDepth(input: AgentLoopRuntime): RuntimeDepth {
   };
 }
 
+function createAgentRunResult(input: AgentLoopRuntime, outcome: Outcome): AgentRunResult {
+  const base = {
+    session: input.session,
+    outcome,
+    limitUsage: cloneLimitUsage(input.limitUsage),
+    depth: runtimeDepth(input),
+  };
+
+  if (input.kind === "thread") {
+    if (!input.parentSessionId || !input.prompt) {
+      throw new Error("Thread run is missing parent session or prompt metadata.");
+    }
+
+    return {
+      kind: "thread",
+      parentSessionId: input.parentSessionId,
+      prompt: input.prompt,
+      ...(input.task ? { task: input.task } : {}),
+      ...(input.goal ? { goal: input.goal } : {}),
+      ...base,
+    };
+  }
+
+  return {
+    kind: "session",
+    ...base,
+  };
+}
+
 function createAgentContext(input: AgentLoopRuntime): AgentContext {
   return {
+    systemPrompt: input.session.systemPrompt,
+    messages: snapshotMessages(input.session.messages),
+    tools: input.tools,
     config: {
       sessionLifecycle: input.sessionLifecycle ?? "created",
       model: input.model,
@@ -227,6 +286,127 @@ function cloneLimitUsage(usage: AgentLimitUsage): AgentLimitUsage {
     modelCalls: usage.modelCalls,
     toolCalls: usage.toolCalls,
   };
+}
+
+function normalizeAgentLoopInput(input: AgentLoopInput): NormalizedAgentLoopInput {
+  if (input.kind === "session") {
+    return input;
+  }
+
+  const session = createSession<AgentEvent>({
+    systemPrompt: input.systemPrompt,
+    input: input.prompt,
+    skills: input.skills ?? [],
+    parentSessionId: input.parentSessionId,
+    task: input.task,
+    goal: input.goal,
+  });
+
+  return {
+    kind: "thread",
+    session,
+    sessionLifecycle: "created",
+    parentSessionId: input.parentSessionId,
+    prompt: input.prompt,
+    ...(input.task ? { task: input.task } : {}),
+    ...(input.goal ? { goal: input.goal } : {}),
+    model: input.model,
+    stream: input.stream,
+    tools: input.tools,
+    maxAttempts: input.maxAttempts,
+    limits: input.limits,
+    threadDepth: input.threadDepth ?? 1,
+    verifyTasks: input.verify ?? true,
+    signal: input.signal,
+    runtime: input.runtime,
+    beforeToolCall: input.beforeToolCall,
+    afterToolCall: input.afterToolCall,
+    emit: input.emit,
+  };
+}
+
+function createNestedRunThread(input: AgentLoopRuntime): RunThread {
+  return async (threadInput) => {
+    const result = await runAgentLoop({
+      kind: "thread",
+      ...threadInput,
+      parentSessionId: threadInput.parentSessionId ?? input.session.id,
+      systemPrompt: input.session.systemPrompt,
+      model: input.model,
+      stream: input.stream,
+      signal: input.signal,
+      limits: threadInput.limits ?? input.limits,
+      threadDepth: threadInput.threadDepth ?? input.threadDepth + 1,
+      verify: threadInput.verify ?? false,
+      runtime: input.runtime,
+      beforeToolCall: input.beforeToolCall,
+      afterToolCall: input.afterToolCall,
+      emit: input.emit,
+    });
+    if (result.kind !== "thread") {
+      throw new Error("Nested thread runner returned a non-thread result.");
+    }
+    return result;
+  };
+}
+
+async function emitThreadCreated(input: AgentLoopRuntime): Promise<void> {
+  if (input.kind !== "thread" || !input.parentSessionId || !input.prompt) {
+    return;
+  }
+
+  await emit(input, {
+    type: "thread_created",
+    parentSessionId: input.parentSessionId,
+    sessionId: input.session.id,
+    prompt: input.prompt,
+    ...(input.task ? { task: input.task } : {}),
+    ...(input.goal ? { goal: input.goal } : {}),
+    threadDepth: input.threadDepth,
+    maxThreadDepth: input.maxThreadDepth,
+    ts: nowIso(),
+  });
+}
+
+async function emitThreadEnd(input: AgentLoopRuntime, result: AgentRunResult): Promise<void> {
+  if (result.kind !== "thread") {
+    return;
+  }
+
+  await emit(input, {
+    type: "thread_end",
+    parentSessionId: result.parentSessionId,
+    sessionId: result.session.id,
+    outcome: result.outcome,
+    limitUsage: result.limitUsage,
+    threadDepth: result.depth.threadDepth,
+    maxThreadDepth: result.depth.maxThreadDepth,
+    ts: nowIso(),
+  });
+}
+
+async function completeRun(
+  input: AgentLoopRuntime,
+  outcome: Outcome,
+  endChatLog: () => Promise<void>,
+): Promise<AgentRunResult> {
+  await endChatLog();
+  await emit(input, { type: "outcome", outcome, ts: nowIso() });
+  const result = createAgentRunResult(input, outcome);
+  await emitThreadEnd(input, result);
+  return result;
+}
+
+async function completeThreadDepthExceeded(input: AgentLoopRuntime): Promise<AgentRunResult> {
+  const outcome = Validators.outcome.Parse({
+    id: createId("out"),
+    passed: false,
+    message: `Thread depth limit exceeded (${input.threadDepth}/${input.maxThreadDepth}).`,
+  });
+  await emit(input, { type: "outcome", outcome, ts: nowIso() });
+  const result = createAgentRunResult(input, outcome);
+  await emitThreadEnd(input, result);
+  return result;
 }
 
 function limitForResource(
@@ -308,8 +488,8 @@ function createThreadTaskOutput(input: {
     goal: input.goal,
     outcome: input.thread.outcome,
     limitUsage: input.thread.limitUsage,
-    threadDepth: input.thread.threadDepth,
-    maxThreadDepth: input.thread.maxThreadDepth,
+    threadDepth: input.thread.depth.threadDepth,
+    maxThreadDepth: input.thread.depth.maxThreadDepth,
   };
 }
 
@@ -1124,19 +1304,21 @@ async function executeThreadRoute(
   return createFailedOutcome(task, verification);
 }
 
-export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
+export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResult> {
+  const normalized = normalizeAgentLoopInput(input);
   const runtime: AgentLoopRuntime = {
-    ...input,
-    messageLog: snapshotMessages(input.session.messages),
+    ...normalized,
+    messageLog: snapshotMessages(normalized.session.messages),
     limitUsage: { modelCalls: 0, toolCalls: 0 },
-    threadDepth: input.threadDepth ?? 0,
-    maxThreadDepth: resolveMaxThreadDepth(input.limits),
-    verifyTasks: input.verifyTasks ?? true,
+    threadDepth: normalized.threadDepth ?? 0,
+    maxThreadDepth: resolveMaxThreadDepth(normalized.limits),
+    verifyTasks: normalized.verifyTasks ?? true,
     status: "routing",
     attempt: 0,
     toolResults: [],
   };
-  const maxAttempts = input.maxAttempts ?? 2;
+  runtime.runThread = normalized.runThread ?? createNestedRunThread(runtime);
+  const maxAttempts = normalized.maxAttempts ?? 2;
   let chatLogEnded = false;
   const endChatLog = async () => {
     if (!chatLogEnded) {
@@ -1146,6 +1328,11 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   };
 
   try {
+    await emitThreadCreated(runtime);
+    if (runtime.kind === "thread" && runtime.threadDepth > runtime.maxThreadDepth) {
+      return completeThreadDepthExceeded(runtime);
+    }
+
     assertNotAborted(runtime.signal);
     const sessionLifecycle = runtime.sessionLifecycle ?? "created";
     if (sessionLifecycle !== "continued") {
@@ -1158,7 +1345,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     await emitChatStart(runtime);
 
     runtime.status = "routing";
-    const canStartThreadRoute = Boolean(runtime.runThread) && runtime.threadDepth < runtime.maxThreadDepth;
+    const canStartThreadRoute = runtime.threadDepth < runtime.maxThreadDepth;
     const routePhaseResult = await runPhase(
       createAgentContext(runtime),
       routePhase,
@@ -1178,17 +1365,13 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       (phaseInput) => routeRequest(createAgentContext(runtime), phaseInput),
     );
     if (routePhaseResult.type === "abort") {
-      await endChatLog();
-      await emit(runtime, { type: "outcome", outcome: routePhaseResult.outcome, ts: nowIso() });
-      return routePhaseResult.outcome;
+      return completeRun(runtime, routePhaseResult.outcome, endChatLog);
     }
     const routed = routePhaseResult.output;
     if (routed.route === "direct") {
       const outcome = createDirectOutcome(routed.message);
       await publishConversationAssistantMessage(runtime, outcome.message, { kind: "direct_answer" });
-      await endChatLog();
-      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
-      return outcome;
+      return completeRun(runtime, outcome, endChatLog);
     }
 
     if (routed.route === "thread") {
@@ -1199,9 +1382,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
           ...(outcome.taskId ? { taskId: outcome.taskId } : {}),
         });
       }
-      await endChatLog();
-      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
-      return outcome;
+      return completeRun(runtime, outcome, endChatLog);
     }
 
     runtime.status = "planning";
@@ -1215,9 +1396,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       (phaseInput) => planTask(createAgentContext(runtime), phaseInput),
     );
     if (planPhaseResult.type === "abort") {
-      await endChatLog();
-      await emit(runtime, { type: "outcome", outcome: planPhaseResult.outcome, ts: nowIso() });
-      return planPhaseResult.outcome;
+      return completeRun(runtime, planPhaseResult.outcome, endChatLog);
     }
     const planned = planPhaseResult.output;
     const task = planned.task;
@@ -1258,9 +1437,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         (phaseInput) => executeTask(createAgentContext(runtime), phaseInput),
       );
       if (executePhaseResult.type === "abort") {
-        await endChatLog();
-        await emit(runtime, { type: "outcome", outcome: executePhaseResult.outcome, ts: nowIso() });
-        return executePhaseResult.outcome;
+        return completeRun(runtime, executePhaseResult.outcome, endChatLog);
       }
       if (executePhaseResult.output.text.trim().length > 0) {
         runtime.lastExecuteText = executePhaseResult.output.text;
@@ -1283,9 +1460,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
             taskId: task.id,
           });
         }
-        await endChatLog();
-        await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
-        return outcome;
+        return completeRun(runtime, outcome, endChatLog);
       }
 
       runtime.status = "verifying";
@@ -1302,9 +1477,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         (phaseInput) => verifyTask(createAgentContext(runtime), phaseInput),
       );
       if (verifyPhaseResult.type === "abort") {
-        await endChatLog();
-        await emit(runtime, { type: "outcome", outcome: verifyPhaseResult.outcome, ts: nowIso() });
-        return verifyPhaseResult.outcome;
+        return completeRun(runtime, verifyPhaseResult.outcome, endChatLog);
       }
       lastVerification = verifyPhaseResult.output;
       if (lastVerification.passed) {
@@ -1314,17 +1487,13 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
           kind: "task_outcome",
           taskId: task.id,
         });
-        await endChatLog();
-        await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
-        return outcome;
+        return completeRun(runtime, outcome, endChatLog);
       }
     }
 
     task.status = "failed";
     const outcome = createFailedOutcome(task, lastVerification);
-    await endChatLog();
-    await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
-    return outcome;
+    return completeRun(runtime, outcome, endChatLog);
   } catch (error) {
     if (error instanceof LimitExceededError) {
       const outcome = createLimitExceededOutcome(error, runtime.currentTask);
@@ -1337,9 +1506,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         ...(runtime.currentTask ? { taskId: runtime.currentTask.id } : {}),
         ts: nowIso(),
       });
-      await endChatLog();
-      await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
-      return outcome;
+      return completeRun(runtime, outcome, endChatLog);
     }
 
     const errorInfo = makeError(error);

@@ -20,6 +20,7 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
   const events: string[] = [];
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -29,9 +30,9 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
     },
   });
 
-  expect(outcome.passed).toBe(true);
-  expect(outcome).not.toHaveProperty("evidence");
-  expect(outcome).not.toHaveProperty("failedCriteria");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome).not.toHaveProperty("evidence");
+  expect(outcome.outcome).not.toHaveProperty("failedCriteria");
   expect(events).toContain("task_created");
   expect(events).toContain("tool_end");
   expect(events).toContain("verification_end");
@@ -102,6 +103,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
   });
 
   await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "ordered" },
     stream,
@@ -159,6 +161,7 @@ test("runAgentLoop records prompt messages emitted by the model adapter", async 
   };
 
   await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "prompt-recording" },
     stream,
@@ -212,6 +215,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
   const emittedEvents: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -222,9 +226,9 @@ test("runAgentLoop can return a direct response without creating a task", async 
   });
   const events = emittedEvents.map((event) => event.type);
 
-  expect(outcome.passed).toBe(true);
-  expect(outcome.taskId).toBeUndefined();
-  expect(outcome.message).toBe("Direct response: hello");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome.taskId).toBeUndefined();
+  expect(outcome.outcome.message).toBe("Direct response: hello");
   expect(events).toContain("model_requested");
   expect(events).toContain("outcome");
   expect(events).not.toContain("task_created");
@@ -277,6 +281,7 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
   });
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -284,7 +289,7 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
     maxAttempts: 1,
   });
 
-  expect(outcome.passed).toBe(false);
+  expect(outcome.outcome.passed).toBe(false);
   expect(session.log.some((event) => event.type === "tool_end")).toBe(true);
 });
 
@@ -311,6 +316,7 @@ test("runAgentLoop preserves provider error details in error events", async () =
 
   await expect(
     runAgentLoop({
+    kind: "session",
       session,
       model: { provider: "test", name: "failing" },
       stream,
@@ -394,6 +400,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
   };
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "retry-verify" },
     stream,
@@ -401,8 +408,8 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     maxAttempts: 2,
   });
 
-  expect(outcome.passed).toBe(true);
-  expect(outcome.message).toBe("Verified after retry.");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome.message).toBe("Verified after retry.");
   expect(verifyCalls).toBe(2);
   expect(
     session.log.some(
@@ -473,6 +480,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   };
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "retry-execute" },
     stream,
@@ -480,8 +488,8 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
     maxAttempts: 2,
   });
 
-  expect(outcome.passed).toBe(true);
-  expect(outcome.message).toBe("Verified after execute retry.");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome.message).toBe("Verified after execute retry.");
   expect(executeCalls).toBe(2);
   expect(session.messages.some((message) => message.metadata?.toolName === "model.execute")).toBe(false);
 });
@@ -494,6 +502,7 @@ test("beforeToolCall hook can block execution", async () => {
   const events: string[] = [];
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -505,7 +514,7 @@ test("beforeToolCall hook can block execution", async () => {
     },
   });
 
-  expect(outcome.passed).toBe(false);
+  expect(outcome.outcome.passed).toBe(false);
   expect(events).toContain("tool_approval_requested");
   expect(events).toContain("tool_approval_result");
   expect(session.log.some((event) => event.type === "tool_blocked")).toBe(true);
@@ -527,6 +536,7 @@ test("afterToolCall hook review is logged with original and reviewed result", as
   });
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -537,7 +547,7 @@ test("afterToolCall hook review is logged with original and reviewed result", as
     }),
   });
 
-  expect(outcome.passed).toBe(true);
+  expect(outcome.outcome.passed).toBe(true);
   expect(session.log.some((event) => event.type === "tool_result_review_requested")).toBe(true);
   expect(
     session.log.some(
@@ -624,6 +634,7 @@ test("invalid tool args do not execute tool", async () => {
   });
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "scripted" },
     stream: invalidArgsStream,
@@ -631,7 +642,7 @@ test("invalid tool args do not execute tool", async () => {
     maxAttempts: 1,
   });
 
-  expect(outcome.passed).toBe(false);
+  expect(outcome.outcome.passed).toBe(false);
   expect(executed).toBe(false);
   expect(session.log.some((event) => event.type === "tool_end")).toBe(true);
 });
@@ -675,6 +686,7 @@ test("runtime beforePhase can adjust phase input", async () => {
   };
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "runtime-adjust-input" },
     stream,
@@ -682,8 +694,8 @@ test("runtime beforePhase can adjust phase input", async () => {
     runtime,
   });
 
-  expect(outcome.passed).toBe(true);
-  expect(outcome.message).toBe("Adjusted route input.");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome.message).toBe("Adjusted route input.");
 });
 
 test("runtime afterPhase can adjust phase output", async () => {
@@ -707,6 +719,7 @@ test("runtime afterPhase can adjust phase output", async () => {
   };
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "runtime-adjust-output" },
     stream,
@@ -728,8 +741,8 @@ test("runtime afterPhase can adjust phase output", async () => {
     },
   });
 
-  expect(outcome.passed).toBe(true);
-  expect(outcome.message).toBe("Adjusted route output.");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome.message).toBe("Adjusted route output.");
 });
 
 test("runtime beforePhase can skip a phase", async () => {
@@ -743,6 +756,7 @@ test("runtime beforePhase can skip a phase", async () => {
   };
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "runtime-skip" },
     stream,
@@ -765,8 +779,8 @@ test("runtime beforePhase can skip a phase", async () => {
   });
 
   expect(modelCalled).toBe(false);
-  expect(outcome.passed).toBe(true);
-  expect(outcome.message).toBe("Skipped route phase.");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome.message).toBe("Skipped route phase.");
 });
 
 test("runtime afterPhase can retry a phase with adjusted input", async () => {
@@ -793,6 +807,7 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
   };
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "runtime-retry" },
     stream,
@@ -820,8 +835,8 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
   });
 
   expect(routeCalls).toBe(2);
-  expect(outcome.passed).toBe(true);
-  expect(outcome.message).toBe("Retried with adjusted input.");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome.message).toBe("Retried with adjusted input.");
 });
 
 test("runtime phase port can abort with an outcome", async () => {
@@ -843,6 +858,7 @@ test("runtime phase port can abort with an outcome", async () => {
   };
 
   const outcome = await runAgentLoop({
+    kind: "session",
     session,
     model: { provider: "test", name: "runtime-abort" },
     stream,
@@ -864,7 +880,7 @@ test("runtime phase port can abort with an outcome", async () => {
     },
   });
 
-  expect(outcome.passed).toBe(false);
-  expect(outcome.message).toBe("Aborted by runtime.");
+  expect(outcome.outcome.passed).toBe(false);
+  expect(outcome.outcome.message).toBe("Aborted by runtime.");
   expect(session.log.some((event) => event.type === "task_created")).toBe(false);
 });

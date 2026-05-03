@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
-import type { AgentEventListener, StreamFn } from "../src/types";
+import type { AgentEventListener, AgentRuntimePort, StreamFn } from "../src/types";
 import { createEchoTools } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-test("Agent.prompt returns an outcome and emits events", async () => {
+test("Agent.prompt returns a run result and emits events", async () => {
   const agent = new Agent({
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
@@ -18,7 +18,7 @@ test("Agent.prompt returns an outcome and emits events", async () => {
 
   const outcome = await agent.prompt("use echo tool");
 
-  expect(outcome.passed).toBe(true);
+  expect(outcome.outcome.passed).toBe(true);
   expect(agent.state.isRunning).toBe(false);
   expect(agent.state.session?.messages.length).toBeGreaterThan(0);
   expect(agent.state.session?.log.length).toBeGreaterThan(0);
@@ -27,6 +27,43 @@ test("Agent.prompt returns an outcome and emits events", async () => {
   expect(events).toContain("tool_start");
   expect(events).toContain("tool_end");
   expect(events).not.toContain("thread_created");
+});
+
+test("Agent.prompt assembles runtime context for the first message", async () => {
+  const seenContexts: Array<{
+    systemPrompt: string;
+    messages: string[];
+    tools: string[];
+  }> = [];
+  const runtime: AgentRuntimePort = {
+    async beforePhase(context, phase) {
+      if (phase !== "route") {
+        return;
+      }
+      seenContexts.push({
+        systemPrompt: context.systemPrompt,
+        messages: context.messages.map((message) => message.content),
+        tools: context.tools.map((tool) => tool.name),
+      });
+    },
+  };
+  const agent = new Agent({
+    systemPrompt: "Test system",
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
+    tools: createEchoTools(),
+    runtime,
+  });
+
+  await agent.prompt("hello");
+
+  expect(seenContexts).toEqual([
+    {
+      systemPrompt: "Test system",
+      messages: ["hello"],
+      tools: ["echo"],
+    },
+  ]);
 });
 
 test("Agent.prompt does not wait for async event listeners", async () => {
@@ -51,7 +88,7 @@ test("Agent.prompt does not wait for async event listeners", async () => {
 
   const outcome = await agent.prompt("hello");
 
-  expect(outcome.passed).toBe(true);
+  expect(outcome.outcome.passed).toBe(true);
   expect(blocked).toBe(true);
   release?.();
   await agent.flushEvents();

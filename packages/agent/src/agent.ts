@@ -1,6 +1,4 @@
 import { runAgentLoop } from "./loop";
-import { runAgentThread } from "./thread";
-export { runAgentThread } from "./thread";
 import {
   appendUserTurn,
   createSession,
@@ -16,9 +14,7 @@ import type {
   BeforeToolCall,
   Tool,
   AfterToolCall,
-  AgentThreadInput,
-  ThreadRunResult,
-  Outcome,
+  AgentRunResult,
   AgentEvent,
   AgentEventListener,
   Unsubscribe,
@@ -26,7 +22,7 @@ import type {
 
 type AgentSession = Session<AgentEvent>;
 
-export type AgentOptions = {
+export type AgentRunConfig = {
   systemPrompt: string;
   model: ModelRef;
   stream: StreamFn;
@@ -46,21 +42,21 @@ export type AgentState = {
   model: ModelRef;
   tools: Tool[];
   isRunning: boolean;
-  currentOutcome?: Outcome;
+  currentResult?: AgentRunResult;
   error?: string;
 };
 
 export class Agent {
   readonly state: AgentState;
-  private readonly options: AgentOptions;
+  private readonly options: AgentRunConfig;
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
-  private currentRun?: Promise<Outcome>;
+  private currentRun?: Promise<AgentRunResult>;
   private abortController?: AbortController;
   private shouldEmitSessionLoaded: boolean;
 
-  constructor(options: AgentOptions) {
+  constructor(options: AgentRunConfig) {
     this.options = options;
     this.shouldEmitSessionLoaded = Boolean(options.session);
     this.state = {
@@ -117,7 +113,7 @@ export class Agent {
     }
   }
 
-  async prompt(input: string): Promise<Outcome> {
+  async prompt(input: string): Promise<AgentRunResult> {
     if (this.state.isRunning) {
       throw new Error("Agent is already running.");
     }
@@ -137,7 +133,7 @@ export class Agent {
           skills: this.options.skills,
         });
     this.state.session = session;
-    this.state.currentOutcome = undefined;
+    this.state.currentResult = undefined;
     this.state.error = undefined;
     this.state.isRunning = true;
     this.abortController = new AbortController();
@@ -148,6 +144,7 @@ export class Agent {
     };
 
     this.currentRun = runAgentLoop({
+      kind: "session",
       session,
       sessionLifecycle,
       model: this.options.model,
@@ -160,11 +157,6 @@ export class Agent {
       signal: this.abortController.signal,
       beforeToolCall: this.options.beforeToolCall,
       afterToolCall: this.options.afterToolCall,
-      runThread: (input) =>
-        this.startThread({
-          ...input,
-          parentSessionId: input.parentSessionId ?? session.id,
-        }),
       ...(this.options.agentStore
         ? { recordStep: (step) => this.options.agentStore!.appendStep(session.id, step) }
         : {}),
@@ -172,10 +164,10 @@ export class Agent {
     });
 
     try {
-      const outcome = await this.currentRun;
-      this.state.currentOutcome = outcome;
+      const result = await this.currentRun;
+      this.state.currentResult = result;
       await this.saveSession();
-      return outcome;
+      return result;
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : "Agent run failed.";
       await this.saveSession().catch(() => undefined);
@@ -188,31 +180,6 @@ export class Agent {
 
   abort(reason = "Aborted by caller."): void {
     this.abortController?.abort(reason);
-  }
-
-  async startThread(input: AgentThreadInput): Promise<ThreadRunResult> {
-    const parentSessionId = input.parentSessionId ?? this.state.session?.id;
-    if (!parentSessionId) {
-      throw new Error("Threads require a parent session.");
-    }
-
-    return runAgentThread({
-      ...input,
-      parentSessionId,
-      systemPrompt: this.options.systemPrompt,
-      model: this.options.model,
-      stream: this.options.stream,
-      signal: this.abortController?.signal,
-      limits: input.limits ?? this.options.limits,
-      threadDepth: input.threadDepth ?? 1,
-      verify: input.verify,
-      runtime: this.options.runtime,
-      beforeToolCall: this.options.beforeToolCall,
-      afterToolCall: this.options.afterToolCall,
-      emit: (event) => {
-        this.emitToListeners(event);
-      },
-    });
   }
 
   async waitForIdle(): Promise<void> {

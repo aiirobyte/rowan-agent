@@ -541,7 +541,8 @@ async function promptWithLog(input: {
 
   const unsubscribe = input.agent.subscribe(listener);
   try {
-    return await input.agent.prompt(input.prompt);
+    const result = await input.agent.prompt(input.prompt);
+    return result.outcome;
   } finally {
     try {
       await input.agent.flushEvents();

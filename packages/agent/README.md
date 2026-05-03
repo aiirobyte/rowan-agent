@@ -2,20 +2,20 @@
 
 ## Main Features
 
-`@rowan-agent/agent` is the public programming entry point and Agent core for Rowan. It wraps session lifecycle management, model execution, event subscriptions, tool registration, thread startup, persistent storage, run cancellation, and idle waiting.
+`@rowan-agent/agent` is the public programming entry point and Agent core for Rowan. It wraps session lifecycle management, model execution, event subscriptions, tool registration, loop-owned thread delegation, persistent storage, run cancellation, and idle waiting.
 
 The package also owns the route, plan, execute, verify, thread, retry, outcome, and execution-turn recording flow. Most application code can depend on `@rowan-agent/agent` alone to create an interactive agent.
 
 ## Architecture
 
-`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly, uses `src/thread.ts` for child sessions, and keeps phase helpers under `src/phases/`. `@rowan-agent/session` creates or appends user messages, and an optional `AgentStore` from `@rowan-agent/store` persists sessions and execution steps.
+`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly, and the loop owns both normal sessions and child thread sessions. Phase helpers live under `src/phases/`. `@rowan-agent/session` creates or appends user messages, and an optional `AgentStore` from `@rowan-agent/store` persists sessions and execution steps.
 
 `Agent` keeps a small state object:
 
 - `session` is the current conversation session.
 - `model` and `stream` describe the model identity and call path.
 - `tools` are the tools the runtime may expose to the model.
-- `isRunning`, `currentOutcome`, and `error` describe the current run state.
+- `isRunning`, `currentResult`, and `error` describe the current run state.
 
 `src/task.ts`, `src/tools.ts`, and `src/types.ts` expose task helpers, runtime-backed core tools, and public Agent types. `src/index.ts` is the package entry point.
 
@@ -41,5 +41,6 @@ agent.subscribe((event) => {
   console.error(event.type);
 });
 
-const outcome = await agent.prompt("list the package structure in this project");
+const result = await agent.prompt("list the package structure in this project");
+console.log(result.outcome.message);
 ```

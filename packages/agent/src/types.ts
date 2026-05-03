@@ -174,27 +174,12 @@ export type AfterToolCall = (input: {
 
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
-export type ThreadInput = {
-  parentSessionId: string;
-  prompt: string;
-  task?: string;
-  goal?: string;
-  tools: Tool[];
-  skills?: Skill[];
-  maxAttempts?: number;
-  limits?: AgentRunLimits;
-  threadDepth?: number;
-  verify?: boolean;
-};
-
-export type AgentThreadInput = Omit<ThreadInput, "parentSessionId"> & {
-  parentSessionId?: string;
-};
-
-export type ThreadRunInput = ThreadInput & {
-  systemPrompt: string;
+type AgentRunCommonConfig = {
   model: ModelRef;
   stream: StreamFn;
+  tools: Tool[];
+  maxAttempts?: number;
+  limits?: AgentRunLimits;
   signal?: AbortSignal;
   runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
@@ -202,16 +187,68 @@ export type ThreadRunInput = ThreadInput & {
   emit?: AgentEventListener;
 };
 
-export type ThreadRunResult = {
-  parentSessionId: string;
+export type AgentLoopRunConfig = AgentRunCommonConfig & {
+  kind: "session";
   session: CoreSession<AgentEvent>;
-  outcome: Outcome;
-  limitUsage: AgentLimitUsage;
-  threadDepth: number;
-  maxThreadDepth: number;
+  sessionLifecycle?: "created" | "loaded" | "continued";
+  threadDepth?: number;
+  verifyTasks?: boolean;
+  runThread?: RunThread;
+  recordStep?: (step: ExecutionTurn) => Promise<void>;
 };
 
-export type RunThread = (input: AgentThreadInput) => Promise<ThreadRunResult>;
+export type AgentThreadRunConfig = AgentRunCommonConfig & {
+  kind: "thread";
+  parentSessionId: string;
+  systemPrompt: string;
+  prompt: string;
+  task?: string;
+  goal?: string;
+  skills?: Skill[];
+  threadDepth?: number;
+  verify?: boolean;
+};
+
+export type AgentRunResult =
+  | {
+      kind: "session";
+      session: CoreSession<AgentEvent>;
+      outcome: Outcome;
+      limitUsage: AgentLimitUsage;
+      depth: RuntimeDepth;
+    }
+  | {
+      kind: "thread";
+      parentSessionId: string;
+      session: CoreSession<AgentEvent>;
+      outcome: Outcome;
+      limitUsage: AgentLimitUsage;
+      depth: RuntimeDepth;
+      prompt: string;
+      task?: string;
+      goal?: string;
+    };
+
+type AgentThreadStartConfig =
+  Omit<
+    AgentThreadRunConfig,
+    | "kind"
+    | "parentSessionId"
+    | "systemPrompt"
+    | "model"
+    | "stream"
+    | "signal"
+    | "runtime"
+    | "beforeToolCall"
+    | "afterToolCall"
+    | "emit"
+  > & {
+    parentSessionId?: string;
+  };
+
+export type RunThread = (
+  input: AgentThreadStartConfig,
+) => Promise<Extract<AgentRunResult, { kind: "thread" }>>;
 
 export type ErrorInfo = {
   code: string;
@@ -291,24 +328,7 @@ export type AgentEventListener = ((event: AgentEvent) => void | Promise<void>) &
 };
 export type Unsubscribe = () => void;
 
-export type AgentLoopInput = {
-  session: CoreSession<AgentEvent>;
-  sessionLifecycle?: "created" | "loaded" | "continued";
-  model: ModelRef;
-  stream: StreamFn;
-  tools: Tool[];
-  maxAttempts?: number;
-  limits?: AgentRunLimits;
-  threadDepth?: number;
-  verifyTasks?: boolean;
-  signal?: AbortSignal;
-  runtime?: AgentRuntimePort;
-  beforeToolCall?: BeforeToolCall;
-  afterToolCall?: AfterToolCall;
-  runThread?: RunThread;
-  recordStep?: (step: ExecutionTurn) => Promise<void>;
-  emit?: AgentEventListener;
-};
+export type AgentLoopInput = AgentLoopRunConfig | AgentThreadRunConfig;
 
 export function resolveMaxThreadDepth(limits?: AgentRunLimits): number {
   const value = limits?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH;

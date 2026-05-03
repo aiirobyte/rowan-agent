@@ -37,8 +37,8 @@ test("Agent.prompt reuses one session for multi-turn direct responses", async ()
   const sessionId = agent.state.session?.id;
   const second = await agent.prompt("second");
 
-  expect(first.message).toBe("First answer");
-  expect(second.message).toBe("Second answer saw the first turn.");
+  expect(first.outcome.message).toBe("First answer");
+  expect(second.outcome.message).toBe("Second answer saw the first turn.");
   expect(agent.state.session?.id).toBe(sessionId);
   expect(agent.state.session?.messages.filter((message) => message.role === "user")).toHaveLength(2);
   expect(agent.state.session?.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
@@ -72,8 +72,8 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   const second = await agent.prompt("use echo tool again");
   const loaded = sessionId ? await store.load(sessionId) : undefined;
 
-  expect(first.passed).toBe(true);
-  expect(second.passed).toBe(true);
+  expect(first.outcome.passed).toBe(true);
+  expect(second.outcome.passed).toBe(true);
   expect(agent.state.session?.id).toBe(sessionId);
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining([
@@ -162,10 +162,10 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
   const first = await agent.prompt("trigger failure");
   const second = await agent.prompt("hello");
 
-  expect(first.passed).toBe(false);
-  expect(first.message).toBe("Missing some functions to finish the task");
-  expect(second.passed).toBe(true);
-  expect(second.message).toBe("Recovered direct answer.");
+  expect(first.outcome.passed).toBe(false);
+  expect(first.outcome.message).toBe("Missing some functions to finish the task");
+  expect(second.outcome.passed).toBe(true);
+  expect(second.outcome.message).toBe("Recovered direct answer.");
   expect(routeOutcomeContexts[1]).not.toContain("Missing some functions to finish the task");
   expect(
     agent.state.session?.messages.some(

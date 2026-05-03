@@ -75,6 +75,12 @@ export type AgentRunState = {
 export type AgentMessageSnapshot = CoreSession<AgentEvent>["messages"][number];
 
 export type AgentContext = {
+  /** System prompt included with the request. */
+  systemPrompt: string;
+  /** Transcript visible to the model. */
+  messages: AgentMessageSnapshot[];
+  /** Tools available for this run. */
+  tools: Tool[];
   config: AgentLoopConfig;
   state: Readonly<AgentRunState>;
   signal?: AbortSignal;

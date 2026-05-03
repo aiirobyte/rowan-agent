@@ -1,14 +1,24 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { createSession } from "@rowan-agent/session";
-import { Agent, runAgentThread } from "../src/agent";
+import { Agent } from "../src/agent";
+import { runAgentLoop } from "../src/loop";
 import { createDefaultCriteria } from "../src/task";
 import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-test("runAgentThread creates a session with explicit tools and skills", async () => {
+type ThreadResult = Extract<Awaited<ReturnType<typeof runAgentLoop>>, { kind: "thread" }>;
+
+function asThreadResult(result: Awaited<ReturnType<typeof runAgentLoop>>): ThreadResult {
+  if (result.kind !== "thread") {
+    throw new Error("Expected thread result.");
+  }
+  return result;
+}
+
+test("runAgentLoop creates a thread session with explicit tools and skills", async () => {
   const events: AgentEvent[] = [];
   const skill = {
     id: "session-skill",
@@ -17,7 +27,8 @@ test("runAgentThread creates a session with explicit tools and skills", async ()
     toolNames: ["echo"],
   };
 
-  const result = await runAgentThread({
+  const result = asThreadResult(await runAgentLoop({
+    kind: "thread",
     parentSessionId: "ses_parent",
     prompt: "use echo tool",
     systemPrompt: "Session system",
@@ -28,7 +39,7 @@ test("runAgentThread creates a session with explicit tools and skills", async ()
     emit: (event) => {
       events.push(event);
     },
-  });
+  }));
 
   expect(result.parentSessionId).toBe("ses_parent");
   expect(result.session.parentSessionId).toBe("ses_parent");
@@ -67,7 +78,7 @@ test("runAgentThread creates a session with explicit tools and skills", async ()
   ).toBe(true);
 });
 
-test("Agent.startThread defaults to the current parent session and does not inherit tools implicitly", async () => {
+test("Agent does not expose startThread; thread runs use explicit loop config", async () => {
   const agent = new Agent({
     systemPrompt: "Test system",
     model: { provider: "test", name: "scripted" },
@@ -76,21 +87,28 @@ test("Agent.startThread defaults to the current parent session and does not inhe
   });
 
   await agent.prompt("hello");
-  const parentSessionId = agent.state.session?.id;
-  if (!parentSessionId) {
-    throw new Error("Expected parent session id.");
-  }
+  expect("startThread" in agent).toBe(false);
 
-  const withoutTools = await agent.startThread({
+  const withoutTools = asThreadResult(await runAgentLoop({
+    kind: "thread",
+    parentSessionId: "ses_parent",
     prompt: "use echo tool",
+    systemPrompt: "Test system",
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: [],
-  });
-  const withTools = await agent.startThread({
+  }));
+  const withTools = asThreadResult(await runAgentLoop({
+    kind: "thread",
+    parentSessionId: "ses_parent",
     prompt: "use echo tool",
+    systemPrompt: "Test system",
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
     tools: [echoTool],
-  });
+  }));
 
-  expect(withoutTools.parentSessionId).toBe(parentSessionId);
+  expect(withoutTools.parentSessionId).toBe("ses_parent");
   expect(withoutTools.session.skills).toEqual([]);
   expect(withoutTools.outcome.passed).toBe(false);
   expect(withoutTools.outcome.message).toContain("missing required echo evidence");
@@ -98,7 +116,8 @@ test("Agent.startThread defaults to the current parent session and does not inhe
 });
 
 test("thread model limits returns a structured failed outcome", async () => {
-  const result = await runAgentThread({
+  const result = asThreadResult(await runAgentLoop({
+    kind: "thread",
     parentSessionId: "ses_parent",
     prompt: "hello",
     systemPrompt: "Session system",
@@ -106,7 +125,7 @@ test("thread model limits returns a structured failed outcome", async () => {
     stream: scriptedStream,
     tools: [echoTool],
     limits: { maxModelCalls: 0 },
-  });
+  }));
 
   expect(result.outcome.passed).toBe(false);
   expect(result.outcome.taskId).toBeUndefined();
@@ -137,7 +156,8 @@ test("thread tool limits stops before executing extra tools", async () => {
     },
   };
 
-  const result = await runAgentThread({
+  const result = asThreadResult(await runAgentLoop({
+    kind: "thread",
     parentSessionId: "ses_parent",
     prompt: "use echo tool",
     systemPrompt: "Session system",
@@ -145,7 +165,7 @@ test("thread tool limits stops before executing extra tools", async () => {
     stream: scriptedStream,
     tools: [trackedEcho],
     limits: { maxToolCalls: 0 },
-  });
+  }));
 
   expect(executed).toBe(false);
   expect(result.outcome.passed).toBe(false);
@@ -252,7 +272,7 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
   const outcome = await agent.prompt("测试 thread");
   const threadCreatedEvents = events.filter((event) => event.type === "thread_created");
 
-  expect(outcome.passed).toBe(true);
+  expect(outcome.outcome.passed).toBe(true);
   expect(routeCalls).toBe(2);
   expect(planCalls).toBe(1);
   expect(threadCreatedEvents).toHaveLength(1);
@@ -366,7 +386,7 @@ test("worker threads can recursively route until the thread depth limit", async 
   const threadCreatedEvents = events.filter((event) => event.type === "thread_created");
   const verificationEvents = events.filter((event) => event.type === "verification_start");
 
-  expect(outcome.passed).toBe(true);
+  expect(outcome.outcome.passed).toBe(true);
   expect(routeCalls).toBe(3);
   expect(planCalls).toBe(1);
   expect(threadCreatedEvents).toHaveLength(2);
@@ -491,9 +511,9 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
 
   const outcome = await agent.prompt("delegate echo to a nested thread");
 
-  expect(outcome.passed).toBe(true);
-  expect(outcome).not.toHaveProperty("evidence");
-  expect(outcome).not.toHaveProperty("failedCriteria");
+  expect(outcome.outcome.passed).toBe(true);
+  expect(outcome.outcome).not.toHaveProperty("evidence");
+  expect(outcome.outcome).not.toHaveProperty("failedCriteria");
   expect(
     events.some(
       (event) =>
