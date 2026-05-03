@@ -66,7 +66,7 @@ MCP implementation belongs inside `packages/runtime` as a tool-provider source. 
 - 不实现 provider-neutral `ConversationEntry[]`。
 - 不实现 full `IntermediateAgentContext -> RenderedAgentContext` projection pipeline。
 - 不实现 SSE streaming parser。
-- 不实现 token budget truncation。
+- 不实现 token limits truncation。
 - 不实现 PolicyEngine。
 - 不实现 replay / fork / compaction。
 - 不改 persisted session schema。
@@ -214,7 +214,7 @@ Rules:
 - `agent` contains facade/lifecycle/state code, not phase execution code.
 - Runtime owns core tool execution, MCP tool-provider ownership, hooks, and `ExecutionTurn` recording.
 - `agent` may re-export public kernel contracts, but shared type definitions come from `protocol` / `session`.
-- Direct, task, thread, budget, multi-turn, and verify retry tests pass.
+- Direct, task, thread, limits, multi-turn, and verify retry tests pass.
 
 ### M5: Release Hardening
 

@@ -116,11 +116,11 @@ test("pinoAgentEventLogger filters warning and error levels", async () => {
     ts: "2026-05-03T141659-32+08:00",
   });
   logger({
-    type: "budget_exceeded",
+    type: "limit_exceeded",
     resource: "modelCalls",
     limit: 1,
     usage: { modelCalls: 2, toolCalls: 0 },
-    message: "Model call budget exceeded.",
+    message: "Model call limit exceeded.",
     ts: "2026-05-03T141700-32+08:00",
   });
   await logger.flush?.();
@@ -129,7 +129,7 @@ test("pinoAgentEventLogger filters warning and error levels", async () => {
   expect(records).toHaveLength(1);
   expect(records[0]).toMatchObject({
     level: 40,
-    eventType: "budget_exceeded",
+    eventType: "limit_exceeded",
     eventTs: "2026-05-03T141700-32+08:00",
   });
   expect(records[0]?.msg).toBeUndefined();

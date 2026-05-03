@@ -1,7 +1,7 @@
 import Type from "typebox";
 import type { Session as CoreSession, Skill } from "@rowan-agent/session";
 import type {
-  AgentRunBudget,
+  AgentRunLimits,
   Task,
   ToolResult,
 } from "@rowan-agent/protocol";
@@ -9,8 +9,8 @@ import type {
 export { createId, Validators } from "@rowan-agent/protocol";
 export type {
   AcceptanceCriterion,
-  AgentBudgetUsage,
-  AgentRunBudget,
+  AgentLimitUsage,
+  AgentRunLimits,
   ExecutionTurn,
   ExecutionTurnEntry,
   LlmContext,
@@ -41,7 +41,7 @@ export type RuntimeThreadInput = {
   tools: Tool[];
   skills?: Skill[];
   maxAttempts?: number;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
   threadDepth?: number;
   verify?: boolean;
 };

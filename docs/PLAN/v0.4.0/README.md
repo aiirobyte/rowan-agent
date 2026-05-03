@@ -57,7 +57,7 @@ bun run rowan --session <session-id> "continue"
 明确不在 v0.4.0 做：
 
 - SSE streaming parser。
-- token budget truncation。
+- token limits truncation。
 - provider-neutral `ConversationEntry[]`。
 - PolicyEngine / replay / compaction。
 - 完整 MCP server/client integration。

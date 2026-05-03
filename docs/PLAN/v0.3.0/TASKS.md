@@ -12,7 +12,7 @@
 | M1 | Route-first task gating |
 | M2 | Direct response outcome semantics |
 | M3 | Sub session API |
-| M4 | Nested trace and budget enforcement |
+| M4 | Nested trace and limits enforcement |
 | M5 | Release verification |
 
 ## 2. Tasks
@@ -31,7 +31,7 @@
 | V03-301 | M3 | Define `SubSessionInput` and sub session types | agent | P0 | V03-201 | done | public types compile and tests cover defaults |
 | V03-302 | M3 | Implement parent-controlled sub session runner | agent | P0 | V03-301 | done | parent can launch sub session with explicit tools/skills |
 | V03-401 | M4 | Record parent/sub session trace metadata | trace | P0 | V03-302 | done | trace can associate sub session with parent session |
-| V03-402 | M4 | Enforce sub session budget | agent | P1 | V03-302 | done | over-budget sub session returns structured failed outcome |
+| V03-402 | M4 | Enforce sub session limits | agent | P1 | V03-302 | done | over-limits sub session returns structured failed outcome |
 | V03-501 | M5 | Run v0.3.0 release gates | release | P0 | V03-401,V03-402 | done | `bun test` and `bun run build` pass |
 
 ## 3. Release Checklist
@@ -42,7 +42,7 @@
 - [x] Route-before-task tool request test
 - [x] Sub session tests
 - [x] Nested trace tests
-- [x] Budget enforcement tests
+- [x] Limits enforcement tests
 - [x] Full test suite
 - [x] TypeScript build
 

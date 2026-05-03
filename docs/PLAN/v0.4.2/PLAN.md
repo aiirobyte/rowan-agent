@@ -59,7 +59,7 @@ type AgentLoopConfig = {
   stream: StreamFn;
   maxAttempts: number;
   verifyTasks: boolean;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
   runtime?: AgentRuntimePort;
 };
 
@@ -69,7 +69,7 @@ type AgentRunState = {
   task?: Task;
   attempt: number;
   toolResults: ToolResult[];
-  budgetUsage: AgentBudgetUsage;
+  limitUsage: AgentLimitUsage;
   depth: RuntimeDepth;
   lastExecuteText?: string;
 };
@@ -173,7 +173,7 @@ Runtime ports must not:
 - Runtime hooks can adjust phase input and phase output without direct session mutation.
 - Runtime hooks can skip, retry, and abort phases.
 - Tool execution is callable through a runtime-owned `ToolRunner` port.
-- Direct, task, thread, budget, multi-turn, and verify retry tests pass.
+- Direct, task, thread, limits, multi-turn, and verify retry tests pass.
 - New tests cover `beforePhase` input adjustment, `afterPhase` output adjustment, skip, retry, abort, and unchanged default behavior.
 - `bun test packages` passes.
 - `bun run build` passes.

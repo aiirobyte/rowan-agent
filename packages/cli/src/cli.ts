@@ -496,7 +496,7 @@ async function createConfiguredAgent(
     tools,
     skills,
     agentStore,
-    budget: {
+    limits: {
       maxThreadDepth:
         args.maxThreadDepth ??
         parseOptionalMaxThreadDepth(process.env.ROWAN_MAX_THREAD_DEPTH) ??

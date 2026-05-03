@@ -39,7 +39,7 @@ export function eventLogLevel(event: AgentEvent): Exclude<WritableAgentEventLogL
     return "error";
   }
   if (
-    event.type === "budget_exceeded" ||
+    event.type === "limit_exceeded" ||
     event.type === "tool_blocked" ||
     (event.type === "tool_approval_result" && !event.decision.allow) ||
     (event.type === "verification_end" && !event.result.passed) ||

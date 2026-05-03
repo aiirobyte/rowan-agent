@@ -41,3 +41,6 @@ Use `--log <path>` only when you want to choose the exact file path relative to 
 The built-in core tools are `read`, `write`, `edit`, and `bash`.
 
 See [docs/PLAN/INDEX.md](docs/PLAN/INDEX.md) for the plan.
+
+# Acknowledgements
+The development of this project was greatly inspired by [pi-agent-core](https://github.com/badlogic/pi-mono), [Cahciua](https://github.com/Menci/Cahciua). Sincere thanks for their excellent work!

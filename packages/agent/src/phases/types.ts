@@ -1,8 +1,8 @@
 import type { Session as CoreSession } from "@rowan-agent/session";
 import type {
-  AgentBudgetUsage,
+  AgentLimitUsage,
   AgentEvent,
-  AgentRunBudget,
+  AgentRunLimits,
   AfterToolCall,
   BeforeToolCall,
   ExecutionTurn,
@@ -49,7 +49,7 @@ export type AgentLoopConfig = {
   tools: Tool[];
   maxAttempts: number;
   verifyTasks: boolean;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
   signal?: AbortSignal;
   runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
@@ -64,7 +64,7 @@ export type AgentRunState = {
   attempt: number;
   task?: Task;
   toolResults: ToolResult[];
-  budgetUsage: AgentBudgetUsage;
+  limitUsage: AgentLimitUsage;
   depth: {
     threadDepth: number;
     maxThreadDepth: number;
@@ -82,7 +82,7 @@ export type AgentContext = {
   record(step: ExecutionTurn): Promise<void>;
   appendEventMessage(message: AgentMessageSnapshot): Promise<void>;
   appendSessionMessage(message: AgentMessageSnapshot): Promise<void>;
-  consumeBudget(resource: keyof AgentBudgetUsage): void;
+  consumeLimit(resource: keyof AgentLimitUsage): void;
   runThread?: RunThread;
 };
 

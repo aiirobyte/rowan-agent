@@ -143,7 +143,7 @@ Rules:
 |---|---|---|
 | `conversation` | user-visible semantic conversation | eligible for future route/plan context |
 | `execution` | phase prompts, routing decisions, planner output, tool results | current run / stored steps only |
-| `diagnostic` | errors, budget failures, invalid model output | trace/debug only |
+| `diagnostic` | errors, limits failures, invalid model output | trace/debug only |
 
 Do not add a parallel `visibility` field. Future work should strengthen `scope` semantics instead.
 
@@ -423,7 +423,7 @@ Acceptance:
 - `packages/agent/src/agent.ts` remains the Agent core/facade entrypoint; no `core/` folder or package is created;
 - obsolete runtime loop/thread/phase/runner exports are removed without compatibility re-exports;
 - core tools, hooks, skills, workspace helpers, and MCP tool-provider boundaries remain exported from `runtime`;
-- budget, thread, verify retry, and multi-turn tests still pass.
+- limits, thread, verify retry, and multi-turn tests still pass.
 
 ### Phase C: Agent Loop IO Atomization
 
@@ -449,7 +449,7 @@ Acceptance:
 - runtime can adjust phase input/output via `beforePhase` / `afterPhase`;
 - `runAgentLoop()` visibly owns route / branch / plan / attempt execute / verify / outcome ordering;
 - tool execution can be routed through a runtime-owned `ToolRunner` port without moving task retry semantics into runtime;
-- direct, task, thread, budget, and verify retry tests still pass.
+- direct, task, thread, limits, and verify retry tests still pass.
 
 ### Phase D: Context Projection and Rendering
 
@@ -462,7 +462,7 @@ packages/context/src/
   project.ts          # Session/source events -> IntermediateAgentContext
   render.ts           # IC + phase policy -> RenderedContextSegment[]
   phase-policy.ts     # route/plan/execute/verify viewport rules
-  budget.ts           # token estimation and truncation hooks
+  limits.ts           # token estimation and truncation hooks
   prompt-templates.ts # prompt strings
   conversation-ir.ts  # ConversationEntry[]
 ```
@@ -473,7 +473,7 @@ Acceptance:
 - route sees semantic history and current request, not old route JSON;
 - execute sees current task and current tool results, not verifier prompts;
 - verify sees task output and criteria, not unrelated session noise.
-- token budget reports are produced after filtering and before provider wire conversion.
+- token limits reports are produced after filtering and before provider wire conversion.
 
 ### Phase E: Provider IR
 

@@ -21,7 +21,7 @@ The package also owns the route, plan, execute, verify, thread, retry, outcome, 
 
 ## Usage Flow
 
-1. Prepare `model`, `stream`, and `tools`. Optionally provide an `AgentStore`, skills, budgets, and tool approval hooks.
+1. Prepare `model`, `stream`, and `tools`. Optionally provide an `AgentStore`, skills, limits, and tool approval hooks.
 2. Create an `Agent` instance.
 3. Use `subscribe` to listen to events. Logging modules and UIs can both consume this stream.
 4. Call `prompt(input)` to start or continue a conversation turn.

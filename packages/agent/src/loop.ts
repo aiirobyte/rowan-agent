@@ -24,7 +24,7 @@ import type {
   ModelCallUsage,
   ModelStreamEvent,
   Outcome,
-  AgentBudgetUsage,
+  AgentLimitUsage,
   Task,
   TaskOutput,
   TaskRoutingDecision,
@@ -60,7 +60,7 @@ const verifyPhase = agentPhases.verify.phase;
 
 type AgentLoopRuntime = AgentLoopInput & {
   messageLog: AgentMessage[];
-  budgetUsage: AgentBudgetUsage;
+  limitUsage: AgentLimitUsage;
   threadDepth: number;
   maxThreadDepth: number;
   status: AgentContext["state"]["status"];
@@ -70,15 +70,15 @@ type AgentLoopRuntime = AgentLoopInput & {
   lastExecuteText?: string;
 };
 
-class BudgetExceededError extends Error {
-  readonly resource: keyof AgentBudgetUsage;
+class LimitExceededError extends Error {
+  readonly resource: keyof AgentLimitUsage;
   readonly limit: number;
-  readonly usage: AgentBudgetUsage;
+  readonly usage: AgentLimitUsage;
 
-  constructor(input: { resource: keyof AgentBudgetUsage; limit: number; usage: AgentBudgetUsage }) {
+  constructor(input: { resource: keyof AgentLimitUsage; limit: number; usage: AgentLimitUsage }) {
     const label = input.resource === "modelCalls" ? "model calls" : "tool calls";
-    super(`Agent run exceeded ${label} budget (${input.usage[input.resource]}/${input.limit}).`);
-    this.name = "BudgetExceededError";
+    super(`Agent run exceeded ${label} limit (${input.usage[input.resource]}/${input.limit}).`);
+    this.name = "LimitExceededError";
     this.resource = input.resource;
     this.limit = input.limit;
     this.usage = { ...input.usage };
@@ -189,7 +189,7 @@ function createAgentContext(input: AgentLoopRuntime): AgentContext {
       tools: input.tools,
       maxAttempts: input.maxAttempts ?? 2,
       verifyTasks: input.verifyTasks ?? true,
-      ...(input.budget ? { budget: input.budget } : {}),
+      ...(input.limits ? { limits: input.limits } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
       ...(input.runtime ? { runtime: input.runtime } : {}),
       ...(input.beforeToolCall ? { beforeToolCall: input.beforeToolCall } : {}),
@@ -203,7 +203,7 @@ function createAgentContext(input: AgentLoopRuntime): AgentContext {
       attempt: input.attempt,
       ...(input.currentTask ? { task: input.currentTask } : {}),
       toolResults: input.toolResults,
-      budgetUsage: input.budgetUsage,
+      limitUsage: input.limitUsage,
       depth: runtimeDepth(input),
       ...(input.lastExecuteText ? { lastExecuteText: input.lastExecuteText } : {}),
     },
@@ -212,49 +212,49 @@ function createAgentContext(input: AgentLoopRuntime): AgentContext {
     record: (step) => input.recordStep?.(step) ?? Promise.resolve(),
     appendEventMessage: (message) => appendEventMessage(input, message),
     appendSessionMessage: (message) => appendSessionMessage(input, message),
-    consumeBudget: (resource) => {
-      const budgetError = consumeBudget(input, resource);
-      if (budgetError) {
-        throw budgetError;
+    consumeLimit: (resource) => {
+      const limitError = consumeLimit(input, resource);
+      if (limitError) {
+        throw limitError;
       }
     },
     ...(input.runThread ? { runThread: input.runThread } : {}),
   };
 }
 
-function cloneBudgetUsage(usage: AgentBudgetUsage): AgentBudgetUsage {
+function cloneLimitUsage(usage: AgentLimitUsage): AgentLimitUsage {
   return {
     modelCalls: usage.modelCalls,
     toolCalls: usage.toolCalls,
   };
 }
 
-function budgetLimit(
+function limitForResource(
   input: AgentLoopRuntime,
-  resource: keyof AgentBudgetUsage,
+  resource: keyof AgentLimitUsage,
 ): number | undefined {
-  return resource === "modelCalls" ? input.budget?.maxModelCalls : input.budget?.maxToolCalls;
+  return resource === "modelCalls" ? input.limits?.maxModelCalls : input.limits?.maxToolCalls;
 }
 
-function consumeBudget(
+function consumeLimit(
   input: AgentLoopRuntime,
-  resource: keyof AgentBudgetUsage,
-): BudgetExceededError | undefined {
-  input.budgetUsage[resource] += 1;
-  const limit = budgetLimit(input, resource);
+  resource: keyof AgentLimitUsage,
+): LimitExceededError | undefined {
+  input.limitUsage[resource] += 1;
+  const limit = limitForResource(input, resource);
 
-  if (limit !== undefined && input.budgetUsage[resource] > limit) {
-    return new BudgetExceededError({
+  if (limit !== undefined && input.limitUsage[resource] > limit) {
+    return new LimitExceededError({
       resource,
       limit,
-      usage: cloneBudgetUsage(input.budgetUsage),
+      usage: cloneLimitUsage(input.limitUsage),
     });
   }
 
   return undefined;
 }
 
-function createBudgetExceededOutcome(error: BudgetExceededError, task?: Task): Outcome {
+function createLimitExceededOutcome(error: LimitExceededError, task?: Task): Outcome {
   return Validators.outcome.Parse({
     id: createId("out"),
     ...(task ? { taskId: task.id } : {}),
@@ -307,7 +307,7 @@ function createThreadTaskOutput(input: {
     task: input.task,
     goal: input.goal,
     outcome: input.thread.outcome,
-    budgetUsage: input.thread.budgetUsage,
+    limitUsage: input.thread.limitUsage,
     threadDepth: input.thread.threadDepth,
     maxThreadDepth: input.thread.maxThreadDepth,
   };
@@ -444,7 +444,7 @@ async function collectTextAndStructured(input: {
     }
 
     if (event.type === "model_requested") {
-      input.context.consumeBudget("modelCalls");
+      input.context.consumeLimit("modelCalls");
       usage = event.usage;
       await input.context.emit({
         type: "model_requested",
@@ -683,7 +683,7 @@ async function executeToolCall(input: {
     return result;
   }
 
-  input.context.consumeBudget("toolCalls");
+  input.context.consumeLimit("toolCalls");
 
   await input.context.emit({
     type: "tool_start",
@@ -1055,7 +1055,7 @@ async function executeThreadRoute(
     tools: input.tools,
     skills: input.session.skills,
     maxAttempts: input.maxAttempts,
-    budget: input.budget,
+    limits: input.limits,
     threadDepth: input.threadDepth + 1,
     verify: false,
   });
@@ -1128,9 +1128,9 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
   const runtime: AgentLoopRuntime = {
     ...input,
     messageLog: snapshotMessages(input.session.messages),
-    budgetUsage: { modelCalls: 0, toolCalls: 0 },
+    limitUsage: { modelCalls: 0, toolCalls: 0 },
     threadDepth: input.threadDepth ?? 0,
-    maxThreadDepth: resolveMaxThreadDepth(input.budget),
+    maxThreadDepth: resolveMaxThreadDepth(input.limits),
     verifyTasks: input.verifyTasks ?? true,
     status: "routing",
     attempt: 0,
@@ -1326,10 +1326,10 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
     return outcome;
   } catch (error) {
-    if (error instanceof BudgetExceededError) {
-      const outcome = createBudgetExceededOutcome(error, runtime.currentTask);
+    if (error instanceof LimitExceededError) {
+      const outcome = createLimitExceededOutcome(error, runtime.currentTask);
       await emit(runtime, {
-        type: "budget_exceeded",
+        type: "limit_exceeded",
         resource: error.resource,
         limit: error.limit,
         usage: error.usage,

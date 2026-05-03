@@ -64,7 +64,7 @@ type SubSessionInput = {
   tools: Tool[];
   skills?: Skill[];
   maxAttempts?: number;
-  budget?: {
+  limits?: {
     maxToolCalls?: number;
     maxModelCalls?: number;
   };
@@ -78,7 +78,7 @@ thread predecessor 要求：
 - thread 使用和普通 Agent 完全相同的 route -> plan -> execute -> verify 逻辑。
 - thread 不由主 loop 强制唤起；只有当前 Agent 或工具上下文显式调用 `startThread` / `runAgentThread` 时才创建。
 - thread 的 outcome 可回到当前 Agent 作为 tool-like evidence。
-- budget 超限必须以结构化失败返回。
+- limits 超限必须以结构化失败返回。
 
 ## 4. 不做
 

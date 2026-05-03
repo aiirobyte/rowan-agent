@@ -34,7 +34,7 @@ test("runAgentThread creates a session with explicit tools and skills", async ()
   expect(result.session.parentSessionId).toBe("ses_parent");
   expect(result.session.skills).toEqual([skill]);
   expect(result.outcome.passed).toBe(true);
-  expect(result.budgetUsage.toolCalls).toBe(1);
+  expect(result.limitUsage.toolCalls).toBe(1);
   expect(events).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -97,7 +97,7 @@ test("Agent.startThread defaults to the current parent session and does not inhe
   expect(withTools.outcome.passed).toBe(true);
 });
 
-test("thread model budget returns a structured failed outcome", async () => {
+test("thread model limits returns a structured failed outcome", async () => {
   const result = await runAgentThread({
     parentSessionId: "ses_parent",
     prompt: "hello",
@@ -105,20 +105,20 @@ test("thread model budget returns a structured failed outcome", async () => {
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
     tools: [echoTool],
-    budget: { maxModelCalls: 0 },
+    limits: { maxModelCalls: 0 },
   });
 
   expect(result.outcome.passed).toBe(false);
   expect(result.outcome.taskId).toBeUndefined();
-  expect(result.outcome.message).toContain("model calls budget");
+  expect(result.outcome.message).toContain("model calls limit");
   expect(result.outcome).not.toHaveProperty("evidence");
   expect(result.outcome).not.toHaveProperty("failedCriteria");
-  expect(result.budgetUsage).toEqual({ modelCalls: 1, toolCalls: 0 });
-  expect(result.session.log.some((event) => event.type === "budget_exceeded")).toBe(true);
+  expect(result.limitUsage).toEqual({ modelCalls: 1, toolCalls: 0 });
+  expect(result.session.log.some((event) => event.type === "limit_exceeded")).toBe(true);
   expect(
     result.session.log.some(
       (event) =>
-        event.type === "budget_exceeded" &&
+        event.type === "limit_exceeded" &&
         event.resource === "modelCalls" &&
         event.limit === 0 &&
         event.usage.modelCalls === 1 &&
@@ -127,7 +127,7 @@ test("thread model budget returns a structured failed outcome", async () => {
   ).toBe(true);
 });
 
-test("thread tool budget stops before executing extra tools", async () => {
+test("thread tool limits stops before executing extra tools", async () => {
   let executed = false;
   const trackedEcho: typeof echoTool = {
     ...echoTool,
@@ -144,20 +144,20 @@ test("thread tool budget stops before executing extra tools", async () => {
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
     tools: [trackedEcho],
-    budget: { maxToolCalls: 0 },
+    limits: { maxToolCalls: 0 },
   });
 
   expect(executed).toBe(false);
   expect(result.outcome.passed).toBe(false);
   expect(result.outcome.taskId).toEqual(expect.any(String));
-  expect(result.outcome.message).toContain("tool calls budget");
+  expect(result.outcome.message).toContain("tool calls limit");
   expect(result.outcome).not.toHaveProperty("evidence");
   expect(result.outcome).not.toHaveProperty("failedCriteria");
-  expect(result.budgetUsage).toEqual({ modelCalls: 1, toolCalls: 1 });
+  expect(result.limitUsage).toEqual({ modelCalls: 1, toolCalls: 1 });
   expect(
     result.session.log.some(
       (event) =>
-        event.type === "budget_exceeded" &&
+        event.type === "limit_exceeded" &&
         event.resource === "toolCalls" &&
         event.limit === 0 &&
         event.usage.modelCalls === 1 &&
@@ -356,7 +356,7 @@ test("worker threads can recursively route until the thread depth limit", async 
     model: { provider: "test", name: "recursive-route" },
     stream: recursiveThreadStream,
     tools: [echoTool],
-    budget: { maxThreadDepth: 2 },
+    limits: { maxThreadDepth: 2 },
   });
   agent.subscribe((event) => {
     events.push(event);
@@ -395,7 +395,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       const nested = await context.runThread?.({
         prompt: args.prompt,
         tools: [echoTool],
-        budget: { maxToolCalls: 1 },
+        limits: { maxToolCalls: 1 },
       });
 
       return {

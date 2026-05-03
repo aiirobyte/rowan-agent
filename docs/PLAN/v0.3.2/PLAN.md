@@ -69,7 +69,7 @@ type ThreadInput = {
   tools: Tool[];
   skills?: Skill[];
   maxAttempts?: number;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
 };
 ```
 

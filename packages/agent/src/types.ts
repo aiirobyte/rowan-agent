@@ -3,8 +3,8 @@ import type { AgentMessage, Session as CoreSession, Skill } from "@rowan-agent/s
 import type { AgentRuntimePort } from "./phases/types";
 import type {
   AcceptanceCriterion,
-  AgentBudgetUsage,
-  AgentRunBudget,
+  AgentLimitUsage,
+  AgentRunLimits,
   ExecutionTurn,
   LlmContext,
   LlmPhase,
@@ -48,8 +48,8 @@ export type {
 
 export type {
   AcceptanceCriterion,
-  AgentBudgetUsage,
-  AgentRunBudget,
+  AgentLimitUsage,
+  AgentRunLimits,
   ExecutionTurn,
   ExecutionTurnEntry,
   LlmContext,
@@ -182,7 +182,7 @@ export type ThreadInput = {
   tools: Tool[];
   skills?: Skill[];
   maxAttempts?: number;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
   threadDepth?: number;
   verify?: boolean;
 };
@@ -206,7 +206,7 @@ export type ThreadRunResult = {
   parentSessionId: string;
   session: CoreSession<AgentEvent>;
   outcome: Outcome;
-  budgetUsage: AgentBudgetUsage;
+  limitUsage: AgentLimitUsage;
   threadDepth: number;
   maxThreadDepth: number;
 };
@@ -239,7 +239,7 @@ export type AgentEvent =
       parentSessionId: string;
       sessionId: string;
       outcome: Outcome;
-      budgetUsage: AgentBudgetUsage;
+      limitUsage: AgentLimitUsage;
       threadDepth?: number;
       maxThreadDepth?: number;
       ts: string;
@@ -275,10 +275,10 @@ export type AgentEvent =
   | { type: "verification_start"; taskId: string; ts: string }
   | { type: "verification_end"; taskId: string; result: VerificationResult; ts: string }
   | {
-      type: "budget_exceeded";
-      resource: keyof AgentBudgetUsage;
+      type: "limit_exceeded";
+      resource: keyof AgentLimitUsage;
       limit: number;
-      usage: AgentBudgetUsage;
+      usage: AgentLimitUsage;
       message: string;
       taskId?: string;
       ts: string;
@@ -298,7 +298,7 @@ export type AgentLoopInput = {
   stream: StreamFn;
   tools: Tool[];
   maxAttempts?: number;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
   threadDepth?: number;
   verifyTasks?: boolean;
   signal?: AbortSignal;
@@ -310,8 +310,8 @@ export type AgentLoopInput = {
   emit?: AgentEventListener;
 };
 
-export function resolveMaxThreadDepth(budget?: AgentRunBudget): number {
-  const value = budget?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH;
+export function resolveMaxThreadDepth(limits?: AgentRunLimits): number {
+  const value = limits?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH;
   if (!Number.isInteger(value) || value < 0) {
     throw new Error("maxThreadDepth must be a non-negative integer.");
   }

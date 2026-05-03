@@ -8,7 +8,7 @@ import {
   createId,
   resolveMaxThreadDepth,
   Validators,
-  type AgentBudgetUsage,
+  type AgentLimitUsage,
   type AgentEvent,
   type AgentEventListener,
   type AgentThreadInput,
@@ -18,10 +18,10 @@ import {
 
 type AgentSession = Session<AgentEvent>;
 
-function summarizeThreadBudgetUsage(events: readonly AgentEvent[]): AgentBudgetUsage {
+function summarizeThreadLimitUsage(events: readonly AgentEvent[]): AgentLimitUsage {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event.type === "budget_exceeded") {
+    if (event.type === "limit_exceeded") {
       return { ...event.usage };
     }
   }
@@ -44,7 +44,7 @@ async function emitThreadEvent(
 
 export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunResult> {
   const threadDepth = input.threadDepth ?? 1;
-  const maxThreadDepth = resolveMaxThreadDepth(input.budget);
+  const maxThreadDepth = resolveMaxThreadDepth(input.limits);
   const verifyTasks = input.verify ?? true;
   const session = createSession<AgentEvent>({
     systemPrompt: input.systemPrompt,
@@ -77,7 +77,7 @@ export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunRe
       passed: false,
       message: `Thread depth limit exceeded (${threadDepth}/${maxThreadDepth}).`,
     });
-    const budgetUsage = summarizeThreadBudgetUsage(session.log);
+    const limitUsage = summarizeThreadLimitUsage(session.log);
     await emitThreadEvent(
       session,
       {
@@ -85,7 +85,7 @@ export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunRe
         parentSessionId: input.parentSessionId,
         sessionId: session.id,
         outcome,
-        budgetUsage,
+        limitUsage,
         threadDepth,
         maxThreadDepth,
         ts: nowIso(),
@@ -97,7 +97,7 @@ export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunRe
       parentSessionId: input.parentSessionId,
       session,
       outcome,
-      budgetUsage,
+      limitUsage,
       threadDepth,
       maxThreadDepth,
     };
@@ -125,7 +125,7 @@ export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunRe
     stream: input.stream,
     tools: input.tools,
     maxAttempts: input.maxAttempts,
-    budget: input.budget,
+    limits: input.limits,
     threadDepth,
     verifyTasks,
     signal: input.signal,
@@ -136,7 +136,7 @@ export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunRe
     emit: input.emit,
   });
 
-  const budgetUsage = summarizeThreadBudgetUsage(session.log);
+  const limitUsage = summarizeThreadLimitUsage(session.log);
   await emitThreadEvent(
     session,
     {
@@ -144,7 +144,7 @@ export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunRe
       parentSessionId: input.parentSessionId,
       sessionId: session.id,
       outcome,
-      budgetUsage,
+      limitUsage,
       threadDepth,
       maxThreadDepth,
       ts: nowIso(),
@@ -156,7 +156,7 @@ export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunRe
     parentSessionId: input.parentSessionId,
     session,
     outcome,
-    budgetUsage,
+    limitUsage,
     threadDepth,
     maxThreadDepth,
   };

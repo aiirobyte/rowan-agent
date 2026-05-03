@@ -44,7 +44,7 @@
 | V042-302 | M3 | Preserve tool hook compatibility | agent/runtime | P0 | V042-301 | implemented | existing `beforeToolCall` and `afterToolCall` behavior remains unchanged |
 | V042-303 | M3 | Keep task retry and verification in Agent loop | agent | P0 | V042-301 | implemented | runtime tool runner does not own task attempts or outcome rules |
 | V042-401 | M4 | Add runtime phase port tests | test | P0 | V042-206 | implemented | tests cover before adjustment, after adjustment, skip, retry, abort, and no-hook behavior |
-| V042-402 | M4 | Preserve existing behavior tests | test | P0 | V042-301 | implemented | direct, task, thread, budget, multi-turn, and verify retry tests pass |
+| V042-402 | M4 | Preserve existing behavior tests | test | P0 | V042-301 | implemented | direct, task, thread, limits, multi-turn, and verify retry tests pass |
 | V042-501 | M5 | Run package tests | release | P0 | V042-401,V042-402 | implemented | `bun test packages` passes |
 | V042-502 | M5 | Run build | release | P0 | V042-501 | implemented | `bun run build` passes |
 | V042-503 | M5 | Update v0.4.2 docs after implementation | docs | P1 | V042-502 | implemented | task statuses and roadmap status reflect implementation result |
@@ -60,7 +60,7 @@
 - [x] tool execution can use a runtime-owned `ToolRunner` port
 - [x] existing tool hooks remain compatible
 - [x] runtime hooks can adjust, skip, retry, and abort phases
-- [x] direct/task/thread/budget/multi-turn/verify retry tests pass
+- [x] direct/task/thread/limits/multi-turn/verify retry tests pass
 - [x] `bun test packages`
 - [x] `bun run build`
 

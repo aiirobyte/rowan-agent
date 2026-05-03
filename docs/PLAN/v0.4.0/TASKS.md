@@ -89,7 +89,7 @@
 - [ ] provider-neutral `ConversationEntry[]`
 - [ ] full context projection/rendering pipeline
 - [ ] SSE streaming parser
-- [ ] token budget truncation
+- [ ] token limits truncation
 - [ ] PolicyEngine
 - [ ] full MCP server/client integration
 - [ ] replay / fork / compaction

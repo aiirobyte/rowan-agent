@@ -54,7 +54,7 @@ function defaultScopeForMessage(
     return "execution";
   }
 
-  if (metadata?.kind === "error" || metadata?.kind === "budget_exceeded") {
+  if (metadata?.kind === "error" || metadata?.kind === "limit_exceeded") {
     return "diagnostic";
   }
 

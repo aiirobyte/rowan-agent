@@ -38,4 +38,4 @@ bun run rowan "use bash to print the current date"
 - 普通回答不产生 `task_created`。
 - 工具请求先产生 route `model_requested`，再产生 `task_created`。
 - thread API 可以记录 parent/thread trace 关系。
-- thread budget 超限返回结构化 failed outcome。
+- thread limits 超限返回结构化 failed outcome。

@@ -137,7 +137,7 @@ v0.3.1 先做：
 - long-term memory。
 - summary compression。
 - vector retrieval。
-- token budget truncation 策略。
+- token limits truncation 策略。
 - cross-session search。
 
 ## 6. CLI Interaction

@@ -106,7 +106,7 @@ type StepFilter = {
 | verify prompt/output | `execution` | 只用于验收 |
 | direct answer | `conversation` | 作为用户可见 assistant message 发布 |
 | accepted final outcome | `conversation` | 作为用户可见 assistant message 发布 |
-| errors/budget/debug | `diagnostic` | trace 可见，prompt 默认不可见 |
+| errors/limits/debug | `diagnostic` | trace 可见，prompt 默认不可见 |
 
 ## 4. JSON-backed Store
 
@@ -295,7 +295,7 @@ export function messageScope(message: AgentMessage): ContextScope {
   if (metadata?.kind === "phase_prompt" || metadata?.kind === "routing_decision") {
     return "execution";
   }
-  if (metadata?.kind === "error" || metadata?.kind === "budget_exceeded") {
+  if (metadata?.kind === "error" || metadata?.kind === "limit_exceeded") {
     return "diagnostic";
   }
 

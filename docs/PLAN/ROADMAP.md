@@ -75,7 +75,7 @@ The old long-term roadmap placed Policy, Replay, Eval, and Workflow immediately 
 | v0.4.0 | Protocol Boundary + Runtime Split | remove reversed dependencies and extract execution engine | `packages/protocol`, `packages/runtime`, shared turn/model/tool types, `AgentRunner`, phase modules, routing, skills, hooks, MCP boundary, core tools |
 | v0.4.1 | Agent Boundary Correction | correct the over-moved runtime boundary before context work | Agent-owned loop/thread/phases, runtime as glue/integration, no `core/` folder, no compatibility runtime re-exports |
 | v0.4.2 | Agent Loop IO Atomization | decouple loop steps into typed phase inputs/outputs and runtime ports | `AgentLoopConfig`, `AgentRunState`, `AgentContext`, `PhaseInputMap`, `PhaseOutputMap`, `PhaseResult`, `beforePhase`/`afterPhase`, orchestration-only loop |
-| v0.5.0 | Context Projection + Provider IR | make context deterministic and provider-neutral on top of phase IO | `IntermediateAgentContext`, `RenderedAgentContext`, phase policy, token budget hooks, `ConversationEntry[]`, SSE streaming parser |
+| v0.5.0 | Context Projection + Provider IR | make context deterministic and provider-neutral on top of phase IO | `IntermediateAgentContext`, `RenderedAgentContext`, phase policy, token limits hooks, `ConversationEntry[]`, SSE streaming parser |
 | v0.6.0 | Tool Runtime Policy Ports | upgrade tool hooks into explicit context/result contracts | `BeforeToolCallContext`, `BeforeToolCallResult`, `AfterToolCallContext`, `AfterToolCallResult`, `ToolExecutionMode`, shared local/MCP `ToolRunner`, permission scopes |
 | v0.7.0 | Replay, Fork, and Compaction | make failed runs reconstructable and long sessions manageable | canonical events, replay from events+turns, fork from step, compaction cursor+summary |
 | v0.8.0 | Eval Harness | compare models/prompts/tools using repeatable runs | datasets, scorer interface, batch runner, reports, static fixtures, optional replay-backed fixtures |
@@ -169,7 +169,7 @@ packages/runtime/src/
 - package boundary test is updated for `protocol`.
 - `bun test packages` passes.
 - `bun run build` passes.
-- Direct, task, thread, multi-turn, budget, and verify retry behavior remains unchanged.
+- Direct, task, thread, multi-turn, limits, and verify retry behavior remains unchanged.
 
 ## 6. v0.4.1 Scope
 
@@ -269,7 +269,7 @@ type AgentLoopConfig = {
   stream: StreamFn;
   maxAttempts: number;
   verifyTasks: boolean;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
   runtime?: AgentRuntimePort;
 };
 
@@ -279,7 +279,7 @@ type AgentRunState = {
   task?: Task;
   attempt: number;
   toolResults: ToolResult[];
-  budgetUsage: AgentBudgetUsage;
+  limitUsage: AgentLimitUsage;
   depth: RuntimeDepth;
   lastExecuteText?: string;
 };
@@ -370,7 +370,7 @@ Runtime examples:
 - loop order is readable as a chain of route / branch / plan / attempt execute / verify / outcome;
 - runtime hooks can adjust phase input and output without mutating `session.messages` directly;
 - tool execution is callable through a runtime-owned `ToolRunner` port;
-- existing direct, task, thread, budget, and verify retry tests still pass;
+- existing direct, task, thread, limits, and verify retry tests still pass;
 - new tests cover `beforePhase` input adjustment, `afterPhase` output adjustment, skip, retry, abort, and unchanged default behavior.
 
 ## 8. v0.5.0 Scope
@@ -391,7 +391,7 @@ Required changes:
 
 - add `IntermediateAgentContext`;
 - add `RenderedContextSegment`;
-- add token budget metadata and truncation hooks in the `IntermediateAgentContext -> RenderedAgentContext` path;
+- add token limits metadata and truncation hooks in the `IntermediateAgentContext -> RenderedAgentContext` path;
 - add phase policy for route / plan / execute / verify;
 - change prompt builder from direct `session.messages` scanning to rendered context consumption;
 - add `ConversationEntry[]` as provider-neutral model input;
@@ -399,18 +399,18 @@ Required changes:
 - add an adapter-level SSE streaming parser that maps provider chunks into `ModelStreamEvent`;
 - preserve non-streaming JSON response handling as a compatibility fallback.
 
-### 8.2 Token Budget Contract
+### 8.2 Token Limits Contract
 
-v0.5.0 does not need a full compaction strategy, but it must define the hard budget hook before context rendering is considered stable:
+v0.5.0 does not need a full compaction strategy, but it must define the hard limits hook before context rendering is considered stable:
 
 ```ts
-type ContextBudget = {
+type ContextLimits = {
   maxInputTokens?: number;
   reserveOutputTokens?: number;
   strategy?: "fail" | "truncate-oldest" | "truncate-lowest-priority";
 };
 
-type ContextBudgetReport = {
+type ContextLimitsReport = {
   estimatedInputTokens: number;
   truncatedSegments: string[];
   hardLimitHit: boolean;
@@ -422,7 +422,7 @@ Rules:
 - token counting may start with provider/model-specific estimators and improve later;
 - truncation happens after phase visibility filtering and before provider wire conversion;
 - `conversation` segments are preferred over `execution` and `diagnostic` segments unless a phase policy explicitly requires evidence;
-- compaction in v0.7.0 consumes this budget report but does not own first-line hard truncation.
+- compaction in v0.7.0 consumes this limits report but does not own first-line hard truncation.
 
 ### 8.3 Streaming Contract
 
@@ -448,7 +448,7 @@ Required behavior:
 
 - prompt tests snapshot each phase viewport;
 - route contamination tests cover routing decision, failed outcome, verifier text, and tool result leakage;
-- token budget tests cover counting hook invocation, hard-limit failure, and oldest/lowest-priority truncation behavior;
+- token limits tests cover counting hook invocation, hard-limit failure, and oldest/lowest-priority truncation behavior;
 - SSE parser fixture tests cover text delta, tool call delta, usage, error, and done events;
 - OpenAI-compatible tests still pass through the new IR;
 - no provider adapter chooses which session history is visible.
@@ -532,7 +532,7 @@ Required changes:
 - implement replay from source events + driver turns into rendered context;
 - add fork from a selected turn/cursor;
 - add compaction cursor + summary after context filtering is stable;
-- consume the v0.5.0 token budget report so compaction is layered after hard truncation hooks.
+- consume the v0.5.0 token limits report so compaction is layered after hard truncation hooks.
 
 Acceptance:
 

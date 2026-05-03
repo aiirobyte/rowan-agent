@@ -48,13 +48,13 @@ export type Outcome = {
   message: string;
 };
 
-export type AgentRunBudget = {
+export type AgentRunLimits = {
   maxToolCalls?: number;
   maxModelCalls?: number;
   maxThreadDepth?: number;
 };
 
-export type AgentBudgetUsage = {
+export type AgentLimitUsage = {
   toolCalls: number;
   modelCalls: number;
 };
@@ -77,7 +77,7 @@ export type ThreadTaskOutput = {
   task: string;
   goal: string;
   outcome: Outcome;
-  budgetUsage: AgentBudgetUsage;
+  limitUsage: AgentLimitUsage;
   threadDepth: number;
   maxThreadDepth: number;
 };

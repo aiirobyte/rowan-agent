@@ -9,18 +9,18 @@ import {
 } from "@rowan-agent/session";
 import type { AgentStore } from "@rowan-agent/store";
 import type {
+  ModelRef,
+  AgentRunLimits,
+  AgentRuntimePort,
+  StreamFn,
+  BeforeToolCall,
+  Tool,
   AfterToolCall,
+  AgentThreadInput,
+  ThreadRunResult,
+  Outcome,
   AgentEvent,
   AgentEventListener,
-  AgentThreadInput,
-  BeforeToolCall,
-  AgentRunBudget,
-  AgentRuntimePort,
-  ModelRef,
-  Outcome,
-  StreamFn,
-  ThreadRunResult,
-  Tool,
   Unsubscribe,
 } from "./types";
 
@@ -35,7 +35,7 @@ export type AgentOptions = {
   session?: AgentSession;
   agentStore?: AgentStore<AgentSession>;
   maxAttempts?: number;
-  budget?: AgentRunBudget;
+  limits?: AgentRunLimits;
   runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
@@ -154,7 +154,7 @@ export class Agent {
       stream: this.options.stream,
       tools: this.state.tools,
       maxAttempts: this.options.maxAttempts,
-      budget: this.options.budget,
+      limits: this.options.limits,
       runtime: this.options.runtime,
       threadDepth: 0,
       signal: this.abortController.signal,
@@ -203,7 +203,7 @@ export class Agent {
       model: this.options.model,
       stream: this.options.stream,
       signal: this.abortController?.signal,
-      budget: input.budget ?? this.options.budget,
+      limits: input.limits ?? this.options.limits,
       threadDepth: input.threadDepth ?? 1,
       verify: input.verify,
       runtime: this.options.runtime,
