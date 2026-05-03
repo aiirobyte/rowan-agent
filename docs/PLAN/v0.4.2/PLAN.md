@@ -2,7 +2,7 @@
 
 > 版本：v0.4.2
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 技术栈：TypeScript + Bun
 > 基线：v0.4.1 Agent Boundary Correction
 > 任务表：`docs/PLAN/v0.4.2/TASKS.md`

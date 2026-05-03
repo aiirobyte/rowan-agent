@@ -15,6 +15,7 @@ import type {
   AgentThreadInput,
   BeforeToolCall,
   AgentRunBudget,
+  AgentRuntimePort,
   ModelRef,
   Outcome,
   StreamFn,
@@ -35,6 +36,7 @@ export type AgentOptions = {
   agentStore?: AgentStore<AgentSession>;
   maxAttempts?: number;
   budget?: AgentRunBudget;
+  runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
 };
@@ -153,6 +155,7 @@ export class Agent {
       tools: this.state.tools,
       maxAttempts: this.options.maxAttempts,
       budget: this.options.budget,
+      runtime: this.options.runtime,
       threadDepth: 0,
       signal: this.abortController.signal,
       beforeToolCall: this.options.beforeToolCall,
@@ -203,6 +206,7 @@ export class Agent {
       budget: input.budget ?? this.options.budget,
       threadDepth: input.threadDepth ?? 1,
       verify: input.verify,
+      runtime: this.options.runtime,
       beforeToolCall: this.options.beforeToolCall,
       afterToolCall: this.options.afterToolCall,
       emit: (event) => {

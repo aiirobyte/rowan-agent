@@ -3,7 +3,7 @@ import Type from "typebox";
 import { createSession as createBaseSession } from "@rowan-agent/session";
 import { runAgentLoop } from "../src/loop";
 import { createDefaultCriteria } from "../src/task";
-import type { AgentEvent, StreamFn, Tool } from "../src/types";
+import type { AgentEvent, AgentRuntimePort, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
@@ -634,4 +634,237 @@ test("invalid tool args do not execute tool", async () => {
   expect(outcome.passed).toBe(false);
   expect(executed).toBe(false);
   expect(session.log.some((event) => event.type === "tool_end")).toBe(true);
+});
+
+test("runtime beforePhase can adjust phase input", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    input: "adjust route input",
+  });
+  const stream: StreamFn = async function* adjustableRouteStream(_model, context) {
+    if (context.phase !== "route") {
+      return;
+    }
+
+    const adjusted = context.runtime?.maxThreadDepth === 99;
+    yield {
+      type: "structured_output",
+      content: {
+        route: "direct",
+        message: adjusted ? "Adjusted route input." : "Original route input.",
+      },
+    };
+    yield { type: "done" };
+  };
+  const runtime: AgentRuntimePort = {
+    async beforePhase(_context, phase, input) {
+      if (phase !== "route") {
+        return;
+      }
+
+      return {
+        input: {
+          ...input,
+          runtime: {
+            ...input.runtime,
+            maxThreadDepth: 99,
+          },
+        },
+      };
+    },
+  };
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "runtime-adjust-input" },
+    stream,
+    tools: [],
+    runtime,
+  });
+
+  expect(outcome.passed).toBe(true);
+  expect(outcome.message).toBe("Adjusted route input.");
+});
+
+test("runtime afterPhase can adjust phase output", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    input: "adjust route output",
+  });
+  const stream: StreamFn = async function* routeStream(_model, context) {
+    if (context.phase !== "route") {
+      return;
+    }
+
+    yield {
+      type: "structured_output",
+      content: {
+        route: "direct",
+        message: "Original route output.",
+      },
+    };
+    yield { type: "done" };
+  };
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "runtime-adjust-output" },
+    stream,
+    tools: [],
+    runtime: {
+      async afterPhase(_context, phase, output) {
+        if (phase !== "route") {
+          return;
+        }
+
+        return {
+          output: {
+            ...output,
+            message: "Adjusted route output.",
+            text: "Adjusted route output.",
+          },
+        };
+      },
+    },
+  });
+
+  expect(outcome.passed).toBe(true);
+  expect(outcome.message).toBe("Adjusted route output.");
+});
+
+test("runtime beforePhase can skip a phase", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    input: "skip route",
+  });
+  let modelCalled = false;
+  const stream: StreamFn = async function* skippedStream() {
+    modelCalled = true;
+  };
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "runtime-skip" },
+    stream,
+    tools: [],
+    runtime: {
+      async beforePhase(_context, phase) {
+        if (phase !== "route") {
+          return;
+        }
+
+        return {
+          skip: {
+            route: "direct",
+            message: "Skipped route phase.",
+            text: "Skipped route phase.",
+          },
+        };
+      },
+    },
+  });
+
+  expect(modelCalled).toBe(false);
+  expect(outcome.passed).toBe(true);
+  expect(outcome.message).toBe("Skipped route phase.");
+});
+
+test("runtime afterPhase can retry a phase with adjusted input", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    input: "retry route",
+  });
+  let routeCalls = 0;
+  const stream: StreamFn = async function* retryableRouteStream(_model, context) {
+    if (context.phase !== "route") {
+      return;
+    }
+
+    routeCalls += 1;
+    const adjusted = context.runtime?.maxThreadDepth === 42;
+    yield {
+      type: "structured_output",
+      content: {
+        route: "direct",
+        message: adjusted ? "Retried with adjusted input." : "Needs retry.",
+      },
+    };
+    yield { type: "done" };
+  };
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "runtime-retry" },
+    stream,
+    tools: [],
+    runtime: {
+      async afterPhase(_context, phase, output) {
+        if (phase !== "route" || !("message" in output) || output.message !== "Needs retry.") {
+          return;
+        }
+
+        return {
+          retry: {
+            session,
+            runtime: {
+              threadDepth: 0,
+              maxThreadDepth: 42,
+            },
+            tools: [],
+            canStartThreadRoute: false,
+            shouldDefaultToThreadRoute: false,
+          },
+        };
+      },
+    },
+  });
+
+  expect(routeCalls).toBe(2);
+  expect(outcome.passed).toBe(true);
+  expect(outcome.message).toBe("Retried with adjusted input.");
+});
+
+test("runtime phase port can abort with an outcome", async () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    input: "abort during plan",
+  });
+  const stream: StreamFn = async function* taskRouteStream(_model, context) {
+    if (context.phase === "route") {
+      yield {
+        type: "structured_output",
+        content: {
+          route: "task",
+          message: "Create a task.",
+        },
+      };
+      yield { type: "done" };
+    }
+  };
+
+  const outcome = await runAgentLoop({
+    session,
+    model: { provider: "test", name: "runtime-abort" },
+    stream,
+    tools: [],
+    runtime: {
+      async beforePhase(_context, phase) {
+        if (phase !== "plan") {
+          return;
+        }
+
+        return {
+          abort: {
+            id: createId("out"),
+            passed: false,
+            message: "Aborted by runtime.",
+          },
+        };
+      },
+    },
+  });
+
+  expect(outcome.passed).toBe(false);
+  expect(outcome.message).toBe("Aborted by runtime.");
+  expect(session.log.some((event) => event.type === "task_created")).toBe(false);
 });

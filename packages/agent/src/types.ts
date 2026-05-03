@@ -1,5 +1,6 @@
 import Type from "typebox";
 import type { AgentMessage, Session as CoreSession, Skill } from "@rowan-agent/session";
+import type { AgentRuntimePort } from "./phases/types";
 import type {
   AcceptanceCriterion,
   AgentBudgetUsage,
@@ -24,6 +25,27 @@ import type {
   VerificationResult,
 } from "@rowan-agent/protocol";
 export { createId, Validators } from "@rowan-agent/protocol";
+export type {
+  AgentContext,
+  AgentEffect,
+  AgentLoopConfig,
+  AgentRunState,
+  AgentRunStatus,
+  AgentRuntimePort,
+  AfterPhaseResult,
+  BeforePhaseResult,
+  ExecuteInput,
+  ExecuteOutput,
+  PhaseInputMap,
+  PhaseOutputMap,
+  PhaseResult,
+  PlanInput,
+  RouteInput,
+  ToolRunner,
+  ToolRunnerInput,
+  VerifyInput,
+} from "./phases/types";
+
 export type {
   AcceptanceCriterion,
   AgentBudgetUsage,
@@ -174,6 +196,7 @@ export type ThreadRunInput = ThreadInput & {
   model: ModelRef;
   stream: StreamFn;
   signal?: AbortSignal;
+  runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   emit?: AgentEventListener;
@@ -279,6 +302,7 @@ export type AgentLoopInput = {
   threadDepth?: number;
   verifyTasks?: boolean;
   signal?: AbortSignal;
+  runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   runThread?: RunThread;

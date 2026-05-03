@@ -2,7 +2,7 @@
 
 > 版本：v0.4.2
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 计划：`docs/PLAN/v0.4.2/PLAN.md`
 > 任务表：`docs/PLAN/v0.4.2/TASKS.md`
 

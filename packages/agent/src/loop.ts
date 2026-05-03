@@ -18,6 +18,7 @@ import { scheduleTaskRouting } from "./phases/routing";
 import type {
   AgentEvent,
   AgentLoopInput,
+  AgentContext,
   ErrorInfo,
   LlmPhase,
   ModelCallUsage,
@@ -39,6 +40,15 @@ import type {
 import { createId, nowIso, resolveMaxThreadDepth, Validators } from "./types";
 import type { ExecutionTurnEntry } from "@rowan-agent/protocol";
 import { recordPhaseStep } from "./recorder";
+import type {
+  ExecuteInput,
+  ExecuteOutput,
+  PhaseInputMap,
+  PhaseOutputMap,
+  PlanInput,
+  RouteInput,
+  VerifyInput,
+} from "./phases/types";
 
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
@@ -53,6 +63,10 @@ type AgentLoopRuntime = AgentLoopInput & {
   budgetUsage: AgentBudgetUsage;
   threadDepth: number;
   maxThreadDepth: number;
+  status: AgentContext["state"]["status"];
+  attempt: number;
+  toolResults: ToolResult[];
+  currentTask?: Task;
   lastExecuteText?: string;
 };
 
@@ -163,6 +177,48 @@ function runtimeDepth(input: AgentLoopRuntime): RuntimeDepth {
   return {
     threadDepth: input.threadDepth,
     maxThreadDepth: input.maxThreadDepth,
+  };
+}
+
+function createAgentContext(input: AgentLoopRuntime): AgentContext {
+  return {
+    config: {
+      sessionLifecycle: input.sessionLifecycle ?? "created",
+      model: input.model,
+      stream: input.stream,
+      tools: input.tools,
+      maxAttempts: input.maxAttempts ?? 2,
+      verifyTasks: input.verifyTasks ?? true,
+      ...(input.budget ? { budget: input.budget } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.runtime ? { runtime: input.runtime } : {}),
+      ...(input.beforeToolCall ? { beforeToolCall: input.beforeToolCall } : {}),
+      ...(input.afterToolCall ? { afterToolCall: input.afterToolCall } : {}),
+      ...(input.runThread ? { runThread: input.runThread } : {}),
+    },
+    state: {
+      session: input.session,
+      messageLog: input.messageLog,
+      status: input.status,
+      attempt: input.attempt,
+      ...(input.currentTask ? { task: input.currentTask } : {}),
+      toolResults: input.toolResults,
+      budgetUsage: input.budgetUsage,
+      depth: runtimeDepth(input),
+      ...(input.lastExecuteText ? { lastExecuteText: input.lastExecuteText } : {}),
+    },
+    ...(input.signal ? { signal: input.signal } : {}),
+    emit: (event) => emit(input, event),
+    record: (step) => input.recordStep?.(step) ?? Promise.resolve(),
+    appendEventMessage: (message) => appendEventMessage(input, message),
+    appendSessionMessage: (message) => appendSessionMessage(input, message),
+    consumeBudget: (resource) => {
+      const budgetError = consumeBudget(input, resource);
+      if (budgetError) {
+        throw budgetError;
+      }
+    },
+    ...(input.runThread ? { runThread: input.runThread } : {}),
   };
 }
 
@@ -328,7 +384,7 @@ async function emitChatEnd(input: AgentLoopRuntime): Promise<void> {
 }
 
 async function collectTextAndStructured(input: {
-  loop: AgentLoopRuntime;
+  context: AgentContext;
   events: AsyncIterable<ModelStreamEvent>;
   metadataPhase: LlmPhase;
   recordText?: boolean;
@@ -353,8 +409,7 @@ async function collectTextAndStructured(input: {
     flushedText += text;
     stepEntries.push({ kind: "assistant_text", text });
     if (input.recordText === false) {
-      await appendEventMessage(
-        input.loop,
+      await input.context.appendEventMessage(
         createMessage("assistant", text, {
           kind: "model_message",
           phase: input.metadataPhase,
@@ -364,8 +419,7 @@ async function collectTextAndStructured(input: {
       text = "";
       return;
     }
-    await appendEventMessage(
-      input.loop,
+    await input.context.appendEventMessage(
       createMessage("assistant", text, {
         kind: "model_message",
         phase: input.metadataPhase,
@@ -376,12 +430,11 @@ async function collectTextAndStructured(input: {
   };
 
   for await (const event of input.events) {
-    assertNotAborted(input.loop.signal);
+    assertNotAborted(input.context.signal);
 
     if (event.type === "prompt_message") {
       stepEntries.push({ kind: "prompt", message: event.message });
-      await appendEventMessage(
-        input.loop,
+      await input.context.appendEventMessage(
         createMessage(event.message.role, event.message.content, {
           kind: "phase_prompt",
           phase: event.phase,
@@ -391,18 +444,15 @@ async function collectTextAndStructured(input: {
     }
 
     if (event.type === "model_requested") {
-      const budgetError = consumeBudget(input.loop, "modelCalls");
+      input.context.consumeBudget("modelCalls");
       usage = event.usage;
-      await emit(input.loop, {
+      await input.context.emit({
         type: "model_requested",
         phase: event.phase,
         model: event.model,
         usage: event.usage,
         ts: nowIso(),
       });
-      if (budgetError) {
-        throw budgetError;
-      }
     }
 
     if (event.type === "text_delta") {
@@ -420,7 +470,7 @@ async function collectTextAndStructured(input: {
       const toolCall = Validators.toolCall.Parse(event.toolCall);
       toolCalls.push(toolCall);
       stepEntries.push({ kind: "tool_call", toolCall });
-      await emit(input.loop, {
+      await input.context.emit({
         type: "tool_requested",
         toolCall,
         ts: nowIso(),
@@ -437,14 +487,41 @@ async function collectTextAndStructured(input: {
   return { text: flushedText, structured, toolCalls, stepEntries, usage };
 }
 
-async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: string }> {
+async function recordContextPhaseStep(input: {
+  context: AgentContext;
+  phase: LlmPhase;
+  requestedAtMs: number;
+  entries: ExecutionTurnEntry[];
+  usage?: ModelCallUsage;
+  scope?: "conversation" | "execution" | "diagnostic";
+}): Promise<void> {
+  if (input.entries.length === 0) {
+    return;
+  }
+
+  const session = input.context.state.session;
+  await input.context.record({
+    id: createId("step"),
+    sessionId: session.id,
+    ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
+    phase: input.phase,
+    requestedAtMs: input.requestedAtMs,
+    completedAtMs: Date.now(),
+    model: input.context.config.model,
+    ...(input.usage ? { usage: input.usage } : {}),
+    scope: input.scope ?? "execution",
+    entries: input.entries,
+  });
+}
+
+async function planTask(context: AgentContext, input: PlanInput): Promise<{ task: Task; text: string }> {
   const requestedAtMs = Date.now();
   const collected = await collectTextAndStructured({
-    loop: input,
-    events: input.stream(
-      input.model,
-      { phase: planPhase, session: input.session, runtime: runtimeDepth(input) },
-      { signal: input.signal },
+    context,
+    events: context.config.stream(
+      context.config.model,
+      { phase: planPhase, session: input.session, runtime: input.runtime },
+      { signal: context.signal },
     ),
     metadataPhase: planPhase,
   });
@@ -454,8 +531,8 @@ async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: st
   }
 
   const task = parseTask(collected.structured);
-  await recordPhaseStep({
-    loop: input,
+  await recordContextPhaseStep({
+    context,
     phase: planPhase,
     requestedAtMs,
     entries: collected.stepEntries,
@@ -465,14 +542,17 @@ async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: st
   return { task, text: collected.text };
 }
 
-async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecision & { text: string }> {
+async function routeRequest(
+  context: AgentContext,
+  input: RouteInput,
+): Promise<TaskRoutingDecision & { text: string }> {
   const requestedAtMs = Date.now();
   const collected = await collectTextAndStructured({
-    loop: input,
-    events: input.stream(
-      input.model,
-      { phase: routePhase, session: input.session, runtime: runtimeDepth(input) },
-      { signal: input.signal },
+    context,
+    events: context.config.stream(
+      context.config.model,
+      { phase: routePhase, session: input.session, runtime: input.runtime },
+      { signal: context.signal },
     ),
     metadataPhase: routePhase,
     recordText: false,
@@ -482,22 +562,18 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
     throw new Error("Router did not produce a structured task routing decision.");
   }
 
-  const canStartThreadRoute = Boolean(input.runThread) && input.threadDepth < input.maxThreadDepth;
-  const shouldDefaultToThreadRoute =
-    canStartThreadRoute && !input.session.parentSessionId && !input.session.task && !input.session.goal;
   const decision = scheduleTaskRouting({
     input: latestUserInput(input.session),
     tools: input.tools,
     decision: parseTaskRoutingDecision(collected.structured),
-    defaultNeedsTaskRoute: shouldDefaultToThreadRoute ? "thread" : "task",
-    allowThreadRoute: canStartThreadRoute,
-    workerTask: input.threadDepth > 0 ? input.session.task : undefined,
-    workerGoal: input.threadDepth > 0 ? input.session.goal : undefined,
+    defaultNeedsTaskRoute: input.shouldDefaultToThreadRoute ? "thread" : "task",
+    allowThreadRoute: input.canStartThreadRoute,
+    workerTask: input.workerTask,
+    workerGoal: input.workerGoal,
   });
   collected.stepEntries.push({ kind: "structured_output", content: decision });
   if (decision.route !== "direct") {
-    await appendEventMessage(
-      input,
+    await context.appendEventMessage(
       createMessage("assistant", JSON.stringify(decision), {
         kind: "routing_decision",
         phase: routePhase,
@@ -505,8 +581,8 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
       }),
     );
   }
-  await recordPhaseStep({
-    loop: input,
+  await recordContextPhaseStep({
+    context,
     phase: routePhase,
     requestedAtMs,
     entries: collected.stepEntries,
@@ -520,11 +596,19 @@ function findTool(tools: Tool[], name: string): Tool | undefined {
 }
 
 async function executeToolCall(input: {
-  loop: AgentLoopRuntime;
+  context: AgentContext;
   task: Task;
   toolCall: ToolCall;
 }): Promise<ToolResult> {
-  const tool = findTool(input.loop.tools, input.toolCall.name);
+  if (input.context.config.runtime?.tools) {
+    return input.context.config.runtime.tools({
+      context: input.context,
+      task: input.task,
+      toolCall: input.toolCall,
+    });
+  }
+
+  const tool = findTool(input.context.config.tools, input.toolCall.name);
   if (!tool) {
     const result: ToolResult = {
       toolCallId: input.toolCall.id,
@@ -533,7 +617,7 @@ async function executeToolCall(input: {
       content: null,
       error: `Unknown tool: ${input.toolCall.name}`,
     };
-    await emit(input.loop, {
+    await input.context.emit({
       type: "tool_end",
       toolName: input.toolCall.name,
       result,
@@ -553,7 +637,7 @@ async function executeToolCall(input: {
       content: null,
       error: error instanceof Error ? error.message : "Invalid tool arguments.",
     };
-    await emit(input.loop, {
+    await input.context.emit({
       type: "tool_end",
       toolName: input.toolCall.name,
       result,
@@ -563,16 +647,16 @@ async function executeToolCall(input: {
   }
 
   let decision: Awaited<ReturnType<NonNullable<AgentLoopInput["beforeToolCall"]>>> | undefined;
-  if (input.loop.beforeToolCall) {
-    await emit(input.loop, {
+  if (input.context.config.beforeToolCall) {
+    await input.context.emit({
       type: "tool_approval_requested",
       taskId: input.task.id,
       toolName: tool.name,
       args,
       ts: nowIso(),
     });
-    decision = await input.loop.beforeToolCall({ task: input.task, tool, args });
-    await emit(input.loop, {
+    decision = await input.context.config.beforeToolCall({ task: input.task, tool, args });
+    await input.context.emit({
       type: "tool_approval_result",
       taskId: input.task.id,
       toolName: tool.name,
@@ -590,7 +674,7 @@ async function executeToolCall(input: {
       content: null,
       error: decision.reason,
     };
-    await emit(input.loop, {
+    await input.context.emit({
       type: "tool_blocked",
       toolName: tool.name,
       reason: decision.reason,
@@ -599,12 +683,9 @@ async function executeToolCall(input: {
     return result;
   }
 
-  const budgetError = consumeBudget(input.loop, "toolCalls");
-  if (budgetError) {
-    throw budgetError;
-  }
+  input.context.consumeBudget("toolCalls");
 
-  await emit(input.loop, {
+  await input.context.emit({
     type: "tool_start",
     toolName: tool.name,
     args,
@@ -613,15 +694,15 @@ async function executeToolCall(input: {
 
   try {
     const toolContext = {
-      session: input.loop.session,
+      session: input.context.state.session,
       task: input.task,
       toolCallId: input.toolCall.id,
-      ...(input.loop.runThread ? { runThread: input.loop.runThread } : {}),
+      ...(input.context.runThread ? { runThread: input.context.runThread } : {}),
     };
     const rawResult = await tool.execute(
       args,
       toolContext,
-      input.loop.signal,
+      input.context.signal,
     );
     const normalized = Validators.toolResult.Parse({
       ...rawResult,
@@ -629,16 +710,16 @@ async function executeToolCall(input: {
       toolName: tool.name,
     });
     let result = normalized;
-    if (input.loop.afterToolCall) {
-      await emit(input.loop, {
+    if (input.context.config.afterToolCall) {
+      await input.context.emit({
         type: "tool_result_review_requested",
         taskId: input.task.id,
         toolName: tool.name,
         result: normalized,
         ts: nowIso(),
       });
-      result = await input.loop.afterToolCall({ task: input.task, tool, result: normalized });
-      await emit(input.loop, {
+      result = await input.context.config.afterToolCall({ task: input.task, tool, result: normalized });
+      await input.context.emit({
         type: "tool_result_review_result",
         taskId: input.task.id,
         toolName: tool.name,
@@ -647,7 +728,7 @@ async function executeToolCall(input: {
       });
     }
 
-    await emit(input.loop, {
+    await input.context.emit({
       type: "tool_end",
       toolName: tool.name,
       result,
@@ -662,7 +743,7 @@ async function executeToolCall(input: {
       content: null,
       error: error instanceof Error ? error.message : "Tool execution failed.",
     };
-    await emit(input.loop, {
+    await input.context.emit({
       type: "tool_end",
       toolName: tool.name,
       result,
@@ -672,16 +753,25 @@ async function executeToolCall(input: {
   }
 }
 
-async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: ToolResult[]): Promise<void> {
+async function executeTask(
+  context: AgentContext,
+  input: ExecuteInput,
+): Promise<ExecuteOutput> {
   let collected: Awaited<ReturnType<typeof collectTextAndStructured>>;
   const requestedAtMs = Date.now();
   try {
     collected = await collectTextAndStructured({
-      loop: input,
-      events: input.stream(
-        input.model,
-        { phase: executePhase, session: input.session, task, toolResults, runtime: runtimeDepth(input) },
-        { signal: input.signal },
+      context,
+      events: context.config.stream(
+        context.config.model,
+        {
+          phase: executePhase,
+          session: input.session,
+          task: input.task,
+          toolResults: input.toolResults,
+          runtime: input.runtime,
+        },
+        { signal: context.signal },
       ),
       metadataPhase: executePhase,
     });
@@ -690,35 +780,33 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
       throw error;
     }
     const result = createInvalidExecuteToolResult(error);
-    toolResults.push(result);
-    await appendEventMessage(
-      input,
+    input.toolResults.push(result);
+    await context.appendEventMessage(
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
         toolName: result.toolName,
         scope: "execution",
       }),
     );
-    await recordPhaseStep({
-      loop: input,
+    await recordContextPhaseStep({
+      context,
       phase: executePhase,
       requestedAtMs,
       entries: [{ kind: "tool_result", result }],
       scope: "diagnostic",
     });
-    return;
-  }
-
-  if (collected.text.trim().length > 0) {
-    input.lastExecuteText = collected.text;
+    return {
+      text: "",
+      toolCalls: [],
+      taskOutput: createToolTaskOutput(input.toolResults),
+    };
   }
 
   for (const toolCall of collected.toolCalls) {
-    const result = await executeToolCall({ loop: input, task, toolCall });
-    toolResults.push(result);
+    const result = await executeToolCall({ context, task: input.task, toolCall });
+    input.toolResults.push(result);
     collected.stepEntries.push({ kind: "tool_result", result });
-    await appendEventMessage(
-      input,
+    await context.appendEventMessage(
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
         toolName: result.toolName,
@@ -727,23 +815,28 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
     );
   }
 
-  await recordPhaseStep({
-    loop: input,
+  await recordContextPhaseStep({
+    context,
     phase: executePhase,
     requestedAtMs,
     entries: collected.stepEntries,
     usage: collected.usage,
   });
+
+  return {
+    text: collected.text,
+    toolCalls: collected.toolCalls,
+    taskOutput: createToolTaskOutput(input.toolResults),
+  };
 }
 
 async function verifyTask(
-  input: AgentLoopRuntime,
-  task: Task,
-  taskOutput: TaskOutput,
+  context: AgentContext,
+  input: VerifyInput,
 ): Promise<VerificationResult> {
-  await emit(input, {
+  await context.emit({
     type: "verification_start",
-    taskId: task.id,
+    taskId: input.task.id,
     ts: nowIso(),
   });
 
@@ -751,18 +844,18 @@ async function verifyTask(
   const requestedAtMs = Date.now();
   try {
     collected = await collectTextAndStructured({
-      loop: input,
-      events: input.stream(
-        input.model,
+      context,
+      events: context.config.stream(
+        context.config.model,
         {
           phase: verifyPhase,
           session: input.session,
-          task,
-          taskOutput,
-          criteria: task.acceptanceCriteria,
-          runtime: runtimeDepth(input),
+          task: input.task,
+          taskOutput: input.taskOutput,
+          criteria: input.criteria,
+          runtime: input.runtime,
         },
-        { signal: input.signal },
+        { signal: context.signal },
       ),
       metadataPhase: verifyPhase,
     });
@@ -770,17 +863,17 @@ async function verifyTask(
     if (!isInvalidModelSchemaError(error)) {
       throw error;
     }
-    const result = createInvalidModelVerification(task, error);
-    await recordPhaseStep({
-      loop: input,
+    const result = createInvalidModelVerification(input.task, error);
+    await recordContextPhaseStep({
+      context,
       phase: verifyPhase,
       requestedAtMs,
       entries: [{ kind: "structured_output", content: result }],
       scope: "diagnostic",
     });
-    await emit(input, {
+    await context.emit({
       type: "verification_end",
-      taskId: task.id,
+      taskId: input.task.id,
       result,
       ts: nowIso(),
     });
@@ -793,22 +886,88 @@ async function verifyTask(
         passed: false,
         message: "Verifier did not produce structured output.",
       };
-  await recordPhaseStep({
-    loop: input,
+  await recordContextPhaseStep({
+    context,
     phase: verifyPhase,
     requestedAtMs,
     entries: collected.stepEntries,
     usage: collected.usage,
   });
 
-  await emit(input, {
+  await context.emit({
     type: "verification_end",
-    taskId: task.id,
+    taskId: input.task.id,
     result,
     ts: nowIso(),
   });
 
   return result;
+}
+
+type RunPhaseOutput<TPhase extends LlmPhase> =
+  | { type: "output"; output: PhaseOutputMap[TPhase] }
+  | { type: "abort"; outcome: Outcome };
+
+function hasAbort(value: unknown): value is { abort: Outcome } {
+  return isRecord(value) && isRecord(value.abort);
+}
+
+function hasSkip<TPhase extends LlmPhase>(value: unknown): value is { skip: PhaseOutputMap[TPhase] } {
+  return isRecord(value) && "skip" in value;
+}
+
+function hasInput<TPhase extends LlmPhase>(value: unknown): value is { input: PhaseInputMap[TPhase] } {
+  return isRecord(value) && "input" in value;
+}
+
+function hasOutput<TPhase extends LlmPhase>(value: unknown): value is { output: PhaseOutputMap[TPhase] } {
+  return isRecord(value) && "output" in value;
+}
+
+function hasRetry<TPhase extends LlmPhase>(value: unknown): value is { retry: PhaseInputMap[TPhase] } {
+  return isRecord(value) && "retry" in value;
+}
+
+async function runPhase<TPhase extends LlmPhase>(
+  context: AgentContext,
+  phase: TPhase,
+  input: PhaseInputMap[TPhase],
+  runner: (phaseInput: PhaseInputMap[TPhase]) => Promise<PhaseOutputMap[TPhase]>,
+): Promise<RunPhaseOutput<TPhase>> {
+  let currentInput = input;
+  let retries = 0;
+
+  while (true) {
+    const before = await context.config.runtime?.beforePhase?.(context, phase, currentInput);
+    if (hasAbort(before)) {
+      return { type: "abort", outcome: before.abort };
+    }
+    if (hasSkip<TPhase>(before)) {
+      return { type: "output", output: before.skip };
+    }
+    if (hasInput<TPhase>(before) && before.input) {
+      currentInput = before.input;
+    }
+
+    const output = await runner(currentInput);
+    const after = await context.config.runtime?.afterPhase?.(context, phase, output);
+    if (hasAbort(after)) {
+      return { type: "abort", outcome: after.abort };
+    }
+    if (hasRetry<TPhase>(after) && after.retry) {
+      retries += 1;
+      if (retries > 3) {
+        throw new Error(`Runtime requested too many ${phase} phase retries.`);
+      }
+      currentInput = after.retry;
+      continue;
+    }
+    if (hasOutput<TPhase>(after) && after.output) {
+      return { type: "output", output: after.output };
+    }
+
+    return { type: "output", output };
+  }
 }
 
 function shortThreadTitle(text: string): string {
@@ -939,7 +1098,23 @@ async function executeThreadRoute(
     });
   }
 
-  const verification = await verifyTask(input, task, threadOutput);
+  input.status = "verifying";
+  const verifyPhaseResult = await runPhase(
+    createAgentContext(input),
+    verifyPhase,
+    {
+      session: input.session,
+      task,
+      taskOutput: threadOutput,
+      criteria: task.acceptanceCriteria,
+      runtime: runtimeDepth(input),
+    },
+    (phaseInput) => verifyTask(createAgentContext(input), phaseInput),
+  );
+  if (verifyPhaseResult.type === "abort") {
+    return verifyPhaseResult.outcome;
+  }
+  const verification = verifyPhaseResult.output;
   if (verification.passed) {
     task.status = "passed";
     return createOutcome(task, verification);
@@ -957,9 +1132,11 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     threadDepth: input.threadDepth ?? 0,
     maxThreadDepth: resolveMaxThreadDepth(input.budget),
     verifyTasks: input.verifyTasks ?? true,
+    status: "routing",
+    attempt: 0,
+    toolResults: [],
   };
   const maxAttempts = input.maxAttempts ?? 2;
-  let currentTask: Task | undefined;
   let chatLogEnded = false;
   const endChatLog = async () => {
     if (!chatLogEnded) {
@@ -980,7 +1157,32 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     }
     await emitChatStart(runtime);
 
-    const routed = await routeRequest(runtime);
+    runtime.status = "routing";
+    const canStartThreadRoute = Boolean(runtime.runThread) && runtime.threadDepth < runtime.maxThreadDepth;
+    const routePhaseResult = await runPhase(
+      createAgentContext(runtime),
+      routePhase,
+      {
+        session: runtime.session,
+        runtime: runtimeDepth(runtime),
+        tools: runtime.tools,
+        canStartThreadRoute,
+        shouldDefaultToThreadRoute:
+          canStartThreadRoute &&
+          !runtime.session.parentSessionId &&
+          !runtime.session.task &&
+          !runtime.session.goal,
+        workerTask: runtime.threadDepth > 0 ? runtime.session.task : undefined,
+        workerGoal: runtime.threadDepth > 0 ? runtime.session.goal : undefined,
+      },
+      (phaseInput) => routeRequest(createAgentContext(runtime), phaseInput),
+    );
+    if (routePhaseResult.type === "abort") {
+      await endChatLog();
+      await emit(runtime, { type: "outcome", outcome: routePhaseResult.outcome, ts: nowIso() });
+      return routePhaseResult.outcome;
+    }
+    const routed = routePhaseResult.output;
     if (routed.route === "direct") {
       const outcome = createDirectOutcome(routed.message);
       await publishConversationAssistantMessage(runtime, outcome.message, { kind: "direct_answer" });
@@ -1002,9 +1204,24 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       return outcome;
     }
 
-    const planned = await planTask(runtime);
+    runtime.status = "planning";
+    const planPhaseResult = await runPhase(
+      createAgentContext(runtime),
+      planPhase,
+      {
+        session: runtime.session,
+        runtime: runtimeDepth(runtime),
+      },
+      (phaseInput) => planTask(createAgentContext(runtime), phaseInput),
+    );
+    if (planPhaseResult.type === "abort") {
+      await endChatLog();
+      await emit(runtime, { type: "outcome", outcome: planPhaseResult.outcome, ts: nowIso() });
+      return planPhaseResult.outcome;
+    }
+    const planned = planPhaseResult.output;
     const task = planned.task;
-    currentTask = task;
+    runtime.currentTask = task;
 
     await emit(runtime, {
       type: "task_created",
@@ -1012,11 +1229,13 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       ts: nowIso(),
     });
 
-    const toolResults: ToolResult[] = [];
     let lastVerification: VerificationResult | undefined;
+    let lastTaskOutput: TaskOutput = createToolTaskOutput(runtime.toolResults);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       assertNotAborted(runtime.signal);
+      runtime.status = "executing";
+      runtime.attempt = attempt;
       task.status = "running";
       task.attempts = attempt;
 
@@ -1027,7 +1246,26 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         ts: nowIso(),
       });
 
-      await executeTask(runtime, task, toolResults);
+      const executePhaseResult = await runPhase(
+        createAgentContext(runtime),
+        executePhase,
+        {
+          session: runtime.session,
+          task,
+          toolResults: runtime.toolResults,
+          runtime: runtimeDepth(runtime),
+        },
+        (phaseInput) => executeTask(createAgentContext(runtime), phaseInput),
+      );
+      if (executePhaseResult.type === "abort") {
+        await endChatLog();
+        await emit(runtime, { type: "outcome", outcome: executePhaseResult.outcome, ts: nowIso() });
+        return executePhaseResult.outcome;
+      }
+      if (executePhaseResult.output.text.trim().length > 0) {
+        runtime.lastExecuteText = executePhaseResult.output.text;
+      }
+      lastTaskOutput = executePhaseResult.output.taskOutput;
 
       await emit(runtime, {
         type: "task_end",
@@ -1037,7 +1275,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
       });
 
       if (!runtime.verifyTasks) {
-        const outcome = createUnverifiedTaskOutcome(runtime, task, toolResults);
+        const outcome = createUnverifiedTaskOutcome(runtime, task, runtime.toolResults);
         task.status = outcome.passed ? "passed" : "failed";
         if (outcome.passed) {
           await publishConversationAssistantMessage(runtime, outcome.message, {
@@ -1050,7 +1288,25 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
         return outcome;
       }
 
-      lastVerification = await verifyTask(runtime, task, createToolTaskOutput(toolResults));
+      runtime.status = "verifying";
+      const verifyPhaseResult = await runPhase(
+        createAgentContext(runtime),
+        verifyPhase,
+        {
+          session: runtime.session,
+          task,
+          taskOutput: lastTaskOutput,
+          criteria: task.acceptanceCriteria,
+          runtime: runtimeDepth(runtime),
+        },
+        (phaseInput) => verifyTask(createAgentContext(runtime), phaseInput),
+      );
+      if (verifyPhaseResult.type === "abort") {
+        await endChatLog();
+        await emit(runtime, { type: "outcome", outcome: verifyPhaseResult.outcome, ts: nowIso() });
+        return verifyPhaseResult.outcome;
+      }
+      lastVerification = verifyPhaseResult.output;
       if (lastVerification.passed) {
         task.status = "passed";
         const outcome = createOutcome(task, lastVerification);
@@ -1071,14 +1327,14 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
     return outcome;
   } catch (error) {
     if (error instanceof BudgetExceededError) {
-      const outcome = createBudgetExceededOutcome(error, currentTask);
+      const outcome = createBudgetExceededOutcome(error, runtime.currentTask);
       await emit(runtime, {
         type: "budget_exceeded",
         resource: error.resource,
         limit: error.limit,
         usage: error.usage,
         message: error.message,
-        ...(currentTask ? { taskId: currentTask.id } : {}),
+        ...(runtime.currentTask ? { taskId: runtime.currentTask.id } : {}),
         ts: nowIso(),
       });
       await endChatLog();
