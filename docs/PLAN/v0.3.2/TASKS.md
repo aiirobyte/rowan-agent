@@ -24,7 +24,7 @@
 | V032-101 | M1 | Use immutable Session `input` | session | P0 | V032-001 | done | persisted session and session snapshots use `input`; append turn does not mutate it |
 | V032-102 | M1 | Add optional Session `task` and `goal` | session | P0 | V032-101 | done | create/persist/load/snapshot preserve task and goal |
 | V032-103 | M1 | Introduce current-turn prompt helper | agent/context | P0 | V032-101 | done | route and plan use latest user turn after multi-turn append |
-| V032-201 | M2 | Add `runThread()` using normal `runAgentLoop()` | agent | P0 | V032-102 | done | child session has parent id, input, task, goal, and normal events |
+| V032-201 | M2 | Add `runAgentThread()` using normal `runAgentLoop()` | agent | P0 | V032-102 | done | child session has parent id, input, task, goal, and normal events |
 | V032-202 | M2 | Add `Agent.startThread()` | agent | P0 | V032-201 | done | current Agent can start child thread with inherited runtime config |
 | V032-203 | M2 | Remove old predecessor API | agent | P0 | V032-202 | done | public API exposes thread primitives only |
 | V032-301 | M3 | Extend route schema to direct/task/thread | agent | P0 | V032-103 | done | parser accepts the required `route` field |

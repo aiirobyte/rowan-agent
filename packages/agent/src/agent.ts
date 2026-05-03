@@ -1,6 +1,6 @@
 import { runAgentLoop } from "./loop";
-import { runThread } from "./thread";
-export { runThread } from "./thread";
+import { runAgentThread } from "./thread";
+export { runAgentThread } from "./thread";
 import {
   appendUserTurn,
   createSession,
@@ -193,7 +193,7 @@ export class Agent {
       throw new Error("Threads require a parent session.");
     }
 
-    return runThread({
+    return runAgentThread({
       ...input,
       parentSessionId,
       systemPrompt: this.options.systemPrompt,

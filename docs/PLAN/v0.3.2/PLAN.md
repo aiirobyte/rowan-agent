@@ -78,7 +78,7 @@ type ThreadInput = {
 - 创建 child Session 时写入 `input = prompt`，并透传 `task` / `goal`。
 - child Session 继续使用 `runAgentLoop()`，不引入专门的 thread runner loop。
 - child thread 可以继续显式创建 nested thread，但默认 worker 路由应优先完成自己的 task / goal。
-- 公开 API 只提供 `runThread()` / `Agent.startThread()`。
+- 公开 API 只提供 `runAgentThread()` / `Agent.startThread()`。
 - 新事件使用 `thread_created` 和 `thread_end`；trace inspector 需要识别 thread parent/child 关系。
 
 ## 4. Routing Rules

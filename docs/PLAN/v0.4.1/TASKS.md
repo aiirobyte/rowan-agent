@@ -33,7 +33,7 @@
 | V041-003 | M0 | Lock no-core-folder constraint | docs | P0 | V041-001 | implemented | docs state no `packages/agent/src/core/` and no new core package |
 | V041-004 | M0 | Lock no compatibility re-export constraint | docs | P0 | V041-001 | implemented | docs state removed runtime loop/thread/phase exports are not preserved |
 | V041-101 | M1 | Move Agent loop into `agent` | agent/runtime | P0 | V041-004 | implemented | `packages/agent/src/loop.ts` owns `runAgentLoop`; runtime loop export removed |
-| V041-102 | M1 | Move thread runner into `agent` | agent/runtime | P0 | V041-101 | implemented | `packages/agent/src/thread.ts` owns `runThread`; runtime thread export removed |
+| V041-102 | M1 | Move thread runner into `agent` | agent/runtime | P0 | V041-101 | implemented | `packages/agent/src/thread.ts` owns `runAgentThread`; runtime thread export removed |
 | V041-103 | M1 | Move phase modules into `agent` | agent/runtime | P0 | V041-101 | implemented | `packages/agent/src/phases/*` owns route/plan/execute/verify phase metadata/helpers |
 | V041-104 | M1 | Decide turn recorder ownership during move | agent/runtime | P1 | V041-101 | implemented | turn recording moved into `agent` so the Agent loop does not import runtime-owned driver semantics |
 | V041-201 | M2 | Remove redundant `AgentRunner` wrapper | agent/runtime | P1 | V041-101 | implemented | `Agent.prompt()` calls the Agent loop directly |

@@ -42,7 +42,7 @@ async function emitThreadEvent(
   await emit?.(event);
 }
 
-export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult> {
+export async function runAgentThread(input: ThreadRunInput): Promise<ThreadRunResult> {
   const threadDepth = input.threadDepth ?? 1;
   const maxThreadDepth = resolveMaxThreadDepth(input.budget);
   const verifyTasks = input.verify ?? true;
@@ -104,7 +104,7 @@ export async function runThread(input: ThreadRunInput): Promise<ThreadRunResult>
   }
 
   const runNestedThread = (childInput: AgentThreadInput): Promise<ThreadRunResult> =>
-    runThread({
+    runAgentThread({
       ...childInput,
       parentSessionId: childInput.parentSessionId ?? session.id,
       threadDepth: threadDepth + 1,

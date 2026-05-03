@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { createSession } from "@rowan-agent/session";
-import { Agent, runThread } from "../src/agent";
+import { Agent, runAgentThread } from "../src/agent";
 import { createDefaultCriteria } from "../src/task";
 import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-test("runThread creates a session with explicit tools and skills", async () => {
+test("runAgentThread creates a session with explicit tools and skills", async () => {
   const events: AgentEvent[] = [];
   const skill = {
     id: "session-skill",
@@ -17,7 +17,7 @@ test("runThread creates a session with explicit tools and skills", async () => {
     toolNames: ["echo"],
   };
 
-  const result = await runThread({
+  const result = await runAgentThread({
     parentSessionId: "ses_parent",
     prompt: "use echo tool",
     systemPrompt: "Session system",
@@ -98,7 +98,7 @@ test("Agent.startThread defaults to the current parent session and does not inhe
 });
 
 test("thread model budget returns a structured failed outcome", async () => {
-  const result = await runThread({
+  const result = await runAgentThread({
     parentSessionId: "ses_parent",
     prompt: "hello",
     systemPrompt: "Session system",
@@ -137,7 +137,7 @@ test("thread tool budget stops before executing extra tools", async () => {
     },
   };
 
-  const result = await runThread({
+  const result = await runAgentThread({
     parentSessionId: "ses_parent",
     prompt: "use echo tool",
     systemPrompt: "Session system",
