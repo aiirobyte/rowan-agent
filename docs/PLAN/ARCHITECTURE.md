@@ -347,14 +347,16 @@ packages/agent/src/
 packages/runtime/src/
   index.ts
   runner.ts
-  run-agent-loop.ts
+  loop.ts
   runtime.ts
   turn-recorder.ts
-  routing/scheduler.ts
+  phases/index.ts
+  phases/types.ts
+  phases/routing.ts
   phases/route.ts
   phases/plan.ts
   phases/execute.ts
-  phases/verify.ts
+  phases/verifying.ts
   hooks/
   mcp/
   skills/

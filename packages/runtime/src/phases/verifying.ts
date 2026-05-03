@@ -7,6 +7,13 @@ import type {
   VerificationResult,
 } from "../types";
 import { parseVerificationResult } from "../task";
+import type { RuntimePhaseDefinition } from "./types";
+
+export const verifyingPhase = {
+  phase: "verify",
+  state: "verifying",
+  label: "Verify task output",
+} as const satisfies RuntimePhaseDefinition<"verify">;
 
 export async function verifyTask(input: {
   model: ModelRef;
@@ -21,7 +28,7 @@ export async function verifyTask(input: {
   for await (const event of input.stream(
     input.model,
     {
-      phase: "verify",
+      phase: verifyingPhase.phase,
       session: input.session,
       task: input.task,
       taskOutput: input.taskOutput,

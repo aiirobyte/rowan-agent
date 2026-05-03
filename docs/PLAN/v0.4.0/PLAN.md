@@ -89,11 +89,13 @@ packages/runtime/src/
   index.ts
   dir.ts
   runner.ts
-  run-agent-loop.ts
+  loop.ts
   thread.ts
   turn-recorder.ts
-  phases/verify.ts
-  routing/scheduler.ts
+  phases/index.ts
+  phases/types.ts
+  phases/routing.ts
+  phases/verifying.ts
   hooks/index.ts
   mcp/
   skills/

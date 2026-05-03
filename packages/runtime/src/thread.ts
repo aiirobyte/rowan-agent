@@ -3,7 +3,7 @@ import {
   nowIso,
   type Session,
 } from "@rowan-agent/session";
-import { runAgentLoop } from "./run-agent-loop";
+import { runAgentLoop } from "./loop";
 import {
   createId,
   resolveMaxThreadDepth,

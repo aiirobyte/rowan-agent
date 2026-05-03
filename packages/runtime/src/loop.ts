@@ -13,7 +13,8 @@ import {
   parseTaskRoutingDecision,
   parseVerificationResult,
 } from "./task";
-import { scheduleTaskRouting } from "./routing/scheduler";
+import { runtimePhases } from "./phases";
+import { scheduleTaskRouting } from "./phases/routing";
 import type {
   AgentEvent,
   AgentLoopInput,
@@ -41,6 +42,11 @@ import { recordPhaseStep } from "./turn-recorder";
 
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
+
+const routePhase = runtimePhases.route.phase;
+const planPhase = runtimePhases.plan.phase;
+const executePhase = runtimePhases.execute.phase;
+const verifyPhase = runtimePhases.verify.phase;
 
 type AgentLoopRuntime = AgentLoopInput & {
   messageLog: AgentMessage[];
@@ -437,10 +443,10 @@ async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: st
     loop: input,
     events: input.stream(
       input.model,
-      { phase: "plan", session: input.session, runtime: runtimeDepth(input) },
+      { phase: planPhase, session: input.session, runtime: runtimeDepth(input) },
       { signal: input.signal },
     ),
-    metadataPhase: "plan",
+    metadataPhase: planPhase,
   });
 
   if (!collected.structured) {
@@ -450,7 +456,7 @@ async function planTask(input: AgentLoopRuntime): Promise<{ task: Task; text: st
   const task = parseTask(collected.structured);
   await recordPhaseStep({
     loop: input,
-    phase: "plan",
+    phase: planPhase,
     requestedAtMs,
     entries: collected.stepEntries,
     usage: collected.usage,
@@ -465,10 +471,10 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
     loop: input,
     events: input.stream(
       input.model,
-      { phase: "route", session: input.session, runtime: runtimeDepth(input) },
+      { phase: routePhase, session: input.session, runtime: runtimeDepth(input) },
       { signal: input.signal },
     ),
-    metadataPhase: "route",
+    metadataPhase: routePhase,
     recordText: false,
   });
 
@@ -494,14 +500,14 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
       input,
       createMessage("assistant", JSON.stringify(decision), {
         kind: "routing_decision",
-        phase: "route",
+        phase: routePhase,
         scope: "execution",
       }),
     );
   }
   await recordPhaseStep({
     loop: input,
-    phase: "route",
+    phase: routePhase,
     requestedAtMs,
     entries: collected.stepEntries,
     usage: collected.usage,
@@ -674,10 +680,10 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
       loop: input,
       events: input.stream(
         input.model,
-        { phase: "execute", session: input.session, task, toolResults, runtime: runtimeDepth(input) },
+        { phase: executePhase, session: input.session, task, toolResults, runtime: runtimeDepth(input) },
         { signal: input.signal },
       ),
-      metadataPhase: "execute",
+      metadataPhase: executePhase,
     });
   } catch (error) {
     if (!isInvalidModelSchemaError(error)) {
@@ -695,7 +701,7 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
     );
     await recordPhaseStep({
       loop: input,
-      phase: "execute",
+      phase: executePhase,
       requestedAtMs,
       entries: [{ kind: "tool_result", result }],
       scope: "diagnostic",
@@ -723,7 +729,7 @@ async function executeTask(input: AgentLoopRuntime, task: Task, toolResults: Too
 
   await recordPhaseStep({
     loop: input,
-    phase: "execute",
+    phase: executePhase,
     requestedAtMs,
     entries: collected.stepEntries,
     usage: collected.usage,
@@ -749,7 +755,7 @@ async function verifyTask(
       events: input.stream(
         input.model,
         {
-          phase: "verify",
+          phase: verifyPhase,
           session: input.session,
           task,
           taskOutput,
@@ -758,7 +764,7 @@ async function verifyTask(
         },
         { signal: input.signal },
       ),
-      metadataPhase: "verify",
+      metadataPhase: verifyPhase,
     });
   } catch (error) {
     if (!isInvalidModelSchemaError(error)) {
@@ -767,7 +773,7 @@ async function verifyTask(
     const result = createInvalidModelVerification(task, error);
     await recordPhaseStep({
       loop: input,
-      phase: "verify",
+      phase: verifyPhase,
       requestedAtMs,
       entries: [{ kind: "structured_output", content: result }],
       scope: "diagnostic",
@@ -789,7 +795,7 @@ async function verifyTask(
       };
   await recordPhaseStep({
     loop: input,
-    phase: "verify",
+    phase: verifyPhase,
     requestedAtMs,
     entries: collected.stepEntries,
     usage: collected.usage,
@@ -911,7 +917,7 @@ async function executeThreadRoute(
   );
   await recordPhaseStep({
     loop: input,
-    phase: "execute",
+    phase: executePhase,
     requestedAtMs: Date.now(),
     entries: [{ kind: "structured_output", content: threadOutput }],
   });

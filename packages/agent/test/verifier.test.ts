@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createSession as createBaseSession } from "@rowan-agent/session";
-import { verifyTask } from "../src/verifier";
+import { verifyTask } from "@rowan-agent/runtime/phases/verifying";
 import { parseTask, createDefaultCriteria } from "../src/task";
 import { createId, type AgentEvent } from "../src/types";
 import { scriptedStream } from "./support/scripted-stream";

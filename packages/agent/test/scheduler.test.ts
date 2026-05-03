@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import { hasExplicitToolRequest, scheduleTaskRouting } from "../src/scheduler";
+import { hasExplicitToolRequest, scheduleTaskRouting } from "@rowan-agent/runtime/phases/routing";
 import type { Tool } from "../src/types";
 
 const bashTool: Tool<{ command: string }> = {

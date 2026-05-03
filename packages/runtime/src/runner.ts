@@ -1,4 +1,4 @@
-import { runAgentLoop } from "./run-agent-loop";
+import { runAgentLoop } from "./loop";
 import type { AgentLoopInput, Outcome } from "./types";
 
 export class AgentRunner {
