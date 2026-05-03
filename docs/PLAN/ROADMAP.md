@@ -1,9 +1,9 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.4.0-planning
+> 版本：v0.4.0
 > 日期：2026-05-03
-> 状态：in-progress
-> 进度：v0.0.0 到 v0.3.5 已实现；v0.4.0+ 路线已重排为 DCP-first architecture hardening
+> 状态：implemented
+> 进度：v0.0.0 到 v0.4.0 已实现；下一步进入 v0.5.0 context projection/provider IR
 > 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`
 
 ## 1. Product Positioning
@@ -47,6 +47,7 @@ Planning docs use this status enum:
 | v0.3.3 | Storage Port + Scoped Context | implemented | `AgentStore`, JSON-backed steps, `ExecutionTurn`, `ContextScope`, phase prompt allowlists |
 | v0.3.4 | Store Package Consolidation | implemented | `packages/store`, in-memory/json stores, `AgentStore` package boundary cleanup |
 | v0.3.5 | Pino Runtime Logging | implemented | `packages/logging`, run logs, redaction, removal of self-owned trace package |
+| v0.4.0 | Protocol Boundary + Runtime Split | implemented | `packages/protocol`, runtime-owned runner/loop/tools/scheduler/skills/hooks/MCP boundary, `context -> protocol`, and small `agent` facade |
 
 ## 3. Current Architecture Principles
 
@@ -111,34 +112,38 @@ Required changes:
 
 ```text
 packages/protocol/src/
+  context.ts
   index.ts
   model.ts
   tool.ts
   phase.ts
+  task.ts
   turn.ts
+  validators.ts
 
 packages/agent/src/
   index.ts
   agent.ts
-  thread.ts
-  lifecycle.ts
+  agent-loop.ts
+  scheduler.ts
+  task.ts
+  tools.ts
+  types.ts
+  verifier.ts
 
 packages/runtime/src/
   index.ts
   dir.ts
   runner.ts
   run-agent-loop.ts
-  runtime.ts
+  thread.ts
   turn-recorder.ts
-  routing/scheduler.ts
-  phases/route.ts
-  phases/plan.ts
-  phases/execute.ts
   phases/verify.ts
+  routing/scheduler.ts
   hooks/
   mcp/
-  skills/
-  tools/
+  skills.ts
+  tools.ts
 ```
 
 ### 5.3 Acceptance Criteria

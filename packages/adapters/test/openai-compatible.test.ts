@@ -7,9 +7,9 @@ import {
   type OpenAICompatibleFetch,
   resolveOpenAICompatibleConfig,
 } from "../src/openai-compatible";
-import { createDefaultCriteria } from "@rowan-agent/agent/task";
+import { createDefaultCriteria, type LlmContext, type ModelStreamEvent, type Task } from "@rowan-agent/protocol";
 import { createId, createSession } from "@rowan-agent/session";
-import type { LlmContext, ModelStreamEvent, Task, Tool } from "@rowan-agent/agent/types";
+import type { Tool } from "@rowan-agent/runtime/types";
 import { echoTool } from "../../agent/test/support/echo-tool";
 
 function jsonResponse(content: string, usage?: Record<string, number>): Response {

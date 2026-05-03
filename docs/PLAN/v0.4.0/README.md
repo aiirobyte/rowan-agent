@@ -2,7 +2,7 @@
 
 > 版本：v0.4.0
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 上游文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.3.5/PLAN.md`
 
 ## 文档

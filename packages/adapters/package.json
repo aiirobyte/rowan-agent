@@ -1,6 +1,6 @@
 {
   "name": "@rowan-agent/adapters",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,7 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/agent": "workspace:*",
-    "@rowan-agent/context": "workspace:*"
+    "@rowan-agent/context": "workspace:*",
+    "@rowan-agent/protocol": "workspace:*"
   }
 }

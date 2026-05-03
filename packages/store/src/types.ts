@@ -7,49 +7,49 @@ import {
   type Session,
   type SessionStore,
 } from "@rowan-agent/session";
+import type {
+  ExecutionTurn,
+  ExecutionTurnEntry,
+  LlmPhase,
+  ModelCallUsage,
+  ModelRef,
+  StepFilter,
+  ToolCall,
+  ToolResult,
+} from "@rowan-agent/protocol";
 
-export const LlmPhaseSchema = Type.Union([
+const LlmPhaseSchema = Type.Union([
   Type.Literal("route"),
   Type.Literal("plan"),
   Type.Literal("execute"),
   Type.Literal("verify"),
 ]);
 
-export type LlmPhase = Type.Static<typeof LlmPhaseSchema>;
-
-export const ModelRefSchema = Type.Object({
+const ModelRefSchema = Type.Object({
   provider: Type.String(),
   name: Type.String(),
 });
 
-export type ModelRef = Type.Static<typeof ModelRefSchema>;
-
-export const ModelCallUsageSchema = Type.Object({
+const ModelCallUsageSchema = Type.Object({
   inputMessages: Type.Number(),
   inputTokens: Type.Optional(Type.Number()),
   outputTokens: Type.Optional(Type.Number()),
   totalTokens: Type.Optional(Type.Number()),
 });
 
-export type ModelCallUsage = Type.Static<typeof ModelCallUsageSchema>;
-
-export const ToolCallSchema = Type.Object({
+const ToolCallSchema = Type.Object({
   id: Type.String(),
   name: Type.String(),
   args: Type.Unknown(),
 });
 
-export type ToolCall = Type.Static<typeof ToolCallSchema>;
-
-export const ToolResultSchema = Type.Object({
+const ToolResultSchema = Type.Object({
   toolCallId: Type.String(),
   toolName: Type.String(),
   ok: Type.Boolean(),
   content: Type.Unknown(),
   error: Type.Optional(Type.String()),
 });
-
-export type ToolResult = Type.Static<typeof ToolResultSchema>;
 
 const PromptStepMessageSchema = Type.Object({
   role: AgentMessageSchema.properties.role,
@@ -79,8 +79,6 @@ export const ExecutionTurnEntrySchema = Type.Union([
   }),
 ]);
 
-export type ExecutionTurnEntry = Type.Static<typeof ExecutionTurnEntrySchema>;
-
 export const ExecutionTurnSchema = Type.Object({
   id: Type.String(),
   sessionId: Type.String(),
@@ -93,14 +91,6 @@ export const ExecutionTurnSchema = Type.Object({
   scope: ContextScopeSchema,
   entries: Type.Array(ExecutionTurnEntrySchema),
 });
-
-export type ExecutionTurn = Type.Static<typeof ExecutionTurnSchema>;
-
-export type StepFilter = {
-  phase?: LlmPhase;
-  afterMs?: number;
-  scope?: ExecutionTurn["scope"];
-};
 
 export type AgentStore<TSession extends Session<unknown> = Session<unknown>> =
   SessionStore<TSession> & {
@@ -126,3 +116,14 @@ export function filterSteps(steps: readonly ExecutionTurn[], filter: StepFilter 
 }
 
 export type PromptStepMessage = Pick<AgentMessage, "role" | "content">;
+
+export type {
+  ExecutionTurn,
+  ExecutionTurnEntry,
+  LlmPhase,
+  ModelCallUsage,
+  ModelRef,
+  StepFilter,
+  ToolCall,
+  ToolResult,
+} from "@rowan-agent/protocol";

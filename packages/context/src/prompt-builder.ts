@@ -1,5 +1,4 @@
-import type { LlmContext, Tool } from "@rowan-agent/agent";
-import { isConversationMessage, latestUserInput, type AgentMessage } from "@rowan-agent/session";
+import type { AgentContextMessage, LlmContext, ToolDefinition } from "@rowan-agent/protocol";
 import {
   buildExecutePrompt,
   buildPlanPrompt,
@@ -9,6 +8,7 @@ import {
 } from "./prompt";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+export type PromptTool = ToolDefinition;
 
 export type OpenAICompatiblePrompt = {
   messages: ChatMessage[];
@@ -30,7 +30,7 @@ function summarizeText(text: string, maxLength = 700): string {
   return compact.length > maxLength ? `${compact.slice(0, maxLength - 3)}...` : compact;
 }
 
-function serializeTools(tools: Tool[] = []): SerializableTool[] {
+function serializeTools(tools: PromptTool[] = []): SerializableTool[] {
   return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -51,7 +51,22 @@ function buildSystemMessage(context: LlmContext): ChatMessage {
   return { role: "system", content: buildSystemPrompt(context.session.systemPrompt) };
 }
 
-function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
+function isConversationMessage(message: AgentContextMessage): boolean {
+  return message.metadata?.scope === "conversation";
+}
+
+function latestUserInput(context: LlmContext): string {
+  for (let index = context.session.messages.length - 1; index >= 0; index -= 1) {
+    const message = context.session.messages[index];
+    if (message.role === "user" && isConversationMessage(message)) {
+      return message.content;
+    }
+  }
+
+  return context.session.input;
+}
+
+function toConversationMessage(message: AgentContextMessage): ChatMessage | undefined {
   if (!isConversationMessage(message)) {
     return undefined;
   }
@@ -66,7 +81,7 @@ function toConversationMessage(message: AgentMessage): ChatMessage | undefined {
   };
 }
 
-function conversationForPhase(context: LlmContext): AgentMessage[] {
+function conversationForPhase(context: LlmContext): AgentContextMessage[] {
   const conversation = context.session.messages.filter(isConversationMessage);
 
   if (context.phase === "route") {
@@ -87,9 +102,9 @@ function buildConversationMessages(context: LlmContext): ChatMessage[] {
   });
 }
 
-function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, tools: Tool[]): string {
+function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, tools: PromptTool[]): string {
   return buildPlanPrompt({
-    currentUserInputJson: toJson(latestUserInput(context.session)),
+    currentUserInputJson: toJson(latestUserInput(context)),
     sessionInputJson: toJson(context.session.input),
     sessionTaskJson: toJson(context.session.task ?? null),
     sessionGoalJson: toJson(context.session.goal ?? null),
@@ -99,9 +114,9 @@ function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, t
   });
 }
 
-function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>, tools: Tool[]): string {
+function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>, tools: PromptTool[]): string {
   return buildRoutePrompt({
-    currentUserInputJson: toJson(latestUserInput(context.session)),
+    currentUserInputJson: toJson(latestUserInput(context)),
     sessionInputJson: toJson(context.session.input),
     sessionTaskJson: toJson(context.session.task ?? null),
     sessionGoalJson: toJson(context.session.goal ?? null),
@@ -111,7 +126,7 @@ function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>,
   });
 }
 
-function buildPhaseExecutePrompt(context: Extract<LlmContext, { phase: "execute" }>, tools: Tool[]): string {
+function buildPhaseExecutePrompt(context: Extract<LlmContext, { phase: "execute" }>, tools: PromptTool[]): string {
   const allowedToolNames = new Set(context.task.toolNames);
   const allowedTools = serializeTools(tools).filter((tool) => allowedToolNames.has(tool.name));
 
@@ -131,7 +146,7 @@ function buildPhaseVerifyPrompt(context: Extract<LlmContext, { phase: "verify" }
   });
 }
 
-function buildPhasePromptMessage(context: LlmContext, tools: Tool[]): ChatMessage {
+function buildPhasePromptMessage(context: LlmContext, tools: PromptTool[]): ChatMessage {
   if (context.phase === "route") {
     return { role: "user", content: buildPhaseRoutePrompt(context, tools) };
   }
@@ -149,7 +164,7 @@ function buildPhasePromptMessage(context: LlmContext, tools: Tool[]): ChatMessag
 
 export function buildOpenAICompatiblePrompt(input: {
   context: LlmContext;
-  tools?: Tool[];
+  tools?: PromptTool[];
 }): OpenAICompatiblePrompt {
   const tools = input.tools ?? [];
   const phasePromptMessage = buildPhasePromptMessage(input.context, tools);
@@ -166,7 +181,7 @@ export function buildOpenAICompatiblePrompt(input: {
 
 export function buildOpenAICompatibleMessages(input: {
   context: LlmContext;
-  tools?: Tool[];
+  tools?: PromptTool[];
 }): ChatMessage[] {
   return buildOpenAICompatiblePrompt(input).messages;
 }

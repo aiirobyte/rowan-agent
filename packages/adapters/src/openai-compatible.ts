@@ -1,4 +1,3 @@
-import { createDefaultCriteria } from "@rowan-agent/agent";
 import { buildOpenAICompatiblePrompt, type ChatMessage } from "@rowan-agent/context";
 import { extractJsonObject } from "./json-extract";
 import type {
@@ -9,11 +8,11 @@ import type {
   StreamOptions,
   Task,
   TaskRoutingDecision,
-  Tool,
+  ToolDefinition,
   ToolCall,
   VerificationResult,
-} from "@rowan-agent/agent";
-import { createId, Validators } from "@rowan-agent/agent";
+} from "@rowan-agent/protocol";
+import { createDefaultCriteria, createId, Validators } from "@rowan-agent/protocol";
 
 export type OpenAICompatibleFetch = (
   input: Parameters<typeof fetch>[0],
@@ -29,7 +28,7 @@ export type OpenAICompatibleConfig = {
   maxRetries?: number;
   retryDelayMs?: number;
   fetch?: OpenAICompatibleFetch;
-  tools?: Tool[];
+  tools?: ToolDefinition[];
   responseFormat?: boolean;
 };
 
@@ -42,7 +41,7 @@ export type ResolveOpenAICompatibleConfigInput = {
   maxRetries?: number;
   retryDelayMs?: number;
   fetch?: OpenAICompatibleFetch;
-  tools?: Tool[];
+  tools?: ToolDefinition[];
   responseFormat?: boolean;
   env?: Record<string, string | undefined>;
 };

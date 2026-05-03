@@ -2,6 +2,8 @@
 
 Rowan is a minimal TypeScript + Bun agent kernel.
 
+As of v0.4.0, shared model/tool/turn contracts live in `@rowan-agent/protocol`, while execution mechanics live in `@rowan-agent/runtime`. `@rowan-agent/agent` is the public facade for session lifecycle, event fanout, abort/waitForIdle, and ergonomic type re-exports.
+
 ```bash
 bun install
 bun test

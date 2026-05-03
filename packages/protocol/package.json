@@ -1,14 +1,10 @@
 {
-  "name": "@rowan-agent/logging",
+  "name": "@rowan-agent/protocol",
   "version": "0.4.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*.ts"
-  },
-  "dependencies": {
-    "@rowan-agent/agent": "workspace:*",
-    "pino": "^10.3.1"
   }
 }

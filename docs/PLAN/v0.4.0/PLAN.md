@@ -2,7 +2,7 @@
 
 > 版本：v0.4.0
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 技术栈：TypeScript + Bun
 > 基线：v0.3.5 Pino Runtime Logging
 > 任务表：`docs/PLAN/v0.4.0/TASKS.md`
@@ -76,34 +76,38 @@ MCP implementation belongs inside `packages/runtime` as a tool-provider source. 
 
 ```text
 packages/protocol/src/
+  context.ts
   index.ts
   model.ts
   phase.ts
+  task.ts
   tool.ts
   turn.ts
+  validators.ts
 
 packages/runtime/src/
   index.ts
   dir.ts
   runner.ts
-  runtime.ts
   run-agent-loop.ts
+  thread.ts
   turn-recorder.ts
-  phases/route.ts
-  phases/plan.ts
-  phases/execute.ts
   phases/verify.ts
   routing/scheduler.ts
-  hooks/
+  hooks/index.ts
   mcp/
   skills/
-  tools/
+  tools.ts
 
 packages/agent/src/
   index.ts
   agent.ts
-  thread.ts
-  lifecycle.ts
+  agent-loop.ts    # compatibility re-export
+  scheduler.ts     # compatibility re-export
+  task.ts          # compatibility re-export
+  tools.ts         # compatibility re-export
+  types.ts         # compatibility re-export
+  verifier.ts      # compatibility re-export
 ```
 
 The exact file split may follow the current codebase if a smaller move reduces churn, but the package responsibilities must match this target.
@@ -249,15 +253,15 @@ Rules:
 
 ## 8. Release Checklist
 
-- [ ] `packages/protocol` exists and exports shared contracts.
-- [ ] `packages/runtime` exists and exports runtime execution entrypoints.
-- [ ] `agent` imports protocol types directly instead of through `store`.
-- [ ] `store` persists protocol types without redefining them.
-- [ ] `context` imports `protocol + session`, not `agent`.
-- [ ] `runtime` owns route / plan / execute / verify implementation.
-- [ ] `runtime` owns scheduler, skills application, hooks, MCP tool-provider ownership, core tool execution, and turn recording.
-- [ ] `agent` is a small public kernel/facade and does not own phase workflow, task planning, verification, tool execution, or DriverTurn recording.
-- [ ] Package boundary tests updated.
-- [ ] `bun test packages`
-- [ ] `bun run build`
-- [ ] CLI smoke tests pass.
+- [x] `packages/protocol` exists and exports shared contracts.
+- [x] `packages/runtime` exists and exports runtime execution entrypoints.
+- [x] `agent` imports protocol types directly instead of through `store`.
+- [x] `store` persists protocol types without redefining them.
+- [x] `context` imports `protocol + session`, not `agent`.
+- [x] `runtime` owns route / plan / execute / verify implementation.
+- [x] `runtime` owns scheduler, skills application, hooks, MCP tool-provider ownership, core tool execution, and turn recording.
+- [x] `agent` is a small public kernel/facade and does not own phase workflow, task planning, verification, tool execution, or DriverTurn recording.
+- [x] Package boundary tests updated.
+- [x] `bun test packages`
+- [x] `bun run build`
+- [x] CLI smoke tests pass.
