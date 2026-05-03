@@ -1,9 +1,9 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.3.3
+> 版本：v0.3.4
 > 日期：2026-05-03
-> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first child-session predecessor 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 已实现；v0.3.3 storage port planned
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
+> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first child-session predecessor 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 已实现；v0.3.3 storage port 已实现；v0.3.4 store package consolidation planned
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`
 
 ## 1. 一句话定位
 
@@ -89,6 +89,7 @@ v0.0.0 详细执行计划只维护在：
 | v0.3.1 | Persistent Session + Multi-turn CLI | 支持跨 CLI 调用持续会话 | SessionStore、multi-turn Agent、`--session`、`sessions` commands、`chat` mode |
 | v0.3.2 | Threaded Sub Agent Sessions | 让 sub-agent/sub-session 回到普通 Session + Agent 同构实现 | immutable input、task/goal Session metadata、thread route、thread_created/thread_end |
 | v0.3.3 | Storage Port + Scoped Context | 升级存储边界，分离对话上下文与执行步骤历史 | AgentStore、JSON-backed store、ExecutionTurn、ContextScope、phase allowlists |
+| v0.3.4 | Store Package Consolidation | 整理 v0.3.3 的 store 边界 | `packages/store`、AgentStore port、InMemoryAgentStore、LocalJsonAgentStore |
 | v0.4.0 | Policy and Safety | 把 hook 升级成策略系统 | approval、permission、dangerous command guard |
 | v0.5.0 | Trace Replay | 让失败 run 可复盘 | trace reader、replay、fork from step |
 | v0.6.0 | Eval Harness | 系统比较 agent 质量 | dataset、scorer、batch report |
@@ -138,12 +139,12 @@ v0.0.0 详细执行计划只维护在：
 
 ## 8. 近期执行顺序
 
-1. 建立 v0.3.3 storage port 规划文档和任务表。
-2. 定义 `AgentStore`、`ExecutionTurn` 和 `ContextScope` 规则。
-3. 实现 JSON-backed AgentStore，并替换当前 session JSON schema。
-4. 将 route / plan / execute / verify 内部输出迁移到 steps。
-5. 让 prompt builder 使用 phase-specific allowlists。
-6. 跑完 v0.3.3 release checklist。
+1. 建立 v0.3.4 store package consolidation 规划文档和任务表。
+2. 新增 `packages/store`，承载 store port 和 JSON-backed store。
+3. 将 `AgentStore` / `ExecutionTurn` 从 `agent` 移入 `store`。
+4. 将 `LocalJsonAgentStore` 从 `cli` 移入 `store`。
+5. 更新 package boundary test。
+6. 跑完 v0.3.4 release checklist。
 
 ## 9. v0.1.0 范围
 
@@ -295,9 +296,33 @@ v0.3.3 release gates：
 - 多轮 route 不受 routing decision / phase prompt / failed outcome / unrelated tool result 污染
 - old-schema session 给出明确 unsupported schema 错误
 
-## 15. Open Questions
+## 15. v0.3.4 范围
 
-这些问题不阻塞 v0.3.3，但会影响 v0.4.0+：
+v0.3.4 详细执行计划维护在：
+
+- `docs/PLAN/v0.3.4/README.md`
+- `docs/PLAN/v0.3.4/PLAN.md`
+- `docs/PLAN/v0.3.4/TASKS.md`
+
+v0.3.4 已确定：
+
+- 新增 `packages/store`。
+- `AgentStore`、`ExecutionTurn`、`StepFilter`、`InMemoryAgentStore` 移入 `store`。
+- JSON-backed `LocalJsonAgentStore` 也放入 `store`，不另建 `store-json`。
+- `session` 保持纯数据模型，不合并 store 实现。
+- `store` 不依赖 `agent`，避免循环。
+- v0.3.3 persisted JSON schema 保持不变。
+
+v0.3.4 release gates：
+
+- `bun test packages`
+- `bun run build`
+- package boundary test 覆盖 `store`
+- CLI 继续可创建、加载、列出 session
+
+## 16. Open Questions
+
+这些问题不阻塞 v0.3.4，但会影响 v0.4.0+：
 
 - v0.4.0 policy approval 是 CLI 交互优先，还是配置文件优先？
 - v0.5.0 replay 是否需要 workspace snapshot？

@@ -8,7 +8,6 @@ The main project roadmap now lives in:
 
 - `docs/PLAN/ARCHITECTURE.md`
 - `docs/PLAN/ROADMAP.md`
-- `docs/PLAN/AGENT_COMPETITIVE_ANALYSIS.md`
 - `docs/PLAN/v0.0.0/README.md`
 - `docs/PLAN/v0.0.0/PLAN.md`
 - `docs/PLAN/v0.1.0/README.md`
@@ -23,13 +22,15 @@ The main project roadmap now lives in:
 - `docs/PLAN/v0.3.2/PLAN.md`
 - `docs/PLAN/v0.3.3/README.md`
 - `docs/PLAN/v0.3.3/PLAN.md`
+- `docs/PLAN/v0.3.4/README.md`
+- `docs/PLAN/v0.3.4/PLAN.md`
 
 ## Current Status
 
 - Git repository initialized.
 - `.agent/` workspace created for AI-agent readable context.
 - Root `AGENT.md` added as the agent entrypoint.
-- Competitive analysis drafted.
+- Competitive analysis archived out of the main plan tree.
 - Project roadmap drafted.
 - Technical architecture drafted.
 - v0.0.0 execution pack drafted.
@@ -39,13 +40,14 @@ The main project roadmap now lives in:
 - v0.3.0 implemented: route-first task gating and child-session predecessor mechanism.
 - v0.3.1 implemented: persistent Session, multi-turn Agent conversations, and session-aware CLI.
 - v0.3.2 implemented: thread/sub-session unification, immutable Session input, and task/goal metadata.
-- v0.3.3 planned: AgentStore port, JSON-backed step storage, and scoped context.
+- v0.3.3 implemented: AgentStore port, JSON-backed step storage, and scoped context.
+- v0.3.4 planned: store package consolidation.
 
 ## Next Steps
 
-1. Implement v0.3.3 storage port and JSON-backed AgentStore.
-2. Upgrade persisted Session schema so `messages` only contains conversation-scoped messages.
-3. Keep v0.3.2 thread APIs stable while v0.3.3 changes storage internals.
+1. Implement v0.3.4 `@rowan-agent/store` package consolidation.
+2. Move `AgentStore`, `ExecutionTurn`, in-memory store, and JSON store into `packages/store`.
+3. Keep v0.3.3 persisted JSON schema stable while changing package ownership.
 
 ## Notes
 
