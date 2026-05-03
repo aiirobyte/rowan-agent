@@ -2,13 +2,13 @@
 
 ## Main Features
 
-`@rowan-agent/agent` is the public programming entry point for Rowan. It wraps session lifecycle management, model execution, event subscriptions, tool registration, thread startup, persistent storage, run cancellation, and idle waiting so callers do not need to assemble the lower-level runtime directly.
+`@rowan-agent/agent` is the public programming entry point and Agent core for Rowan. It wraps session lifecycle management, model execution, event subscriptions, tool registration, thread startup, persistent storage, run cancellation, and idle waiting.
 
-The package also re-exports common task helpers, Outcome builders, core tools, and runtime types. Most application code can depend on `@rowan-agent/agent` alone to create an interactive agent.
+The package also owns the route, plan, execute, verify, thread, retry, outcome, and execution-turn recording flow. Most application code can depend on `@rowan-agent/agent` alone to create an interactive agent.
 
 ## Architecture
 
-`src/agent.ts` provides the `Agent` class. Internally it uses `AgentRunner` from `@rowan-agent/runtime` to execute the main loop, `@rowan-agent/session` to create or append user messages, and an optional `AgentStore` from `@rowan-agent/store` to persist sessions and execution steps.
+`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly, uses `src/thread.ts` for child sessions, and keeps phase helpers under `src/phases/`. `@rowan-agent/session` creates or appends user messages, and an optional `AgentStore` from `@rowan-agent/store` persists sessions and execution steps.
 
 `Agent` keeps a small state object:
 
@@ -17,7 +17,7 @@ The package also re-exports common task helpers, Outcome builders, core tools, a
 - `tools` are the tools the runtime may expose to the model.
 - `isRunning`, `currentOutcome`, and `error` describe the current run state.
 
-`src/task.ts`, `src/tools.ts`, and `src/types.ts` mainly re-export runtime task helpers, tools, and types. `src/index.ts` is the package entry point.
+`src/task.ts`, `src/tools.ts`, and `src/types.ts` expose task helpers, runtime-backed core tools, and public Agent types. `src/index.ts` is the package entry point.
 
 ## Usage Flow
 

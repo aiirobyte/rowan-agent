@@ -7,13 +7,13 @@ import type {
   VerificationResult,
 } from "../types";
 import { parseVerificationResult } from "../task";
-import type { RuntimePhaseDefinition } from "./types";
+import type { AgentPhaseDefinition } from "./types";
 
 export const verifyingPhase = {
   phase: "verify",
   state: "verifying",
   label: "Verify task output",
-} as const satisfies RuntimePhaseDefinition<"verify">;
+} as const satisfies AgentPhaseDefinition<"verify">;
 
 export async function verifyTask(input: {
   model: ModelRef;

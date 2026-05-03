@@ -2,7 +2,7 @@
 
 > 版本：v0.4.1
 > 日期：2026-05-03
-> 状态：planned
+> 状态：implemented
 > 技术栈：TypeScript + Bun
 > 基线：v0.4.0 Protocol Boundary + Runtime Split
 > 任务表：`docs/PLAN/v0.4.1/TASKS.md`
@@ -35,6 +35,9 @@ There is no external API compatibility requirement for this project yet. Runtime
   - `packages/runtime/src/loop.ts` -> `packages/agent/src/loop.ts`
   - `packages/runtime/src/thread.ts` -> `packages/agent/src/thread.ts`
   - `packages/runtime/src/phases/*` -> `packages/agent/src/phases/*`
+- Move Agent driver vocabulary from `runtime` to `agent`:
+  - task parsing/outcome helpers;
+  - execution turn recording.
 - Keep `packages/agent/src/agent.ts` as the Agent core/facade entrypoint.
 - Move or duplicate no files into a `core/` folder.
 - Remove obsolete `runtime` exports for loop, thread, phases, and runner APIs.
@@ -49,10 +52,9 @@ There is no external API compatibility requirement for this project yet. Runtime
 - Update package boundary tests to reflect the corrected direction.
 - Preserve public `Agent.prompt()` and CLI behavior.
 
-### 2.2 Conditional
+### 2.2 Ownership Decision
 
-- Move `turn-recorder.ts` into `agent` if the loop would otherwise import runtime only to assemble driver turns.
-- Keep `turn-recorder.ts` in `runtime` only if it is refactored into a pure runtime adapter behind a port and does not define core driver semantics.
+`turn-recorder.ts` moved into `agent` because it records Agent driver turns and would otherwise force the Agent loop to depend on runtime-owned driver semantics.
 
 ### 2.3 Not Doing
 
@@ -213,13 +215,13 @@ Compatibility that must remain:
 ## 8. Release Checklist
 
 - [x] v0.4.1 docs created and linked.
-- [ ] loop moved to `packages/agent/src/loop.ts`.
-- [ ] thread runner moved to `packages/agent/src/thread.ts`.
-- [ ] phases moved to `packages/agent/src/phases/*`.
-- [ ] no `packages/agent/src/core/` exists.
-- [ ] obsolete runtime exports removed without compatibility re-exports.
-- [ ] runtime README describes glue/integration ownership.
-- [ ] agent README describes Agent core/facade ownership.
-- [ ] package boundary tests updated.
-- [ ] `bun test packages`
-- [ ] `bun run build`
+- [x] loop moved to `packages/agent/src/loop.ts`.
+- [x] thread runner moved to `packages/agent/src/thread.ts`.
+- [x] phases moved to `packages/agent/src/phases/*`.
+- [x] no `packages/agent/src/core/` exists.
+- [x] obsolete runtime exports removed without compatibility re-exports.
+- [x] runtime README describes glue/integration ownership.
+- [x] agent README describes Agent core/facade ownership.
+- [x] package boundary tests updated.
+- [x] `bun test packages`
+- [x] `bun run build`

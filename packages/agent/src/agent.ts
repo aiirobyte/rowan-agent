@@ -1,5 +1,6 @@
-import { AgentRunner, runThread } from "@rowan-agent/runtime";
-export { runThread } from "@rowan-agent/runtime";
+import { runAgentLoop } from "./loop";
+import { runThread } from "./thread";
+export { runThread } from "./thread";
 import {
   appendUserTurn,
   createSession,
@@ -53,7 +54,6 @@ export class Agent {
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
-  private readonly runner = new AgentRunner();
   private currentRun?: Promise<Outcome>;
   private abortController?: AbortController;
   private shouldEmitSessionLoaded: boolean;
@@ -145,7 +145,7 @@ export class Agent {
       this.emitToListeners(event);
     };
 
-    this.currentRun = this.runner.run({
+    this.currentRun = runAgentLoop({
       session,
       sessionLifecycle,
       model: this.options.model,

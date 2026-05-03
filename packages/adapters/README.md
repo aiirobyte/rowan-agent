@@ -23,7 +23,7 @@ The package also provides JSON extraction helpers. They can parse complete JSON,
 1. Prepare OpenAI-compatible environment variables: `ROWAN_OPENAI_BASE_URL` is optional, while `ROWAN_OPENAI_API_KEY` and `ROWAN_MODEL` are required.
 2. Call `resolveOpenAICompatibleConfig` and pass the runtime tools through `tools`.
 3. Call `createOpenAICompatibleStream` to create a `StreamFn` that the Rowan runtime can consume.
-4. Pass the `stream` to `Agent` from `@rowan-agent/agent` or to `AgentRunner` from `@rowan-agent/runtime`.
+4. Pass the `stream` to `Agent` from `@rowan-agent/agent`.
 
 ```ts
 import {

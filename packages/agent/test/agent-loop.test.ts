@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { createSession as createBaseSession } from "@rowan-agent/session";
-import { runAgentLoop } from "@rowan-agent/runtime/loop";
+import { runAgentLoop } from "../src/loop";
 import { createDefaultCriteria } from "../src/task";
 import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";

@@ -13,7 +13,7 @@ import {
   parseTaskRoutingDecision,
   parseVerificationResult,
 } from "./task";
-import { runtimePhases } from "./phases";
+import { agentPhases } from "./phases";
 import { scheduleTaskRouting } from "./phases/routing";
 import type {
   AgentEvent,
@@ -43,10 +43,10 @@ import { recordPhaseStep } from "./turn-recorder";
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
-const routePhase = runtimePhases.route.phase;
-const planPhase = runtimePhases.plan.phase;
-const executePhase = runtimePhases.execute.phase;
-const verifyPhase = runtimePhases.verify.phase;
+const routePhase = agentPhases.route.phase;
+const planPhase = agentPhases.plan.phase;
+const executePhase = agentPhases.execute.phase;
+const verifyPhase = agentPhases.verify.phase;
 
 type AgentLoopRuntime = AgentLoopInput & {
   messageLog: AgentMessage[];

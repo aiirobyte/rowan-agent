@@ -28,7 +28,7 @@ test("packages follow Rowan dependency direction", async () => {
     session: new Set(),
     store: new Set(["protocol", "session"]),
     context: new Set(["protocol", "session"]),
-    runtime: new Set(["context", "protocol", "session", "store"]),
+    runtime: new Set(["protocol", "session"]),
     agent: new Set(["protocol", "runtime", "session", "store"]),
     adapters: new Set(["context", "protocol"]),
     logging: new Set(["agent"]),

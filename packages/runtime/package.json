@@ -1,6 +1,6 @@
 {
   "name": "@rowan-agent/runtime",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,10 +8,8 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/context": "workspace:*",
     "@rowan-agent/protocol": "workspace:*",
     "@rowan-agent/session": "workspace:*",
-    "@rowan-agent/store": "workspace:*",
     "typebox": "^1.0.0"
   }
 }
