@@ -26,6 +26,8 @@ export type OpenAICompatibleConfig = {
   model: string;
   temperature?: number;
   timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
   fetch?: OpenAICompatibleFetch;
   tools?: Tool[];
   responseFormat?: boolean;
@@ -37,11 +39,16 @@ export type ResolveOpenAICompatibleConfigInput = {
   model?: string;
   temperature?: number;
   timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
   fetch?: OpenAICompatibleFetch;
   tools?: Tool[];
   responseFormat?: boolean;
   env?: Record<string, string | undefined>;
 };
+
+const DEFAULT_MAX_RETRIES = 1;
+const DEFAULT_RETRY_DELAY_MS = 250;
 
 export class OpenAICompatibleError extends Error {
   readonly code: string;
@@ -131,6 +138,8 @@ export function resolveOpenAICompatibleConfig(
     model: requireValue("model", model, "set ROWAN_MODEL or pass --model"),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+    ...(input.maxRetries !== undefined ? { maxRetries: input.maxRetries } : {}),
+    ...(input.retryDelayMs !== undefined ? { retryDelayMs: input.retryDelayMs } : {}),
     ...(input.fetch ? { fetch: input.fetch } : {}),
     ...(input.tools ? { tools: input.tools } : {}),
     ...(input.responseFormat !== undefined ? { responseFormat: input.responseFormat } : {}),
@@ -377,7 +386,98 @@ function buildChatCompletionBody(config: OpenAICompatibleConfig, messages: ChatM
   return body;
 }
 
-export async function callOpenAICompatibleChatCompletion(
+function normalizeRetryNumber(value: number | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function abortMessage(signal?: AbortSignal): string {
+  return signal?.reason instanceof Error ? signal.reason.message : "OpenAI-compatible request aborted.";
+}
+
+function normalizeRequestError(error: unknown, signal?: AbortSignal): OpenAICompatibleError {
+  if (error instanceof OpenAICompatibleError) {
+    return error;
+  }
+
+  if (signal?.aborted) {
+    return new OpenAICompatibleError({
+      code: "request_aborted",
+      message: abortMessage(signal),
+      retryable: true,
+    });
+  }
+
+  return new OpenAICompatibleError({
+    code: "request_failed",
+    message: error instanceof Error ? error.message : "OpenAI-compatible request failed.",
+    retryable: true,
+  });
+}
+
+function withAttemptDetails(error: OpenAICompatibleError, attempts: number): OpenAICompatibleError {
+  return new OpenAICompatibleError({
+    code: error.code,
+    message: error.message,
+    ...(error.status !== undefined ? { status: error.status } : {}),
+    retryable: error.retryable,
+    details: {
+      ...(error.details ?? {}),
+      attempts,
+    },
+  });
+}
+
+function shouldRetryRequest(input: {
+  error: OpenAICompatibleError;
+  attempts: number;
+  maxRetries: number;
+  parentSignal?: AbortSignal;
+}): boolean {
+  return input.error.retryable && input.attempts - 1 < input.maxRetries && !input.parentSignal?.aborted;
+}
+
+async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) {
+    return;
+  }
+
+  if (signal?.aborted) {
+    throw new OpenAICompatibleError({
+      code: "request_aborted",
+      message: abortMessage(signal),
+      retryable: true,
+    });
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+    };
+    const timeout = setTimeout(() => {
+      finish();
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      finish();
+      reject(
+        new OpenAICompatibleError({
+          code: "request_aborted",
+          message: abortMessage(signal),
+          retryable: true,
+        }),
+      );
+    };
+
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function callOpenAICompatibleChatCompletionOnce(
   config: OpenAICompatibleConfig,
   messages: ChatMessage[],
   options: StreamOptions = {},
@@ -430,23 +530,35 @@ export async function callOpenAICompatibleChatCompletion(
       ...(usage ? { usage } : {}),
     };
   } catch (error) {
-    if (error instanceof OpenAICompatibleError) {
-      throw error;
-    }
-    if (signal?.aborted) {
-      throw new OpenAICompatibleError({
-        code: "request_aborted",
-        message: signal.reason instanceof Error ? signal.reason.message : "OpenAI-compatible request aborted.",
-        retryable: true,
-      });
-    }
-    throw new OpenAICompatibleError({
-      code: "request_failed",
-      message: error instanceof Error ? error.message : "OpenAI-compatible request failed.",
-      retryable: true,
-    });
+    throw normalizeRequestError(error, signal);
   } finally {
     cleanup();
+  }
+}
+
+export async function callOpenAICompatibleChatCompletion(
+  config: OpenAICompatibleConfig,
+  messages: ChatMessage[],
+  options: StreamOptions = {},
+  requestBody = buildChatCompletionBody(config, messages),
+): Promise<OpenAICompatibleChatCompletionResult> {
+  const maxRetries = normalizeRetryNumber(config.maxRetries, DEFAULT_MAX_RETRIES);
+  const retryDelayMs = normalizeRetryNumber(config.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
+  let attempts = 0;
+
+  while (true) {
+    attempts += 1;
+
+    try {
+      return await callOpenAICompatibleChatCompletionOnce(config, messages, options, requestBody);
+    } catch (error) {
+      const requestError = normalizeRequestError(error, options.signal);
+      if (!shouldRetryRequest({ error: requestError, attempts, maxRetries, parentSignal: options.signal })) {
+        throw attempts > 1 ? withAttemptDetails(requestError, attempts) : requestError;
+      }
+
+      await waitForRetry(retryDelayMs * 2 ** (attempts - 1), options.signal);
+    }
   }
 }
 

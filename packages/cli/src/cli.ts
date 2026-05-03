@@ -15,7 +15,11 @@ import {
   type AgentEventListener,
   type Outcome,
 } from "@rowan-agent/agent";
-import { pinoAgentEventLogger, type AgentEventLogPath } from "@rowan-agent/logging";
+import {
+  pinoAgentEventLogger,
+  type AgentEventLogLevel,
+  type AgentEventLogPath,
+} from "@rowan-agent/logging";
 import { type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
 import { LocalJsonAgentStore } from "@rowan-agent/store";
 import {
@@ -31,6 +35,7 @@ type CliCommand = "config" | "list";
 type CliArgs = {
   command?: CliCommand;
   log?: string;
+  logLevel?: AgentEventLogLevel;
   sessionId?: string;
   skills: string[];
   baseUrl?: string;
@@ -49,6 +54,7 @@ type CliCommandDefinition = {
 };
 
 const DEFAULT_OPENAI_TIMEOUT_MS = 60_000;
+const LOG_LEVELS = ["debug", "info", "warn", "error", "silent"] as const;
 
 const CLI_COMMANDS = {
   config: {
@@ -153,6 +159,7 @@ Examples:
   bun run rowan --model gpt-4.1-mini "hello"
   bun run rowan --skill example "summarize the example skill"
   bun run rowan --log runs/real.jsonl "list workspace files"
+  bun run rowan --log-level debug "inspect full event payloads"
   bun run rowan --max-thread-depth 6 "delegate deeply"
 
 Commands:
@@ -163,6 +170,8 @@ Run logs:
   Source runs use the Rowan project root as the workspace.
   Packaged binary runs use ~/.rowan as the workspace.
   Session run logs are written automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
+  --log-level controls run log detail: debug, info, warn, error, or silent. Default: info.
+  Info logs write event summaries only; debug logs include redacted event payloads.
   Turns in one process append to the same run log; explicit session loads start a new run log.
   Relative --log paths are resolved from <workspace>.
   CLI output prints Session id once, Message id before each turn result, and Log path last once per entry.
@@ -181,6 +190,7 @@ Environment:
   ROWAN_MODEL            Required unless --model is passed
   ROWAN_OPENAI_TIMEOUT_MS Optional request timeout in milliseconds, defaults to 60000
   ROWAN_MAX_THREAD_DEPTH Optional maximum nested thread depth, defaults to 4
+  ROWAN_LOG_LEVEL        Optional run log detail: debug, info, warn, error, or silent
   ROWAN_RUNTIME          Optional override: source or binary
   ROWAN_WORKSPACE        Optional workspace root override
 `);
@@ -253,6 +263,23 @@ function parseOptionalMaxThreadDepth(value: string | undefined): number | undefi
   return normalized ? parseNonNegativeInteger(normalized, "ROWAN_MAX_THREAD_DEPTH") : undefined;
 }
 
+function parseLogLevel(value: string, source: string): AgentEventLogLevel {
+  const normalized = value.trim().toLowerCase();
+  if ((LOG_LEVELS as readonly string[]).includes(normalized)) {
+    return normalized as AgentEventLogLevel;
+  }
+  throw new Error(`${source} must be one of: debug, info, warn, error, silent.`);
+}
+
+function parseOptionalLogLevel(value: string | undefined, source: string): AgentEventLogLevel | undefined {
+  const normalized = value?.trim();
+  return normalized ? parseLogLevel(normalized, source) : undefined;
+}
+
+function configuredLogLevel(args: CliArgs): AgentEventLogLevel {
+  return args.logLevel ?? parseOptionalLogLevel(process.env.ROWAN_LOG_LEVEL, "ROWAN_LOG_LEVEL") ?? "info";
+}
+
 function parseArgs(argv: string[]): CliArgs {
   const args = [...argv];
   const parsed: CliArgs = { skills: [] };
@@ -271,6 +298,11 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (next === "--log") {
       parsed.log = readOptionValue(args, "--log");
+      continue;
+    }
+
+    if (next === "--log-level") {
+      parsed.logLevel = parseLogLevel(readOptionValue(args, "--log-level"), "--log-level");
       continue;
     }
 
@@ -357,6 +389,7 @@ function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Re
     parseOptionalMaxThreadDepth(env.ROWAN_MAX_THREAD_DEPTH) ??
     DEFAULT_MAX_THREAD_DEPTH;
   const logPath = resolveOptionalWorkspacePath(args.log, workspace);
+  const logLevel = configuredLogLevel(args);
   const tools = createCoreTools({ root: workspace.root });
 
   return {
@@ -401,6 +434,13 @@ function createConfigSnapshot(args: CliArgs, workspace: RowanWorkspacePaths): Re
     logging: {
       automatic: !logPath,
       path: logPath ? formatWorkspacePathForDisplay(logPath, workspace) : null,
+      level: logLevel,
+      levelSource:
+        args.logLevel !== undefined
+          ? "flag"
+          : nonEmpty(env.ROWAN_LOG_LEVEL)
+            ? "env"
+            : "default",
     },
     skills: args.skills.map((skill) => ({
       idOrPath: skill,
@@ -474,10 +514,11 @@ async function promptWithLog(input: {
   prompt: string;
   logPath: AgentEventLogPath;
   logMode?: "replace" | "append";
+  logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
 }): Promise<Outcome> {
-  const eventLogger = pinoAgentEventLogger(input.logPath, { mode: input.logMode });
+  const eventLogger = pinoAgentEventLogger(input.logPath, { mode: input.logMode, level: input.logLevel });
   let messageId: string | undefined;
   const listener: AgentEventListener = ((event: AgentEvent) => {
     eventLogger(event);
@@ -509,6 +550,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const agent = await createConfiguredAgent(args, workspace);
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
+  const logLevel = configuredLogLevel(args);
   let activeLogPath: string | undefined = explicitLogPath;
   let hasWrittenLog = false;
   let hasPrintedSession = false;
@@ -550,10 +592,15 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         prompt,
         logPath: activeLogPath ?? createDefaultLogPathResolver(workspace),
         logMode: hasWrittenLog ? "append" : "replace",
+        logLevel,
         onLogPath: (path) => {
-          activeLogPath = path ?? activeLogPath;
-          hasWrittenLog = true;
-          writtenLogPath = activeLogPath;
+          if (path) {
+            activeLogPath = path;
+            hasWrittenLog = true;
+            writtenLogPath = path;
+          } else if (!activeLogPath && agent.state.session) {
+            activeLogPath = createDefaultLogPath(workspace, agent.state.session.id);
+          }
         },
         onMessageId: (id) => {
           messageId = id;
@@ -601,12 +648,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         continue;
       }
 
-      try {
-        await runPrompt(prompt);
-      } catch (error) {
-        console.error(error instanceof Error ? error.message : error);
-        throw error;
-      }
+      await runPrompt(prompt);
 
       if (process.stdin.isTTY) {
         process.stdout.write("> ");

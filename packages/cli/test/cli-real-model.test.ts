@@ -12,6 +12,15 @@ type AgentEventLogRecord = Record<string, unknown> & {
   eventType?: AgentEvent["type"];
   eventTs?: string;
   phase?: string;
+  sessionId?: string;
+};
+
+type LoggedEventSummary = {
+  type: AgentEvent["type"];
+  ts?: string;
+  phase?: string;
+  sessionId?: string;
+  event?: AgentEvent;
 };
 
 type LogSummary = {
@@ -33,6 +42,7 @@ async function runCli(
       ROWAN_MODEL: "",
       ROWAN_OPENAI_BASE_URL: "",
       ROWAN_OPENAI_TIMEOUT_MS: "",
+      ROWAN_LOG_LEVEL: "",
       ...env,
     },
     stdin: stdin === undefined ? "ignore" : "pipe",
@@ -95,12 +105,19 @@ async function readLogRecords(path: string): Promise<AgentEventLogRecord[]> {
     .map((line) => JSON.parse(line) as AgentEventLogRecord);
 }
 
-async function readLogEvents(path: string): Promise<AgentEvent[]> {
+async function readLogEvents(path: string): Promise<LoggedEventSummary[]> {
   return (await readLogRecords(path)).map((record) => {
-    if (!record.event) {
-      throw new Error(`Missing event payload in log record: ${JSON.stringify(record)}`);
+    const type = record.event?.type ?? record.eventType;
+    if (!type) {
+      throw new Error(`Missing event type in log record: ${JSON.stringify(record)}`);
     }
-    return record.event;
+    return {
+      type,
+      ts: record.event?.ts ?? record.eventTs,
+      phase: record.event && "phase" in record.event ? record.event.phase : record.phase,
+      sessionId: record.event ? eventSessionId(record.event) : record.sessionId,
+      event: record.event,
+    };
   });
 }
 
@@ -119,13 +136,12 @@ async function summarizeLogFile(filePath: string): Promise<LogSummary> {
   const sessionIds = new Set<string>();
   for (const event of await readLogEvents(filePath)) {
     eventTypes[event.type] = (eventTypes[event.type] ?? 0) + 1;
-    const sessionId = eventSessionId(event);
-    if (sessionId) {
-      sessionIds.add(sessionId);
-    }
-    if (event.type === "thread_created" || event.type === "thread_end") {
-      sessionIds.add(event.parentSessionId);
+    if (event.sessionId) {
       sessionIds.add(event.sessionId);
+    }
+    if (event.event && (event.event.type === "thread_created" || event.event.type === "thread_end")) {
+      sessionIds.add(event.event.parentSessionId);
+      sessionIds.add(event.event.sessionId);
     }
   }
   return { filePath, eventTypes, sessionIds: [...sessionIds] };
@@ -171,6 +187,13 @@ test("CLI rejects invalid OpenAI-compatible timeout", async () => {
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("--timeout-ms must be a positive integer.");
+});
+
+test("CLI rejects invalid log level", async () => {
+  const result = await runCli(["--log-level", "verbose", "hello"]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("--log-level must be one of: debug, info, warn, error, silent.");
 });
 
 test("CLI config shows missing and default configuration without requiring model credentials", async () => {
@@ -225,7 +248,12 @@ test("CLI config shows missing and default configuration without requiring model
       maxThreadDepth: 4,
       maxThreadDepthSource: "default",
     });
-    expect(config.logging).toEqual({ automatic: true, path: null });
+    expect(config.logging).toEqual({
+      automatic: true,
+      path: null,
+      level: "info",
+      levelSource: "default",
+    });
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -251,6 +279,8 @@ test("CLI config reports resolved flags without exposing API key material", asyn
         "ses_example",
         "--log",
         "runs/custom.jsonl",
+        "--log-level",
+        "Debug",
         "--skill",
         "example",
         "config",
@@ -288,7 +318,12 @@ test("CLI config reports resolved flags without exposing API key material", asyn
       maxThreadDepthSource: "flag",
     });
     expect(config.session).toEqual({ id: "ses_example", source: "flag" });
-    expect(config.logging).toEqual({ automatic: false, path: "runs/custom.jsonl" });
+    expect(config.logging).toEqual({
+      automatic: false,
+      path: "runs/custom.jsonl",
+      level: "debug",
+      levelSource: "flag",
+    });
     expect(config.skills).toEqual([
       {
         idOrPath: "example",
@@ -418,6 +453,49 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
   }
 });
 
+test("CLI interactive prompt reports model errors once", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-interactive-error-"));
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    try {
+      server = Bun.serve({
+        port: 0,
+        fetch: () =>
+          Response.json(
+            { error: { message: "provider down" } },
+            { status: 400, statusText: "Bad Request" },
+          ),
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli(
+      [],
+      {
+        ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+        ROWAN_OPENAI_API_KEY: "test-key",
+        ROWAN_MODEL: "test-model",
+        ROWAN_WORKSPACE: workspace,
+      },
+      "hello\n",
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(countMatches(result.stderr, /provider down/g)).toBe(1);
+    expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
+    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("CLI writes a default log without --log", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-default-"));
   const responses = [
@@ -485,12 +563,21 @@ test("CLI writes a default log without --log", async () => {
     expect(firstRecord?.time).toEqual(expect.any(Number));
     expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
     expect(firstRecord?.timestamp).toBeUndefined();
-    expect(logText).toContain("\"type\":\"session_created\"");
-    expect(logText).toContain("\"input\":\"hello\"");
-    expect(logText).toContain("\"type\":\"model_requested\"");
+    expect(firstRecord?.event).toBeUndefined();
+    expect(firstRecord).toMatchObject({
+      level: 30,
+      eventType: "session_created",
+      sessionId,
+    });
+    expect(firstRecord?.msg).toBeUndefined();
+    expect(logText).toContain("\"eventType\":\"session_created\"");
+    expect(logText).not.toContain("\"msg\":");
+    expect(logText).not.toContain("\"event\":");
+    expect(logText).not.toContain("\"input\":\"hello\"");
+    expect(logText).toContain("\"eventType\":\"model_requested\"");
     expect(logText).toContain("\"phase\":\"route\"");
-    expect(logText).not.toContain("\"type\":\"task_created\"");
-    expect(logText).toContain("\"type\":\"outcome\"");
+    expect(logText).not.toContain("\"eventType\":\"task_created\"");
+    expect(logText).toContain("\"eventType\":\"outcome\"");
 
     const sessionPath = join(workspace, "sessions", `${sessionId}.json`);
     const session = JSON.parse(await Bun.file(sessionPath).text()) as {
@@ -500,6 +587,85 @@ test("CLI writes a default log without --log", async () => {
     expect(session.version).toBe("0.3.3");
     expect(session.messages?.some((message) => message.content?.includes("Hello from model"))).toBe(true);
     expect(session.messages?.some((message) => message.content === "Hello from model")).toBe(true);
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI --log-level debug writes redacted event payloads", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-debug-log-"));
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    try {
+      server = Bun.serve({
+        port: 0,
+        fetch: () => openAIResponse({ message: "Debug answer", route: "direct" }),
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli(["--log-level", "Debug", "hello"], {
+      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+      ROWAN_OPENAI_API_KEY: "test-key",
+      ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
+    expect(logMatch).not.toBeNull();
+    const logPath = join(workspace, logMatch?.[1] ?? "");
+    const logText = await Bun.file(logPath).text();
+    const [firstRecord] = await readLogRecords(logPath);
+    expect(firstRecord?.event).toMatchObject({
+      type: "session_created",
+      session: {
+        input: "hello",
+      },
+    });
+    expect(logText).toContain("\"event\":");
+    expect(logText).toContain("\"input\":\"hello\"");
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI --log-level silent suppresses run log files", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-silent-log-"));
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    try {
+      server = Bun.serve({
+        port: 0,
+        fetch: () => openAIResponse({ message: "Silent answer", route: "direct" }),
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli(["--log-level", "silent", "hello"], {
+      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
+      ROWAN_OPENAI_API_KEY: "test-key",
+      ROWAN_MODEL: "test-model",
+      ROWAN_WORKSPACE: workspace,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("Log written to");
+    const runsDir = join(workspace, "runs");
+    const logFiles = await readdir(runsDir).catch(() => []);
+    expect(logFiles.filter((file) => file.endsWith(".jsonl"))).toHaveLength(0);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
@@ -578,9 +744,9 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     const taskCreatedIndex = logEvents.findIndex((event) => event.type === "task_created");
     expect(routeCallIndex).toBeGreaterThanOrEqual(0);
     expect(taskCreatedIndex).toBeGreaterThan(routeCallIndex);
-    expect(logText).toContain("\"type\":\"tool_start\"");
-    expect(logText).toContain("\"toolName\":\"bash\"");
-    expect(logText).toContain("cli-bash-ok");
+    expect(logText).toContain("\"eventType\":\"tool_start\"");
+    expect(logText).not.toContain("\"toolName\":\"bash\"");
+    expect(logText).not.toContain("cli-bash-ok");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

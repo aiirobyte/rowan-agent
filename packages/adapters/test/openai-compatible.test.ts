@@ -173,6 +173,53 @@ test("callOpenAICompatibleChatCompletion normalizes HTTP errors", async () => {
   }
 });
 
+test("callOpenAICompatibleChatCompletion retries retryable request failures", async () => {
+  let attempts = 0;
+  const fetchMock: OpenAICompatibleFetch = async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new Error("Unable to connect. Is the computer able to access the url?");
+    }
+    return jsonResponse("{\"ok\":true}");
+  };
+
+  const result = await callOpenAICompatibleChatCompletion(
+    {
+      baseUrl: "https://api.example/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      retryDelayMs: 0,
+      fetch: fetchMock,
+    },
+    [{ role: "user", content: "hello" }],
+  );
+
+  expect(result.content).toBe("{\"ok\":true}");
+  expect(attempts).toBe(2);
+});
+
+test("callOpenAICompatibleChatCompletion can disable retries", async () => {
+  let attempts = 0;
+  const fetchMock: OpenAICompatibleFetch = async () => {
+    attempts += 1;
+    throw new Error("Unable to connect. Is the computer able to access the url?");
+  };
+
+  await expect(
+    callOpenAICompatibleChatCompletion(
+      {
+        baseUrl: "https://api.example/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        maxRetries: 0,
+        fetch: fetchMock,
+      },
+      [{ role: "user", content: "hello" }],
+    ),
+  ).rejects.toThrow("Unable to connect");
+  expect(attempts).toBe(1);
+});
+
 test("callOpenAICompatibleChatCompletion exposes nested provider error details", async () => {
   const fetchMock: OpenAICompatibleFetch = async () =>
     new Response(

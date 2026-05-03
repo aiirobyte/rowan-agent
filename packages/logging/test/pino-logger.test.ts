@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -13,7 +14,7 @@ function parseLogLines(text: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-test("pinoAgentEventLogger writes AgentEvent payloads as Pino JSONL records", async () => {
+test("pinoAgentEventLogger writes summary Pino JSONL records at info by default", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-logging-"));
   const logPath = join(root, "run.jsonl");
   const logger = pinoAgentEventLogger(logPath);
@@ -31,13 +32,42 @@ test("pinoAgentEventLogger writes AgentEvent payloads as Pino JSONL records", as
   expect(logger.path()).toBe(logPath);
   const [record] = parseLogLines(await readFile(logPath, "utf8"));
   expect(record).toMatchObject({
-    msg: "agent event",
     eventType: "model_requested",
     eventTs: "2026-05-03T141659-32+08:00",
     phase: "route",
-    event,
   });
   expect(record?.level).toBe(30);
+  expect(record?.msg).toBeUndefined();
+  expect(record?.pid).toBeUndefined();
+  expect(record?.hostname).toBeUndefined();
+  expect(record?.event).toBeUndefined();
+});
+
+test("pinoAgentEventLogger includes redacted event payloads at debug level", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-logging-debug-"));
+  const logPath = join(root, "run.jsonl");
+  const logger = pinoAgentEventLogger(logPath, { level: "debug" });
+  const event: AgentEvent = {
+    type: "tool_start",
+    toolName: "bash",
+    args: { command: "OPENAI_API_KEY=secret-token bun test" },
+    ts: "2026-05-03T141659-32+08:00",
+  };
+
+  logger(event);
+  await logger.flush?.();
+
+  const [record] = parseLogLines(await readFile(logPath, "utf8"));
+  expect(record).toMatchObject({
+    eventType: "tool_start",
+    event: {
+      type: "tool_start",
+      toolName: "bash",
+      ts: "2026-05-03T141659-32+08:00",
+    },
+  });
+  expect(JSON.stringify(record)).not.toContain("secret-token");
+  expect(JSON.stringify(record)).toContain("OPENAI_API_KEY=[REDACTED]");
 });
 
 test("pinoAgentEventLogger resolves dynamic paths from the first session event", async () => {
@@ -65,6 +95,60 @@ test("pinoAgentEventLogger resolves dynamic paths from the first session event",
     eventType: "session_created",
     sessionId: "ses_12345678",
   });
+  expect(record?.msg).toBeUndefined();
+  expect(record?.event).toBeUndefined();
+});
+
+test("pinoAgentEventLogger filters warning and error levels", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-logging-warn-"));
+  const logPath = join(root, "run.jsonl");
+  const logger = pinoAgentEventLogger(logPath, { level: "warn" });
+
+  logger({
+    type: "session_created",
+    session: {
+      version: "0.3.3",
+      id: "ses_12345678",
+      systemPrompt: "Test system",
+      input: "hello",
+      skills: [],
+    },
+    ts: "2026-05-03T141659-32+08:00",
+  });
+  logger({
+    type: "budget_exceeded",
+    resource: "modelCalls",
+    limit: 1,
+    usage: { modelCalls: 2, toolCalls: 0 },
+    message: "Model call budget exceeded.",
+    ts: "2026-05-03T141700-32+08:00",
+  });
+  await logger.flush?.();
+
+  const records = parseLogLines(await readFile(logPath, "utf8"));
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    level: 40,
+    eventType: "budget_exceeded",
+    eventTs: "2026-05-03T141700-32+08:00",
+  });
+  expect(records[0]?.msg).toBeUndefined();
+});
+
+test("pinoAgentEventLogger silent level does not create a log file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-logging-silent-"));
+  const logPath = join(root, "run.jsonl");
+  const logger = pinoAgentEventLogger(logPath, { level: "silent" });
+
+  logger({
+    type: "error",
+    error: { code: "boom", message: "boom", retryable: false },
+    ts: "2026-05-03T141659-32+08:00",
+  });
+  await logger.flush?.();
+
+  expect(logger.path()).toBeUndefined();
+  expect(existsSync(logPath)).toBe(false);
 });
 
 test("redactSecrets redacts API keys in nested event payloads", () => {
