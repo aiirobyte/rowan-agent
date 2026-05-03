@@ -1,10 +1,10 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.4.0
+> 版本：v0.4.1
 > 日期：2026-05-03
-> 状态：implemented
-> 进度：v0.0.0 到 v0.4.0 已实现；下一步进入 v0.5.0 context projection/provider IR
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`
+> 状态：planned
+> 进度：v0.0.0 到 v0.4.0 已实现；下一步进入 v0.4.1 Agent/runtime boundary correction，再进入 v0.5.0 context projection/provider IR
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`
 
 ## 1. Product Positioning
 
@@ -48,6 +48,7 @@ Planning docs use this status enum:
 | v0.3.4 | Store Package Consolidation | implemented | `packages/store`, in-memory/json stores, `AgentStore` package boundary cleanup |
 | v0.3.5 | Pino Runtime Logging | implemented | `packages/logging`, run logs, redaction, removal of self-owned trace package |
 | v0.4.0 | Protocol Boundary + Runtime Split | implemented | `packages/protocol`, runtime-owned runner/loop/tools/scheduler/skills/hooks/MCP boundary, `context -> protocol`, and small `agent` facade |
+| v0.4.1 | Agent Boundary Correction | planned | move Agent loop/thread/phases back into `packages/agent/src/`, keep runtime as glue/integration, no `core/` folder, no compatibility runtime re-exports |
 
 ## 3. Current Architecture Principles
 
@@ -57,7 +58,9 @@ Planning docs use this status enum:
 4. Pino run logs are observability output, not replay state.
 5. `AgentStore` owns persistence, but should not own protocol types long term.
 6. Provider adapters should convert wire formats, not choose context.
-7. Workflow, eval, replay, and policy should layer around the Agent kernel instead of expanding `runAgentLoop()` into a platform.
+7. The Agent loop, phases, thread semantics, retry, verification, and outcome rules belong to `packages/agent`, not `packages/runtime`.
+8. Runtime should act as glue for tools, skills, hooks, MCP, workspace helpers, policy integration, and future plugin surfaces.
+9. Workflow, eval, replay, and policy should layer around the Agent kernel instead of expanding `runAgentLoop()` into a platform.
 
 ## 4. New Version Roadmap
 
@@ -66,6 +69,7 @@ The old long-term roadmap placed Policy, Replay, Eval, and Workflow immediately 
 | Version | Name | Goal | Main capabilities |
 |---|---|---|---|
 | v0.4.0 | Protocol Boundary + Runtime Split | remove reversed dependencies and extract execution engine | `packages/protocol`, `packages/runtime`, shared turn/model/tool types, `AgentRunner`, phase modules, routing, skills, hooks, MCP boundary, core tools |
+| v0.4.1 | Agent Boundary Correction | correct the over-moved runtime boundary before context work | Agent-owned loop/thread/phases, runtime as glue/integration, no `core/` folder, no compatibility runtime re-exports |
 | v0.5.0 | Context Projection + Provider IR | make context deterministic and provider-neutral | `IntermediateAgentContext`, `RenderedAgentContext`, phase policy, token budget hooks, `ConversationEntry[]`, SSE streaming parser |
 | v0.6.0 | Policy and Safety | upgrade hooks into explicit tool execution policy | approvals, permission scopes, dangerous command guard, policy events |
 | v0.7.0 | Replay, Fork, and Compaction | make failed runs reconstructable and long sessions manageable | canonical events, replay from events+turns, fork from step, compaction cursor+summary |
@@ -76,6 +80,8 @@ The old long-term roadmap placed Policy, Replay, Eval, and Workflow immediately 
 ## 5. v0.4.0 Scope
 
 v0.4.0 is architecture hardening with minimal behavior change.
+
+Note: v0.4.0 shipped with runtime-owned execution mechanics. v0.4.1 intentionally supersedes that ownership model by moving Agent loop/thread/phases back into `packages/agent/src/`.
 
 ### 5.1 Goals
 
@@ -151,9 +157,8 @@ packages/runtime/src/
 ### 5.3 Acceptance Criteria
 
 - `agent` no longer imports `ExecutionTurn` or `ExecutionTurnEntry` from `store`.
-- `agent` delegates execution to `runtime` and keeps only public API / state / lifecycle / event fanout ownership.
-- `agent` does not own phase workflow, task planning, verification, tool execution, or turn recording.
-- `runtime` owns route / plan / execute / verify, routing, skills, hooks, MCP tool providers, and core tool execution.
+- v0.4.0 shipped with `agent` delegating execution to `runtime`; v0.4.1 supersedes the driver ownership part.
+- v0.4.0 shipped with `runtime` owning route / plan / execute / verify and routing; v0.4.1 moves those Agent semantics back into `agent` while leaving skills, hooks, MCP tool providers, and core tool execution in `runtime`.
 - `context` does not import `agent`.
 - `store` persists protocol types but does not define model/tool/phase contracts.
 - package boundary test is updated for `protocol`.
@@ -161,11 +166,55 @@ packages/runtime/src/
 - `bun run build` passes.
 - Direct, task, thread, multi-turn, budget, and verify retry behavior remains unchanged.
 
-## 6. v0.5.0 Scope
+## 6. v0.4.1 Scope
+
+v0.4.1 corrects the Agent/runtime boundary before v0.5.0 builds context projection on top of it.
+
+v0.4.0 intentionally shrank `agent`, but it moved too much Agent definition into `runtime`. The corrected ownership is:
+
+```text
+agent
+  -> Agent class and public facade
+  -> Agent loop
+  -> route / plan / execute / verify phases
+  -> thread semantics
+  -> retry / verification / outcome rules
+
+runtime
+  -> workspace helpers
+  -> local tool definitions and execution glue
+  -> skills loading
+  -> hooks and future policy integration
+  -> MCP tool-provider integration
+  -> plugin/runtime adapters for the Agent loop
+```
+
+Required changes:
+
+- move `packages/runtime/src/loop.ts` to `packages/agent/src/loop.ts`;
+- move `packages/runtime/src/thread.ts` to `packages/agent/src/thread.ts`;
+- move `packages/runtime/src/phases/*` to `packages/agent/src/phases/*`;
+- keep `packages/agent/src/agent.ts` as the Agent core/facade entrypoint;
+- do not create `packages/agent/src/core/` or a new `packages/agent-core`;
+- remove obsolete runtime exports for loop, thread, phases, and runner APIs;
+- do not add compatibility re-exports because there is no stable external API yet;
+- keep runtime focused on tools, skills, hooks, MCP, workspace helpers, and future plugin/policy glue;
+- update package boundary tests and READMEs.
+
+Acceptance:
+
+- `Agent.prompt()` and `Agent.startThread()` behavior stays unchanged.
+- `packages/agent/src/agent.ts` wires session lifecycle, event fanout, abort/waitForIdle, store orchestration, and Agent-owned loop entry.
+- `packages/agent/src/loop.ts`, `thread.ts`, and `phases/*` own Agent driver behavior.
+- `packages/runtime` no longer exports Agent loop/thread/phase APIs.
+- No `core/` folder exists.
+- `bun test packages` and `bun run build` pass.
+
+## 7. v0.5.0 Scope
 
 v0.5.0 makes the Cahciua-inspired DCP direction real in Rowan.
 
-### 6.1 Goals
+### 7.1 Goals
 
 ```text
 Session + source events + driver turns
@@ -187,7 +236,7 @@ Required changes:
 - add an adapter-level SSE streaming parser that maps provider chunks into `ModelStreamEvent`;
 - preserve non-streaming JSON response handling as a compatibility fallback.
 
-### 6.2 Token Budget Contract
+### 7.2 Token Budget Contract
 
 v0.5.0 does not need a full compaction strategy, but it must define the hard budget hook before context rendering is considered stable:
 
@@ -212,7 +261,7 @@ Rules:
 - `conversation` segments are preferred over `execution` and `diagnostic` segments unless a phase policy explicitly requires evidence;
 - compaction in v0.7.0 consumes this budget report but does not own first-line hard truncation.
 
-### 6.3 Streaming Contract
+### 7.3 Streaming Contract
 
 SSE streaming belongs to v0.5.0 because provider IR is where Rowan can cleanly separate provider wire chunks from model-visible context.
 
@@ -223,7 +272,7 @@ Required behavior:
 - expose stream parser fixtures independent of live network calls;
 - keep current non-streaming response path for deterministic tests and providers that do not support streaming.
 
-### 6.4 Phase Visibility Policy
+### 7.4 Phase Visibility Policy
 
 | Phase | Should see | Should not see |
 |---|---|---|
@@ -232,7 +281,7 @@ Required behavior:
 | execute | task, allowed tools, current attempt tool results, necessary semantic context | route examples as history, old verifier text |
 | verify | task, criteria, task output, necessary evidence | route/plan format examples, unrelated conversation chatter |
 
-### 6.5 Acceptance Criteria
+### 7.5 Acceptance Criteria
 
 - prompt tests snapshot each phase viewport.
 - route contamination tests cover routing decision, failed outcome, verifier text, and tool result leakage.
@@ -241,7 +290,7 @@ Required behavior:
 - OpenAI-compatible tests still pass through the new IR.
 - no provider adapter chooses which session history is visible.
 
-## 7. v0.6.0 Scope
+## 8. v0.6.0 Scope
 
 v0.6.0 returns to the previously planned policy and safety work, now on cleaner driver boundaries.
 
@@ -271,7 +320,7 @@ Acceptance:
 - denials are recorded as tool results and AgentEvents;
 - tests cover approval allow, approval deny, non-interactive default, and dangerous command guard.
 
-## 8. v0.7.0 Scope
+## 9. v0.7.0 Scope
 
 v0.7.0 turns `ExecutionTurn` and future source events into real replay/fork infrastructure.
 
@@ -290,7 +339,7 @@ Acceptance:
 - fork starts a new session from a selected point without copying internal noise into conversation;
 - compaction never summarizes `execution` or `diagnostic` content unless explicitly selected by policy.
 
-## 9. v0.8.0 Scope
+## 10. v0.8.0 Scope
 
 v0.8.0 builds the eval harness on provider-neutral runs. Replay-backed fixtures are preferred, but eval must also support static fixtures so v0.8.0 is not blocked if v0.7.0 replay ships in a smaller form.
 
@@ -310,7 +359,7 @@ Acceptance:
 - evals can run from static fixtures without replay state;
 - scoring does not require parsing Pino logs as state.
 
-## 10. v0.9.0 Scope
+## 11. v0.9.0 Scope
 
 v0.9.0 introduces workflow as an outer orchestration layer.
 
@@ -328,7 +377,7 @@ Acceptance:
 - workflow state references Agent sessions rather than embedding duplicate run history;
 - Agent kernel remains usable without workflow.
 
-## 11. v1.0.0 Scope
+## 12. v1.0.0 Scope
 
 v1.0.0 stabilizes Rowan as a modular harness runtime.
 
@@ -340,17 +389,18 @@ Required changes:
 - documented tool and policy contract;
 - examples for CLI, embedded runtime, custom tools, custom model adapter, and replay/eval.
 
-## 12. Updated Execution Order
+## 13. Updated Execution Order
 
 Near-term order:
 
-1. Implement v0.4.0 protocol boundary and runtime split.
-2. Implement v0.5.0 context projection/rendering and provider IR.
-3. Then resume policy/safety work as v0.6.0, with local and MCP tools sharing the runtime `ToolRunner`.
-4. Build replay/compaction after source events and driver turns are clean.
-5. Build eval and workflow on replayable state.
+1. Finish v0.4.0 protocol boundary and runtime split baseline.
+2. Implement v0.4.1 Agent/runtime boundary correction.
+3. Implement v0.5.0 context projection/rendering and provider IR.
+4. Then resume policy/safety work as v0.6.0, with local and MCP tools sharing runtime integration paths.
+5. Build replay/compaction after source events and driver turns are clean.
+6. Build eval and workflow on replayable state.
 
-## 13. Deferred Decisions
+## 14. Deferred Decisions
 
 Deferred decisions must be triaged after each version is implemented. Current triage:
 
@@ -359,7 +409,9 @@ Deferred decisions must be triaged after each version is implemented. Current tr
 | Should `runtime` own skill file loading itself, or only skill application after CLI/session loads skills? | deferred | v0.4.0 moves skill application to runtime; file loading can stay in CLI/session composition until a concrete runtime embedder needs otherwise. |
 | Should core tools all move into `runtime` in v0.4.0, or should v0.4.0 first move only the tool execution path? | implemented | v0.4.0 scope moves core tool execution and default tool definitions to runtime, while policy redesign stays in v0.6.0. |
 | Should MCP live in a separate package or inside `runtime`? | implemented | MCP implementation lives under `packages/runtime/src/mcp/` as a tool provider source; no sibling `packages/mcp` package unless future dependency pressure proves it necessary. |
-| Should the execution package be named `runtime` or `runner`? | implemented | Keep package name `runtime`; use `runner` for the internal one-run executor (`AgentRunner`). `sandbox` / `environment` name code execution environments, and `workflow` names outer orchestration. |
+| Should the execution package be named `runtime` or `runner`? | superseded | v0.4.0 kept package name `runtime`; v0.4.1 corrects the deeper issue by moving Agent loop/thread/phases into `agent` and leaving `runtime` as glue/integration. |
+| Should v0.4.1 preserve compatibility re-exports from `runtime`? | implemented | No. There is no stable external API yet, so obsolete runtime loop/thread/phase exports should be removed cleanly. |
+| Should v0.4.1 create a `core/` folder or package? | implemented | No. `packages/agent/src/agent.ts` is the Agent core/facade entrypoint, with loop/thread/phases moved beside it in `packages/agent/src/`. |
 | Should `CanonicalAgentEvent` be persisted in the same session JSON or a sidecar JSONL? | planned | Decide in v0.7.0 when source events are introduced. |
 | Does replay require workspace snapshotting in v0.7.0, or only command/tool output replay first? | planned | Start with command/tool output replay; workspace snapshots require separate storage pressure. |
 | Should v0.8.0 prioritize programmatic scorers over LLM judges? | implemented | Programmatic scorers first, LLM judge second. |

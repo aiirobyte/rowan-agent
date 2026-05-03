@@ -1,10 +1,10 @@
 # Rowan Agent Technical Architecture
 
-> 版本：v0.3.5
+> 版本：v0.4.1
 > 日期：2026-05-03
-> 状态：in-progress
-> 进度：v0.0.0 到 v0.3.5 已实现；v0.4.0+ 进入 DCP-style architecture hardening
-> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`.agent/docs/2026-05-03-cahciua-dcp-reuse-plan.md`
+> 状态：planned
+> 进度：v0.0.0 到 v0.4.0 已实现；v0.4.1 修正 Agent/runtime boundary；v0.5.0+ 进入 context projection/provider IR
+> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`.agent/docs/2026-05-03-cahciua-dcp-reuse-plan.md`
 
 ## 1. Architecture Goal
 
@@ -27,9 +27,9 @@ source input
   -> Adaptation: CanonicalAgentEvent
   -> Projection: IntermediateAgentContext
   -> Rendering: RenderedAgentContext / ConversationEntry[]
-  -> Driver: route / plan / execute / verify
+  -> Agent core: Agent facade + route / plan / execute / verify + thread semantics
   -> Ports: ModelClient / ToolRunner / AgentStore / EventLogger
-  -> Runtime tool providers: local tools / MCP
+  -> Runtime glue: local tools / skills / hooks / MCP / plugins / workspace helpers
   -> Adapters: OpenAI-compatible / JSON store / Pino log
 ```
 
@@ -49,6 +49,7 @@ DCP 在这里指 deterministic context pipeline：外部输入、模型/工具�
 | v0.3.4 | implemented | `packages/store` consolidation and store/package boundary cleanup |
 | v0.3.5 | implemented | `packages/logging`, Pino run logs, removal of self-owned trace package |
 | v0.4.0 | implemented | `packages/protocol`, runtime-owned execution mechanics, context import cleanup, small `agent` facade |
+| v0.4.1 | planned | Correct v0.4.0 over-move: Agent-owned loop/thread/phases, runtime as glue/integration, no `core/` folder, no runtime compatibility re-exports |
 
 ## 3. Current Package Architecture
 
@@ -59,8 +60,8 @@ packages/
   protocol/  Zero-dependency shared contracts: model, phase, tool, task, context, turn
   session/    Session, AgentMessage, Skill, ContextScope, persisted session helpers
   store/      AgentStore port, protocol ExecutionTurn persistence, in-memory/json stores
-  runtime/    AgentRunner, run loop, thread runner, turn recorder, routing, tools, skills, hooks/MCP boundary, workspace helpers
-  agent/      Small public facade/kernel: Agent, state/lifecycle, event fanout, abort/waitForIdle, ergonomic re-exports
+  runtime/    v0.4.0 currently owns loop/thread/phases/tools/skills/hooks/MCP/workspace helpers; v0.4.1 moves loop/thread/phases back to agent
+  agent/      Public facade plus Agent core target: Agent, state/lifecycle, event fanout, abort/waitForIdle, loop/thread/phases
   context/    phase prompt templates and OpenAI-compatible prompt builder
   adapters/   OpenAI-compatible provider adapter and JSON extraction
   logging/    Pino AgentEvent logger and redaction
@@ -81,13 +82,20 @@ logging      -> agent
 cli          -> adapters, agent, logging, runtime, session, store
 ```
 
-v0.4.0 resolves the v0.3.5 pressure points:
+v0.4.0 resolved the v0.3.5 dependency pressure points:
 
 - `agent` no longer imports `ExecutionTurn` / `ExecutionTurnEntry` from `store`.
 - `context` imports protocol-shaped context/tool contracts instead of importing `agent`.
 - `store` validates and persists protocol turn types instead of owning shared model/tool/phase contracts.
 - `runtime` owns the execution loop, thread runner, scheduler, tools, hooks/MCP boundary, skills loading, and turn recording.
 - `agent` is now the public facade/kernel and delegates execution to `runtime`.
+
+v0.4.1 corrects the over-move from v0.4.0:
+
+- `agent` should own the Agent loop, route / plan / execute / verify phases, thread semantics, retry rules, verification rules, and outcome creation.
+- `runtime` should own runtime glue: workspace helpers, tools, skills loading, hooks/policy integration, MCP tool providers, and future plugin integration points.
+- No new `packages/agent-core` or `packages/agent/src/core/` is introduced; `packages/agent/src/agent.ts` remains the Agent core/facade entrypoint.
+- Removed runtime loop/thread/phase exports do not need compatibility re-exports because the package surface is not externally stable yet.
 
 ## 4. Core Data Boundaries
 
@@ -164,12 +172,12 @@ Rules:
 - failed outcomes stay out of future semantic context unless a later product decision explicitly publishes them.
 - run logs observe events; `ExecutionTurn` is the replay/fork seed.
 
-## 5. Current Runtime Flow
+## 5. Current Agent Flow
 
 ```text
 Agent.prompt(input)
   -> create/append Session user turn
-  -> runAgentLoop()
+  -> runAgentLoop() # v0.4.1 target: packages/agent/src/loop.ts
     -> routeRequest()
        -> route=direct: publish assistant conversation message, emit outcome
        -> route=task: planTask()
@@ -233,8 +241,8 @@ packages/
   protocol/        zero-dependency shared contracts: phase, model, tool, task, event, turn
   session/         Session aggregate, source events, persisted session migration
   context/         projection, phase policies, rendering, prompt templates, ConversationEntry IR
-  agent/           small public Agent facade/kernel surface, lifecycle, state, event fanout
-  runtime/         agent execution runtime: runner, routing, phase driver, skills, tools, hooks, MCP
+  agent/           public Agent facade plus Agent core: lifecycle, state, event fanout, loop, phases, thread semantics
+  runtime/         runtime glue: tools, skills, workspace helpers, hooks/policy integration, MCP, plugins
   adapters/        provider wire adapters
   store/           AgentStore implementations
   logging/         AgentEvent log sinks
@@ -257,19 +265,21 @@ cli         -> adapters, agent, logging, protocol, runtime, session, store
 
 The key correction is that `context` should be an upstream input-rendering package, not an `agent` downstream package. After `protocol` exists, `context` may use protocol contracts and session state, but it should not import the public `Agent` facade or runtime implementation details.
 
-The minimal path can avoid creating every package immediately:
+The corrected minimal path before v0.5.0:
 
 - create `protocol` first;
-- create `runtime` as the execution engine package instead of separate `driver` and `tools` packages;
-- move route / plan / execute / verify, scheduler, skills application, hooks, MCP tool providers, and core tool execution into `runtime`;
-- keep `agent` as the small public facade/kernel surface that owns session lifecycle, state, event fanout, abort handling, and persistence orchestration.
+- keep `agent` as the public facade plus Agent core;
+- move route / plan / execute / verify, scheduler, thread semantics, retry rules, verification rules, and outcome creation into `packages/agent/src/`;
+- do not create `packages/agent-core` or `packages/agent/src/core/`;
+- keep `runtime` as the glue/integration package for workspace helpers, local tools, skills, hooks/policy integration, MCP tool providers, and plugins;
 - allow `agent` to re-export ergonomic public kernel contracts such as `AgentMessage`, `ToolCall`, `ToolResult`, `StreamFn`, and `AgentEvent`, but do not let `agent` own shared domain types; definitions live in `protocol` / `session`.
 
 Terminology lock:
 
 ```text
-runtime = agent execution runtime package and system layer
-runner = runtime internal executor for one Agent run
+agent core = Agent-owned loop, phases, thread semantics, retry, verification, and outcome rules; implemented directly under packages/agent/src/
+runtime = integration/glue layer for tools, skills, hooks, MCP, plugins, policy, and workspace helpers
+runner = optional internal helper only when it adds value beyond a direct runAgentLoop() call
 sandbox/environment = tool or code execution environment
 workflow = outer orchestration layer around Agent runs
 ```
@@ -281,25 +291,30 @@ Future package responsibilities:
 ```text
 agent
   -> Agent class and public API
-  -> minimal public kernel exports/re-exports
+  -> Agent core/facade entrypoint in packages/agent/src/agent.ts
   -> AgentState
   -> Session create/load/save lifecycle
   -> user turn append and child thread lifecycle
   -> event subscription/fanout
   -> abort / waitForIdle
-  -> delegates execution to runtime
-  -> does not own phase workflow, task planning, verification, DriverTurn, tool running, context rendering, or provider wire conversion
+  -> runAgentLoop implementation
+  -> route / plan / execute / verify phases
+  -> thread semantics
+  -> routing scheduler
+  -> task retry, verification, and outcome rules
+  -> DriverTurn assembly when it is core driver vocabulary
+  -> does not own tool implementation, MCP integration, provider wire conversion, or workflow graph orchestration
 
 runtime
-  -> AgentRunner / runTurn / runAgentLoop implementation
-  -> route / plan / execute / verify phases
-  -> routing scheduler
-  -> skill loading/application policy
+  -> runtime glue/integration used by Agent core
+  -> workspace helpers
+  -> skill loading and runtime skill integration
   -> tool registry and tool runner
   -> core tool definitions and tool execution
   -> hook pipeline and policy hook invocation
   -> MCP client/tool provider implementation
-  -> ExecutionTurn recording
+  -> plugin integration points
+  -> AgentStore / logging adapters when used as runtime composition
 ```
 
 ## 8. DCP Refactor Principles
@@ -308,8 +323,8 @@ runtime
 2. `ExecutionTurn` moves from `store` to `protocol`; `store` persists it but does not own the domain type.
 3. `context` owns projection and rendering, not provider wire format, and depends on `protocol + session` rather than `agent`.
 4. `adapters` convert `ConversationEntry[]` to provider requests and provider responses back to Rowan events/output.
-5. `runtime` owns route / plan / execute / verify, routing, skills, hooks, MCP tool providers, and core tool execution.
-6. `agent` stays a small public kernel/facade: lifecycle, subscriptions, abort/waitForIdle, persistence orchestration, and ergonomic type re-exports only.
+5. `agent` owns route / plan / execute / verify, routing, thread semantics, retry, verification, and outcome rules.
+6. `runtime` owns tools, skills, hooks, MCP tool providers, policy/plugin integration points, and workspace helpers.
 7. Source input and Driver output remain orthogonal streams and are merged only by phase-specific rendering.
 8. Filtering happens before compaction; never summarize internal execution noise into long-term context.
 
@@ -332,43 +347,39 @@ Acceptance:
 - `store` persists protocol types but does not define them;
 - `bun test packages` and `bun run build` pass.
 
-### Phase B: Runtime Package Split
+### Phase B: Agent Boundary Correction
 
-Goal: move execution mechanics out of `agent` and into one cohesive runtime package.
+Goal: correct the v0.4.0 over-move by returning Agent driver semantics to `agent` while keeping runtime as integration glue.
 
 Target shape:
 
 ```text
 packages/agent/src/
   agent.ts
-  thread.ts
-  lifecycle.ts
-
-packages/runtime/src/
-  index.ts
-  runner.ts
   loop.ts
-  runtime.ts
-  turn-recorder.ts
+  thread.ts
   phases/index.ts
   phases/types.ts
   phases/routing.ts
-  phases/route.ts
-  phases/plan.ts
-  phases/execute.ts
   phases/verifying.ts
+  turn-recorder.ts # if driver-turn assembly remains core-owned
+
+packages/runtime/src/
+  index.ts
+  dir.ts
   hooks/
   mcp/
-  skills/
-  tools/
+  skills.ts
+  tools.ts
 ```
 
 Acceptance:
 
 - public `Agent.prompt()` behavior stays unchanged;
-- route, plan, execute, verify behavior moves behind the runtime boundary;
-- core tools, routing, hooks, and MCP tool-provider boundaries are exported from `runtime`;
-- `agent` no longer owns task planner, verifier, scheduler, tool runner, or DriverTurn recording implementation;
+- route, plan, execute, verify, thread semantics, retry, and outcome rules are Agent-owned under `packages/agent/src/`;
+- `packages/agent/src/agent.ts` remains the Agent core/facade entrypoint; no `core/` folder or package is created;
+- obsolete runtime loop/thread/phase/runner exports are removed without compatibility re-exports;
+- core tools, hooks, skills, workspace helpers, and MCP tool-provider boundaries remain exported from `runtime`;
 - budget, thread, verify retry, and multi-turn tests still pass.
 
 ### Phase C: Context Projection and Rendering

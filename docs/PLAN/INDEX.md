@@ -29,6 +29,9 @@ The main project roadmap now lives in:
 - `docs/PLAN/v0.4.0/README.md`
 - `docs/PLAN/v0.4.0/PLAN.md`
 - `docs/PLAN/v0.4.0/TASKS.md`
+- `docs/PLAN/v0.4.1/README.md`
+- `docs/PLAN/v0.4.1/PLAN.md`
+- `docs/PLAN/v0.4.1/TASKS.md`
 
 ## Current Status
 
@@ -50,6 +53,7 @@ The main project roadmap now lives in:
 - v0.3.5 implemented: Pino runtime logging and trace package removal.
 - Architecture direction updated on 2026-05-03: v0.4.0+ now follows a DCP-first hardening path before policy/replay/eval/workflow expansion.
 - v0.4.0 implemented: protocol boundary, runtime split, context import cleanup, runtime/runner terminology, and MCP ownership under runtime.
+- v0.4.1 planned: correct the Agent/runtime boundary by moving loop, thread, and phases back into `packages/agent/src/` with no `core/` folder and no compatibility runtime re-exports.
 
 Planning status enum:
 
@@ -62,9 +66,10 @@ Planning status enum:
 
 ## Next Steps
 
-1. Implement v0.5.0: add context projection/rendering and provider-neutral `ConversationEntry[]`.
-2. Resume policy and safety as v0.6.0 after the driver and context boundaries are clean.
-3. Build replay/fork/compaction after source events and driver turns are cleanly separated.
+1. Implement v0.4.1: correct the Agent/runtime boundary before context work.
+2. Implement v0.5.0: add context projection/rendering and provider-neutral `ConversationEntry[]`.
+3. Resume policy and safety as v0.6.0 after the driver and context boundaries are clean.
+4. Build replay/fork/compaction after source events and driver turns are cleanly separated.
 
 ## Notes
 
