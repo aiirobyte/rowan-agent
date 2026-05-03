@@ -2,7 +2,7 @@
 
 > 版本：v0.1.0
 > 日期：2026-05-01
-> 状态：已实现，待真实 API 手动验收
+> 状态：implemented
 > 范围：OpenAI-compatible 真实模型接入
 
 ## 1. Status Legend
@@ -57,5 +57,5 @@
 - [ ] provider registry
 - [ ] native tool calling compatibility matrix
 - [ ] SSE streaming parser
-- [ ] workspace ACI
+- [ ] workspace tools
 - [ ] eval harness

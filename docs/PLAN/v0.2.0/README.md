@@ -2,14 +2,14 @@
 
 > 版本：v0.2.0
 > 日期：2026-05-01
-> 状态：已实现
+> 状态：implemented
 > 上游文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.1.0/PLAN.md`
 
 ## 文档
 
 | 文档 | 用途 |
 |---|---|
-| `docs/PLAN/v0.2.0/PLAN.md` | v0.2.0 主计划，聚焦 monorepo 拆包条件和 Workspace ACI 起步 |
+| `docs/PLAN/v0.2.0/PLAN.md` | v0.2.0 主计划，聚焦 monorepo 拆包条件和 Workspace tools 起步 |
 | `docs/PLAN/v0.2.0/TASKS.md` | 可直接拆 issue 的任务表 |
 
 ## v0.2.0 定位
@@ -23,7 +23,7 @@ src/ single package
   -> packages/agent
   -> packages/adapters
   -> packages/trace
-  -> packages/aci
+  -> packages/workspace
   -> packages/cli
 ```
 
@@ -34,7 +34,7 @@ src/ single package
 1. 稳定 v0.0.0 public API 和事件 schema。
 2. 把 OpenAI-compatible adapter 作为第一个真实 adapter 迁入 package 边界。
 3. 让 trace 从 writer 扩展为 writer + reader + basic inspect。
-4. 引入 Workspace ACI 的最小多工具集合。
+4. 引入 Workspace tools 的最小多工具集合。
 5. 建立 Bun workspace / monorepo 基础结构。
 6. 保持现有 CLI 使用方式不破坏：
 
@@ -69,13 +69,13 @@ cli
   -> agent
   -> adapters
   -> trace
-  -> aci
+  -> workspace
 
 adapters -> agent
 trace    -> agent
-aci      -> agent
+workspace -> agent
 
 agent     -> no Rowan package dependency
 ```
 
-任何 package 不能反向依赖 `cli`。`agent` 不能依赖 adapter、trace、aci、workflow 或 eval。
+任何 package 不能反向依赖 `cli`。`agent` 不能依赖 adapter、trace、workspace、workflow 或 eval。

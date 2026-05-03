@@ -2,7 +2,7 @@
 
 > 版本：v0.1.0
 > 日期：2026-05-01
-> 状态：已实现，待真实 API 手动验收
+> 状态：implemented
 > 技术栈：TypeScript + Bun
 > 基线：v0.0.0 Minimal Agent Kernel
 > 任务表：`docs/PLAN/v0.1.0/TASKS.md`
@@ -69,7 +69,7 @@ v0.1.0 不做 provider registry，不做 Anthropic/Gemini，不做 SDK 依赖，
 - 不做 native tool calling 兼容矩阵。
 - 不做 streaming SSE token parser，除非实现成本很低。
 - 不做 real model eval。
-- 不做 workspace ACI。
+- 不做 workspace tools。
 
 ## 4. 设计决策
 
@@ -523,5 +523,5 @@ bun run rowan --trace .rowan/runs/real.jsonl "use echo tool"
 - native tool calling compatibility。
 - streaming SSE parser。
 - local model profiles。
-- workspace ACI。
+- workspace tools。
 - eval harness。

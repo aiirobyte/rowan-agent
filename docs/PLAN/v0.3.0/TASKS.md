@@ -2,7 +2,7 @@
 
 > 版本：v0.3.0
 > 日期：2026-05-01
-> 状态：done
+> 状态：implemented
 
 ## 1. Milestones
 

@@ -2,7 +2,7 @@
 
 > 版本：v0.0.0
 > 日期：2026-04-30
-> 状态：已定稿，可直接拆 issue
+> 状态：implemented
 > 范围：单包 TypeScript + Bun 最简 Agent 内核
 
 ## 1. Status Legend
@@ -79,12 +79,12 @@
 ## 4. Explicitly Out of v0.0.0
 
 - [ ] real model adapter。
-- [ ] workspace ACI。
+- [ ] workspace tools。
 - [ ] shell tool。
 - [ ] eval runner。
 - [ ] policy engine。
 - [ ] replay/fork。
-- [ ] sub-agent。
+- [ ] thread runner。
 - [ ] workflow。
 - [ ] MCP。
 - [ ] Web UI。

@@ -2,7 +2,7 @@
 
 > 版本：v0.2.0
 > 日期：2026-05-01
-> 状态：已实现
+> 状态：implemented
 > 技术栈：TypeScript + Bun
 > 基线：v0.1.0 Real Model Runtime
 > 任务表：`docs/PLAN/v0.2.0/TASKS.md`
@@ -18,7 +18,7 @@ packages/
   agent/       Agent, Session, Task, Tool, Verifier, Events
   adapters/   OpenAI-compatible real model adapter
   trace/      JSONL writer, reader, basic inspect
-  aci/        workspace read/list/search/diff/patch/test tools
+  workspace/   workspace read/list/search/diff/patch/test tools
   cli/        command interface and runtime composition
 ```
 
@@ -32,7 +32,7 @@ packages/
 |---|---|---|
 | v0.0.0 API 稳定 | 基本稳定，但需要显式冻结 public API | 建立 `agent` public exports，迁移 import 到 package 入口 |
 | 至少一个真实模型 adapter 完成 | OpenAI-compatible 已实现 | 迁入 `packages/adapters` |
-| workspace ACI 开始引入多工具 | 尚未开始 | 新增 `packages/aci` 最小工具集 |
+| workspace tools 开始引入多工具 | 尚未开始 | 新增 `packages/workspace` 最小工具集 |
 | trace 不再只是 writer，需要 reader/replay | writer 已有，reader/replay 未有 | v0.2.0 做 reader + inspect，replay/fork 后置 |
 
 因此 v0.2.0 的正确定位是：
@@ -40,7 +40,7 @@ packages/
 ```text
 Monorepo Split Readiness
   + First Package Extraction
-  + Workspace ACI Seed
+  + Workspace Tooling Seed
 ```
 
 ## 3. 范围
@@ -63,12 +63,12 @@ Monorepo Split Readiness
   - 迁移 JSONL writer。
   - 新增 JSONL reader。
   - 新增 basic inspect API：list runs、read events、filter by type/run/session。
-- `packages/aci`：
-  - 新增 Workspace ACI 最小多工具集合。
+- `packages/workspace`：
+  - 新增 Workspace tools 最小多工具集合。
   - 以 `Tool` 协议暴露，不污染 Agent Loop。
   - 默认只允许 workspace 内操作。
 - `packages/cli`：
-  - CLI 组合 agent、adapters、trace、aci。
+  - CLI 组合 agent、adapters、trace、workspace。
   - 保持当前命令兼容。
   - 新增 trace 子命令。
 - 测试：
@@ -83,7 +83,7 @@ Monorepo Split Readiness
 - 不做完整 replay/fork from step。
 - 不做 eval runner。
 - 不做 workflow graph executor。
-- 不做 sub-agent。
+- 不做 thread runner。
 - 不做 Web UI。
 - 不做远程 sandbox 或容器执行。
 
@@ -125,7 +125,7 @@ packages/
       jsonl-reader.ts
       inspect.ts
 
-  aci/
+  workspace/
     package.json
     src/
       index.ts
@@ -172,7 +172,7 @@ packages/workflow/
 - 发起网络请求。
 - 读写 trace 文件。
 - 直接访问 workspace 文件系统。
-- 依赖 `adapters`、`trace`、`aci`、`cli`。
+- 依赖 `adapters`、`trace`、`workspace`、`cli`。
 
 ### 5.2 `packages/adapters`
 
@@ -213,7 +213,7 @@ v0.2.0 只做：
 - fork from step。
 - trace compaction。
 
-### 5.4 `packages/aci`
+### 5.4 `packages/workspace`
 
 职责：
 
@@ -240,7 +240,7 @@ v0.2.0 工具：
 
 - 解析命令行参数。
 - 解析模型 config。
-- 组合 agent/adapters/trace/aci。
+- 组合 agent/adapters/trace/workspace。
 - 管理用户可见错误。
 
 v0.2.0 命令：
@@ -313,9 +313,9 @@ v0.2.0 不修改现有事件语义。
 - fork event。
 - raw prompt / raw response 记录。
 
-## 8. Workspace ACI 设计
+## 8. Workspace tools 设计
 
-v0.2.0 的 ACI 目标是提供工具协议，不是做完整 coding agent。
+v0.2.0 的 Workspace tools 目标是提供工具协议，不是做完整 coding agent。
 
 核心对象：
 
@@ -407,11 +407,11 @@ const tools = [
 - trace writer tests 通过。
 - reader 能读取现有 `.rowan/runs/*.jsonl`。
 
-### M4: Add Workspace ACI
+### M4: Add Workspace tools
 
 目标：
 
-- 新增 `packages/aci`。
+- 新增 `packages/workspace`。
 - 实现 read-only tools。
 - 接入 CLI 默认工具集。
 
@@ -455,11 +455,11 @@ const tools = [
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 过早拆太细 | package 边界反复变化 | v0.2.0 只拆已有压力的 agent/adapters/trace/aci/cli |
+| 过早拆太细 | package 边界反复变化 | v0.2.0 只拆已有压力的 agent/adapters/trace/workspace/cli |
 | 循环依赖 | build 和测试不稳定 | 明确 dependency direction，并加检查 |
 | CLI 兼容破坏 | 用户现有命令失效 | 根 scripts 保持不变 |
 | Trace schema 漂移 | 历史 run 不可读 | v0.2.0 不改事件语义 |
-| ACI 写入过早 | 安全边界不清 | 先 read-only，再 patch/test |
+| Workspace tools 写入过早 | 安全边界不清 | 先 read-only，再 patch/test |
 | Bun workspace 配置复杂 | 开发体验下降 | root scripts 继续作为唯一入口 |
 
 ## 11. Release Checklist
@@ -471,6 +471,6 @@ const tools = [
 - [x] `bun run rowan trace show <run-id-or-file>`
 - [x] OpenAI-compatible mock tests pass after package extraction
 - [x] Trace reader can parse v0.1.0 JSONL files
-- [x] Workspace ACI read-only tools pass tests
+- [x] Workspace read-only tools pass tests
 - [x] Package dependency direction check passes
 - [x] README / ROADMAP / ARCHITECTURE updated

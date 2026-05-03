@@ -2,7 +2,7 @@
 
 > 版本：v0.0.0
 > 日期：2026-04-30
-> 状态：已定稿，可直接执行
+> 状态：implemented
 > 技术栈：TypeScript + Bun
 > 任务表：`docs/PLAN/v0.0.0/TASKS.md`
 
@@ -10,7 +10,7 @@
 
 v0.0.0 是 Rowan 的最简 Agent 内核版本。
 
-它不做平台，不做 monorepo，不做 eval，不做 sub-agent，不做 workflow。v0.0.0 只跑通一个核心闭环：
+它不做平台，不做 monorepo，不做 eval，不做 thread runner，不做 workflow。v0.0.0 只跑通一个核心闭环：
 
 ```text
 Session
@@ -32,7 +32,7 @@ v0.0.0 的产品目标：
 |---|---|
 | Agent 角色 | 同一个 Agent 同时承担 planner 和 executor |
 | Planner / executor 关系 | 不拆独立 planner；planner 只是同一个 Agent 的一次模型/工具调用阶段 |
-| Task 粒度 | v0.0.0 先只做 task，不做 sub-agent |
+| Task 粒度 | v0.0.0 先只做 task，不做 thread runner |
 | Acceptance criteria | 使用结构化 schema 表示 |
 | Verification | v0.0.0 先用同一个模型判断；后续再加 scorer |
 | Session log vs Message | 不合并；log 是完整运行事件，messages 是模型请求上下文 |
@@ -65,12 +65,12 @@ v0.0.0 的产品目标：
 
 - 不做 `packages/*` monorepo。
 - 不做 real model adapter。
-- 不做 workspace ACI。
+- 不做 workspace tools。
 - 不做 shell/network/file write tools。
 - 不做 eval runner。
 - 不做 replay/fork。
 - 不做 full policy engine。
-- 不做 sub-agent。
+- 不做 thread runner。
 - 不做 workflow graph。
 - 不做 MCP。
 - 不做 Web UI。

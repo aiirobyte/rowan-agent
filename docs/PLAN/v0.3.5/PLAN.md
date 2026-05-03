@@ -218,6 +218,25 @@ Run logs:
   Relative --log paths are resolved from <workspace>.
 ```
 
+### 3.4 Removed Trace Inspect Commands
+
+v0.2.0 曾引入：
+
+```text
+rowan trace list
+rowan trace show <run-id-or-file>
+```
+
+v0.3.5 的处置是移除这两个 trace inspect 子命令，不在本版本改名为 `log list` / `log show`。
+
+原因：
+
+- Pino run logs 是 observability sink，不再承担 inspect database 职责。
+- v0.3.3 已经用 `AgentStore.steps` 承接可查询的 execution history。
+- 未来 replay/fork/eval 应从 `ExecutionTurn` 和 source events 读取状态，而不是从 Pino log 反推状态。
+
+如果后续需要可读的历史查看命令，应作为 store/replay inspect 能力重新设计，而不是复活 trace reader。
+
 ## 4. Dependency Direction
 
 目标依赖规则：
@@ -264,6 +283,7 @@ Run logs:
 - CLI 默认写 run log，并打印 `Log written to ...`。
 - CLI 支持 `--log <path>`。
 - CLI 不再支持 `--trace <path>`。
+- CLI 不再支持 `trace list` / `trace show`，且 v0.3.5 不新增 `log list` / `log show`。
 - run log JSONL 每行是 Pino JSON record，且包含 `event` payload。
 - log redaction 覆盖 API key 风险。
 - `bun test packages` 通过。

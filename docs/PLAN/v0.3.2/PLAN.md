@@ -2,13 +2,13 @@
 
 > 版本：v0.3.2
 > 日期：2026-05-02
-> 状态：completed
+> 状态：implemented
 > 基线：v0.3.1 Persistent Session + Multi-turn CLI
 > 任务表：`docs/PLAN/v0.3.2/TASKS.md`
 
 ## 1. v0.3.2 目标
 
-v0.3.2 的目标是把 Rowan 的 sub-agent / sub-session 从“专门 runner 能力”收敛为“普通 Agent + 普通 Session 的同构执行”。
+v0.3.2 的目标是把 Rowan 的 predecessor runner 能力收敛为“普通 Agent + 普通 Session 的同构执行”。
 
 核心变化：
 
@@ -58,7 +58,7 @@ type Session<TLogEvent = never> = {
 
 ## 3. Thread Model
 
-新增 thread 语义，作为 sub-session 的 v0.3.2 名称：
+新增 thread 语义，作为 predecessor 能力的 v0.3.2 名称：
 
 ```ts
 type ThreadInput = {
@@ -76,7 +76,7 @@ type ThreadInput = {
 运行规则：
 
 - 创建 child Session 时写入 `input = prompt`，并透传 `task` / `goal`。
-- child Session 继续使用 `runAgentLoop()`，不引入专门的 sub-agent loop。
+- child Session 继续使用 `runAgentLoop()`，不引入专门的 thread runner loop。
 - child thread 可以继续显式创建 nested thread，但默认 worker 路由应优先完成自己的 task / goal。
 - 公开 API 只提供 `runThread()` / `Agent.startThread()`。
 - 新事件使用 `thread_created` 和 `thread_end`；trace inspector 需要识别 thread parent/child 关系。
@@ -130,10 +130,10 @@ Prompt builder 需要显式告诉模型：
 
 ## 7. Breaking Changes
 
-v0.3.2 不保留旧 sub-session 兼容层：
+v0.3.2 不保留旧 predecessor 兼容层：
 
-- 删除旧 sub-session API。
-- 删除 legacy sub-session runner。
+- 删除旧 predecessor API。
+- 删除 legacy predecessor runner。
 - route parser 只接受 `route: "direct" | "task" | "thread"`。
 - trace inspector 只识别 `thread_created` / `thread_end` 作为 child thread 事件。
 
@@ -143,7 +143,7 @@ v0.3.2 不保留旧 sub-session 兼容层：
 - 多轮 `Agent.prompt()` 不更新 `session.input`，但当前轮 route / plan 仍使用最新 user turn。
 - `createSession()` 支持 optional `task` / `goal`。
 - `Agent.startThread()` 创建 child Session 并运行同一套 Agent loop。
-- 旧 sub-session API 和事件不再暴露。
+- 旧 predecessor API 和事件不再暴露。
 - 主 Session 对工具/大任务请求可自动创建 thread，收集 child outcome 后进行 verify。
 - trace 包含 `thread_created` 和 `thread_end`，并能被 inspector 识别 parent/child 关系。
 - OpenAI-compatible prompt 与 parser 只支持新 route schema。

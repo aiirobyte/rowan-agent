@@ -25,7 +25,8 @@
 | V035-202 | M2 | Implement Pino AgentEvent logger | logging/test | P0 | V035-201 | done | Logger writes Pino JSONL records containing `event` payload and supports flush |
 | V035-301 | M3 | Replace CLI trace writer with logger | cli/logging | P0 | V035-202 | done | CLI subscribes `pinoAgentEventLogger` and prints `Log written to ...` |
 | V035-302 | M3 | Replace `--trace` with `--log` | cli/test | P0 | V035-301 | done | CLI accepts `--log`, rejects removed `--trace`, and config outputs `logging` |
-| V035-401 | M4 | Remove `packages/trace` | package | P0 | V035-302 | done | No source imports `@rowan-agent/trace` |
+| V035-303 | M3 | Remove `trace list` / `trace show` CLI inspect commands | cli/docs | P1 | V035-302 | done | CLI no longer exposes trace inspect commands and does not introduce `log list` / `log show` |
+| V035-401 | M4 | Remove `packages/trace` | package | P0 | V035-303 | done | No source imports `@rowan-agent/trace` |
 | V035-402 | M4 | Update tests that inspect run log files | test | P0 | V035-401 | done | Tests parse Pino records and assert event payloads |
 | V035-501 | M5 | Update package boundaries | test | P0 | V035-401 | done | Boundary rules include `logging` and exclude `trace` |
 | V035-502 | M5 | Run release gates | release | P0 | V035-501 | done | `bun test packages` and `bun run build` pass |
@@ -38,6 +39,7 @@
 - [x] CLI imports logging instead of trace
 - [x] CLI supports `--log`
 - [x] CLI rejects `--trace`
+- [x] CLI removes `trace list` / `trace show`
 - [x] `packages/trace` removed
 - [x] package boundary test updated
 - [x] run log records contain original `AgentEvent` payload

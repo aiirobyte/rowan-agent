@@ -2,7 +2,7 @@
 
 > 版本：v0.1.0
 > 日期：2026-05-01
-> 状态：已实现，待真实 API 手动验收
+> 状态：implemented
 > 上游文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`
 
 ## 文档

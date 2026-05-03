@@ -2,8 +2,8 @@
 
 > 版本：v0.3.3
 > 日期：2026-05-03
-> 状态：planned
-> 基线：v0.3.2 Threaded Sub Agent Sessions
+> 状态：implemented
+> 基线：v0.3.2 Threaded Agent Sessions
 > 任务表：`docs/PLAN/v0.3.3/TASKS.md`
 
 ## 1. v0.3.3 目标

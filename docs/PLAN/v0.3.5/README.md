@@ -23,7 +23,8 @@ v0.3.5 是 v0.3.4 store package consolidation 后的运行日志瘦身版本。
 3. 新增 `packages/logging`，用 Pino 将现有颗粒度的 `AgentEvent` 输出成 JSONL run log。
 4. CLI 默认写入 `<workspace>/runs/<timestamp>-<session-id>.jsonl`，但语义从 trace 改为 run log。
 5. CLI 的 `--trace` 被 `--log` 替代，避免继续暴露 trace 概念。
-6. 不引入 replay / fork / trace inspect；后续需要回放时从 `AgentStore.steps` 和 run log 组合设计。
+6. `trace list` / `trace show` inspect 子命令移除，本版本不改名为 `log list` / `log show`。
+7. 不引入 replay / fork / log inspect；后续需要回放时从 `AgentStore.steps` 和 source events 设计。
 
 ## 快速验收
 
@@ -38,5 +39,6 @@ bun run build
 - `packages/logging` 存在并导出 Pino-backed AgentEvent logger。
 - CLI 不再依赖 `@rowan-agent/trace`。
 - CLI help/config 输出使用 log terminology。
+- CLI 不再暴露 `--trace`、`trace list`、`trace show`。
 - run log JSONL 中每行是 Pino log record，并包含原始 `AgentEvent` payload。
 - package boundary test 使用 `logging`，不再使用 `trace`。

@@ -2,19 +2,19 @@
 
 > 版本：v0.3.2
 > 日期：2026-05-02
-> 状态：completed
+> 状态：implemented
 > 上游文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.3.1/PLAN.md`
 
 ## 文档
 
 | 文档 | 用途 |
 |---|---|
-| `docs/PLAN/v0.3.2/PLAN.md` | v0.3.2 主计划，聚焦 thread/sub-session 同构化 |
+| `docs/PLAN/v0.3.2/PLAN.md` | v0.3.2 主计划，聚焦 thread 同构化 |
 | `docs/PLAN/v0.3.2/TASKS.md` | 可直接拆 issue 的任务表 |
 
 ## v0.3.2 定位
 
-v0.3.2 把旧 sub-session/sub-agent 能力收敛为普通 Agent + 普通 Session 的 thread 执行。
+v0.3.2 把旧 predecessor runner 能力收敛为普通 Agent + 普通 Session 的 thread 执行。
 
 核心变化：
 
@@ -23,7 +23,7 @@ v0.3.2 把旧 sub-session/sub-agent 能力收敛为普通 Agent + 普通 Session
 3. 主 Session 需要工具或大任务时创建 child thread。
 4. child thread 使用同一套 `route -> plan -> execute -> verify` Agent loop。
 5. trace 新增 `thread_created` 和 `thread_end`。
-6. 旧 sub-session API 和事件被移除。
+6. 旧 predecessor API 和事件被移除。
 
 ## 快速验收
 
