@@ -16,6 +16,7 @@ import {
   type Outcome,
 } from "@rowan-agent/agent";
 import {
+  consoleAgentEventLogger,
   pinoAgentEventLogger,
   type AgentEventLogLevel,
   type AgentEventLogPath,
@@ -172,6 +173,7 @@ Run logs:
   Session run logs are written automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
   --log-level controls run log detail: debug, info, warn, error, or silent. Default: info.
   Info logs write event summaries only; debug logs include redacted event payloads.
+  Matching run log records are streamed live to stderr; stdout is reserved for command results.
   Turns in one process append to the same run log; explicit session loads start a new run log.
   Relative --log paths are resolved from <workspace>.
   CLI output prints Session id once, Message id before each turn result, and Log path last once per entry.
@@ -519,9 +521,11 @@ async function promptWithLog(input: {
   onMessageId?: (messageId: string) => void;
 }): Promise<Outcome> {
   const eventLogger = pinoAgentEventLogger(input.logPath, { mode: input.logMode, level: input.logLevel });
+  const consoleLogger = consoleAgentEventLogger({ level: input.logLevel });
   let messageId: string | undefined;
   const listener: AgentEventListener = ((event: AgentEvent) => {
     eventLogger(event);
+    consoleLogger(event);
 
     if (event.type === "chat_start" && !messageId) {
       messageId = currentTurnMessageId(event.content);
@@ -530,7 +534,10 @@ async function promptWithLog(input: {
       }
     }
   }) as AgentEventListener;
-  listener.flush = eventLogger.flush;
+  listener.flush = async () => {
+    await eventLogger.flush();
+    await consoleLogger.flush();
+  };
 
   const unsubscribe = input.agent.subscribe(listener);
   try {

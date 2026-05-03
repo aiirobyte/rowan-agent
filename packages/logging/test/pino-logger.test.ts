@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import type { AgentEvent } from "@rowan-agent/agent";
-import { pinoAgentEventLogger, redactSecrets } from "../src";
+import { consoleAgentEventLogger, pinoAgentEventLogger, redactSecrets } from "../src";
 
 function parseLogLines(text: string): Array<Record<string, unknown>> {
   return text
@@ -149,6 +149,70 @@ test("pinoAgentEventLogger silent level does not create a log file", async () =>
 
   expect(logger.path()).toBeUndefined();
   expect(existsSync(logPath)).toBe(false);
+});
+
+test("consoleAgentEventLogger writes Pino-shaped JSONL records to the configured stream", async () => {
+  const chunks: string[] = [];
+  const logger = consoleAgentEventLogger({
+    stream: {
+      write: (chunk) => {
+        chunks.push(chunk);
+      },
+    },
+  });
+
+  logger({
+    type: "model_requested",
+    phase: "route",
+    model: { provider: "test", name: "model" },
+    usage: { inputMessages: 3 },
+    ts: "2026-05-03T141659-32+08:00",
+  });
+  await logger.flush?.();
+
+  const [record] = parseLogLines(chunks.join(""));
+  expect(record).toMatchObject({
+    level: 30,
+    eventType: "model_requested",
+    eventTs: "2026-05-03T141659-32+08:00",
+    phase: "route",
+  });
+  expect(record?.time).toEqual(expect.any(Number));
+  expect(record?.msg).toBeUndefined();
+  expect(record?.event).toBeUndefined();
+});
+
+test("consoleAgentEventLogger debug output includes redacted event payloads", async () => {
+  const chunks: string[] = [];
+  const logger = consoleAgentEventLogger({
+    level: "debug",
+    stream: {
+      write: (chunk) => {
+        chunks.push(chunk);
+      },
+    },
+  });
+
+  logger({
+    type: "tool_start",
+    toolName: "bash",
+    args: { command: "OPENAI_API_KEY=secret-token bun test" },
+    ts: "2026-05-03T141659-32+08:00",
+  });
+  await logger.flush?.();
+
+  const [record] = parseLogLines(chunks.join(""));
+  expect(record).toMatchObject({
+    level: 30,
+    eventType: "tool_start",
+    event: {
+      type: "tool_start",
+      toolName: "bash",
+      ts: "2026-05-03T141659-32+08:00",
+    },
+  });
+  expect(JSON.stringify(record)).not.toContain("secret-token");
+  expect(JSON.stringify(record)).toContain("OPENAI_API_KEY=[REDACTED]");
 });
 
 test("redactSecrets redacts API keys in nested event payloads", () => {

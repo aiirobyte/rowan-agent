@@ -544,6 +544,9 @@ test("CLI writes a default log without --log", async () => {
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
     expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(result.stderr).toContain("\"eventType\":\"session_created\"");
+    expect(result.stderr).toContain("\"eventType\":\"model_requested\"");
+    expect(result.stderr).toContain("\"eventType\":\"outcome\"");
     const metadataLines = result.stderr
       .trim()
       .split("\n")
@@ -663,6 +666,7 @@ test("CLI --log-level silent suppresses run log files", async () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("Log written to");
+    expect(result.stderr).not.toContain("\"eventType\":");
     const runsDir = join(workspace, "runs");
     const logFiles = await readdir(runsDir).catch(() => []);
     expect(logFiles.filter((file) => file.endsWith(".jsonl"))).toHaveLength(0);

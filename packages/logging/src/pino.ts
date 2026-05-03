@@ -3,9 +3,16 @@ import { dirname } from "node:path";
 import pino from "pino";
 import type { AgentEvent, AgentEventListener } from "@rowan-agent/agent";
 import { redactSecrets } from "./redact";
+import {
+  createAgentEventLogFields,
+  eventLogLevel,
+  shouldWriteEvent,
+  type AgentEventLogLevel,
+} from "./record";
+
+export type { AgentEventLogLevel } from "./record";
 
 export type AgentEventLogPath = string | ((event: AgentEvent) => string | undefined);
-export type AgentEventLogLevel = "debug" | "info" | "warn" | "error" | "silent";
 
 export type AgentEventLoggerOptions = {
   mode?: "replace" | "append";
@@ -18,72 +25,6 @@ export type AgentEventLogger = AgentEventListener & {
 };
 
 type PinoDestination = ReturnType<typeof pino.destination>;
-type WritableAgentEventLogLevel = Exclude<AgentEventLogLevel, "silent">;
-
-const LOG_LEVEL_VALUES = {
-  debug: 20,
-  info: 30,
-  warn: 40,
-  error: 50,
-} satisfies Record<WritableAgentEventLogLevel, number>;
-
-function eventSessionId(event: AgentEvent): string | undefined {
-  if (event.type === "session_created" || event.type === "session_loaded") {
-    return event.session.parentSessionId ?? event.session.id;
-  }
-  if (
-    event.type === "thread_created" ||
-    event.type === "thread_end"
-  ) {
-    return event.parentSessionId;
-  }
-  if ("sessionId" in event && typeof event.sessionId === "string") {
-    return event.sessionId;
-  }
-  return undefined;
-}
-
-function eventTaskId(event: AgentEvent): string | undefined {
-  return "taskId" in event && typeof event.taskId === "string" ? event.taskId : undefined;
-}
-
-function eventPhase(event: AgentEvent): string | undefined {
-  return "phase" in event && typeof event.phase === "string" ? event.phase : undefined;
-}
-
-function eventLogLevel(event: AgentEvent): Exclude<WritableAgentEventLogLevel, "debug"> {
-  if (event.type === "error") {
-    return "error";
-  }
-  if (
-    event.type === "budget_exceeded" ||
-    event.type === "tool_blocked" ||
-    (event.type === "tool_approval_result" && !event.decision.allow) ||
-    (event.type === "verification_end" && !event.result.passed) ||
-    (event.type === "outcome" && !event.outcome.passed)
-  ) {
-    return "warn";
-  }
-  return "info";
-}
-
-function shouldWriteEvent(eventLevel: WritableAgentEventLogLevel, configuredLevel: WritableAgentEventLogLevel): boolean {
-  return LOG_LEVEL_VALUES[eventLevel] >= LOG_LEVEL_VALUES[configuredLevel];
-}
-
-function createRecord(event: AgentEvent, includeEventPayload: boolean): Record<string, unknown> {
-  const sessionId = eventSessionId(event);
-  const taskId = eventTaskId(event);
-  const phase = eventPhase(event);
-  return {
-    eventType: event.type,
-    eventTs: event.ts,
-    ...(sessionId ? { sessionId } : {}),
-    ...(taskId ? { taskId } : {}),
-    ...(phase ? { phase } : {}),
-    ...(includeEventPayload ? { event } : {}),
-  };
-}
 
 export function pinoAgentEventLogger(
   path: AgentEventLogPath,
@@ -138,7 +79,7 @@ export function pinoAgentEventLogger(
       if (!shouldWriteEvent(eventLevel, level)) {
         return;
       }
-      const record = createRecord(snapshot, level === "debug");
+      const record = createAgentEventLogFields(snapshot, level === "debug");
       const eventLogger = ensureLogger(snapshot);
       if (eventLevel === "error") {
         eventLogger.error(record);
