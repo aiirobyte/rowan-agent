@@ -241,15 +241,17 @@ test("runAgentLoop can return a direct response without creating a task", async 
     (message) => message.metadata?.kind === "routing_decision" && message.metadata.phase === "route",
   );
   expect(sessionRouteDecision).toBeUndefined();
-  expect(routeDecision?.type).toBe("message_delta");
-  if (routeDecision?.type !== "message_delta" || Array.isArray(routeDecision.delta)) {
-    throw new Error("Expected routing decision message_delta.");
-  }
-  expect(JSON.parse(routeDecision.delta.content)).toEqual({
-    route: "direct",
-    message: "Direct response: hello",
-  });
+  expect(routeDecision).toBeUndefined();
   expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
+  expect(
+    emittedEvents.filter(
+      (event) =>
+        event.type === "message_delta" &&
+        !Array.isArray(event.delta) &&
+        event.delta.role === "assistant" &&
+        event.delta.metadata?.scope === "conversation",
+    ),
+  ).toHaveLength(1);
   expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
   expect(
     emittedEvents.some(

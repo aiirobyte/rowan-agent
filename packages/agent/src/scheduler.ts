@@ -6,6 +6,8 @@ export type TaskRoutingScheduleInput = {
   decision: TaskRoutingDecision;
   defaultNeedsTaskRoute?: "task" | "thread";
   allowThreadRoute?: boolean;
+  workerTask?: string | null;
+  workerGoal?: string | null;
 };
 
 function includesAny(text: string, values: string[]): boolean {
@@ -16,6 +18,21 @@ function hasExplicitThreadRequest(input: string): boolean {
   return /\b(thread|child thread|sub-agent|subagent|delegate|delegated)\b/i.test(input) ||
     /(创建|开|启动|派|委派).*(thread|线程|子线程|子任务|子agent|子代理)/i.test(input) ||
     /(thread|线程|子线程|子任务|子agent|子代理).*(创建|开|启动|派|委派)/i.test(input);
+}
+
+function hasExplicitNestedThreadRequest(input: string): boolean {
+  return [
+    /\b(create|start|spawn|launch|open|delegate|delegated|fork)\b.*\b(thread|child thread|sub-agent|subagent)\b/i,
+    /\b(thread|child thread|sub-agent|subagent)\b.*\b(create|start|spawn|launch|open|delegate|delegated|fork)\b/i,
+    /\b(another|nested)\b.*\b(thread|worker|runtime)\b/i,
+    /\bthread\b.*\b(another|nested)\b/i,
+    /(创建|开|启动|派|委派|新建|再).*(thread|线程|子线程|子任务|子agent|子代理)/i,
+    /(thread|线程|子线程|子任务|子agent|子代理).*(创建|开|启动|派|委派|新建|再)/i,
+  ].some((pattern) => pattern.test(input));
+}
+
+function workerAssignmentText(input: TaskRoutingScheduleInput): string {
+  return [input.workerTask, input.workerGoal].filter(Boolean).join("\n");
 }
 
 export function hasExplicitToolRequest(input: string, tools: Tool[] = []): boolean {
@@ -66,6 +83,18 @@ export function scheduleTaskRouting(input: TaskRoutingScheduleInput): TaskRoutin
     return {
       route: "task",
       message: "Creating a task because the thread depth limit was reached.",
+    };
+  }
+
+  const workerAssignment = workerAssignmentText(input);
+  if (
+    input.decision.route === "thread" &&
+    workerAssignment.trim().length > 0 &&
+    !hasExplicitNestedThreadRequest(workerAssignment)
+  ) {
+    return {
+      route: "task",
+      message: "Creating a task for this worker thread.",
     };
   }
 

@@ -167,6 +167,109 @@ test("thread tool budget stops before executing extra tools", async () => {
   expect(result.session.log.some((event) => event.type === "tool_start")).toBe(false);
 });
 
+test("worker thread smoke tests do not recursively route on bare thread wording", async () => {
+  const events: AgentEvent[] = [];
+  let routeCalls = 0;
+  let planCalls = 0;
+
+  const smokeTestStream: StreamFn = async function* smokeTestStream(model, context) {
+    if (context.phase === "route") {
+      routeCalls += 1;
+      yield {
+        type: "model_requested",
+        phase: "route",
+        model,
+        usage: { inputMessages: context.session.messages.length },
+      };
+      yield {
+        type: "structured_output",
+        content: {
+          route: "thread",
+          message: "Creating another thread.",
+          thread: {
+            prompt: "测试 thread",
+            task: context.session.task ??
+              "Execute a simple test within an isolated child runtime to verify thread creation and execution.",
+            goal: context.session.goal ??
+              "Return a confirmation that the thread executed successfully with a test result.",
+          },
+        },
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (context.phase === "plan") {
+      planCalls += 1;
+      yield {
+        type: "structured_output",
+        content: {
+          id: createId("task"),
+          title: "Confirm worker thread runtime",
+          instruction: context.session.task ?? "Confirm this worker thread is running.",
+          acceptanceCriteria: createDefaultCriteria("The worker thread returns a success confirmation."),
+          toolNames: [],
+          skillIds: [],
+          status: "pending",
+          attempts: 0,
+        },
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (context.phase === "execute") {
+      yield { type: "text_delta", text: "Thread test executed successfully: child runtime active." };
+      yield { type: "done" };
+      return;
+    }
+
+    const output = context.taskOutput;
+    const passed =
+      output.kind === "thread" &&
+      output.outcome.passed &&
+      output.outcome.message.includes("child runtime active");
+    yield {
+      type: "structured_output",
+      content: {
+        passed,
+        message: passed ? "Thread test executed successfully: child runtime active." : "Thread test failed.",
+      },
+    };
+    yield { type: "done" };
+  };
+
+  const agent = new Agent({
+    systemPrompt: "Test system",
+    model: { provider: "test", name: "thread-smoke-test" },
+    stream: smokeTestStream,
+    tools: [echoTool],
+  });
+  agent.subscribe((event) => {
+    events.push(event);
+  });
+
+  const outcome = await agent.prompt("测试 thread");
+  const threadCreatedEvents = events.filter((event) => event.type === "thread_created");
+
+  expect(outcome.passed).toBe(true);
+  expect(routeCalls).toBe(2);
+  expect(planCalls).toBe(1);
+  expect(threadCreatedEvents).toHaveLength(1);
+  expect(
+    events.some(
+      (event) =>
+        event.type === "message_delta" &&
+        (Array.isArray(event.delta) ? event.delta : [event.delta]).some(
+          (delta) =>
+            delta.metadata?.kind === "routing_decision" &&
+            delta.content.includes("\"route\":\"task\"") &&
+            delta.content.includes("worker thread"),
+        ),
+    ),
+  ).toBe(true);
+});
+
 test("worker threads can recursively route until the thread depth limit", async () => {
   const events: AgentEvent[] = [];
   let routeCalls = 0;

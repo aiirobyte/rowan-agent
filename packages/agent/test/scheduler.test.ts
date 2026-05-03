@@ -135,6 +135,61 @@ test("scheduler preserves thread routes while thread depth allows it", () => {
   });
 });
 
+test("scheduler downgrades worker self-recursive thread routes to tasks", () => {
+  expect(
+    scheduleTaskRouting({
+      input: "测试 thread",
+      tools: [bashTool],
+      defaultNeedsTaskRoute: "task",
+      allowThreadRoute: true,
+      workerTask: "Execute a simple test within an isolated child runtime to verify thread creation and execution.",
+      workerGoal: "Return a confirmation that the thread executed successfully with a test result.",
+      decision: {
+        route: "thread",
+        message: "Creating another thread.",
+        thread: {
+          prompt: "测试 thread",
+          task: "Execute a simple test within an isolated child runtime to verify thread creation and execution.",
+          goal: "Return a confirmation that the thread executed successfully with a test result.",
+        },
+      },
+    }),
+  ).toEqual({
+    route: "task",
+    message: "Creating a task for this worker thread.",
+  });
+});
+
+test("scheduler preserves explicit nested worker thread routes", () => {
+  expect(
+    scheduleTaskRouting({
+      input: "测试 thread",
+      tools: [bashTool],
+      defaultNeedsTaskRoute: "task",
+      allowThreadRoute: true,
+      workerTask: "Delegate echo evidence to a child thread.",
+      workerGoal: "Return echo evidence.",
+      decision: {
+        route: "thread",
+        message: "Creating another worker thread.",
+        thread: {
+          prompt: "create a thread to use echo tool",
+          task: "Delegate echo evidence to a child thread.",
+          goal: "Return echo evidence.",
+        },
+      },
+    }),
+  ).toEqual({
+    route: "thread",
+    message: "Creating another worker thread.",
+    thread: {
+      prompt: "create a thread to use echo tool",
+      task: "Delegate echo evidence to a child thread.",
+      goal: "Return echo evidence.",
+    },
+  });
+});
+
 test("scheduler downgrades simple tool thread routes to task routes", () => {
   expect(
     scheduleTaskRouting({

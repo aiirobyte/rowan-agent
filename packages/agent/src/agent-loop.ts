@@ -511,16 +511,20 @@ async function routeRequest(input: AgentLoopRuntime): Promise<TaskRoutingDecisio
     decision: parseTaskRoutingDecision(collected.structured),
     defaultNeedsTaskRoute: shouldDefaultToThreadRoute ? "thread" : "task",
     allowThreadRoute: canStartThreadRoute,
+    workerTask: input.threadDepth > 0 ? input.session.task : undefined,
+    workerGoal: input.threadDepth > 0 ? input.session.goal : undefined,
   });
   collected.stepEntries.push({ kind: "structured_output", content: decision });
-  await appendTraceMessage(
-    input,
-    createMessage("assistant", JSON.stringify(decision), {
-      kind: "routing_decision",
-      phase: "route",
-      scope: "execution",
-    }),
-  );
+  if (decision.route !== "direct") {
+    await appendTraceMessage(
+      input,
+      createMessage("assistant", JSON.stringify(decision), {
+        kind: "routing_decision",
+        phase: "route",
+        scope: "execution",
+      }),
+    );
+  }
   await recordPhaseStep({
     loop: input,
     phase: "route",
