@@ -16,6 +16,7 @@ v0.4.0 是 DCP-first architecture hardening 的第一步，目标是把当前已
 1. `agent` 从 `store` 导入 `ExecutionTurn` / `ExecutionTurnEntry`，导致运行内核反向依赖持久化包。
 2. `context` 从 `agent` 导入类型并直接构建 OpenAI wire format，导致上下文渲染和 provider 适配耦合。
 3. `store` 和 `agent` 各自独立定义 `LlmPhase`、`ModelRef`、`ModelCallUsage`、`ToolCall`、`ToolResult` 等共享领域类型。
+4. `agent` 包当前同时承载 public facade、phase workflow、task planning、verification、thread execution、tool running、DriverTurn recording vocabulary，kernel surface 过大。
 
 v0.4.0 的定位不是新增 Agent 能力，而是拆出两个稳定边界：
 
@@ -55,6 +56,7 @@ MCP implementation belongs inside `packages/runtime` as a tool-provider source. 
   - `StepFilter`
 - 将 route / plan / execute / verify 执行逻辑从 `agent` 移入 `runtime` phase modules。
 - 将 routing scheduler、skills application、hook pipeline、MCP tool-provider ownership、core tool execution、turn recording 移入 `runtime`。
+- 将 `agent` 收窄为 small public kernel/facade：Agent class、session lifecycle、state、event fanout、abort/waitForIdle、以及少量 ergonomic type re-export。
 - 将 `context` 的类型依赖改为 `protocol + session`，不再从 `agent` 导入领域类型。
 - 保持 `Agent.prompt()`、`Agent.startThread()`、CLI flags、session schema、run log 输出行为不变。
 - 更新 package boundary tests。
@@ -98,6 +100,7 @@ packages/runtime/src/
   tools/
 
 packages/agent/src/
+  index.ts
   agent.ts
   thread.ts
   lifecycle.ts
@@ -130,7 +133,8 @@ Rules:
 - `runtime` also owns local workspace root/path helpers; there is no separate `workspace` package in the target.
 - `runtime` exposes the one-run executor as `AgentRunner` / `runner.ts`; package name stays `runtime`.
 - `runtime` owns MCP tool-provider implementation; MCP tools must flow through the same tool runner, hooks, events, and policy path as local tools.
-- `agent` owns lifecycle, state, event fanout, abort/waitForIdle, and persistence orchestration.
+- `agent` owns only the small public kernel/facade: lifecycle, state, event fanout, abort/waitForIdle, persistence orchestration, and optional ergonomic re-exports of public types such as `AgentMessage`, `ToolCall`, `ToolResult`, `StreamFn`, and `AgentEvent`.
+- `agent` must not own route / plan / execute / verify, task planning, verification retry, routing scheduler, tool execution, DriverTurn recording, context rendering, or provider wire conversion.
 - `adapters` convert provider wire formats and must not choose context visibility.
 
 ## 5. Migration Plan
@@ -196,12 +200,14 @@ Rules:
 
 - Move route / plan / execute / verify into runtime phase modules.
 - Move scheduler, skill application, hook pipeline, tool execution, MCP ownership boundary, and turn recording into runtime.
+- Keep `agent` as the small public kernel/facade and remove runtime-only implementation from its ownership.
 - Keep tests green after each mechanical move where practical.
 
 验收：
 
 - `agent` contains facade/lifecycle/state code, not phase execution code.
 - Runtime owns core tool execution, MCP tool-provider ownership, hooks, and `ExecutionTurn` recording.
+- `agent` may re-export public kernel contracts, but shared type definitions come from `protocol` / `session`.
 - Direct, task, thread, budget, multi-turn, and verify retry tests pass.
 
 ### M5: Release Hardening
@@ -235,6 +241,7 @@ Rules:
 |---|---|---|
 | Runtime split becomes a behavior rewrite | Regression risk increases | Move code in thin slices and keep existing tests as behavior contract |
 | Protocol package grows into a dumping ground | Weak boundaries | Only shared cross-package contracts enter protocol |
+| `agent` regrows into a large runtime package through convenience exports | Boundary regression | Allow thin re-exports only; implementations and owned type definitions stay in `runtime`, `protocol`, or `session` |
 | Context cleanup accidentally changes prompts | Route/plan behavior changes | Snapshot current prompt behavior before and after import cleanup |
 | Core tools move before policy is ready | Safety semantics unclear | Preserve existing hooks and move policy redesign to v0.6.0 |
 | MCP expands v0.4.0 beyond boundary hardening | Regression and dependency risk increases | Put MCP ownership under `runtime/mcp`, but defer full external server/client behavior until the tool runner and policy path are stable |
@@ -249,6 +256,7 @@ Rules:
 - [ ] `context` imports `protocol + session`, not `agent`.
 - [ ] `runtime` owns route / plan / execute / verify implementation.
 - [ ] `runtime` owns scheduler, skills application, hooks, MCP tool-provider ownership, core tool execution, and turn recording.
+- [ ] `agent` is a small public kernel/facade and does not own phase workflow, task planning, verification, tool execution, or DriverTurn recording.
 - [ ] Package boundary tests updated.
 - [ ] `bun test packages`
 - [ ] `bun run build`

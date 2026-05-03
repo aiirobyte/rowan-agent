@@ -20,7 +20,7 @@ v0.4.0 是 DCP-style architecture hardening 的第一步：最小行为变化的
 
 1. 新增 `packages/protocol`，承载 `LlmPhase`、`ModelRef`、`ModelCallUsage`、`ToolCall`、`ToolResult`、`ExecutionTurn`、`ExecutionTurnEntry`、`StepFilter` 等零依赖共享契约。
 2. 新增 `packages/runtime`，从 `agent` 中提取 agent execution runtime：`AgentRunner`、route / plan / execute / verify phase modules、routing scheduler、skills application、hooks、MCP tool-provider ownership、core tool execution、turn recording。
-3. `agent` 瘦身为 public facade：Agent class、session lifecycle、state、event fanout、abort/waitForIdle。
+3. `agent` 瘦身为 small public kernel/facade：Agent class、session lifecycle、state、event fanout、abort/waitForIdle，以及少量 ergonomic type re-export；不再拥有 phase workflow、task planning、verification、tool runner 或 DriverTurn recording。
 4. `store` 和 `agent` 不再各自独立定义模型/工具领域类型，统一从 `protocol` 导入。
 5. `context` 不再从 `agent` 导入共享领域类型，改依赖 `protocol + session`。
 6. `Agent.prompt()` 和 CLI 行为完全不变。
@@ -49,7 +49,7 @@ bun run rowan --session <session-id> "continue"
 
 - `packages/protocol` 存在并导出共享契约类型。
 - `packages/runtime` 存在并承载 `AgentRunner`、phase modules、routing logic、hooks、MCP ownership boundary、tool execution。
-- `agent` 不再导入 `store` 的领域类型（改从 `protocol`）。
+- `agent` 保持 small public kernel/facade，不再导入 `store` 的领域类型（改从 `protocol`），也不再拥有 runtime-only implementation。
 - `store` 不再自定义 `LlmPhase`、`ModelRef` 等类型（改从 `protocol`）。
 - `context` 不再导入 `agent`。
 - 所有现有测试继续通过，行为无变化。

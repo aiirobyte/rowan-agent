@@ -103,6 +103,7 @@ Required changes:
 - move route / plan / execute / verify from `agent-loop.ts` into runtime phase modules;
 - move routing scheduler, skills execution/application, hook pipeline, MCP tool-provider ownership, and core tool execution into `runtime`;
 - extract turn recording into `runtime/turn-recorder.ts`;
+- trim `agent` to a small public kernel/facade with lifecycle, state, event fanout, and optional ergonomic type re-exports only;
 - make `context` import shared contracts from `protocol + session`, not `agent`;
 - keep `Agent.prompt()` and CLI behavior unchanged.
 
@@ -117,6 +118,7 @@ packages/protocol/src/
   turn.ts
 
 packages/agent/src/
+  index.ts
   agent.ts
   thread.ts
   lifecycle.ts
@@ -142,7 +144,8 @@ packages/runtime/src/
 ### 5.3 Acceptance Criteria
 
 - `agent` no longer imports `ExecutionTurn` or `ExecutionTurnEntry` from `store`.
-- `agent` delegates execution to `runtime` and keeps public API / state / lifecycle ownership.
+- `agent` delegates execution to `runtime` and keeps only public API / state / lifecycle / event fanout ownership.
+- `agent` does not own phase workflow, task planning, verification, tool execution, or turn recording.
 - `runtime` owns route / plan / execute / verify, routing, skills, hooks, MCP tool providers, and core tool execution.
 - `context` does not import `agent`.
 - `store` persists protocol types but does not define model/tool/phase contracts.

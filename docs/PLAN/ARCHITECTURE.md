@@ -57,7 +57,7 @@ Current tracked package layout:
 packages/
   session/    Session, AgentMessage, Skill, ContextScope, persisted session helpers
   store/      AgentStore port, ExecutionTurn, in-memory/json store implementations
-  agent/      Agent facade, runAgentLoop, tasks, tools, scheduler, verifier, AgentEvent
+  agent/      transitional: Agent facade plus current runAgentLoop/tasks/tools/scheduler/verifier
   context/    phase prompt templates and OpenAI-compatible prompt builder
   adapters/   OpenAI-compatible provider adapter and JSON extraction
   logging/    Pino AgentEvent logger and redaction
@@ -83,6 +83,7 @@ This direction is workable for v0.3.5, but it still has three pressure points:
 - `agent` imports `ExecutionTurn` / `ExecutionTurnEntry` from `store`, so the runtime kernel depends on the persistence package.
 - `context` imports `agent` types and builds OpenAI-compatible chat messages directly, so context rendering and provider wire format are still coupled.
 - `store` and `agent` each independently define shared domain types (`LlmPhase`, `ModelRef`, `ModelCallUsage`, `ToolCall`, `ToolResult`), creating structural duplication that `packages/protocol` must resolve.
+- `agent` owns too much runtime vocabulary today: phase workflow, task planning, verification, thread execution, tool running, and event contracts are mixed with the public Agent facade.
 
 ## 4. Core Data Boundaries
 
@@ -228,7 +229,7 @@ packages/
   protocol/        zero-dependency shared contracts: phase, model, tool, task, event, turn
   session/         Session aggregate, source events, persisted session migration
   context/         projection, phase policies, rendering, prompt templates, ConversationEntry IR
-  agent/           public Agent facade, lifecycle, state, event fanout
+  agent/           small public Agent facade/kernel surface, lifecycle, state, event fanout
   runtime/         agent execution runtime: runner, routing, phase driver, skills, tools, hooks, MCP
   adapters/        provider wire adapters
   store/           AgentStore implementations
@@ -257,7 +258,8 @@ The minimal path can avoid creating every package immediately:
 - create `protocol` first;
 - create `runtime` as the execution engine package instead of separate `driver` and `tools` packages;
 - move route / plan / execute / verify, scheduler, skills application, hooks, MCP tool providers, and core tool execution into `runtime`;
-- keep `agent` as the public facade that owns session lifecycle, state, event fanout, abort handling, and persistence orchestration.
+- keep `agent` as the small public facade/kernel surface that owns session lifecycle, state, event fanout, abort handling, and persistence orchestration.
+- allow `agent` to re-export ergonomic public kernel contracts such as `AgentMessage`, `ToolCall`, `ToolResult`, `StreamFn`, and `AgentEvent`, but do not let `agent` own shared domain types; definitions live in `protocol` / `session`.
 
 Terminology lock:
 
@@ -275,12 +277,14 @@ Future package responsibilities:
 ```text
 agent
   -> Agent class and public API
+  -> minimal public kernel exports/re-exports
   -> AgentState
   -> Session create/load/save lifecycle
   -> user turn append and child thread lifecycle
   -> event subscription/fanout
   -> abort / waitForIdle
   -> delegates execution to runtime
+  -> does not own phase workflow, task planning, verification, DriverTurn, tool running, context rendering, or provider wire conversion
 
 runtime
   -> AgentRunner / runTurn / runAgentLoop implementation
@@ -301,7 +305,7 @@ runtime
 3. `context` owns projection and rendering, not provider wire format, and depends on `protocol + session` rather than `agent`.
 4. `adapters` convert `ConversationEntry[]` to provider requests and provider responses back to Rowan events/output.
 5. `runtime` owns route / plan / execute / verify, routing, skills, hooks, MCP tool providers, and core tool execution.
-6. `agent` owns public lifecycle and delegates execution to `runtime`.
+6. `agent` stays a small public kernel/facade: lifecycle, subscriptions, abort/waitForIdle, persistence orchestration, and ergonomic type re-exports only.
 7. Source input and Driver output remain orthogonal streams and are merged only by phase-specific rendering.
 8. Filtering happens before compaction; never summarize internal execution noise into long-term context.
 
@@ -358,6 +362,7 @@ Acceptance:
 - public `Agent.prompt()` behavior stays unchanged;
 - route, plan, execute, verify behavior moves behind the runtime boundary;
 - core tools, routing, hooks, and MCP tool-provider boundaries are exported from `runtime`;
+- `agent` no longer owns task planner, verifier, scheduler, tool runner, or DriverTurn recording implementation;
 - budget, thread, verify retry, and multi-turn tests still pass.
 
 ### Phase C: Context Projection and Rendering

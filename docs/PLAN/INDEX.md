@@ -62,7 +62,7 @@ Planning status enum:
 
 ## Next Steps
 
-1. Implement `docs/PLAN/v0.4.0/PLAN.md`: create `packages/protocol` and `packages/runtime`, move shared phase/model/tool/turn contracts into protocol, and move execution mechanics plus MCP tool-provider ownership into runtime.
+1. Implement `docs/PLAN/v0.4.0/PLAN.md`: create `packages/protocol` and `packages/runtime`, move shared phase/model/tool/turn contracts into protocol, move execution mechanics plus MCP tool-provider ownership into runtime, and keep `agent` as a small public kernel/facade.
 2. Implement v0.5.0: add context projection/rendering and provider-neutral `ConversationEntry[]`.
 3. Resume policy and safety as v0.6.0 after the driver and context boundaries are clean.
 4. Build replay/fork/compaction after source events and driver turns are cleanly separated.

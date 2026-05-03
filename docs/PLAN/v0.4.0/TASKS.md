@@ -33,6 +33,7 @@
 | V040-002 | M0 | Update roadmap/index/architecture links | docs | P0 | V040-001 | planned | v0.4.0 docs are discoverable from top-level planning docs |
 | V040-003 | M0 | Add package boundary expectations | test/build | P0 | V040-001 | planned | boundary test includes `protocol` and `runtime` target direction |
 | V040-004 | M0 | Lock runtime/runner/sandbox/workflow terminology | docs | P0 | V040-001 | planned | docs define `runtime` as package/layer, `runner` as one-run executor, `sandbox/environment` as code execution environment, and `workflow` as outer orchestration |
+| V040-005 | M0 | Lock small `agent` kernel boundary | docs/test | P0 | V040-001 | planned | docs and boundary expectations state that `agent` is public facade/kernel only, with runtime implementation moved out |
 | V040-101 | M1 | Scaffold `packages/protocol` | build | P0 | V040-003 | planned | package has `package.json`, `src/index.ts`, and build wiring |
 | V040-102 | M1 | Move model and phase contracts to protocol | protocol/agent/store | P0 | V040-101 | planned | `LlmPhase`, `ModelRef`, `ModelCallUsage` exported from protocol |
 | V040-103 | M1 | Move tool contracts to protocol | protocol/agent/store | P0 | V040-101 | planned | `ToolCall`, `ToolResult` exported from protocol |
@@ -51,6 +52,7 @@
 | V040-405 | M4 | Move scheduler and thread execution helpers | runtime/agent | P0 | V040-401 | planned | thread lifecycle tests pass through public Agent API |
 | V040-406 | M4 | Move skills application, hooks, MCP ownership, and core tool execution | runtime/agent | P0 | V040-403 | planned | default workspace tools still work through CLI and MCP ownership is reserved under `runtime/mcp` |
 | V040-407 | M4 | Move turn recording into runtime | runtime/store | P0 | V040-404 | planned | `ExecutionTurn` entries are recorded with protocol types |
+| V040-408 | M4 | Trim `agent` to public facade/kernel | agent/runtime | P0 | V040-407 | planned | `agent` owns lifecycle/state/event fanout and optional type re-exports only; no phase workflow, task planner, verifier, tool runner, or turn recorder implementation remains |
 | V040-501 | M5 | Update package boundary tests | test/build | P0 | V040-407 | planned | no reversed dependency from runtime to agent or context to agent |
 | V040-502 | M5 | Update docs and examples | docs | P1 | V040-501 | planned | README/ROADMAP/ARCHITECTURE match shipped package boundaries |
 | V040-503 | M5 | Run package tests | release | P0 | V040-501 | planned | `bun test packages` passes |
@@ -61,6 +63,7 @@
 
 - [ ] v0.4.0 planning docs created and linked
 - [ ] runtime/runner/sandbox/workflow terminology locked
+- [ ] small `agent` kernel boundary locked
 - [ ] `packages/protocol` scaffolded
 - [ ] shared model/phase/tool/turn contracts moved to protocol
 - [ ] duplicate store/agent shared contract definitions removed
@@ -75,6 +78,7 @@
 - [ ] scheduler/thread helpers moved
 - [ ] skills application, hooks, MCP ownership, and core tool execution moved
 - [ ] turn recording moved
+- [ ] `agent` trimmed to public facade/kernel
 - [ ] package boundary tests updated
 - [ ] `bun test packages`
 - [ ] `bun run build`
