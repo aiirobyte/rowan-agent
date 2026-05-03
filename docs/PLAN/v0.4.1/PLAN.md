@@ -54,7 +54,7 @@ There is no external API compatibility requirement for this project yet. Runtime
 
 ### 2.2 Ownership Decision
 
-`turn-recorder.ts` moved into `agent` because it records Agent driver turns and would otherwise force the Agent loop to depend on runtime-owned driver semantics.
+`recorder.ts` moved into `agent` because it records Agent driver turns and would otherwise force the Agent loop to depend on runtime-owned driver semantics.
 
 ### 2.3 Not Doing
 
@@ -81,7 +81,7 @@ packages/agent/src/
   phases/types.ts
   phases/routing.ts
   phases/verifying.ts
-  turn-recorder.ts        # if driver-turn assembly stays core-owned
+  recorder.ts             # if driver-turn assembly stays core-owned
 
 packages/runtime/src/
   dir.ts
@@ -91,7 +91,7 @@ packages/runtime/src/
   skills.ts
   tools.ts
   types.ts               # runtime-only integration types, if needed
-  turn-recorder.ts        # only if refactored into a runtime adapter
+  recorder.ts             # only if refactored into a runtime adapter
 ```
 
 `agent.ts` is the core entrypoint, not a thin wrapper around a separate `core` module.

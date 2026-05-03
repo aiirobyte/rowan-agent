@@ -18,7 +18,7 @@ The implementation makes `packages/agent/src/agent.ts` the Agent core/facade ent
 - `packages/runtime/src/thread.ts`
 - `packages/runtime/src/phases/*`
 - `packages/runtime/src/task.ts`
-- `packages/runtime/src/turn-recorder.ts`
+- `packages/runtime/src/recorder.ts`
 
 No separate `core` package or `core/` folder was introduced. There is also no external API compatibility requirement, so removed runtime exports were not preserved as compatibility re-exports.
 

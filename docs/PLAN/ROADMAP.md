@@ -109,7 +109,7 @@ Required changes:
   - `StepFilter`
 - move route / plan / execute / verify from `agent-loop.ts` into runtime phase modules;
 - move routing scheduler, skills execution/application, hook pipeline, MCP tool-provider ownership, and core tool execution into `runtime`;
-- extract turn recording into `runtime/turn-recorder.ts`;
+- extract turn recording into `runtime/recorder.ts`;
 - trim `agent` to a small public kernel/facade with lifecycle, state, event fanout, and optional ergonomic type re-exports only;
 - make `context` import shared contracts from `protocol + session`, not `agent`;
 - keep `Agent.prompt()` and CLI behavior unchanged.
@@ -143,7 +143,7 @@ packages/runtime/src/
   runner.ts
   loop.ts
   thread.ts
-  turn-recorder.ts
+  recorder.ts
   phases/index.ts
   phases/types.ts
   phases/routing.ts

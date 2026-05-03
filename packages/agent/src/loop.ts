@@ -38,7 +38,7 @@ import type {
 } from "./types";
 import { createId, nowIso, resolveMaxThreadDepth, Validators } from "./types";
 import type { ExecutionTurnEntry } from "@rowan-agent/protocol";
-import { recordPhaseStep } from "./turn-recorder";
+import { recordPhaseStep } from "./recorder";
 
 type AgentSession = CoreSession<AgentEvent>;
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;

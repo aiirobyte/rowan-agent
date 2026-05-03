@@ -362,7 +362,7 @@ packages/agent/src/
   phases/types.ts
   phases/routing.ts
   phases/verifying.ts
-  turn-recorder.ts # if driver-turn assembly remains core-owned
+  recorder.ts # if driver-turn assembly remains core-owned
 
 packages/runtime/src/
   index.ts
