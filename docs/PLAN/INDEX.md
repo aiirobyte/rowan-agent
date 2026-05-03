@@ -45,14 +45,17 @@ The main project roadmap now lives in:
 - v0.3.3 implemented: AgentStore port, JSON-backed step storage, and scoped context.
 - v0.3.4 implemented: store package consolidation.
 - v0.3.5 implemented: Pino runtime logging and trace package removal.
+- Architecture direction updated on 2026-05-03: v0.4.0+ now follows a DCP-first hardening path before policy/replay/eval/workflow expansion.
 
 ## Next Steps
 
-1. Scope v0.4.0 policy and safety work.
-2. Keep `@rowan-agent/logging` as the event log sink package.
-3. Keep `@rowan-agent/store` as the single owner of store ports and JSON persistence.
+1. Implement v0.4.0: create `packages/protocol` and `packages/runtime`, move shared phase/model/tool/turn contracts into protocol, and move execution mechanics into runtime.
+2. Implement v0.5.0: add context projection/rendering and provider-neutral `ConversationEntry[]`.
+3. Resume policy and safety as v0.6.0 after the driver and context boundaries are clean.
+4. Build replay/fork/compaction after source events and driver turns are cleanly separated.
 
 ## Notes
 
 - Treat this file as a short planning index.
 - Use `docs/PLAN/ROADMAP.md` as the editable source of truth for project evolution.
+- Use `docs/PLAN/ARCHITECTURE.md` as the source of truth for package boundaries and DCP-style layering.

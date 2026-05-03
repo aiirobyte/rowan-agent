@@ -1,137 +1,94 @@
 # Rowan Agent Technical Architecture
 
-> 版本：v0.3.2
-> 日期：2026-05-02
-> 状态：v0.0.0 架构已定稿；v0.1.0 OpenAI-compatible StreamFn 已实现；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first child-session predecessor 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 已实现
-> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`
+> 版本：v0.3.5
+> 日期：2026-05-03
+> 状态：v0.0.0 到 v0.3.5 已实现；v0.4.0+ 进入 DCP-style architecture hardening
+> 输入文档：`docs/PLAN/ROADMAP.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`.agent/docs/2026-05-03-cahciua-dcp-reuse-plan.md`
 
-## 1. 架构目标
+## 1. Architecture Goal
 
-Rowan v0.0.0 的目标是实现一个最简 Agent 内核：
+Rowan 是一个面向工程化 Agent 的 Bun + TypeScript harness runtime。当前内核已经跑通：
 
 ```text
 Session
   -> Agent
-  -> Task
+  -> route / plan / execute / verify
   -> Tool calls
-  -> Acceptance criteria verification
   -> Outcome
-  -> Session log / JSONL trace
+  -> AgentStore steps
+  -> Pino run log
 ```
 
-这个内核要满足：
-
-- Agent 可以同时承担 planner 和 executor。
-- Task 有结构化 acceptance criteria。
-- Tool 调用有 schema validation。
-- Verification 先由同一个模型完成。
-- Session log 和 model messages 分离。
-- Skill 以 `SKILL.md` 形式作为可执行能力加载。
-- JSONL trace 通过事件订阅写入。
-
-## 2. v0.0.0 总体架构
-
-```mermaid
-flowchart TB
-  CLI["CLI"] --> Agent["Stateful Agent"]
-  Agent --> Session["Session"]
-  Agent --> Loop["runAgentLoop()"]
-
-  Session --> Messages["Model Messages"]
-  Session --> Log["Session Log"]
-  Session --> Skills["SKILL.md Skills"]
-
-  Loop --> Planner["Plan Task"]
-  Planner --> Task["Structured Task"]
-  Task --> Executor["Execute Task"]
-  Executor --> Tools["Tool[]"]
-  Tools --> ToolHooks["beforeToolCall / afterToolCall"]
-  Executor --> Verifier["Same-model Verifier"]
-  Verifier --> Criteria["Acceptance Criteria"]
-  Verifier --> Outcome["Outcome"]
-
-  Agent --> Events["Agent Events"]
-  Events --> Log
-  Events --> Trace["JSONL Trace Subscriber"]
-```
-
-## 3. v0.0.0 文件结构
-
-v0.0.0 使用单包结构，不拆 `packages/*`。
+v0.4.0+ 的架构方向是把现有边界升级成更清晰的 DCP-style pipeline：
 
 ```text
-.
-  package.json
-  bun.lock
-  tsconfig.json
-  README.md
-
-  src/
-    index.ts
-    types.ts
-    agent.ts
-    agent-loop.ts
-    session.ts
-    task.ts
-    stream.ts
-    tools.ts
-    verifier.ts
-    skills.ts
-    trace-jsonl.ts
-    cli.ts
-
-  test/
-    agent-loop.test.ts
-    agent.test.ts
-    task.test.ts
-    verifier.test.ts
-    trace-jsonl.test.ts
-
-  skills/
-    example/
-      SKILL.md
+source input
+  -> Adaptation: CanonicalAgentEvent
+  -> Projection: IntermediateAgentContext
+  -> Rendering: RenderedAgentContext / ConversationEntry[]
+  -> Driver: route / plan / execute / verify
+  -> Ports: ModelClient / ToolRunner / AgentStore / EventLogger
+  -> Adapters: OpenAI-compatible / local tools / JSON store / Pino log
 ```
 
-## 4. 核心对象关系
+DCP 在这里指 deterministic context pipeline：外部输入、模型/工具运行结果、上下文渲染策略彼此分层，避免内部运行噪声污染未来 prompt。
+
+## 2. Implemented Versions
+
+| Version | Status | Implemented architecture change |
+|---|---|---|
+| v0.0.0 | implemented | Minimal Agent kernel: `Session`、`Agent`、`Task`、`Tool`、同模型 verifier、`Outcome`、`AgentEvent` |
+| v0.1.0 | implemented | OpenAI-compatible Chat Completions runtime via `StreamFn` |
+| v0.2.0 | implemented | Monorepo foundation and workspace core tools seed |
+| v0.3.0 | implemented | route-first execution: direct / task / thread predecessor path |
+| v0.3.1 | implemented | Persistent multi-turn `Session` and CLI session continuation |
+| v0.3.2 | implemented | Thread/sub-session unification with `parentSessionId`、`task`、`goal` |
+| v0.3.3 | implemented | `AgentStore` port, `ExecutionTurn`, scoped context, JSON session+steps |
+| v0.3.4 | implemented | `packages/store` consolidation and store/package boundary cleanup |
+| v0.3.5 | implemented | `packages/logging`, Pino run logs, removal of self-owned trace package |
+
+## 3. Current Package Architecture
+
+Current tracked package layout:
 
 ```text
-Agent
-  owns AgentState
-  owns Session
-  runs agentLoop
-  emits AgentEvent
-
-Session
-  owns model messages
-  owns session log
-  owns loaded skills
-
-Task
-  owns instruction
-  owns acceptance criteria
-  owns allowed tool names
-  owns skill ids
-
-Tool
-  validates args
-  executes action
-  returns ToolResult
-
-Verifier
-  checks criteria
-  returns VerificationResult
-
-Outcome
-  user-facing result
-  includes pass/fail message
+packages/
+  session/    Session, AgentMessage, Skill, ContextScope, persisted session helpers
+  store/      AgentStore port, ExecutionTurn, in-memory/json store implementations
+  agent/      Agent facade, runAgentLoop, tasks, tools, scheduler, verifier, AgentEvent
+  context/    phase prompt templates and OpenAI-compatible prompt builder
+  adapters/   OpenAI-compatible provider adapter and JSON extraction
+  logging/    Pino AgentEvent logger and redaction
+  workspace/  workspace root/path helpers
+  cli/        composition root for model, tools, store, logging, skills, output
 ```
 
-## 5. Core Types
+Current dependency direction:
 
-### 5.1 Session
+```text
+session      -> none
+workspace    -> none
+store        -> session
+agent        -> session, store
+context      -> agent, session
+adapters     -> agent, context
+logging      -> agent
+cli          -> adapters, agent, logging, session, store, workspace
+```
+
+This direction is workable for v0.3.5, but it still has two pressure points:
+
+- `agent` imports `ExecutionTurn` / `ExecutionTurnEntry` from `store`, so the runtime kernel depends on the persistence package.
+- `context` imports `agent` types and builds OpenAI-compatible chat messages directly, so context rendering and provider wire format are still coupled.
+
+## 4. Core Data Boundaries
+
+### 4.1 Session
+
+Current `Session`:
 
 ```ts
-interface Session {
+interface Session<TLogEvent = never> {
   version: string;
   id: string;
   parentSessionId?: string;
@@ -140,7 +97,7 @@ interface Session {
   task?: string;
   goal?: string;
   messages: AgentMessage[];
-  log: AgentEvent[];
+  log: TLogEvent[];
   skills: Skill[];
   createdAt: string;
   updatedAt: string;
@@ -148,29 +105,80 @@ interface Session {
 }
 ```
 
-`messages` 和 `log` 必须分离：
+Rules:
 
-- `messages`：发给模型的上下文。
-- `log`：完整运行事件，可写入 trace。
-- `input`：Session 创建时的原始输入，多轮追加不改写。
-- `task` / `goal`：child thread 的结构化任务上下文。
+- `input` is the original session input and is not rewritten by later turns.
+- `task` and `goal` describe worker thread context.
+- `messages` should contain semantic user-visible conversation only.
+- `log` is runtime event history and is not the persistent source of conversation truth.
 
-v0.3.1 起，`messages` 是可持久化的多轮对话上下文；`log` 仍然是运行事件记录，不作为持久 Session 的主存储。
-v0.3.2 起，Session 使用 `input` 替代旧初始输入字段，并通过 `parentSessionId` 表达 thread 父子关系。
+### 4.2 Context Scope
 
-### 5.2 Agent
+Current `AgentMessage.metadata.scope` is the visibility boundary:
 
 ```ts
-interface AgentState {
-  session: Session;
-  model: ModelRef;
-  tools: Tool[];
-  isRunning: boolean;
-  currentTask?: Task;
-  currentOutcome?: Outcome;
-  error?: string;
-}
+type ContextScope = "conversation" | "execution" | "diagnostic";
+```
 
+Rules:
+
+| Scope | Meaning | Prompt visibility |
+|---|---|---|
+| `conversation` | user-visible semantic conversation | eligible for future route/plan context |
+| `execution` | phase prompts, routing decisions, planner output, tool results | current run / stored steps only |
+| `diagnostic` | errors, budget failures, invalid model output | trace/debug only |
+
+Do not add a parallel `visibility` field. Future work should strengthen `scope` semantics instead.
+
+### 4.3 ExecutionTurn
+
+Current `ExecutionTurn` stores phase-level driver history:
+
+```ts
+type ExecutionTurn = {
+  id: string;
+  sessionId: string;
+  parentSessionId?: string;
+  phase: "route" | "plan" | "execute" | "verify";
+  requestedAtMs: number;
+  completedAtMs: number;
+  model: ModelRef;
+  usage?: ModelCallUsage;
+  scope: ContextScope;
+  entries: ExecutionTurnEntry[];
+};
+```
+
+Rules:
+
+- route decision, planner output, execute tool calls, tool results, and verifier output belong here.
+- direct answer and accepted final outcome are explicitly published back into `session.messages` as `conversation`.
+- failed outcomes stay out of future semantic context unless a later product decision explicitly publishes them.
+- run logs observe events; `ExecutionTurn` is the replay/fork seed.
+
+## 5. Current Runtime Flow
+
+```text
+Agent.prompt(input)
+  -> create/append Session user turn
+  -> runAgentLoop()
+    -> routeRequest()
+       -> route=direct: publish assistant conversation message, emit outcome
+       -> route=task: planTask()
+       -> route=thread: run child Session via the same Agent loop, then verify parent outcome
+    -> executeTask()
+       -> collect assistant text, tool calls, tool results
+    -> verifyTask()
+       -> decide pass/fail against acceptance criteria
+    -> record ExecutionTurn for each phase
+    -> emit AgentEvent stream
+  -> AgentStore.save(session)
+  -> logging subscriber writes Pino JSONL run log
+```
+
+The public API stays intentionally small:
+
+```ts
 class Agent {
   prompt(input: string): Promise<Outcome>;
   startThread(input: AgentThreadInput): Promise<ThreadRunResult>;
@@ -180,346 +188,222 @@ class Agent {
 }
 ```
 
-### 5.3 Task and Criteria
+## 6. Current Context Rendering
 
-```ts
-interface Task {
-  id: string;
-  title: string;
-  instruction: string;
-  acceptanceCriteria: AcceptanceCriterion[];
-  toolNames: string[];
-  skillIds: string[];
-  status: "pending" | "running" | "passed" | "failed";
-  attempts: number;
-}
-
-type AcceptanceCriterion =
-  | {
-      id: string;
-      type: "model_judge";
-      description: string;
-      required: boolean;
-    }
-  | {
-      id: string;
-      type: "tool_observation";
-      description: string;
-      toolName?: string;
-      required: boolean;
-    };
-```
-
-### 5.4 Tool
-
-```ts
-interface Tool<TArgs = unknown> {
-  name: string;
-  description: string;
-  parameters: TSchema;
-  execute(
-    args: TArgs,
-    context: ToolContext,
-    signal?: AbortSignal
-  ): Promise<ToolResult>;
-}
-```
-
-v0.0.0 不做 `ToolRegistry`。Agent state 直接持有 `Tool[]`。
-
-### 5.5 Skill
-
-```ts
-interface Skill {
-  id: string;
-  path: string;
-  content: string;
-  toolNames?: string[];
-}
-```
-
-v0.0.0 的 `Skill` 是 `SKILL.md` 可执行能力说明，注入模型上下文。真正的 skill 脚本沙箱、依赖管理、自动发现后置。
-
-## 6. Agent Loop
-
-v0.3.2 起 loop 先经过 `route` phase。route 输出三类路径：
+Current prompt building is still transitional:
 
 ```text
-route request
-  -> route=direct:
-     direct response outcome
-  -> route=task:
-     plan task
-       -> execute task with tools
-       -> verify acceptance criteria
-  -> route=thread:
-     create child Session(input, task?, goal?, parentSessionId)
-       -> run the same Agent loop in child Session
-       -> verify child thread outcome in the parent Session
+LlmContext
+  -> prompt-builder filters session.messages by scope
+  -> build phase prompt string
+  -> OpenAI-compatible ChatMessage[]
 ```
 
-```ts
-async function runAgentLoop(input: AgentLoopInput): Promise<Outcome> {
-  const decision = await routeRequest(input);
-  if (decision.route === "direct") {
-    return createDirectOutcome(decision.message);
-  }
+This already prevents the most dangerous contamination cases:
 
-  if (decision.route === "thread") {
-    const child = await input.runThread({
-      prompt: decision.thread?.prompt ?? latestUserInput(input.session),
-      task: decision.thread?.task,
-      goal: decision.thread?.goal,
-      tools: input.tools,
-    });
-    return verifyThreadOutcome(input, child);
-  }
+- phase prompts are not replayed as conversation.
+- routing decisions are not fed into later route prompts.
+- failed outcomes are not published into conversation by default.
+- tool results do not enter route/plan unless explicitly carried by phase context.
 
-  const task = await planTask(input);
-  emit("task_created", { task });
-
-  for (let attempt = 1; attempt <= input.maxAttempts; attempt++) {
-    const execution = await executeTaskWithTools(task, input);
-    const verification = await verifyTask(task, execution, input);
-
-    if (verification.passed) {
-      return createOutcome(task, verification);
-    }
-  }
-
-  return createFailedOutcome(task);
-}
-```
-
-## 7. StreamFn
-
-v0.0.0 使用轻量 `StreamFn`，不做 provider registry。
-
-```ts
-type StreamFn = (
-  model: ModelRef,
-  context: LlmContext,
-  options: StreamOptions
-) => AsyncIterable<ModelStreamEvent>;
-```
-
-v0.0.0 必须实现 `FakeStreamFn`。真实模型 adapter 后置到 v0.1.0。
-
-## 8. Tool Hooks
-
-v0.0.0 权限与拦截先用 hooks。
-
-```ts
-type BeforeToolCall = (input: {
-  task: Task;
-  tool: Tool;
-  args: unknown;
-}) => Promise<{ allow: true } | { allow: false; reason: string }>;
-
-type AfterToolCall = (input: {
-  task: Task;
-  tool: Tool;
-  result: ToolResult;
-}) => Promise<ToolResult>;
-```
-
-完整 `PolicyEngine` 后置到 v0.4.0。
-
-## 9. Verifier
-
-v0.0.0 verifier 由同一个模型完成。
-
-```ts
-interface VerificationResult {
-  passed: boolean;
-  message: string;
-  evidence: Evidence[];
-  failedCriteria: string[];
-}
-```
-
-后续 v0.5.0 再加入 scorer。
-
-## 10. Events and Trace
-
-v0.0.0 事件生命周期：
+But the implementation still lacks a first-class projection/rendering model. The next architecture step is:
 
 ```text
-session_start
-chat_start
-message_delta
-chat_end
-model_requested
-task_created
-task_start
-tool_start
-tool_end
-verification_start
-verification_end
-outcome
-session_end
-error
+Session + source events + driver turns
+  -> IntermediateAgentContext
+  -> RenderedAgentContext
+  -> ConversationEntry[]
+  -> provider adapter wire format
 ```
 
-`chat_start.content` 记录初始 `session.messages` 数组，`message_delta.delta` 只记录新增 `AgentMessage`，不重复输出完整 content，`chat_end.content` 记录最终完整数组。`session_created` 不包含 messages、createdAt、updatedAt 或 messageCount。`model_requested` 只记录消息数量和 provider token usage，不记录完整 prompt 或 raw response。
+## 7. Target Package Architecture
 
-v0.3.0 的 direct response trace 必须包含 `model_requested` route 和 `outcome`，但不能包含 `task_created`。需要工具或多步骤执行时，`model_requested` route 必须出现在 `task_created` 之前。
-
-Trace 是 subscriber：
-
-```ts
-agent.subscribe(jsonlTraceWriter(".rowan/runs/latest.jsonl"));
-```
-
-v0.0.0 不做 trace reader、replay、fork。
-
-## 11. CLI
-
-```bash
-bun run rowan "hello"
-bun run rowan --trace .rowan/runs/latest.jsonl "use echo tool"
-bun run rowan --base-url https://api.openai.com/v1 --model gpt-4.1-mini "hello"
-```
-
-CLI 只负责：
-
-- 创建 Agent。
-- 注入真实模型 `StreamFn`。
-- 注入 tools。
-- 可选加载 skill。
-- 默认挂 JSONL trace subscriber。
-- 输出 outcome。
-
-## 12. Future Modular Architecture
-
-v0.2.0 开始按能力拆模块，但不一次性完成 v1.0.0。拆包以依赖方向和已出现的能力压力为准。
+The next stable package target is:
 
 ```text
 packages/
-  agent/       Agent, Session, Task, Tool, Verifier, Events
-  cli/        command interface
-  trace/      trace reader, replay, fork
-  aci/        workspace tools
-  eval/       datasets and scorers
-  workflow/   graph executor
-  adapters/   real model providers
+  protocol/        zero-dependency shared contracts: phase, model, tool, task, event, turn
+  session/         Session aggregate, source events, persisted session migration
+  context/         projection, phase policies, rendering, prompt templates, ConversationEntry IR
+  agent/           public Agent facade, lifecycle, state, event fanout
+  runtime/         agent execution runtime: routing, phase driver, skills, core tool execution
+  adapters/        provider wire adapters
+  store/           AgentStore implementations
+  logging/         AgentEvent log sinks
+  workspace/       workspace root/path helpers
+  cli/             composition root
 ```
 
-### 12.1 拆包条件
+The minimal path can avoid creating every package immediately:
 
-| 条件 | v0.2.0 处理方式 |
-|---|---|
-| v0.0.0 API 稳定 | 冻结 `agent` public exports，并把内部 import 迁移到 package 入口 |
-| 至少一个真实模型 adapter 完成 | 将 OpenAI-compatible runtime 迁入 `packages/adapters` |
-| workspace ACI 开始引入多工具 | 新增 `packages/aci`，先提供 read/list/search，再设计 diff/patch/test |
-| trace 不再只是 writer，需要 reader/replay | 将 JSONL writer 迁入 `packages/trace`，新增 reader 和 inspect；完整 replay/fork 后置 |
+- create `protocol` first;
+- create `runtime` as the execution engine package instead of separate `driver` and `tools` packages;
+- move route / plan / execute / verify, scheduler, skills application, and core tool execution into `runtime`;
+- keep `agent` as the public facade that owns session lifecycle, state, event fanout, abort handling, and persistence orchestration.
 
-### 12.2 Package Dependency Direction
+Future package responsibilities:
 
 ```text
-cli
-  -> agent
-  -> adapters
-  -> trace
-  -> aci
+agent
+  -> Agent class and public API
+  -> AgentState
+  -> Session create/load/save lifecycle
+  -> user turn append and child thread lifecycle
+  -> event subscription/fanout
+  -> abort / waitForIdle
+  -> delegates execution to runtime
 
-adapters -> agent
-trace    -> agent
-aci      -> agent
-
-eval     -> agent, trace
-workflow -> agent
-
-agent     -> no Rowan package dependency
+runtime
+  -> runTurn / runAgentLoop implementation
+  -> route / plan / execute / verify phases
+  -> routing scheduler
+  -> skill loading/application policy
+  -> core tool definitions and tool execution
+  -> policy hook invocation
+  -> ExecutionTurn recording
 ```
 
-规则：
+## 8. DCP Refactor Principles
 
-- `agent` 不依赖任何其他 Rowan package。
-- `adapters` 只把 provider response 映射成 `agent` 的 `StreamFn` events。
-- `trace` 只消费 `agent` 的 `AgentEvent`，不执行 agent。
-- `aci` 只暴露 `agent.Tool`，不直接控制 agent loop。
-- `cli` 是组合层，可以依赖所有运行时 package。
-- `eval` 和 `workflow` 在 v0.2.0 不进入主链路，保留到后续版本。
+1. `session.messages` only stores semantic conversation.
+2. `ExecutionTurn` moves from `store` to `protocol`; `store` persists it but does not own the domain type.
+3. `context` owns projection and rendering, not provider wire format.
+4. `adapters` convert `ConversationEntry[]` to provider requests and provider responses back to Rowan events/output.
+5. `runtime` owns route / plan / execute / verify, routing, skills, and core tool execution.
+6. `agent` owns public lifecycle and delegates execution to `runtime`.
+7. Source input and Driver output remain orthogonal streams and are merged only by phase-specific rendering.
+8. Filtering happens before compaction; never summarize internal execution noise into long-term context.
 
-### 12.3 v0.2.0 拆包范围
+## 9. Planned Refactor Sequence
 
-v0.2.0 目标结构：
+### Phase A: Protocol Boundary
+
+Goal: remove reversed dependency between runtime kernel and storage.
+
+Tasks:
+
+- create `packages/protocol`;
+- move `LlmPhase`, `ModelRef`, `ModelCallUsage`, `ToolCall`, `ToolResult`, `ExecutionTurn`, `ExecutionTurnEntry`, and `StepFilter` into `protocol`;
+- update `agent`, `store`, `context`, `adapters`, and `logging` imports;
+- update package boundary tests.
+
+Acceptance:
+
+- `agent` no longer imports `store` for execution step types;
+- `store` persists protocol types but does not define them;
+- `bun test packages` and `bun run build` pass.
+
+### Phase B: Runtime Package Split
+
+Goal: move execution mechanics out of `agent` and into one cohesive runtime package.
+
+Target shape:
 
 ```text
-packages/
-  agent/       existing agent kernel
-  adapters/   existing OpenAI-compatible adapter
-  trace/      existing JSONL writer + new reader/inspect
-  aci/        new workspace tools
-  cli/        existing CLI composition
+packages/agent/src/
+  agent.ts
+  thread.ts
+  lifecycle.ts
+
+packages/runtime/src/
+  index.ts
+  run-agent-loop.ts
+  runtime.ts
+  turn-recorder.ts
+  routing/scheduler.ts
+  phases/route.ts
+  phases/plan.ts
+  phases/execute.ts
+  phases/verify.ts
+  skills/
+  tools/
 ```
 
-v0.2.0 不做完整 `eval`、`workflow`，也不做完整 trace replay/fork。
+Acceptance:
 
-## 13. v0.1.0 Real Model Runtime
+- public `Agent.prompt()` behavior stays unchanged;
+- route, plan, execute, verify behavior moves behind the runtime boundary;
+- core tools and routing are exported from `runtime`;
+- budget, thread, verify retry, and multi-turn tests still pass.
 
-v0.1.0 在 v0.0.0 的 `StreamFn` 边界上增加真实模型接入：
+### Phase C: Context Projection and Rendering
+
+Goal: replace direct message scanning with explicit phase rendering.
+
+Target shape:
 
 ```text
-Agent Loop
-  -> OpenAI-compatible StreamFn
-  -> Chat Completions fetch client
-  -> JSON extraction
-  -> TypeBox validation
-  -> ModelStreamEvent
+packages/context/src/
+  project.ts          # Session/source events -> IntermediateAgentContext
+  render.ts           # IC + phase policy -> RenderedContextSegment[]
+  phase-policy.ts     # route/plan/execute/verify viewport rules
+  prompt-templates.ts # prompt strings
+  conversation-ir.ts  # ConversationEntry[]
 ```
 
-v0.1.0 不改变 `Agent`、`Session`、`Task`、`Tool`、`Verifier`、`Outcome`。
+Acceptance:
 
-### 13.1 OpenAI-compatible StreamFn
+- prompt tests can snapshot what each phase sees;
+- route sees semantic history and current request, not old route JSON;
+- execute sees current task and current tool results, not verifier prompts;
+- verify sees task output and criteria, not unrelated session noise.
 
-```ts
-function createOpenAICompatibleStream(config: OpenAICompatibleConfig): StreamFn
+### Phase D: Provider IR
+
+Goal: isolate model provider wire formats.
+
+Target flow:
+
+```text
+RenderedAgentContext
+  -> ConversationEntry[]
+  -> OpenAI Chat Completions messages
+  -> ModelOutput / ModelStreamEvent
 ```
 
-Config:
+Acceptance:
 
-```ts
-interface OpenAICompatibleConfig {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  temperature?: number;
-  timeoutMs?: number;
-  fetch?: typeof fetch;
-}
-```
+- OpenAI-compatible adapter stops choosing context;
+- OpenAI Chat request/response conversion has fixtures;
+- future Responses / Anthropic adapters can share Rowan context rendering.
 
-每个 phase 都通过 JSON contract 映射回 v0.0.0 events：
+### Phase E: Replay, Compaction, and Policy
 
-| Phase | Model Output | Rowan Event |
+Goal: build durable long-session and safety capabilities on top of clean streams.
+
+Tasks:
+
+- add `CanonicalAgentEvent` for user turns, session changes, thread starts, and future IDE/GitHub inputs;
+- rebuild `IntermediateAgentContext` from source events plus driver turns;
+- add compaction cursor and summary after filtering is stable;
+- upgrade tool hooks into policy/approval without changing context storage;
+- add replay/fork from `ExecutionTurn` and source events.
+
+## 10. Long-Term Architecture
+
+Longer-term capabilities should layer on top of DCP boundaries:
+
+| Capability | Depends on | Notes |
 |---|---|---|
-| route | `{ message, route, thread? }` JSON | `text_delta` + `structured_output` |
-| plan | Task JSON | `structured_output` |
-| execute | message + toolCalls JSON | `text_delta` + `tool_call` |
-| verify | VerificationResult JSON | `structured_output` |
+| Policy and safety | protocol + runtime split | permissions and dangerous command handling should wrap tool execution, not prompt rendering |
+| Replay/fork | protocol + source events + ExecutionTurn | replay should not parse Pino logs as state |
+| Eval harness | provider IR + replay | evals need repeatable context and model output fixtures |
+| Workflow graph | stable Agent facade + replay | workflow should orchestrate Agents externally, not enlarge `runAgentLoop()` |
+| UI / daemon / webhooks | CanonicalAgentEvent | multiple input sources need ordered source-event ingestion |
+| SQLite/DB storage | stable store port + replay pressure | JSON remains preferred until query/concurrency pressure is real |
 
-### 13.2 Provider Strategy
+## 11. Architecture Decisions
 
-v0.1.0 只做 OpenAI-compatible Chat Completions：
-
-- `POST /v1/chat/completions`
-- `response_format: { type: "json_object" }` 可配置启用/禁用
-- prompt 仍要求只输出 JSON
-- 不做 native tool calling 兼容矩阵
-- 不做 Anthropic/Gemini
-
-## 14. Architecture Decisions
-
-| ADR | Decision | v0.0.0 Default |
+| ADR | Decision | Current value |
 |---|---|---|
 | ADR-0001 | Runtime | TypeScript + Bun |
-| ADR-0002 | Project shape | Single package |
+| ADR-0002 | Project shape | Bun workspace monorepo |
 | ADR-0003 | Schema | TypeBox 1.x + `Schema.Compile()` |
-| ADR-0004 | Model abstraction | `StreamFn` |
-| ADR-0005 | Tool collection | `Tool[]` |
-| ADR-0006 | Policy | hooks first |
-| ADR-0007 | Trace | JSONL subscriber |
-| ADR-0008 | Skill | `SKILL.md` |
-| ADR-0009 | First real model runtime | OpenAI-compatible `StreamFn` |
+| ADR-0004 | Model abstraction | `StreamFn`, moving toward provider IR |
+| ADR-0005 | Tool collection | `Tool[]`, policy hooks first |
+| ADR-0006 | Policy | hooks now, PolicyEngine after runtime split |
+| ADR-0007 | Runtime history | `AgentEvent` + `ExecutionTurn` + Pino logs |
+| ADR-0008 | Skill | `SKILL.md` loaded into context |
+| ADR-0009 | First real model runtime | OpenAI-compatible Chat Completions |
+| ADR-0010 | Context visibility | `ContextScope`, not a parallel visibility field |
+| ADR-0011 | Storage | JSON-backed `AgentStore` until replay/query pressure justifies DB |
