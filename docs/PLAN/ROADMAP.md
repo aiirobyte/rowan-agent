@@ -1,9 +1,9 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.3.4
+> 版本：v0.3.5
 > 日期：2026-05-03
-> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first child-session predecessor 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 已实现；v0.3.3 storage port 已实现；v0.3.4 store package consolidation 已实现
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`
+> 状态：v0.0.0 已定稿；v0.1.0 已实现真实模型运行时；v0.2.0 monorepo foundation 已实现；v0.3.0 route-first child-session predecessor 已实现；v0.3.1 persistent session 已实现；v0.3.2 thread/sub-session unification 已实现；v0.3.3 storage port 已实现；v0.3.4 store package consolidation 已实现；v0.3.5 logging migration 已规划
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`
 
 ## 1. 一句话定位
 
@@ -90,6 +90,7 @@ v0.0.0 详细执行计划只维护在：
 | v0.3.2 | Threaded Sub Agent Sessions | 让 sub-agent/sub-session 回到普通 Session + Agent 同构实现 | immutable input、task/goal Session metadata、thread route、thread_created/thread_end |
 | v0.3.3 | Storage Port + Scoped Context | 升级存储边界，分离对话上下文与执行步骤历史 | AgentStore、JSON-backed store、ExecutionTurn、ContextScope、phase allowlists |
 | v0.3.4 | Store Package Consolidation | 整理 v0.3.3 的 store 边界 | `packages/store`、AgentStore port、InMemoryAgentStore、LocalJsonAgentStore |
+| v0.3.5 | Pino Runtime Logging | 移除自研 trace package，用 logger 承接 AgentEvent 输出 | `packages/logging`、Pino-backed run logs、`--log` |
 | v0.4.0 | Policy and Safety | 把 hook 升级成策略系统 | approval、permission、dangerous command guard |
 | v0.5.0 | Trace Replay | 让失败 run 可复盘 | trace reader、replay、fork from step |
 | v0.6.0 | Eval Harness | 系统比较 agent 质量 | dataset、scorer、batch report |
@@ -139,12 +140,13 @@ v0.0.0 详细执行计划只维护在：
 
 ## 8. 近期执行顺序
 
-1. 建立 v0.3.4 store package consolidation 规划文档和任务表。
-2. 新增 `packages/store`，承载 store port 和 JSON-backed store。
-3. 将 `AgentStore` / `ExecutionTurn` 从 `agent` 移入 `store`。
-4. 将 `LocalJsonAgentStore` 从 `cli` 移入 `store`。
-5. 更新 package boundary test。
-6. 跑完 v0.3.4 release checklist。
+1. 建立 v0.3.5 Pino runtime logging 规划文档和任务表。
+2. 新增 `packages/logging`，承载 Pino-backed AgentEvent logger。
+3. 将 CLI 默认 JSONL 输出从 trace writer 改为 logger sink。
+4. 用 `--log` 替代 `--trace`。
+5. 移除 `packages/trace`。
+6. 更新 package boundary test。
+7. 跑完 v0.3.5 release checklist。
 
 ## 9. v0.1.0 范围
 
