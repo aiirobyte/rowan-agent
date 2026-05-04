@@ -1,10 +1,17 @@
 # Rowan Agent Roadmap
 
-> 版本：v0.4.2
-> 日期：2026-05-03
-> 状态：implemented
-> 进度：v0.0.0 到 v0.4.2 已实现；下一步进入 v0.5.0 context projection/provider IR
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`docs/PLAN/v0.4.2/PLAN.md`
+> 版本：v0.4.3
+> 日期：2026-05-04
+> 状态：planned
+> 进度：v0.0.0 到 v0.4.2 已实现；v0.4.3 先收敛 Agent loop 包边界，再进入 v0.5.0 context projection/provider IR
+> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`docs/PLAN/v0.4.2/PLAN.md`、`docs/PLAN/v0.4.3/PLAN.md`
+
+Architecture-review source docs:
+
+- `CONTEXT.md`
+- `docs/adr/`
+- `docs/architecture/module-map.md`
+- `docs/architecture/deepening-opportunities.md`
 
 ## 1. Product Positioning
 
@@ -23,7 +30,7 @@ Session
   -> Pino run log
 ```
 
-下一阶段的主线不是继续堆功能，而是先把 Agent loop 内部的每个环节拆成明确的输入/输出原子，再在这个基础上整理上下文、provider 适配、policy 和 replay。
+下一阶段的主线不是继续堆功能，而是先把 Agent loop 的复杂度收敛到既有包边界，再在这个基础上整理上下文、provider 适配、policy 和 replay。
 
 ## 2. Implemented Baseline
 
@@ -65,6 +72,7 @@ Planning docs use this status enum:
 10. The Agent loop should be an orchestration-only state machine: it owns ordering and retry semantics, while each phase consumes a typed input and returns a typed output.
 11. Runtime may adjust phase input/output only through explicit ports; it should not mutate session, task, or loop internals through hidden shared state.
 12. Tool execution should use context/result contracts so approval, manual execution, dry-run, retries, MCP tools, and local tools all share one execution path.
+13. Architecture reviews must use `CONTEXT.md` domain language and check `docs/adr/` before proposing new Seams.
 
 ## 4. New Version Roadmap
 
@@ -75,6 +83,7 @@ The old long-term roadmap placed Policy, Replay, Eval, and Workflow immediately 
 | v0.4.0 | Protocol Boundary + Runtime Split | remove reversed dependencies and extract execution engine | `packages/protocol`, `packages/runtime`, shared turn/model/tool types, `AgentRunner`, phase modules, routing, skills, hooks, MCP boundary, core tools |
 | v0.4.1 | Agent Boundary Correction | correct the over-moved runtime boundary before context work | Agent-owned loop/thread/phases, runtime as glue/integration, no `core/` folder, no compatibility runtime re-exports |
 | v0.4.2 | Agent Loop IO Atomization | decouple loop steps into typed phase inputs/outputs and runtime ports | `AgentLoopConfig`, `AgentRunState`, `AgentContext`, `PhaseInputMap`, `PhaseOutputMap`, `PhaseResult`, `beforePhase`/`afterPhase`, orchestration-only loop |
+| v0.4.3 | Agent Loop Package Boundary Consolidation | reduce loop complexity by returning cross-package glue to existing package boundaries | protocol shared phase output contracts, adapter-owned typed model output, runtime-owned tool execution primitive, Agent-owned orchestration/effects/outcomes |
 | v0.5.0 | Context Projection + Provider IR | make context deterministic and provider-neutral on top of phase IO | `IntermediateAgentContext`, `RenderedAgentContext`, phase policy, token limits hooks, `ConversationEntry[]`, SSE streaming parser |
 | v0.6.0 | Tool Runtime Policy Ports | upgrade tool hooks into explicit context/result contracts | `BeforeToolCallContext`, `BeforeToolCallResult`, `AfterToolCallContext`, `AfterToolCallResult`, `ToolExecutionMode`, shared local/MCP `ToolRunner`, permission scopes |
 | v0.7.0 | Replay, Fork, and Compaction | make failed runs reconstructable and long sessions manageable | canonical events, replay from events+turns, fork from step, compaction cursor+summary |
@@ -373,6 +382,43 @@ Runtime examples:
 - existing direct, task, thread, limits, and verify retry tests still pass;
 - new tests cover `beforePhase` input adjustment, `afterPhase` output adjustment, skip, retry, abort, and unchanged default behavior.
 
+### 7.6 v0.4.3 Scope
+
+v0.4.3 is the cleanup pass after v0.4.2. It keeps the Agent loop in `packages/agent`, but moves remaining cross-package glue to the packages that already own those boundaries.
+
+Target ownership:
+
+```text
+protocol
+  -> shared phase output and stream event contracts
+
+adapters
+  -> provider output normalization into typed phase output events
+
+runtime
+  -> event-neutral tool execution primitives, hook invocation, schema validation/cache
+
+agent
+  -> ordered run state machine, effects, attempts, verification, thread depth, outcomes
+```
+
+Required changes:
+
+- avoid creating new Agent-local `runtime.ts` or `model-stream.ts` files;
+- keep `agent` from importing `adapters`;
+- move shared phase output contracts to `protocol` where cross-package use requires it;
+- let adapters emit typed phase outputs instead of requiring Agent-owned provider JSON repair;
+- let runtime execute default tool calls through an event-neutral primitive;
+- keep Agent-owned session/message/event/turn materialization and final outcome publishing.
+
+Acceptance:
+
+- Agent loop no longer owns provider JSON repair/normalization;
+- default tool execution goes through runtime-owned primitives;
+- package boundary tests still pass;
+- direct/task/thread/multi-turn/limits/invalid schema/invalid tool args/verify retry tests pass;
+- v0.5.0 context projection can start without further loop-boundary cleanup.
+
 ## 8. v0.5.0 Scope
 
 v0.5.0 makes the Cahciua-inspired DCP direction real in Rowan, now on top of phase IO boundaries.
@@ -594,7 +640,7 @@ Required changes:
 
 Near-term order:
 
-1. Implement v0.4.2 Agent loop IO atomization and runtime phase ports.
+1. Implement v0.4.3 Agent loop package-boundary consolidation.
 2. Implement v0.5.0 context projection/rendering and provider IR on top of typed phase IO.
 3. Upgrade tool execution and policy as v0.6.0, with local and MCP tools sharing one runtime path.
 4. Build replay/compaction after source events, driver turns, and rendered contexts are clean.
@@ -612,6 +658,8 @@ Deferred decisions must be triaged after each version is implemented. Current tr
 | Should the execution package be named `runtime` or `runner`? | superseded | v0.4.0 kept package name `runtime`; v0.4.1 corrects the deeper issue by moving Agent loop/thread/phases into `agent` and leaving `runtime` as glue/integration. |
 | Should v0.4.1 preserve compatibility re-exports from `runtime`? | implemented | No. There is no stable external API yet, so obsolete runtime loop/thread/phase exports should be removed cleanly. |
 | Should v0.4.1 create a `core/` folder or package? | implemented | No. `packages/agent/src/agent.ts` is the Agent core/facade entrypoint, with loop/thread/phases moved beside it in `packages/agent/src/`. |
+| Should v0.4.3 split `loop.ts` into many new Agent-local files? | planned | No. Use existing package boundaries first: `protocol` for shared contracts, `adapters` for provider output, `runtime` for tool execution, and `agent` for orchestration/effects. |
+| Where should architecture review candidates live? | implemented | Use `docs/architecture/deepening-opportunities.md`; release plans should link to candidates instead of becoming the review backlog. |
 | Should `CanonicalAgentEvent` be persisted in the same session JSON or a sidecar JSONL? | planned | Decide in v0.7.0 when source events are introduced. |
 | Does replay require workspace snapshotting in v0.7.0, or only command/tool output replay first? | planned | Start with command/tool output replay; workspace snapshots require separate storage pressure. |
 | Should v0.8.0 prioritize programmatic scorers over LLM judges? | implemented | Programmatic scorers first, LLM judge second. |

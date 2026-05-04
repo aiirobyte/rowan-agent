@@ -4,6 +4,15 @@
 
 Keep Rowan Agent planning, implementation notes, and working context organized.
 
+Architecture-review docs now live outside the release plan tree:
+
+- `CONTEXT.md`
+- `docs/README.md`
+- `docs/architecture/README.md`
+- `docs/architecture/module-map.md`
+- `docs/architecture/deepening-opportunities.md`
+- `docs/adr/`
+
 The main project roadmap now lives in:
 
 - `docs/PLAN/ARCHITECTURE.md`
@@ -35,6 +44,9 @@ The main project roadmap now lives in:
 - `docs/PLAN/v0.4.2/README.md`
 - `docs/PLAN/v0.4.2/PLAN.md`
 - `docs/PLAN/v0.4.2/TASKS.md`
+- `docs/PLAN/v0.4.3/README.md`
+- `docs/PLAN/v0.4.3/PLAN.md`
+- `docs/PLAN/v0.4.3/TASKS.md`
 
 ## Current Status
 
@@ -58,6 +70,8 @@ The main project roadmap now lives in:
 - v0.4.0 implemented: protocol boundary, runtime split, context import cleanup, runtime/runner terminology, and MCP ownership under runtime.
 - v0.4.1 implemented: corrected the Agent/runtime boundary by moving loop, thread, phases, task outcomes, and turn recording back into `packages/agent/src/` with no `core/` folder and no compatibility runtime re-exports.
 - v0.4.2 implemented: atomized Agent loop inputs/outputs and exposed explicit runtime phase ports while keeping loop ownership in `agent`.
+- v0.4.3 planned: consolidate Agent loop complexity at existing package boundaries before v0.5.0 context projection.
+- Architecture docs reorganized on 2026-05-04 for `improve-codebase-architecture`: root domain context, ADR files, Module map, and deepening opportunities.
 
 Planning status enum:
 
@@ -70,12 +84,16 @@ Planning status enum:
 
 ## Next Steps
 
-1. Implement v0.5.0: add context projection/rendering and provider-neutral `ConversationEntry[]`.
-2. Resume tool policy ports as v0.6.0 after the driver and context boundaries are clean.
-3. Build replay/fork/compaction after source events and driver turns are cleanly separated.
+1. Implement v0.4.3: move provider-output normalization and tool execution glue to the existing `adapters` and `runtime` package boundaries while keeping Agent orchestration in `agent`.
+2. Implement v0.5.0: add context projection/rendering and provider-neutral `ConversationEntry[]`.
+3. Resume tool policy ports as v0.6.0 after the driver and context boundaries are clean.
+4. Build replay/fork/compaction after source events and driver turns are cleanly separated.
 
 ## Notes
 
 - Treat this file as a short planning index.
+- Use `CONTEXT.md` for Rowan domain language.
+- Use `docs/adr/` for accepted architecture decisions.
+- Use `docs/architecture/deepening-opportunities.md` for architecture review candidates.
 - Use `docs/PLAN/ROADMAP.md` as the editable source of truth for project evolution.
-- Use `docs/PLAN/ARCHITECTURE.md` as the source of truth for package boundaries and DCP-style layering.
+- Use `docs/PLAN/ARCHITECTURE.md` as the versioned architecture snapshot for package boundaries and DCP-style layering.
