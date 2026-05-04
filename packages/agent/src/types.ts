@@ -184,6 +184,8 @@ export type AfterToolCall = (input: {
   result: ToolResult;
 }) => Promise<ToolResult>;
 
+export type AgentStepRecorder = (step: ExecutionTurn) => Promise<void>;
+
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
 type AgentRunCommonConfig = {
@@ -207,7 +209,7 @@ export type AgentLoopRunConfig = AgentRunCommonConfig & {
   threadDepth?: number;
   verifyTasks?: boolean;
   runThread?: RunThread;
-  recordStep?: (step: ExecutionTurn) => Promise<void>;
+  recordStep?: AgentStepRecorder;
 };
 
 export type AgentThreadRunConfig = AgentRunCommonConfig & {

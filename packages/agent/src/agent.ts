@@ -5,7 +5,6 @@ import {
 import type {
   ModelRef,
   AgentRunLimits,
-  AgentRuntimePort,
   StreamFn,
   BeforeToolCall,
   Tool,
@@ -13,7 +12,7 @@ import type {
   AgentRunResult,
   AgentEvent,
   AgentContext,
-  ExecutionTurn,
+  AgentStepRecorder,
   AgentEventListener,
   Unsubscribe,
 } from "./types";
@@ -27,10 +26,9 @@ export type AgentRunConfig = {
   session?: AgentSession;
   maxAttempts?: number;
   limits?: AgentRunLimits;
-  runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
-  recordStep?: (step: ExecutionTurn) => Promise<void>;
+  recordStep?: AgentStepRecorder;
 };
 
 export type AgentRunOverride = Partial<Omit<AgentRunConfig, "context">> & {
@@ -159,7 +157,6 @@ export class Agent {
       stream: resolved.stream,
       maxAttempts: resolved.maxAttempts,
       limits: resolved.limits,
-      runtime: resolved.runtime,
       threadDepth: 0,
       signal: this.abortController.signal,
       beforeToolCall: resolved.beforeToolCall,

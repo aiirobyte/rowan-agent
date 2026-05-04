@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import { createSession as createBaseSession } from "@rowan-agent/session";
+import { createMessage, createSession as createBaseSession } from "@rowan-agent/session";
 import { runAgentLoop } from "../src/loop";
 import { createDefaultCriteria } from "../src/task";
 import type { AgentEvent, AgentRuntimePort, StreamFn, Tool } from "../src/types";
@@ -11,6 +11,48 @@ import { scriptedStream } from "./support/scripted-stream";
 function createSession(input: Parameters<typeof createBaseSession>[0]) {
   return createBaseSession<AgentEvent>(input);
 }
+
+test("runAgentLoop assembles runtime context for the first message", async () => {
+  const seenContexts: Array<{
+    systemPrompt: string;
+    messages: string[];
+    tools: string[];
+  }> = [];
+  const runtime: AgentRuntimePort = {
+    async beforePhase(context, phase) {
+      if (phase !== "route") {
+        return;
+      }
+      seenContexts.push({
+        systemPrompt: context.systemPrompt,
+        messages: context.messages.map((message) => message.content),
+        tools: context.tools.map((tool) => tool.name),
+      });
+    },
+  };
+
+  await runAgentLoop({
+    kind: "session",
+    context: {
+      systemPrompt: "Test system",
+      messages: [
+        createMessage("user", "hello", { scope: "conversation" }),
+      ],
+      tools: [echoTool],
+    },
+    model: { provider: "test", name: "scripted" },
+    stream: scriptedStream,
+    runtime,
+  });
+
+  expect(seenContexts).toEqual([
+    {
+      systemPrompt: "Test system",
+      messages: ["hello"],
+      tools: ["echo"],
+    },
+  ]);
+});
 
 test("runAgentLoop completes task with echo tool and verification", async () => {
   const session = createSession({

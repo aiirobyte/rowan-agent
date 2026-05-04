@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
-import type { AgentEventListener, AgentRuntimePort, StreamFn } from "../src/types";
+import type { AgentEventListener, StreamFn } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
@@ -27,42 +27,6 @@ test("Agent.run returns a run result and emits events", async () => {
   expect(events).toContain("tool_start");
   expect(events).toContain("tool_end");
   expect(events).not.toContain("thread_created");
-});
-
-test("Agent.run assembles runtime context for the first message", async () => {
-  const seenContexts: Array<{
-    systemPrompt: string;
-    messages: string[];
-    tools: string[];
-  }> = [];
-  const runtime: AgentRuntimePort = {
-    async beforePhase(context, phase) {
-      if (phase !== "route") {
-        return;
-      }
-      seenContexts.push({
-        systemPrompt: context.systemPrompt,
-        messages: context.messages.map((message) => message.content),
-        tools: context.tools.map((tool) => tool.name),
-      });
-    },
-  };
-  const agent = new Agent({
-    context: createTestContext({ tools: createEchoTools() }),
-    model: { provider: "test", name: "scripted" },
-    stream: scriptedStream,
-    runtime,
-  });
-
-  await runAgentTurn(agent, "hello");
-
-  expect(seenContexts).toEqual([
-    {
-      systemPrompt: "Test system",
-      messages: ["hello"],
-      tools: ["echo"],
-    },
-  ]);
 });
 
 test("Agent.run does not wait for async event listeners", async () => {
