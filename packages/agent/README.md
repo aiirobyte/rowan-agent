@@ -8,7 +8,7 @@ The package also owns the route, plan, execute, verify, thread, retry, outcome, 
 
 ## Architecture
 
-`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly, and the loop owns both normal sessions and child thread sessions. Phase helpers live under `src/phases/`. The loop materializes the run `context` into session messages; composition roots such as the CLI persist returned sessions and execution steps.
+`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly, and the loop owns both normal sessions and child thread sessions. Phase helpers live under `src/phases/`. The loop materializes the run `context` into session messages; composition roots such as the CLI persist returned sessions and optional execution steps.
 
 `Agent` keeps a small state object:
 
@@ -20,9 +20,11 @@ The package also owns the route, plan, execute, verify, thread, retry, outcome, 
 
 `src/task.ts`, `src/tools.ts`, and `src/types.ts` expose task helpers, runtime-backed core tools, and public Agent types. `src/index.ts` is the package entry point.
 
+`Agent` intentionally exposes the stable, application-facing run surface: context, model, stream, limits, sessions, tool approval hooks, event subscriptions, cancellation, and optional step recording. Advanced phase/runtime ports are internal to the low-level loop API and should be tested or customized through `runAgentLoop`, not through `AgentRunConfig`.
+
 ## Usage Flow
 
-1. Prepare `model`, `stream`, and `tools`. Optionally provide skills, limits, tool approval hooks, and a `recordStep` callback.
+1. Prepare `model`, `stream`, and `tools`. Optionally provide skills, limits, tool approval hooks, and a `recordStep` callback for observability/persistence.
 2. Create an `Agent` instance.
 3. Use `subscribe` to listen to events. Logging modules and UIs can both consume this stream.
 4. Call `run()` with an `AgentRunConfig.context` snapshot to start or continue a conversation turn.
