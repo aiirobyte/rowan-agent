@@ -18,9 +18,10 @@ import { agentPhases } from "./phases";
 import { scheduleTaskRouting } from "./phases/routing";
 import type {
   AgentEvent,
+  AgentContext as AgentRunContext,
   AgentLoopInput,
   AgentRunResult,
-  AgentContext,
+  AgentLoopContext,
   ErrorInfo,
   LlmPhase,
   ModelCallUsage,
@@ -66,7 +67,7 @@ type NormalizedAgentLoopInput = {
   goal?: string;
   model: AgentLoopInput["model"];
   stream: AgentLoopInput["stream"];
-  tools: AgentLoopInput["tools"];
+  tools: Tool[];
   maxAttempts?: AgentLoopInput["maxAttempts"];
   limits?: AgentLoopInput["limits"];
   threadDepth?: AgentLoopInput["threadDepth"];
@@ -90,7 +91,7 @@ type AgentLoopRuntime = NormalizedAgentLoopInput & {
   limitUsage: AgentLimitUsage;
   threadDepth: number;
   maxThreadDepth: number;
-  status: AgentContext["state"]["status"];
+  status: AgentLoopContext["state"]["status"];
   attempt: number;
   toolResults: ToolResult[];
   currentTask?: Task;
@@ -236,11 +237,12 @@ function createAgentRunResult(input: AgentLoopRuntime, outcome: Outcome): AgentR
   };
 }
 
-function createAgentContext(input: AgentLoopRuntime): AgentContext {
+function createAgentLoopContext(input: AgentLoopRuntime): AgentLoopContext {
   return {
     systemPrompt: input.session.systemPrompt,
     messages: snapshotMessages(input.session.messages),
     tools: input.tools,
+    skills: input.session.skills.slice(),
     config: {
       sessionLifecycle: input.sessionLifecycle ?? "created",
       model: input.model,
@@ -290,13 +292,42 @@ function cloneLimitUsage(usage: AgentLimitUsage): AgentLimitUsage {
 
 function normalizeAgentLoopInput(input: AgentLoopInput): NormalizedAgentLoopInput {
   if (input.kind === "session") {
-    return input;
+    const context = input.context
+      ? cloneAgentRunContext(input.context)
+      : input.session
+        ? contextFromSession(input.session, input.tools)
+        : undefined;
+    if (!context) {
+      throw new Error("Session agent loop runs require either context or session.");
+    }
+    const session = input.session
+      ? syncSessionFromContext(input.session, context)
+      : createSessionFromContext(context);
+
+    return {
+      kind: "session",
+      session,
+      sessionLifecycle: input.sessionLifecycle,
+      model: input.model,
+      stream: input.stream,
+      tools: input.tools ?? context.tools ?? [],
+      maxAttempts: input.maxAttempts,
+      limits: input.limits,
+      threadDepth: input.threadDepth,
+      verifyTasks: input.verifyTasks,
+      signal: input.signal,
+      runtime: input.runtime,
+      beforeToolCall: input.beforeToolCall,
+      afterToolCall: input.afterToolCall,
+      runThread: input.runThread,
+      recordStep: input.recordStep,
+      emit: input.emit,
+    };
   }
 
-  const session = createSession<AgentEvent>({
-    systemPrompt: input.systemPrompt,
+  const context = contextFromThreadInput(input);
+  const session = createSessionFromContext(context, {
     input: input.prompt,
-    skills: input.skills ?? [],
     parentSessionId: input.parentSessionId,
     task: input.task,
     goal: input.goal,
@@ -312,7 +343,7 @@ function normalizeAgentLoopInput(input: AgentLoopInput): NormalizedAgentLoopInpu
     ...(input.goal ? { goal: input.goal } : {}),
     model: input.model,
     stream: input.stream,
-    tools: input.tools,
+    tools: input.tools ?? context.tools ?? [],
     maxAttempts: input.maxAttempts,
     limits: input.limits,
     threadDepth: input.threadDepth ?? 1,
@@ -522,6 +553,83 @@ function snapshotMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map(snapshotMessage);
 }
 
+function cloneAgentRunContext(context: AgentRunContext): AgentRunContext {
+  return {
+    systemPrompt: context.systemPrompt,
+    messages: snapshotMessages(context.messages),
+    ...(context.tools ? { tools: context.tools.slice() } : {}),
+    ...(context.skills ? { skills: context.skills.slice() } : {}),
+  };
+}
+
+function firstUserInput(messages: AgentMessage[]): string {
+  const message = messages.find((entry) => entry.role === "user");
+  if (!message) {
+    throw new Error("Agent context must include at least one user message.");
+  }
+  return message.content;
+}
+
+function contextFromSession(session: AgentSession, tools?: Tool[]): AgentRunContext {
+  return {
+    systemPrompt: session.systemPrompt,
+    messages: snapshotMessages(session.messages),
+    tools: tools?.slice() ?? [],
+    skills: session.skills.slice(),
+  };
+}
+
+function contextFromThreadInput(input: Extract<AgentLoopInput, { kind: "thread" }>): AgentRunContext {
+  if (input.context) {
+    return cloneAgentRunContext(input.context);
+  }
+
+  return {
+    systemPrompt: input.systemPrompt,
+    messages: [
+      createMessage("user", input.prompt, { scope: "conversation" }),
+    ],
+    tools: input.tools?.slice() ?? [],
+    skills: input.skills?.slice() ?? [],
+  };
+}
+
+function createSessionFromContext(
+  context: AgentRunContext,
+  input: {
+    input?: string;
+    parentSessionId?: string;
+    task?: string;
+    goal?: string;
+  } = {},
+): AgentSession {
+  const session = createSession<AgentEvent>({
+    systemPrompt: context.systemPrompt,
+    input: input.input ?? firstUserInput(context.messages),
+    skills: context.skills ?? [],
+    ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
+    ...(input.task ? { task: input.task } : {}),
+    ...(input.goal ? { goal: input.goal } : {}),
+  });
+
+  if (context.messages.length > 0) {
+    session.messages = snapshotMessages(context.messages);
+  }
+  session.skills = context.skills?.slice() ?? [];
+  session.updatedAt = nowIso();
+  return session;
+}
+
+function syncSessionFromContext(session: AgentSession, context: AgentRunContext): AgentSession {
+  session.systemPrompt = context.systemPrompt;
+  if (context.messages.length > 0) {
+    session.messages = snapshotMessages(context.messages);
+  }
+  session.skills = context.skills?.slice() ?? session.skills;
+  session.updatedAt = nowIso();
+  return session;
+}
+
 async function emitChatStart(input: AgentLoopRuntime): Promise<void> {
   await emit(input, {
     type: "chat_start",
@@ -564,7 +672,7 @@ async function emitChatEnd(input: AgentLoopRuntime): Promise<void> {
 }
 
 async function collectTextAndStructured(input: {
-  context: AgentContext;
+  context: AgentLoopContext;
   events: AsyncIterable<ModelStreamEvent>;
   metadataPhase: LlmPhase;
   recordText?: boolean;
@@ -668,7 +776,7 @@ async function collectTextAndStructured(input: {
 }
 
 async function recordContextPhaseStep(input: {
-  context: AgentContext;
+  context: AgentLoopContext;
   phase: LlmPhase;
   requestedAtMs: number;
   entries: ExecutionTurnEntry[];
@@ -694,7 +802,7 @@ async function recordContextPhaseStep(input: {
   });
 }
 
-async function planTask(context: AgentContext, input: PlanInput): Promise<{ task: Task; text: string }> {
+async function planTask(context: AgentLoopContext, input: PlanInput): Promise<{ task: Task; text: string }> {
   const requestedAtMs = Date.now();
   const collected = await collectTextAndStructured({
     context,
@@ -723,7 +831,7 @@ async function planTask(context: AgentContext, input: PlanInput): Promise<{ task
 }
 
 async function routeRequest(
-  context: AgentContext,
+  context: AgentLoopContext,
   input: RouteInput,
 ): Promise<TaskRoutingDecision & { text: string }> {
   const requestedAtMs = Date.now();
@@ -776,7 +884,7 @@ function findTool(tools: Tool[], name: string): Tool | undefined {
 }
 
 async function executeToolCall(input: {
-  context: AgentContext;
+  context: AgentLoopContext;
   task: Task;
   toolCall: ToolCall;
 }): Promise<ToolResult> {
@@ -934,7 +1042,7 @@ async function executeToolCall(input: {
 }
 
 async function executeTask(
-  context: AgentContext,
+  context: AgentLoopContext,
   input: ExecuteInput,
 ): Promise<ExecuteOutput> {
   let collected: Awaited<ReturnType<typeof collectTextAndStructured>>;
@@ -1011,7 +1119,7 @@ async function executeTask(
 }
 
 async function verifyTask(
-  context: AgentContext,
+  context: AgentLoopContext,
   input: VerifyInput,
 ): Promise<VerificationResult> {
   await context.emit({
@@ -1109,7 +1217,7 @@ function hasRetry<TPhase extends LlmPhase>(value: unknown): value is { retry: Ph
 }
 
 async function runPhase<TPhase extends LlmPhase>(
-  context: AgentContext,
+  context: AgentLoopContext,
   phase: TPhase,
   input: PhaseInputMap[TPhase],
   runner: (phaseInput: PhaseInputMap[TPhase]) => Promise<PhaseOutputMap[TPhase]>,
@@ -1280,7 +1388,7 @@ async function executeThreadRoute(
 
   input.status = "verifying";
   const verifyPhaseResult = await runPhase(
-    createAgentContext(input),
+    createAgentLoopContext(input),
     verifyPhase,
     {
       session: input.session,
@@ -1289,7 +1397,7 @@ async function executeThreadRoute(
       criteria: task.acceptanceCriteria,
       runtime: runtimeDepth(input),
     },
-    (phaseInput) => verifyTask(createAgentContext(input), phaseInput),
+    (phaseInput) => verifyTask(createAgentLoopContext(input), phaseInput),
   );
   if (verifyPhaseResult.type === "abort") {
     return verifyPhaseResult.outcome;
@@ -1347,7 +1455,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
     runtime.status = "routing";
     const canStartThreadRoute = runtime.threadDepth < runtime.maxThreadDepth;
     const routePhaseResult = await runPhase(
-      createAgentContext(runtime),
+      createAgentLoopContext(runtime),
       routePhase,
       {
         session: runtime.session,
@@ -1362,7 +1470,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
         workerTask: runtime.threadDepth > 0 ? runtime.session.task : undefined,
         workerGoal: runtime.threadDepth > 0 ? runtime.session.goal : undefined,
       },
-      (phaseInput) => routeRequest(createAgentContext(runtime), phaseInput),
+      (phaseInput) => routeRequest(createAgentLoopContext(runtime), phaseInput),
     );
     if (routePhaseResult.type === "abort") {
       return completeRun(runtime, routePhaseResult.outcome, endChatLog);
@@ -1387,13 +1495,13 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
 
     runtime.status = "planning";
     const planPhaseResult = await runPhase(
-      createAgentContext(runtime),
+      createAgentLoopContext(runtime),
       planPhase,
       {
         session: runtime.session,
         runtime: runtimeDepth(runtime),
       },
-      (phaseInput) => planTask(createAgentContext(runtime), phaseInput),
+      (phaseInput) => planTask(createAgentLoopContext(runtime), phaseInput),
     );
     if (planPhaseResult.type === "abort") {
       return completeRun(runtime, planPhaseResult.outcome, endChatLog);
@@ -1426,7 +1534,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
       });
 
       const executePhaseResult = await runPhase(
-        createAgentContext(runtime),
+        createAgentLoopContext(runtime),
         executePhase,
         {
           session: runtime.session,
@@ -1434,7 +1542,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
           toolResults: runtime.toolResults,
           runtime: runtimeDepth(runtime),
         },
-        (phaseInput) => executeTask(createAgentContext(runtime), phaseInput),
+        (phaseInput) => executeTask(createAgentLoopContext(runtime), phaseInput),
       );
       if (executePhaseResult.type === "abort") {
         return completeRun(runtime, executePhaseResult.outcome, endChatLog);
@@ -1465,7 +1573,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
 
       runtime.status = "verifying";
       const verifyPhaseResult = await runPhase(
-        createAgentContext(runtime),
+        createAgentLoopContext(runtime),
         verifyPhase,
         {
           session: runtime.session,
@@ -1474,7 +1582,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
           criteria: task.acceptanceCriteria,
           runtime: runtimeDepth(runtime),
         },
-        (phaseInput) => verifyTask(createAgentContext(runtime), phaseInput),
+        (phaseInput) => verifyTask(createAgentLoopContext(runtime), phaseInput),
       );
       if (verifyPhaseResult.type === "abort") {
         return completeRun(runtime, verifyPhaseResult.outcome, endChatLog);

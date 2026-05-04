@@ -27,10 +27,13 @@ Most callers use runtime through `@rowan-agent/agent`:
 import { Agent, createCoreTools } from "@rowan-agent/agent";
 
 const agent = new Agent({
-  systemPrompt: "You are Rowan.",
+  context: {
+    systemPrompt: "You are Rowan.",
+    messages: [],
+    tools: createCoreTools({ root: process.cwd() }),
+  },
   model: { provider: "openai-compatible", name: "gpt-4.1-mini" },
   stream,
-  tools: createCoreTools({ root: process.cwd() }),
 });
 ```
 

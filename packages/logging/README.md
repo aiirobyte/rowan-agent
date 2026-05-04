@@ -25,12 +25,21 @@ Log levels are `debug`, `info`, `warn`, `error`, and `silent`. The default `info
 
 ```ts
 import { pinoAgentEventLogger } from "@rowan-agent/logging";
+import { createMessage } from "@rowan-agent/session";
 
 const logger = pinoAgentEventLogger("runs/session.jsonl", {
   level: "info",
 });
 
 agent.subscribe(logger);
-await agent.prompt("hello");
+await agent.run({
+  context: {
+    ...agent.state.context,
+    messages: [
+      ...agent.state.context.messages,
+      createMessage("user", "hello"),
+    ],
+  },
+});
 await logger.flush();
 ```

@@ -13,6 +13,7 @@ import {
   formatLocalTimestamp,
   type AgentEvent,
   type AgentEventListener,
+  type ExecutionTurn,
   type Outcome,
 } from "@rowan-agent/agent";
 import {
@@ -21,7 +22,7 @@ import {
   type AgentEventLogLevel,
   type AgentEventLogPath,
 } from "@rowan-agent/logging";
-import { type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
+import { createMessage, type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
 import { LocalJsonAgentStore } from "@rowan-agent/store";
 import {
   type WorkspacePaths,
@@ -372,6 +373,10 @@ function parseArgs(argv: string[]): CliArgs {
 }
 type AgentSession = Session<AgentEvent>;
 type CliSessionListItem = Pick<SessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
+type ConfiguredAgent = {
+  agent: Agent;
+  agentStore: LocalJsonAgentStore<AgentSession>;
+};
 
 function configuredValue(flagValue: string | undefined, envValue: string | undefined, defaultValue?: string): string | undefined {
   return nonEmpty(flagValue) ?? nonEmpty(envValue) ?? defaultValue;
@@ -475,10 +480,14 @@ async function runListCommand(_args: CliArgs): Promise<void> {
 async function createConfiguredAgent(
   args: CliArgs,
   workspace: WorkspacePaths,
-): Promise<Agent> {
+): Promise<ConfiguredAgent> {
   const skills = await loadSkills(args.skills, workspace);
   const tools = createCoreTools({ root: workspace.root });
   const agentStore = new LocalJsonAgentStore<AgentSession>(workspace.sessionsDir);
+  const session = args.sessionId ? await agentStore.load(args.sessionId) : undefined;
+  if (args.sessionId && !session) {
+    throw new Error(`Session not found: ${args.sessionId}`);
+  }
   const config = resolveOpenAICompatibleConfig({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
@@ -490,12 +499,15 @@ async function createConfiguredAgent(
     tools,
   });
   const agent = new Agent({
-    systemPrompt: "You are Rowan, a minimal agent kernel.",
+    context: {
+      systemPrompt: session?.systemPrompt ?? "You are Rowan, a minimal agent kernel.",
+      messages: session?.messages ?? [],
+      tools,
+      skills: session?.skills ?? skills,
+    },
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompatibleStream(config),
-    tools,
-    skills,
-    agentStore,
+    ...(session ? { session } : {}),
     limits: {
       maxThreadDepth:
         args.maxThreadDepth ??
@@ -504,15 +516,23 @@ async function createConfiguredAgent(
     },
   });
 
-  if (args.sessionId) {
-    await agent.loadSession(args.sessionId);
-  }
+  return { agent, agentStore };
+}
 
-  return agent;
+async function saveRunArtifacts(input: {
+  agentStore: LocalJsonAgentStore<AgentSession>;
+  session: AgentSession;
+  steps: ExecutionTurn[];
+}): Promise<void> {
+  await input.agentStore.save(input.session);
+  for (const step of input.steps) {
+    await input.agentStore.appendStep(step.sessionId, step);
+  }
 }
 
 async function promptWithLog(input: {
   agent: Agent;
+  agentStore: LocalJsonAgentStore<AgentSession>;
   prompt: string;
   logPath: AgentEventLogPath;
   logMode?: "replace" | "append";
@@ -540,9 +560,35 @@ async function promptWithLog(input: {
   };
 
   const unsubscribe = input.agent.subscribe(listener);
+  const pendingSteps: ExecutionTurn[] = [];
   try {
-    const result = await input.agent.prompt(input.prompt);
+    const result = await input.agent.run({
+      context: {
+        ...input.agent.state.context,
+        messages: [
+          ...(input.agent.state.session?.messages ?? input.agent.state.context.messages),
+          createMessage("user", input.prompt, { scope: "conversation" }),
+        ],
+      },
+      recordStep: async (step) => {
+        pendingSteps.push(step);
+      },
+    });
+    await saveRunArtifacts({
+      agentStore: input.agentStore,
+      session: result.session,
+      steps: pendingSteps,
+    });
     return result.outcome;
+  } catch (error) {
+    if (input.agent.state.session) {
+      await saveRunArtifacts({
+        agentStore: input.agentStore,
+        session: input.agent.state.session,
+        steps: pendingSteps,
+      }).catch(() => undefined);
+    }
+    throw error;
   } finally {
     try {
       await input.agent.flushEvents();
@@ -555,7 +601,7 @@ async function promptWithLog(input: {
 
 async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  const agent = await createConfiguredAgent(args, workspace);
+  const { agent, agentStore } = await createConfiguredAgent(args, workspace);
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args);
@@ -597,6 +643,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     try {
       const outcome = await promptWithLog({
         agent,
+        agentStore,
         prompt,
         logPath: activeLogPath ?? createDefaultLogPathResolver(workspace),
         logMode: hasWrittenLog ? "append" : "replace",

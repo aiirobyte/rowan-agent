@@ -6,6 +6,7 @@ import { runAgentLoop } from "../src/loop";
 import { createDefaultCriteria } from "../src/task";
 import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
+import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
@@ -80,13 +81,12 @@ test("runAgentLoop creates a thread session with explicit tools and skills", asy
 
 test("Agent does not expose startThread; thread runs use explicit loop config", async () => {
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: [echoTool] }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: [echoTool],
   });
 
-  await agent.prompt("hello");
+  await runAgentTurn(agent, "hello");
   expect("startThread" in agent).toBe(false);
 
   const withoutTools = asThreadResult(await runAgentLoop({
@@ -260,16 +260,15 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
   };
 
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: [echoTool] }),
     model: { provider: "test", name: "thread-smoke-test" },
     stream: smokeTestStream,
-    tools: [echoTool],
   });
   agent.subscribe((event) => {
     events.push(event);
   });
 
-  const outcome = await agent.prompt("测试 thread");
+  const outcome = await runAgentTurn(agent, "测试 thread");
   const threadCreatedEvents = events.filter((event) => event.type === "thread_created");
 
   expect(outcome.outcome.passed).toBe(true);
@@ -372,17 +371,16 @@ test("worker threads can recursively route until the thread depth limit", async 
   };
 
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: [echoTool] }),
     model: { provider: "test", name: "recursive-route" },
     stream: recursiveThreadStream,
-    tools: [echoTool],
     limits: { maxThreadDepth: 2 },
   });
   agent.subscribe((event) => {
     events.push(event);
   });
 
-  const outcome = await agent.prompt("create a thread to use echo tool");
+  const outcome = await runAgentTurn(agent, "create a thread to use echo tool");
   const threadCreatedEvents = events.filter((event) => event.type === "thread_created");
   const verificationEvents = events.filter((event) => event.type === "verification_start");
 
@@ -499,17 +497,19 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
     goal: "Nested thread outcome must be returned as delegate evidence.",
   });
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({
+      tools: [delegateTool],
+      messages: session.messages,
+    }),
     model: { provider: "test", name: "parent" },
     stream: parentStream,
-    tools: [delegateTool],
     session,
   });
   agent.subscribe((event) => {
     events.push(event);
   });
 
-  const outcome = await agent.prompt("delegate echo to a nested thread");
+  const outcome = await runAgentTurn(agent, "delegate echo to a nested thread");
 
   expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome).not.toHaveProperty("evidence");

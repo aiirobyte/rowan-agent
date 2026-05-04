@@ -26,8 +26,8 @@ import type {
 } from "@rowan-agent/protocol";
 export { createId, Validators } from "@rowan-agent/protocol";
 export type {
-  AgentContext,
   AgentEffect,
+  AgentLoopContext,
   AgentLoopConfig,
   AgentRunState,
   AgentRunStatus,
@@ -160,6 +160,18 @@ export type Tool<TArgs = unknown> = {
   execute(args: TArgs, context: ToolContext, signal?: AbortSignal): Promise<ToolResult>;
 };
 
+/** Context snapshot passed into the low-level agent loop. */
+export type AgentContext = {
+  /** System prompt included with the request. */
+  systemPrompt: string;
+  /** Transcript visible to the model. */
+  messages: AgentMessage[];
+  /** Tools available for this run. */
+  tools?: Tool[];
+  /** Skills available for this run. */
+  skills?: Skill[];
+};
+
 export type BeforeToolCall = (input: {
   task: Task;
   tool: Tool;
@@ -175,9 +187,10 @@ export type AfterToolCall = (input: {
 type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
 
 type AgentRunCommonConfig = {
+  context?: AgentContext;
   model: ModelRef;
   stream: StreamFn;
-  tools: Tool[];
+  tools?: Tool[];
   maxAttempts?: number;
   limits?: AgentRunLimits;
   signal?: AbortSignal;
@@ -189,7 +202,7 @@ type AgentRunCommonConfig = {
 
 export type AgentLoopRunConfig = AgentRunCommonConfig & {
   kind: "session";
-  session: CoreSession<AgentEvent>;
+  session?: CoreSession<AgentEvent>;
   sessionLifecycle?: "created" | "loaded" | "continued";
   threadDepth?: number;
   verifyTasks?: boolean;

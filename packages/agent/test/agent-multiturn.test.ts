@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test";
 import { latestUserInput, type Session } from "@rowan-agent/session";
 import { InMemoryAgentStore } from "@rowan-agent/store";
-import { Agent, type AgentEvent, type StreamFn } from "../src";
+import { Agent, type AgentEvent, type ExecutionTurn, type StreamFn } from "../src";
 import { createDefaultCriteria } from "../src/task";
 import { createId } from "../src/types";
+import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
 type AgentSession = Session<AgentEvent>;
 
-test("Agent.prompt reuses one session for multi-turn direct responses", async () => {
+test("Agent.run reuses one session for multi-turn direct responses", async () => {
   const routeContexts: string[][] = [];
   const stream: StreamFn = async function* directMultiTurnStream(model, context) {
     if (context.phase !== "route") {
@@ -24,7 +25,7 @@ test("Agent.prompt reuses one session for multi-turn direct responses", async ()
     yield { type: "done" };
   };
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext(),
     model: { provider: "test", name: "direct-multiturn" },
     stream,
   });
@@ -33,9 +34,9 @@ test("Agent.prompt reuses one session for multi-turn direct responses", async ()
     events.push(event.type);
   });
 
-  const first = await agent.prompt("first");
+  const first = await runAgentTurn(agent, "first");
   const sessionId = agent.state.session?.id;
-  const second = await agent.prompt("second");
+  const second = await runAgentTurn(agent, "second");
 
   expect(first.outcome.message).toBe("First answer");
   expect(second.outcome.message).toBe("Second answer saw the first turn.");
@@ -60,16 +61,27 @@ test("Agent keeps conversation messages separate from execution steps", async ()
     yield* scriptedStream(model, context, options);
   };
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream,
-    tools: createEchoTools(),
-    agentStore: store,
   });
+  const runStoredTurn = async (input: string) => {
+    const steps: ExecutionTurn[] = [];
+    const result = await runAgentTurn(agent, input, {
+      recordStep: async (step) => {
+        steps.push(step);
+      },
+    });
+    await store.save(result.session);
+    for (const step of steps) {
+      await store.appendStep(step.sessionId, step);
+    }
+    return result;
+  };
 
-  const first = await agent.prompt("use echo tool");
+  const first = await runStoredTurn("use echo tool");
   const sessionId = agent.state.session?.id;
-  const second = await agent.prompt("use echo tool again");
+  const second = await runStoredTurn("use echo tool again");
   const loaded = sessionId ? await store.load(sessionId) : undefined;
 
   expect(first.outcome.passed).toBe(true);
@@ -153,14 +165,14 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
     yield { type: "done" };
   };
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext(),
     model: { provider: "test", name: "failed-then-direct" },
     stream,
     maxAttempts: 1,
   });
 
-  const first = await agent.prompt("trigger failure");
-  const second = await agent.prompt("hello");
+  const first = await runAgentTurn(agent, "trigger failure");
+  const second = await runAgentTurn(agent, "hello");
 
   expect(first.outcome.passed).toBe(false);
   expect(first.outcome.message).toBe("Missing some functions to finish the task");

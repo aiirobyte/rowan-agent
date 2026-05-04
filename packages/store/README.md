@@ -18,7 +18,7 @@ The package currently includes in-memory storage and local JSON file storage. Th
 
 1. Use `InMemoryAgentStore` for tests or short-lived runs.
 2. Use `LocalJsonAgentStore(sessionsDir)` for CLI or local persistence.
-3. Pass the store to `Agent` through `agentStore`; the agent will save sessions and append execution steps automatically.
+3. At the composition root, save `Agent.run()` results and use `recordStep` to collect execution steps.
 4. For debugging, call `loadSteps(sessionId, filter)` to filter execution records by phase, scope, or time.
 
 ```ts
@@ -27,10 +27,23 @@ import { LocalJsonAgentStore } from "@rowan-agent/store";
 const store = new LocalJsonAgentStore("sessions");
 
 const agent = new Agent({
-  systemPrompt: "You are Rowan.",
+  context: {
+    systemPrompt: "You are Rowan.",
+    messages: [],
+    tools,
+  },
   model,
   stream,
-  tools,
-  agentStore: store,
 });
+
+const steps = [];
+const result = await agent.run({
+  recordStep: async (step) => {
+    steps.push(step);
+  },
+});
+await store.save(result.session);
+for (const step of steps) {
+  await store.appendStep(step.sessionId, step);
+}
 ```

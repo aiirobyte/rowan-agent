@@ -1,11 +1,7 @@
 import { runAgentLoop } from "./loop";
 import {
-  appendUserTurn,
-  createSession,
-  type Session,
-  type Skill,
+  type AgentMessage,
 } from "@rowan-agent/session";
-import type { AgentStore } from "@rowan-agent/store";
 import type {
   ModelRef,
   AgentRunLimits,
@@ -16,29 +12,34 @@ import type {
   AfterToolCall,
   AgentRunResult,
   AgentEvent,
+  AgentContext,
+  ExecutionTurn,
   AgentEventListener,
   Unsubscribe,
 } from "./types";
 
-type AgentSession = Session<AgentEvent>;
+type AgentSession = Extract<AgentRunResult, { kind: "session" }>["session"];
 
 export type AgentRunConfig = {
-  systemPrompt: string;
+  context: AgentContext;
   model: ModelRef;
   stream: StreamFn;
-  tools?: Tool[];
-  skills?: Skill[];
   session?: AgentSession;
-  agentStore?: AgentStore<AgentSession>;
   maxAttempts?: number;
   limits?: AgentRunLimits;
   runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
+  recordStep?: (step: ExecutionTurn) => Promise<void>;
+};
+
+export type AgentRunOverride = Partial<Omit<AgentRunConfig, "context">> & {
+  context: AgentContext;
 };
 
 export type AgentState = {
   session?: AgentSession;
+  context: AgentContext;
   model: ModelRef;
   tools: Tool[];
   isRunning: boolean;
@@ -48,21 +49,26 @@ export type AgentState = {
 
 export class Agent {
   readonly state: AgentState;
-  private readonly options: AgentRunConfig;
+  private options: AgentRunConfig;
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
   private currentRun?: Promise<AgentRunResult>;
   private abortController?: AbortController;
   private shouldEmitSessionLoaded: boolean;
+  private shadowSessionId?: string;
 
   constructor(options: AgentRunConfig) {
-    this.options = options;
-    this.shouldEmitSessionLoaded = Boolean(options.session);
+    this.options = {
+      ...options,
+      context: cloneAgentContext(options.context),
+    };
+    this.shouldEmitSessionLoaded = Boolean(this.options.session);
     this.state = {
-      ...(options.session ? { session: options.session } : {}),
-      model: options.model,
-      tools: options.tools ?? [],
+      ...(this.options.session ? { session: this.options.session } : {}),
+      context: cloneAgentContext(this.options.context),
+      model: this.options.model,
+      tools: this.options.context.tools ?? [],
       isRunning: false,
     };
   }
@@ -113,64 +119,69 @@ export class Agent {
     }
   }
 
-  async prompt(input: string): Promise<AgentRunResult> {
+  async run(config?: AgentRunOverride): Promise<AgentRunResult> {
     if (this.state.isRunning) {
       throw new Error("Agent is already running.");
     }
 
-    const hadExistingSession = Boolean(this.state.session);
+    const resolved = this.resolveRunConfig(config);
+    const session = resolved.session ?? this.state.session;
+    const hadExistingSession = Boolean(session);
     const sessionLifecycle = hadExistingSession
       ? this.shouldEmitSessionLoaded
         ? "loaded"
         : "continued"
       : "created";
     this.shouldEmitSessionLoaded = false;
-    const session = this.state.session
-      ? appendUserTurn(this.state.session, input)
-      : createSession<AgentEvent>({
-          systemPrompt: this.options.systemPrompt,
-          input,
-          skills: this.options.skills,
-        });
-    this.state.session = session;
+    this.options = resolved;
+    if (session) {
+      this.state.session = session;
+    }
+    this.state.context = cloneAgentContext(resolved.context);
+    this.state.model = resolved.model;
+    this.state.tools = resolved.context.tools ?? [];
     this.state.currentResult = undefined;
     this.state.error = undefined;
     this.state.isRunning = true;
     this.abortController = new AbortController();
-    await this.options.agentStore?.save(session);
 
     const emit = (event: AgentEvent) => {
+      this.captureLoopSessionEvent(event, resolved.context);
       this.emitToListeners(event);
     };
 
     this.currentRun = runAgentLoop({
       kind: "session",
-      session,
+      context: resolved.context,
+      ...(session ? { session } : {}),
       sessionLifecycle,
-      model: this.options.model,
-      stream: this.options.stream,
-      tools: this.state.tools,
-      maxAttempts: this.options.maxAttempts,
-      limits: this.options.limits,
-      runtime: this.options.runtime,
+      model: resolved.model,
+      stream: resolved.stream,
+      maxAttempts: resolved.maxAttempts,
+      limits: resolved.limits,
+      runtime: resolved.runtime,
       threadDepth: 0,
       signal: this.abortController.signal,
-      beforeToolCall: this.options.beforeToolCall,
-      afterToolCall: this.options.afterToolCall,
-      ...(this.options.agentStore
-        ? { recordStep: (step) => this.options.agentStore!.appendStep(session.id, step) }
-        : {}),
+      beforeToolCall: resolved.beforeToolCall,
+      afterToolCall: resolved.afterToolCall,
+      ...(resolved.recordStep ? { recordStep: resolved.recordStep } : {}),
       emit,
     });
 
     try {
       const result = await this.currentRun;
+      this.state.session = result.session;
+      this.shadowSessionId = undefined;
+      this.state.context = contextFromSession(result.session, resolved.context.tools);
       this.state.currentResult = result;
-      await this.saveSession();
+      this.options = {
+        ...resolved,
+        session: result.session,
+        context: cloneAgentContext(this.state.context),
+      };
       return result;
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : "Agent run failed.";
-      await this.saveSession().catch(() => undefined);
       throw error;
     } finally {
       this.state.isRunning = false;
@@ -190,22 +201,86 @@ export class Agent {
     await this.flushEvents().catch(() => undefined);
   }
 
-  async loadSession(sessionId: string): Promise<void> {
-    if (!this.options.agentStore) {
-      throw new Error("Agent has no AgentStore.");
-    }
-    const session = await this.options.agentStore.load(sessionId);
-    if (!session) {
-      throw new Error(`Session not found: ${sessionId}`);
-    }
-    this.state.session = session;
-    this.shouldEmitSessionLoaded = true;
+  private resolveRunConfig(config?: AgentRunOverride): AgentRunConfig {
+    const context = cloneAgentContext(config?.context ?? this.createContextSnapshot());
+    return {
+      ...this.options,
+      ...config,
+      context,
+      session: config?.session ?? this.state.session ?? this.options.session,
+    };
   }
 
-  async saveSession(): Promise<void> {
-    if (!this.options.agentStore || !this.state.session) {
+  private createContextSnapshot(): AgentContext {
+    if (this.state.session) {
+      return contextFromSession(this.state.session, this.state.tools);
+    }
+    return cloneAgentContext(this.state.context);
+  }
+
+  private captureLoopSessionEvent(event: AgentEvent, context: AgentContext): void {
+    if (event.type === "session_created" && !this.state.session) {
+      this.state.session = sessionFromSnapshot(event.session, context, event);
+      this.shadowSessionId = event.session.id;
       return;
     }
-    await this.options.agentStore.save(this.state.session);
+
+    if (!this.shadowSessionId || this.state.session?.id !== this.shadowSessionId) {
+      return;
+    }
+
+    this.state.session.log.push(event);
+    this.state.session.updatedAt = event.ts;
   }
+}
+
+function cloneMessage(message: AgentMessage): AgentMessage {
+  return {
+    ...message,
+    ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
+  };
+}
+
+function cloneMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.map(cloneMessage);
+}
+
+function cloneAgentContext(context: AgentContext): AgentContext {
+  return {
+    systemPrompt: context.systemPrompt,
+    messages: cloneMessages(context.messages),
+    ...(context.tools ? { tools: context.tools.slice() } : {}),
+    ...(context.skills ? { skills: context.skills.slice() } : {}),
+  };
+}
+
+function contextFromSession(session: AgentSession, tools?: Tool[]): AgentContext {
+  return {
+    systemPrompt: session.systemPrompt,
+    messages: cloneMessages(session.messages),
+    tools: tools?.slice() ?? [],
+    skills: session.skills.slice(),
+  };
+}
+
+function sessionFromSnapshot(
+  snapshot: Extract<AgentEvent, { type: "session_created" | "session_loaded" }>["session"],
+  context: AgentContext,
+  event: AgentEvent,
+): AgentSession {
+  return {
+    version: snapshot.version,
+    id: snapshot.id,
+    ...(snapshot.parentSessionId ? { parentSessionId: snapshot.parentSessionId } : {}),
+    systemPrompt: snapshot.systemPrompt,
+    input: snapshot.input,
+    ...(snapshot.task ? { task: snapshot.task } : {}),
+    ...(snapshot.goal ? { goal: snapshot.goal } : {}),
+    messages: cloneMessages(context.messages),
+    log: [event],
+    skills: snapshot.skills.slice(),
+    createdAt: event.ts,
+    updatedAt: event.ts,
+    ...(snapshot.title ? { title: snapshot.title } : {}),
+  };
 }

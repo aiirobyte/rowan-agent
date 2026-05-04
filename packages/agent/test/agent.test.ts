@@ -1,22 +1,22 @@
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
 import type { AgentEventListener, AgentRuntimePort, StreamFn } from "../src/types";
+import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-test("Agent.prompt returns a run result and emits events", async () => {
+test("Agent.run returns a run result and emits events", async () => {
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createEchoTools(),
   });
   const events: string[] = [];
   agent.subscribe((event) => {
     events.push(event.type);
   });
 
-  const outcome = await agent.prompt("use echo tool");
+  const outcome = await runAgentTurn(agent, "use echo tool");
 
   expect(outcome.outcome.passed).toBe(true);
   expect(agent.state.isRunning).toBe(false);
@@ -29,7 +29,7 @@ test("Agent.prompt returns a run result and emits events", async () => {
   expect(events).not.toContain("thread_created");
 });
 
-test("Agent.prompt assembles runtime context for the first message", async () => {
+test("Agent.run assembles runtime context for the first message", async () => {
   const seenContexts: Array<{
     systemPrompt: string;
     messages: string[];
@@ -48,14 +48,13 @@ test("Agent.prompt assembles runtime context for the first message", async () =>
     },
   };
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createEchoTools(),
     runtime,
   });
 
-  await agent.prompt("hello");
+  await runAgentTurn(agent, "hello");
 
   expect(seenContexts).toEqual([
     {
@@ -66,12 +65,11 @@ test("Agent.prompt assembles runtime context for the first message", async () =>
   ]);
 });
 
-test("Agent.prompt does not wait for async event listeners", async () => {
+test("Agent.run does not wait for async event listeners", async () => {
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createEchoTools(),
   });
   let release: (() => void) | undefined;
   let blocked = false;
@@ -86,7 +84,7 @@ test("Agent.prompt does not wait for async event listeners", async () => {
   }) as AgentEventListener;
   agent.subscribe(slowListener);
 
-  const outcome = await agent.prompt("hello");
+  const outcome = await runAgentTurn(agent, "hello");
 
   expect(outcome.outcome.passed).toBe(true);
   expect(blocked).toBe(true);
@@ -96,14 +94,13 @@ test("Agent.prompt does not wait for async event listeners", async () => {
 
 test("Agent rejects concurrent runs", async () => {
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: createEchoTools(),
   });
 
-  const first = agent.prompt("use echo tool");
-  await expect(agent.prompt("hello")).rejects.toThrow("Agent is already running.");
+  const first = runAgentTurn(agent, "use echo tool");
+  await expect(runAgentTurn(agent, "hello")).rejects.toThrow("Agent is already running.");
   await first;
 });
 
@@ -116,13 +113,12 @@ test("Agent.abort stops an active run", async () => {
     yield { type: "done" };
   };
   const agent = new Agent({
-    systemPrompt: "Test system",
+    context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: hangingStream,
-    tools: createEchoTools(),
   });
 
-  const run = agent.prompt("hello");
+  const run = runAgentTurn(agent, "hello");
   await new Promise((resolve) => setTimeout(resolve, 1));
   agent.abort();
 

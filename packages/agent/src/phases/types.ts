@@ -74,13 +74,15 @@ export type AgentRunState = {
 
 export type AgentMessageSnapshot = CoreSession<AgentEvent>["messages"][number];
 
-export type AgentContext = {
+export type AgentLoopContext = {
   /** System prompt included with the request. */
   systemPrompt: string;
   /** Transcript visible to the model. */
   messages: AgentMessageSnapshot[];
   /** Tools available for this run. */
   tools: Tool[];
+  /** Skills available for this run. */
+  skills: CoreSession<AgentEvent>["skills"];
   config: AgentLoopConfig;
   state: Readonly<AgentRunState>;
   signal?: AbortSignal;
@@ -165,7 +167,7 @@ export type AfterPhaseResult<TPhase extends LlmPhase> =
   | { abort: Outcome };
 
 export type ToolRunnerInput = {
-  context: AgentContext;
+  context: AgentLoopContext;
   task: Task;
   toolCall: ToolCall;
 };
@@ -174,12 +176,12 @@ export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
 
 export type AgentRuntimePort = {
   beforePhase?(
-    context: AgentContext,
+    context: AgentLoopContext,
     phase: LlmPhase,
     input: PhaseInputMap[LlmPhase],
   ): Promise<BeforePhaseResult<LlmPhase> | void>;
   afterPhase?(
-    context: AgentContext,
+    context: AgentLoopContext,
     phase: LlmPhase,
     output: PhaseOutputMap[LlmPhase],
   ): Promise<AfterPhaseResult<LlmPhase> | void>;
