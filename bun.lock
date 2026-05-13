@@ -14,7 +14,7 @@
     },
     "packages/adapters": {
       "name": "@rowan-agent/adapters",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "@rowan-agent/context": "workspace:*",
         "@rowan-agent/protocol": "workspace:*",
@@ -22,7 +22,7 @@
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "@rowan-agent/protocol": "workspace:*",
         "@rowan-agent/runtime": "workspace:*",
@@ -33,7 +33,7 @@
     },
     "packages/cli": {
       "name": "@rowan-agent/cli",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "bin": {
         "rowan": "./src/cli.ts",
       },
@@ -48,7 +48,7 @@
     },
     "packages/context": {
       "name": "@rowan-agent/context",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "@rowan-agent/protocol": "workspace:*",
         "@rowan-agent/session": "workspace:*",
@@ -56,7 +56,7 @@
     },
     "packages/logging": {
       "name": "@rowan-agent/logging",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
         "pino": "^10.3.1",
@@ -64,11 +64,11 @@
     },
     "packages/protocol": {
       "name": "@rowan-agent/protocol",
-      "version": "0.4.2",
+      "version": "0.4.3",
     },
     "packages/runtime": {
       "name": "@rowan-agent/runtime",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "@rowan-agent/protocol": "workspace:*",
         "@rowan-agent/session": "workspace:*",
@@ -77,14 +77,14 @@
     },
     "packages/session": {
       "name": "@rowan-agent/session",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "typebox": "^1.0.0",
       },
     },
     "packages/store": {
       "name": "@rowan-agent/store",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "@rowan-agent/protocol": "workspace:*",
         "@rowan-agent/session": "workspace:*",

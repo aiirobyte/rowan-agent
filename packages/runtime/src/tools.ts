@@ -2,7 +2,8 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import Type from "typebox";
 import Schema from "typebox/schema";
-import type { Tool, ToolContext, ToolResult } from "./types";
+import { Validators, type Task, type ToolCall, type ToolResult } from "@rowan-agent/protocol";
+import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "./types";
 
 const DEFAULT_MAX_READ_BYTES = 64_000;
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;
@@ -65,6 +66,49 @@ type CapturedOutput = {
   truncated: boolean;
 };
 
+type ToolArgsValidator = {
+  Parse(value: unknown): unknown;
+};
+
+const validatorCache = new WeakMap<Type.TSchema, ToolArgsValidator>();
+
+function validatorFor(schema: Type.TSchema): ToolArgsValidator {
+  const cached = validatorCache.get(schema);
+  if (cached) {
+    return cached;
+  }
+
+  const validator = Schema.Compile(schema);
+  validatorCache.set(schema, validator);
+  return validator;
+}
+
+export type RuntimeToolExecutionEvent =
+  | { type: "approval_requested"; task: Task; tool: Tool; args: unknown }
+  | {
+      type: "approval_result";
+      task: Task;
+      tool: Tool;
+      args: unknown;
+      decision: { allow: true } | { allow: false; reason: string };
+    }
+  | { type: "tool_start"; tool: Tool; args: unknown }
+  | { type: "tool_blocked"; tool: Tool; reason: string }
+  | { type: "result_review_requested"; task: Task; tool: Tool; result: ToolResult }
+  | { type: "result_review_result"; task: Task; tool: Tool; result: ToolResult }
+  | { type: "tool_end"; toolName: string; result: ToolResult };
+
+export type RuntimeToolExecutionInput = {
+  tools: Tool[];
+  task: Task;
+  toolCall: ToolCall;
+  toolContext: ToolContext;
+  beforeToolCall?: BeforeToolCall;
+  afterToolCall?: AfterToolCall;
+  signal?: AbortSignal;
+  observe?: (event: RuntimeToolExecutionEvent) => void | Promise<void>;
+};
+
 function normalizeRelativePath(path: string): string {
   return path.split(sep).join("/");
 }
@@ -119,6 +163,101 @@ function toolResult(input: {
     content: input.content,
     ...(input.error ? { error: input.error } : {}),
   };
+}
+
+export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): Promise<ToolResult> {
+  const tool = input.tools.find((candidate) => candidate.name === input.toolCall.name);
+  if (!tool) {
+    const result = toolResult({
+      context: input.toolContext,
+      toolName: input.toolCall.name,
+      ok: false,
+      content: null,
+      error: `Unknown tool: ${input.toolCall.name}`,
+    });
+    await input.observe?.({ type: "tool_end", toolName: input.toolCall.name, result });
+    return result;
+  }
+
+  let args: unknown;
+  try {
+    args = validatorFor(tool.parameters).Parse(input.toolCall.args);
+  } catch (error) {
+    const result = toolResult({
+      context: input.toolContext,
+      toolName: tool.name,
+      ok: false,
+      content: null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await input.observe?.({ type: "tool_end", toolName: tool.name, result });
+    return result;
+  }
+
+  let decision: { allow: true } | { allow: false; reason: string } | undefined;
+  if (input.beforeToolCall) {
+    await input.observe?.({ type: "approval_requested", task: input.task, tool, args });
+    decision = await input.beforeToolCall({ task: input.task, tool, args });
+    await input.observe?.({
+      type: "approval_result",
+      task: input.task,
+      tool,
+      args,
+      decision: decision ?? { allow: true },
+    });
+  }
+
+  if (decision && !decision.allow) {
+    const result = toolResult({
+      context: input.toolContext,
+      toolName: tool.name,
+      ok: false,
+      content: null,
+      error: decision.reason,
+    });
+    await input.observe?.({ type: "tool_blocked", tool, reason: decision.reason });
+    return result;
+  }
+
+  await input.observe?.({ type: "tool_start", tool, args });
+
+  try {
+    const rawResult = await tool.execute(args, input.toolContext, input.signal);
+    const normalized = Validators.toolResult.Parse({
+      ...rawResult,
+      toolCallId: input.toolCall.id,
+      toolName: tool.name,
+    });
+    let result = normalized;
+    if (input.afterToolCall) {
+      await input.observe?.({
+        type: "result_review_requested",
+        task: input.task,
+        tool,
+        result: normalized,
+      });
+      result = await input.afterToolCall({ task: input.task, tool, result: normalized });
+      await input.observe?.({
+        type: "result_review_result",
+        task: input.task,
+        tool,
+        result,
+      });
+    }
+
+    await input.observe?.({ type: "tool_end", toolName: tool.name, result });
+    return result;
+  } catch (error) {
+    const result = toolResult({
+      context: input.toolContext,
+      toolName: tool.name,
+      ok: false,
+      content: null,
+      error: error instanceof Error ? error.message : "Tool execution failed.",
+    });
+    await input.observe?.({ type: "tool_end", toolName: tool.name, result });
+    return result;
+  }
 }
 
 function positiveNumber(value: number, name: string): string | undefined {

@@ -2,7 +2,7 @@
 
 ## Main Features
 
-`@rowan-agent/runtime` is Rowan's runtime glue package. It provides workspace path helpers, built-in local tools, skill loading, tool hook types, and the MCP tool-provider boundary used by the Agent core.
+`@rowan-agent/runtime` is Rowan's runtime glue package. It provides workspace path helpers, built-in local tools, event-neutral tool execution, skill loading, tool hook types, and the MCP tool-provider boundary used by the Agent core.
 
 The Agent loop itself lives in `@rowan-agent/agent`: route, plan, execute, verify, thread semantics, retries, outcome creation, and execution turn recording are Agent behavior.
 
@@ -11,7 +11,7 @@ The Agent loop itself lives in `@rowan-agent/agent`: route, plan, execute, verif
 Runtime-owned modules:
 
 - `src/dir.ts` resolves source/binary workspaces and safe in-workspace paths.
-- `src/tools.ts` provides built-in `read`, `write`, `edit`, and `bash` tools.
+- `src/tools.ts` provides built-in `read`, `write`, `edit`, and `bash` tools, and executes prepared tool calls without emitting `AgentEvent`s.
 - `src/skills.ts` loads `SKILL.md` files.
 - `src/hooks/index.ts` exports tool approval/review hook types.
 - `src/mcp/index.ts` reserves the MCP tool-provider integration surface.
@@ -21,10 +21,11 @@ Runtime intentionally does not export Agent loop, thread, phase, runner, or task
 
 ## Usage Flow
 
-Most callers use runtime through `@rowan-agent/agent`:
+Most callers compose runtime with `@rowan-agent/agent`:
 
 ```ts
-import { Agent, createCoreTools } from "@rowan-agent/agent";
+import { Agent } from "@rowan-agent/agent";
+import { createCoreTools } from "@rowan-agent/runtime";
 
 const agent = new Agent({
   context: {

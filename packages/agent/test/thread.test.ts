@@ -4,7 +4,7 @@ import { createSession } from "@rowan-agent/session";
 import { Agent } from "../src/agent";
 import { runAgentLoop } from "../src/loop";
 import { createDefaultCriteria } from "../src/task";
-import type { AgentEvent, StreamFn, Tool } from "../src/types";
+import type { AgentEvent, ExecutionTurn, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
@@ -189,6 +189,7 @@ test("thread tool limits stops before executing extra tools", async () => {
 
 test("worker thread smoke tests do not recursively route on bare thread wording", async () => {
   const events: AgentEvent[] = [];
+  const recordedSteps: ExecutionTurn[] = [];
   let routeCalls = 0;
   let planCalls = 0;
 
@@ -263,6 +264,9 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
     context: createTestContext({ tools: [echoTool] }),
     model: { provider: "test", name: "thread-smoke-test" },
     stream: smokeTestStream,
+    recordStep: async (step) => {
+      recordedSteps.push(step);
+    },
   });
   agent.subscribe((event) => {
     events.push(event);
@@ -284,6 +288,21 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
             delta.metadata?.kind === "routing_decision" &&
             delta.content.includes("\"route\":\"task\"") &&
             delta.content.includes("worker thread"),
+        ),
+    ),
+  ).toBe(true);
+  expect(
+    recordedSteps.some(
+      (step) =>
+        step.sessionId === outcome.session.id &&
+        step.phase === "execute" &&
+        step.entries.some(
+          (entry) =>
+            entry.kind === "structured_output" &&
+            typeof entry.content === "object" &&
+            entry.content !== null &&
+            "kind" in entry.content &&
+            entry.content.kind === "thread",
         ),
     ),
   ).toBe(true);

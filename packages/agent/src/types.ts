@@ -8,6 +8,9 @@ import type {
   ExecutionTurn,
   LlmContext,
   LlmPhase,
+  LlmPhaseOutput,
+  LlmPhaseOutputEvent,
+  LlmPhaseOutputMap,
   ModelCallUsage,
   ModelRef,
   ModelStreamEvent,
@@ -54,6 +57,9 @@ export type {
   ExecutionTurnEntry,
   LlmContext,
   LlmPhase,
+  LlmPhaseOutput,
+  LlmPhaseOutputEvent,
+  LlmPhaseOutputMap,
   ModelCallUsage,
   ModelRef,
   ModelStreamEvent,
@@ -72,79 +78,7 @@ export type {
   VerificationResult,
 } from "@rowan-agent/protocol";
 
-export const AcceptanceCriterionSchema = Type.Union([
-  Type.Object({
-    id: Type.String(),
-    type: Type.Literal("model_judge"),
-    description: Type.String(),
-    required: Type.Boolean(),
-  }),
-  Type.Object({
-    id: Type.String(),
-    type: Type.Literal("tool_observation"),
-    description: Type.String(),
-    toolName: Type.Optional(Type.String()),
-    required: Type.Boolean(),
-  }),
-]);
-
-export const TaskSchema = Type.Object({
-  id: Type.String(),
-  title: Type.String(),
-  instruction: Type.String(),
-  acceptanceCriteria: Type.Array(AcceptanceCriterionSchema),
-  toolNames: Type.Array(Type.String()),
-  skillIds: Type.Array(Type.String()),
-  status: Type.Union([
-    Type.Literal("pending"),
-    Type.Literal("running"),
-    Type.Literal("passed"),
-    Type.Literal("failed"),
-  ]),
-  attempts: Type.Number(),
-});
-
-export const TaskRoutingDecisionSchema = Type.Object({
-  route: Type.Union([
-    Type.Literal("direct"),
-    Type.Literal("task"),
-    Type.Literal("thread"),
-  ]),
-  message: Type.String(),
-  thread: Type.Optional(Type.Object({
-    prompt: Type.String(),
-    task: Type.String(),
-    goal: Type.String(),
-  })),
-});
-
-export const VerificationResultSchema = Type.Object({
-  passed: Type.Boolean(),
-  message: Type.String(),
-});
-
-export const OutcomeSchema = Type.Object({
-  id: Type.String(),
-  taskId: Type.Optional(Type.String()),
-  passed: Type.Boolean(),
-  message: Type.String(),
-});
-
 export const DEFAULT_MAX_THREAD_DEPTH = 4;
-
-export const ToolCallSchema = Type.Object({
-  id: Type.String(),
-  name: Type.String(),
-  args: Type.Unknown(),
-});
-
-export const ToolResultSchema = Type.Object({
-  toolCallId: Type.String(),
-  toolName: Type.String(),
-  ok: Type.Boolean(),
-  content: Type.Unknown(),
-  error: Type.Optional(Type.String()),
-});
 
 export type ToolContext = {
   session: CoreSession<AgentEvent>;

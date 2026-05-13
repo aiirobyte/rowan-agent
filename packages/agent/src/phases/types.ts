@@ -7,33 +7,18 @@ import type {
   BeforeToolCall,
   ExecutionTurn,
   LlmPhase,
+  LlmPhaseOutputMap,
   ModelRef,
   Outcome,
   RunThread,
   StreamFn,
   Task,
   TaskOutput,
-  TaskRoutingDecision,
   Tool,
   ToolCall,
   ToolResult,
   VerificationResult,
 } from "../types";
-
-export type AgentPhaseState = "routing" | "planning" | "executing" | "verifying";
-
-export type AgentPhaseDefinition<TPhase extends LlmPhase = LlmPhase> = {
-  phase: TPhase;
-  state: AgentPhaseState;
-  label: string;
-};
-
-export type AgentPhaseRunner<TInput, TOutput> = (input: TInput) => Promise<TOutput>;
-
-export type AgentPhaseModule<TPhase extends LlmPhase, TInput, TOutput> =
-  AgentPhaseDefinition<TPhase> & {
-    run: AgentPhaseRunner<TInput, TOutput>;
-  };
 
 export type AgentRunStatus =
   | "routing"
@@ -124,9 +109,7 @@ export type VerifyInput = {
   runtime: AgentRunState["depth"];
 };
 
-export type ExecuteOutput = {
-  text: string;
-  toolCalls: ToolCall[];
+export type ExecuteOutput = LlmPhaseOutputMap["execute"] & {
   taskOutput: TaskOutput;
 };
 
@@ -138,10 +121,10 @@ export type PhaseInputMap = {
 };
 
 export type PhaseOutputMap = {
-  route: TaskRoutingDecision & { text: string };
-  plan: { task: Task; text: string };
+  route: LlmPhaseOutputMap["route"];
+  plan: LlmPhaseOutputMap["plan"];
   execute: ExecuteOutput;
-  verify: VerificationResult;
+  verify: LlmPhaseOutputMap["verify"];
 };
 
 export type AgentEffect =

@@ -1,4 +1,4 @@
-import Schema from "typebox/schema";
+import { executeRuntimeToolCall } from "@rowan-agent/runtime/tools";
 import {
   createSession,
   createMessage,
@@ -14,7 +14,6 @@ import {
   parseTaskRoutingDecision,
   parseVerificationResult,
 } from "./task";
-import { agentPhases } from "./phases";
 import { scheduleTaskRouting } from "./phases/routing";
 import type {
   AgentEvent,
@@ -23,6 +22,7 @@ import type {
   AgentRunResult,
   AgentLoopContext,
   ErrorInfo,
+  LlmPhaseOutputMap,
   LlmPhase,
   ModelCallUsage,
   ModelStreamEvent,
@@ -42,7 +42,6 @@ import type {
 } from "./types";
 import { createId, nowIso, resolveMaxThreadDepth, Validators } from "./types";
 import type { ExecutionTurnEntry } from "@rowan-agent/protocol";
-import { recordPhaseStep } from "./recorder";
 import type {
   ExecuteInput,
   ExecuteOutput,
@@ -81,10 +80,10 @@ type NormalizedAgentLoopInput = {
   emit?: AgentLoopInput["emit"];
 };
 
-const routePhase = agentPhases.route.phase;
-const planPhase = agentPhases.plan.phase;
-const executePhase = agentPhases.execute.phase;
-const verifyPhase = agentPhases.verify.phase;
+const routePhase = "route";
+const planPhase = "plan";
+const executePhase = "execute";
+const verifyPhase = "verify";
 
 type AgentLoopRuntime = NormalizedAgentLoopInput & {
   messageLog: AgentMessage[];
@@ -671,13 +670,14 @@ async function emitChatEnd(input: AgentLoopRuntime): Promise<void> {
   });
 }
 
-async function collectTextAndStructured(input: {
+async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
   context: AgentLoopContext;
   events: AsyncIterable<ModelStreamEvent>;
-  metadataPhase: LlmPhase;
+  metadataPhase: TPhase;
   recordText?: boolean;
 }): Promise<{
   text: string;
+  phaseOutput?: LlmPhaseOutputMap[TPhase];
   structured?: unknown;
   toolCalls: ToolCall[];
   stepEntries: ExecutionTurnEntry[];
@@ -687,6 +687,7 @@ async function collectTextAndStructured(input: {
   const stepEntries: ExecutionTurnEntry[] = [];
   let text = "";
   let flushedText = "";
+  let phaseOutput: LlmPhaseOutputMap[TPhase] | undefined;
   let structured: unknown;
   let usage: ModelCallUsage | undefined;
   const flushText = async () => {
@@ -753,6 +754,29 @@ async function collectTextAndStructured(input: {
       stepEntries.push({ kind: "structured_output", content: event.content });
     }
 
+    if (event.type === "phase_output") {
+      if (event.phase !== input.metadataPhase) {
+        throw new Error(`Expected ${input.metadataPhase} phase output, received ${event.phase}.`);
+      }
+
+      await flushText();
+      phaseOutput = event.output as LlmPhaseOutputMap[TPhase];
+      stepEntries.push({ kind: "structured_output", content: event.output });
+
+      if (event.phase === executePhase) {
+        for (const outputToolCall of (event.output as LlmPhaseOutputMap["execute"]).toolCalls) {
+          const toolCall = Validators.toolCall.Parse(outputToolCall);
+          toolCalls.push(toolCall);
+          stepEntries.push({ kind: "tool_call", toolCall });
+          await input.context.emit({
+            type: "tool_requested",
+            toolCall,
+            ts: nowIso(),
+          });
+        }
+      }
+    }
+
     if (event.type === "tool_call") {
       await flushText();
       const toolCall = Validators.toolCall.Parse(event.toolCall);
@@ -772,7 +796,7 @@ async function collectTextAndStructured(input: {
 
   await flushText();
 
-  return { text: flushedText, structured, toolCalls, stepEntries, usage };
+  return { text: flushedText, phaseOutput, structured, toolCalls, stepEntries, usage };
 }
 
 async function recordContextPhaseStep(input: {
@@ -814,11 +838,13 @@ async function planTask(context: AgentLoopContext, input: PlanInput): Promise<{ 
     metadataPhase: planPhase,
   });
 
-  if (!collected.structured) {
+  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["plan"] | undefined;
+  const rawTask = phaseOutput?.task ?? collected.structured;
+  if (!rawTask) {
     throw new Error("Planner did not produce a structured task.");
   }
 
-  const task = parseTask(collected.structured);
+  const task = parseTask(rawTask);
   await recordContextPhaseStep({
     context,
     phase: planPhase,
@@ -827,7 +853,7 @@ async function planTask(context: AgentLoopContext, input: PlanInput): Promise<{ 
     usage: collected.usage,
   });
 
-  return { task, text: collected.text };
+  return { task, text: phaseOutput?.text ?? collected.text };
 }
 
 async function routeRequest(
@@ -846,14 +872,16 @@ async function routeRequest(
     recordText: false,
   });
 
-  if (!collected.structured) {
+  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["route"] | undefined;
+  const rawDecision = phaseOutput ?? collected.structured;
+  if (!rawDecision) {
     throw new Error("Router did not produce a structured task routing decision.");
   }
 
   const decision = scheduleTaskRouting({
     input: latestUserInput(input.session),
     tools: input.tools,
-    decision: parseTaskRoutingDecision(collected.structured),
+    decision: parseTaskRoutingDecision(rawDecision),
     defaultNeedsTaskRoute: input.shouldDefaultToThreadRoute ? "thread" : "task",
     allowThreadRoute: input.canStartThreadRoute,
     workerTask: input.workerTask,
@@ -876,11 +904,7 @@ async function routeRequest(
     entries: collected.stepEntries,
     usage: collected.usage,
   });
-  return { ...decision, text: decision.message };
-}
-
-function findTool(tools: Tool[], name: string): Tool | undefined {
-  return tools.find((tool) => tool.name === name);
+  return { ...decision, text: phaseOutput?.text ?? decision.message };
 }
 
 async function executeToolCall(input: {
@@ -896,149 +920,97 @@ async function executeToolCall(input: {
     });
   }
 
-  const tool = findTool(input.context.config.tools, input.toolCall.name);
-  if (!tool) {
-    const result: ToolResult = {
-      toolCallId: input.toolCall.id,
-      toolName: input.toolCall.name,
-      ok: false,
-      content: null,
-      error: `Unknown tool: ${input.toolCall.name}`,
-    };
-    await input.context.emit({
-      type: "tool_end",
-      toolName: input.toolCall.name,
-      result,
-      ts: nowIso(),
-    });
-    return result;
-  }
+  const toolContext = {
+    session: input.context.state.session,
+    task: input.task,
+    toolCallId: input.toolCall.id,
+    ...(input.context.runThread ? { runThread: input.context.runThread } : {}),
+  };
+  const output = await executeRuntimeToolCall({
+    tools: input.context.config.tools,
+    task: input.task,
+    toolCall: input.toolCall,
+    toolContext,
+    beforeToolCall: input.context.config.beforeToolCall,
+    afterToolCall: input.context.config.afterToolCall,
+    signal: input.context.signal,
+    observe: async (event) => {
+      if (event.type === "approval_requested") {
+        await input.context.emit({
+          type: "tool_approval_requested",
+          taskId: input.task.id,
+          toolName: event.tool.name,
+          args: event.args,
+          ts: nowIso(),
+        });
+        return;
+      }
 
-  let args: unknown;
-  try {
-    args = Schema.Compile(tool.parameters).Parse(input.toolCall.args);
-  } catch (error) {
-    const result: ToolResult = {
-      toolCallId: input.toolCall.id,
-      toolName: input.toolCall.name,
-      ok: false,
-      content: null,
-      error: error instanceof Error ? error.message : "Invalid tool arguments.",
-    };
-    await input.context.emit({
-      type: "tool_end",
-      toolName: input.toolCall.name,
-      result,
-      ts: nowIso(),
-    });
-    return result;
-  }
+      if (event.type === "approval_result") {
+        await input.context.emit({
+          type: "tool_approval_result",
+          taskId: input.task.id,
+          toolName: event.tool.name,
+          args: event.args,
+          decision: event.decision,
+          ts: nowIso(),
+        });
+        return;
+      }
 
-  let decision: Awaited<ReturnType<NonNullable<AgentLoopInput["beforeToolCall"]>>> | undefined;
-  if (input.context.config.beforeToolCall) {
-    await input.context.emit({
-      type: "tool_approval_requested",
-      taskId: input.task.id,
-      toolName: tool.name,
-      args,
-      ts: nowIso(),
-    });
-    decision = await input.context.config.beforeToolCall({ task: input.task, tool, args });
-    await input.context.emit({
-      type: "tool_approval_result",
-      taskId: input.task.id,
-      toolName: tool.name,
-      args,
-      decision: decision ?? { allow: true },
-      ts: nowIso(),
-    });
-  }
+      if (event.type === "tool_blocked") {
+        await input.context.emit({
+          type: "tool_blocked",
+          toolName: event.tool.name,
+          reason: event.reason,
+          ts: nowIso(),
+        });
+        return;
+      }
 
-  if (decision && !decision.allow) {
-    const result: ToolResult = {
-      toolCallId: input.toolCall.id,
-      toolName: tool.name,
-      ok: false,
-      content: null,
-      error: decision.reason,
-    };
-    await input.context.emit({
-      type: "tool_blocked",
-      toolName: tool.name,
-      reason: decision.reason,
-      ts: nowIso(),
-    });
-    return result;
-  }
+      if (event.type === "tool_start") {
+        input.context.consumeLimit("toolCalls");
+        await input.context.emit({
+          type: "tool_start",
+          toolName: event.tool.name,
+          args: event.args,
+          ts: nowIso(),
+        });
+        return;
+      }
 
-  input.context.consumeLimit("toolCalls");
+      if (event.type === "result_review_requested") {
+        await input.context.emit({
+          type: "tool_result_review_requested",
+          taskId: input.task.id,
+          toolName: event.tool.name,
+          result: event.result,
+          ts: nowIso(),
+        });
+        return;
+      }
 
-  await input.context.emit({
-    type: "tool_start",
-    toolName: tool.name,
-    args,
-    ts: nowIso(),
+      if (event.type === "result_review_result") {
+        await input.context.emit({
+          type: "tool_result_review_result",
+          taskId: input.task.id,
+          toolName: event.tool.name,
+          result: event.result,
+          ts: nowIso(),
+        });
+        return;
+      }
+
+      await input.context.emit({
+        type: "tool_end",
+        toolName: event.toolName,
+        result: event.result,
+        ts: nowIso(),
+      });
+    },
   });
 
-  try {
-    const toolContext = {
-      session: input.context.state.session,
-      task: input.task,
-      toolCallId: input.toolCall.id,
-      ...(input.context.runThread ? { runThread: input.context.runThread } : {}),
-    };
-    const rawResult = await tool.execute(
-      args,
-      toolContext,
-      input.context.signal,
-    );
-    const normalized = Validators.toolResult.Parse({
-      ...rawResult,
-      toolCallId: input.toolCall.id,
-      toolName: tool.name,
-    });
-    let result = normalized;
-    if (input.context.config.afterToolCall) {
-      await input.context.emit({
-        type: "tool_result_review_requested",
-        taskId: input.task.id,
-        toolName: tool.name,
-        result: normalized,
-        ts: nowIso(),
-      });
-      result = await input.context.config.afterToolCall({ task: input.task, tool, result: normalized });
-      await input.context.emit({
-        type: "tool_result_review_result",
-        taskId: input.task.id,
-        toolName: tool.name,
-        result,
-        ts: nowIso(),
-      });
-    }
-
-    await input.context.emit({
-      type: "tool_end",
-      toolName: tool.name,
-      result,
-      ts: nowIso(),
-    });
-    return result;
-  } catch (error) {
-    const result: ToolResult = {
-      toolCallId: input.toolCall.id,
-      toolName: tool.name,
-      ok: false,
-      content: null,
-      error: error instanceof Error ? error.message : "Tool execution failed.",
-    };
-    await input.context.emit({
-      type: "tool_end",
-      toolName: tool.name,
-      result,
-      ts: nowIso(),
-    });
-    return result;
-  }
+  return output;
 }
 
 async function executeTask(
@@ -1111,8 +1083,9 @@ async function executeTask(
     usage: collected.usage,
   });
 
+  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["execute"] | undefined;
   return {
-    text: collected.text,
+    text: phaseOutput?.text ?? collected.text,
     toolCalls: collected.toolCalls,
     taskOutput: createToolTaskOutput(input.toolResults),
   };
@@ -1168,8 +1141,10 @@ async function verifyTask(
     return result;
   }
 
-  const result = collected.structured
-    ? parseVerificationResult(collected.structured)
+  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["verify"] | undefined;
+  const rawVerification = phaseOutput ?? collected.structured;
+  const result = rawVerification
+    ? parseVerificationResult(rawVerification)
     : {
         passed: false,
         message: "Verifier did not produce structured output.",
@@ -1362,8 +1337,8 @@ async function executeThreadRoute(
       scope: "execution",
     }),
   );
-  await recordPhaseStep({
-    loop: input,
+  await recordContextPhaseStep({
+    context: createAgentLoopContext(input),
     phase: executePhase,
     requestedAtMs: Date.now(),
     entries: [{ kind: "structured_output", content: threadOutput }],

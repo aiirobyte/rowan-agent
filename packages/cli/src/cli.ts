@@ -9,7 +9,6 @@ import {
 import {
   Agent,
   DEFAULT_MAX_THREAD_DEPTH,
-  createCoreTools,
   formatLocalTimestamp,
   type AgentEvent,
   type AgentEventListener,
@@ -25,12 +24,14 @@ import {
 import { createMessage, type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
 import { LocalJsonAgentStore } from "@rowan-agent/store";
 import {
+  createCoreTools,
+  loadSkills,
+  resolveSkillPath,
   type WorkspacePaths,
   resolveInWorkspace,
   resolveWorkspacePaths,
 } from "@rowan-agent/runtime";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
-import { loadSkills, resolveSkillPath } from "./skills";
 
 type CliCommand = "config" | "list";
 

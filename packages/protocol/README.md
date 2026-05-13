@@ -2,7 +2,7 @@
 
 ## Main Features
 
-`@rowan-agent/protocol` is the shared type and protocol layer for Rowan packages. It defines model references, LLM phases, tasks, tool calls, tool results, run limits, contexts, execution steps, Outcomes, and structured output validators.
+`@rowan-agent/protocol` is the shared type and protocol layer for Rowan packages. It defines model references, LLM phases, typed phase outputs, tasks, tool calls, tool results, run limits, contexts, execution steps, Outcomes, and structured output validators.
 
 This package has no runtime side effects. Its main job is to keep adapters, context, runtime, agent, and store modules on the same data contract.
 
@@ -10,7 +10,7 @@ This package has no runtime side effects. Its main job is to keep adapters, cont
 
 The source is split by protocol domain:
 
-- `context.ts` defines `LlmContext`, `StreamFn`, and model stream events.
+- `context.ts` defines `LlmContext`, `StreamFn`, typed phase outputs, and model stream events.
 - `model.ts` defines model references and token usage.
 - `phase.ts` defines the `route`, `plan`, `execute`, and `verify` phases.
 - `task.ts` defines tasks, acceptance criteria, routing decisions, run limits, task output, and Outcomes.

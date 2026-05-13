@@ -1,6 +1,13 @@
 import type { LlmPhase } from "./phase";
 import type { ModelCallUsage, ModelRef } from "./model";
-import type { AcceptanceCriterion, RuntimeDepth, Task, TaskOutput } from "./task";
+import type {
+  AcceptanceCriterion,
+  RuntimeDepth,
+  Task,
+  TaskOutput,
+  TaskRoutingDecision,
+  VerificationResult,
+} from "./task";
 import type { ToolCall, ToolResult } from "./tool";
 
 export type ContextScope = "conversation" | "execution" | "diagnostic";
@@ -67,8 +74,34 @@ export type LlmContext<TSession extends AgentContextSession = AgentContextSessio
       runtime?: RuntimeDepth;
     };
 
+export type LlmPhaseOutputMap = {
+  route: TaskRoutingDecision & {
+    text: string;
+  };
+  plan: {
+    task: Task;
+    text: string;
+  };
+  execute: {
+    text: string;
+    toolCalls: ToolCall[];
+  };
+  verify: VerificationResult;
+};
+
+export type LlmPhaseOutput<TPhase extends LlmPhase = LlmPhase> = LlmPhaseOutputMap[TPhase];
+
+export type LlmPhaseOutputEvent<TPhase extends LlmPhase = LlmPhase> = {
+  [TKey in TPhase]: {
+    type: "phase_output";
+    phase: TKey;
+    output: LlmPhaseOutputMap[TKey];
+  };
+}[TPhase];
+
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
+  | LlmPhaseOutputEvent
   | {
       type: "prompt_message";
       phase: LlmPhase;

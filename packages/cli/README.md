@@ -12,13 +12,13 @@ CLI stdout is reserved for final command results. Runtime events are written to 
 
 `src/output.ts` formats Outcomes and plain objects as JSON text.
 
-`src/skills.ts` re-exports runtime skill loading helpers so the CLI can resolve either `<workspace>/skills/<id>/SKILL.md` or explicit skill paths with one rule set.
+The CLI imports runtime skill helpers directly so `--skill` can resolve either `<workspace>/skills/<id>/SKILL.md` or explicit skill paths with one rule set.
 
 The CLI composes these packages:
 
 - `@rowan-agent/adapters` creates the OpenAI-compatible `stream`.
-- `@rowan-agent/agent` creates the agent and core tools.
-- `@rowan-agent/runtime` resolves workspace, runs, sessions, and skills paths.
+- `@rowan-agent/agent` creates the agent.
+- `@rowan-agent/runtime` provides core tools and resolves workspace, runs, sessions, and skills paths.
 - `@rowan-agent/logging` writes console and file logs.
 - `@rowan-agent/store` persists session JSON.
 

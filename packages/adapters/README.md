@@ -2,7 +2,7 @@
 
 ## Main Features
 
-`@rowan-agent/adapters` connects external model services to the Rowan runtime protocol. The current primary implementation is an OpenAI-compatible Chat Completions adapter that resolves configuration, builds requests, handles retries and timeouts, and normalizes JSON model output into Rowan runtime structures such as routing decisions, tasks, tool calls, and verification results.
+`@rowan-agent/adapters` connects external model services to the Rowan runtime protocol. The current primary implementation is an OpenAI-compatible Chat Completions adapter that resolves configuration, builds requests, handles retries and timeouts, and normalizes JSON model output into typed Rowan phase output events such as routing decisions, tasks, tool calls, and verification results.
 
 The package also provides JSON extraction helpers. They can parse complete JSON, `json` fenced code blocks, or balanced JSON fragments embedded in text. When model output does not match the expected contract, the adapter raises `OpenAICompatibleError` or `JsonExtractionError` with useful error codes for logging and recovery.
 
@@ -14,7 +14,7 @@ The package also provides JSON extraction helpers. They can parse complete JSON,
 
 - `resolveOpenAICompatibleConfig` resolves `baseUrl`, `apiKey`, `model`, timeout, retry, and tool settings from input options and environment variables.
 - `callOpenAICompatibleChatCompletion` wraps HTTP requests, response parsing, error normalization, exponential backoff retries, and abort/timeout handling.
-- `createOpenAICompatibleStream` implements Rowan's `StreamFn`, uses `@rowan-agent/context` to build phase prompts, and converts model output into structured `@rowan-agent/protocol` events.
+- `createOpenAICompatibleStream` implements Rowan's `StreamFn`, uses `@rowan-agent/context` to build phase prompts, and converts model output into typed `phase_output` events from `@rowan-agent/protocol`.
 
 `src/json-extract.ts` only handles JSON extraction and parse errors from model text. It is independent from model providers and runtime phases.
 

@@ -18,7 +18,9 @@ The package also owns the route, plan, execute, verify, thread, retry, outcome, 
 - `tools` are the tools the runtime may expose to the model.
 - `isRunning`, `currentResult`, and `error` describe the current run state.
 
-`src/task.ts`, `src/tools.ts`, and `src/types.ts` expose task helpers, runtime-backed core tools, and public Agent types. `src/index.ts` is the package entry point.
+`src/task.ts` and `src/types.ts` expose task helpers, typed protocol phase outputs, and public Agent types. Runtime-owned core tools are exported by `@rowan-agent/runtime`. `src/index.ts` is the package entry point.
+
+The loop consumes adapter-normalized `phase_output` events from `@rowan-agent/protocol` while still accepting legacy `structured_output` events for local scripted streams. Default tool calls are executed through the event-neutral runtime primitive; `agent` translates runtime observations into ordered `AgentEvent`s, session messages, execution turns, attempts, verification, and final `AgentRunResult`.
 
 `Agent` intentionally exposes the stable, application-facing run surface: context, model, stream, limits, sessions, tool approval hooks, event subscriptions, cancellation, and optional step recording. Advanced phase/runtime ports are internal to the low-level loop API and should be tested or customized through `runAgentLoop`, not through `AgentRunConfig`.
 
@@ -31,7 +33,8 @@ The package also owns the route, plan, execute, verify, thread, retry, outcome, 
 5. Pass a loaded `session` in `AgentRunConfig` before continuing an existing session, or call `abort()` to stop the current run.
 
 ```ts
-import { Agent, createCoreTools } from "@rowan-agent/agent";
+import { Agent } from "@rowan-agent/agent";
+import { createCoreTools } from "@rowan-agent/runtime";
 import { createMessage } from "@rowan-agent/session";
 
 const tools = createCoreTools({ root: process.cwd() });

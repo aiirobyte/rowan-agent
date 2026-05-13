@@ -2,6 +2,7 @@ import { buildOpenAICompatiblePrompt, type ChatMessage } from "@rowan-agent/cont
 import { extractJsonObject } from "./json-extract";
 import type {
   LlmContext,
+  LlmPhaseOutputMap,
   ModelCallUsage,
   ModelStreamEvent,
   StreamFn,
@@ -863,9 +864,14 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     if (context.phase === "route") {
       const decision = normalizeRoutingOutput(value, context);
+      const output: LlmPhaseOutputMap["route"] = {
+        ...decision,
+        text: decision.message,
+      };
       yield {
-        type: "structured_output",
-        content: decision,
+        type: "phase_output",
+        phase: "route",
+        output,
       };
       yield { type: "done" };
       return;
@@ -873,13 +879,18 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     if (context.phase === "plan") {
       const task = normalizeTaskOutput(value, context);
+      const output: LlmPhaseOutputMap["plan"] = {
+        task,
+        text: result.content,
+      };
       yield {
         type: "text_delta",
         text: result.content,
       };
       yield {
-        type: "structured_output",
-        content: task,
+        type: "phase_output",
+        phase: "plan",
+        output,
       };
       yield { type: "done" };
       return;
@@ -887,25 +898,33 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     if (context.phase === "execute") {
       const output = normalizeExecuteOutput(value);
+      const phaseOutput: LlmPhaseOutputMap["execute"] = {
+        text: result.content,
+        toolCalls: output.toolCalls,
+      };
       yield {
         type: "text_delta",
         text: result.content,
       };
-      for (const toolCall of output.toolCalls) {
-        yield { type: "tool_call", toolCall };
-      }
+      yield {
+        type: "phase_output",
+        phase: "execute",
+        output: phaseOutput,
+      };
       yield { type: "done" };
       return;
     }
 
     const verification = normalizeVerificationOutput(value, context);
+    const output: LlmPhaseOutputMap["verify"] = verification;
     yield {
       type: "text_delta",
       text: result.content,
     };
     yield {
-      type: "structured_output",
-      content: verification,
+      type: "phase_output",
+      phase: "verify",
+      output,
     };
     yield { type: "done" };
   };
