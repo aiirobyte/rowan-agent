@@ -1,7 +1,7 @@
 # Rowan v0.4.3 Prompt Plan
 
 Last updated: 2026-05-13
-Status: Planned
+Status: Complete
 
 ## Version Target
 
@@ -31,7 +31,7 @@ Guardrails:
 
 ### Prompt 1: Protocol Phase Output Contracts
 
-Status: Planned
+Status: Complete
 
 Goal: Move shared phase output contracts into `protocol` so cross-package phase output types are no longer Agent-private.
 
@@ -52,7 +52,7 @@ Guardrails:
 
 ### Prompt 2: Adapter Typed Phase Output
 
-Status: Planned
+Status: Complete
 
 Goal: Keep provider-specific JSON/text/tool-call normalization in `adapters` and expose typed phase output to the Agent loop.
 
@@ -73,7 +73,7 @@ Guardrails:
 
 ### Prompt 3: Runtime Tool Execution Primitive
 
-Status: Planned
+Status: Complete
 
 Goal: Move default tool lookup, argument validation, execution, and before/after hook handling into runtime-owned event-neutral primitives.
 
@@ -94,7 +94,7 @@ Guardrails:
 
 ### Prompt 4: Agent Loop Consolidation
 
-Status: Planned
+Status: Complete
 
 Goal: Update `runAgentLoop()` to consume typed provider output and runtime tool execution while preserving Agent-owned ordering and effects.
 
@@ -103,7 +103,7 @@ Expected next change:
 1. Replace Agent-local provider output parsing where typed adapter output is available.
 2. Use runtime-owned tool execution for default tool calls.
 3. Keep event emission, session message appends, execution turn recording, task attempts, verification, thread depth, and outcomes in `agent`.
-4. Reuse existing `phases/`, `task.ts`, and `recorder.ts` only when Agent-owned logic needs a home.
+4. Reuse existing `phases/` and `task.ts` only when Agent-owned logic needs a home; do not add shallow helper files for single call sites.
 5. Confirm no new `packages/agent/src/runtime.ts` or `packages/agent/src/model-stream.ts` exists.
 6. Run focused Agent loop tests and `bun run build`.
 
@@ -115,7 +115,7 @@ Guardrails:
 
 ### Prompt 5: Regression, Docs, And Version Handoff
 
-Status: Planned
+Status: Complete
 
 Goal: Close v0.4.3 with regression coverage, full verification, and docs updated for the next version.
 
@@ -137,12 +137,12 @@ Guardrails:
 ## Completion Checklist
 
 - [x] Versioned docs format created for v0.4.3.
-- [ ] Shared phase output contracts live in `protocol`.
-- [ ] Adapter typed phase output is covered by tests.
-- [ ] Runtime owns default event-neutral tool execution.
-- [ ] Agent loop consumes typed provider output and runtime tool execution.
-- [ ] Agent behavior tests preserved.
-- [ ] Package boundary tests updated.
-- [ ] `bun test packages`.
-- [ ] `bun run build`.
-- [ ] Root docs updated for v0.4.3 completion and v0.5.0 handoff.
+- [x] Shared phase output contracts live in `protocol`.
+- [x] Adapter typed phase output is covered by tests.
+- [x] Runtime owns default event-neutral tool execution.
+- [x] Agent loop consumes typed provider output and runtime tool execution.
+- [x] Agent behavior tests preserved.
+- [x] Package boundary tests updated.
+- [x] `bun test packages`.
+- [x] `bun run build`.
+- [x] Root docs updated for v0.4.3 completion and v0.5.0 handoff.

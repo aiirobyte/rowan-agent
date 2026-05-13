@@ -1,7 +1,7 @@
 # Rowan v0.4.3 Todo
 
 Last updated: 2026-05-13
-Status: Planned
+Status: Complete
 
 ## Version Target
 
@@ -15,34 +15,39 @@ Definition of done:
 - [x] Create root `docs/spec.md`, `docs/prompt_plan.md`, and `docs/todo.md`.
 - [x] Create `docs/version/README.md`.
 - [x] Update docs navigation for the new planning format.
-- [ ] Move shared phase output contracts into `protocol`.
-- [ ] Add typed phase-output stream events or equivalent contracts.
-- [ ] Preserve `StreamFn` compatibility where needed during migration.
-- [ ] Update OpenAI-compatible adapter typed phase output.
-- [ ] Keep provider schema and JSON extraction errors in adapters.
-- [ ] Add adapter tests for typed phase outputs.
-- [ ] Add runtime event-neutral tool execution primitive.
-- [ ] Move default tool argument validation to runtime.
-- [ ] Cache compiled tool schema validators when applicable.
-- [ ] Preserve before/after tool hook behavior.
-- [ ] Replace Agent-local provider output parsing where typed adapter output is available.
-- [ ] Use runtime tool execution primitive from Agent loop.
-- [ ] Keep Agent-owned lifecycle, effects, and outcomes in `agent`.
-- [ ] Avoid new Agent-local `runtime.ts` and `model-stream.ts` files.
-- [ ] Update package boundary tests.
-- [ ] Preserve Agent behavior tests.
-- [ ] Add runtime tool execution tests.
-- [ ] Run `bun test packages`.
-- [ ] Run `bun run build`.
-- [ ] Update root docs after v0.4.3 completion.
+- [x] Move shared phase output contracts into `protocol`.
+- [x] Add typed phase-output stream events or equivalent contracts.
+- [x] Preserve `StreamFn` compatibility where needed during migration.
+- [x] Update OpenAI-compatible adapter typed phase output.
+- [x] Keep provider schema and JSON extraction errors in adapters.
+- [x] Add adapter tests for typed phase outputs.
+- [x] Add runtime event-neutral tool execution primitive.
+- [x] Move default tool argument validation to runtime.
+- [x] Cache compiled tool schema validators when applicable.
+- [x] Preserve before/after tool hook behavior.
+- [x] Replace Agent-local provider output parsing where typed adapter output is available.
+- [x] Use runtime tool execution primitive from Agent loop.
+- [x] Keep Agent-owned lifecycle, effects, and outcomes in `agent`.
+- [x] Avoid new Agent-local `runtime.ts` and `model-stream.ts` files.
+- [x] Update package boundary tests.
+- [x] Preserve Agent behavior tests.
+- [x] Add runtime tool execution tests.
+- [x] Run `bun test packages`.
+- [x] Run `bun run build`.
+- [x] Update root docs after v0.4.3 completion.
 
 ## Next Prompt
 
-Start v0.4.3 Prompt 1: Protocol Phase Output Contracts.
+v0.4.3 is complete. Next version handoff: prepare v0.5.0 Context Projection And Provider IR planning before starting implementation.
 
 Expected next change:
 
-- Move only shared phase output contracts into `packages/protocol/src`, then update imports and verify that consumers no longer depend on Agent-private types for cross-package phase output.
+- Create `docs/version/0.5.0/` planning docs from the roadmap context before implementing context projection or provider IR.
+
+## Verification
+
+- 2026-05-13: `bun test packages` passed with 141 tests.
+- 2026-05-13: `bun run build` passed.
 
 ## Guardrails
 
@@ -57,4 +62,5 @@ Expected next change:
 
 - 2026-05-13: Planning format changed to the allmone-style versioned docs layout. New and resumed version work should start from root `docs/spec.md`, `docs/prompt_plan.md`, `docs/todo.md`, then the active files under `docs/version/<semver>/`.
 - 2026-05-13: `docs/PLAN/` is retained as a legacy release-planning tree and historical source, not the default entry point for new version work.
+- 2026-05-13: v0.4.3 implementation completed. `protocol` owns typed phase output contracts, `adapters` emits typed `phase_output` events, `runtime` owns event-neutral tool execution, and `agent` preserves loop ordering/effects/outcomes.
 - Update this file after every meaningful coding session.

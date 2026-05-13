@@ -6,7 +6,7 @@ Specific version prompt plans live under `docs/version/<semver>/prompt_plan.md`.
 
 ## Active Version
 
-Start or continue v0.4.3:
+v0.4.3 is complete. Prepare v0.5.0 planning:
 
 ```text
 Read AGENT.md.
@@ -17,12 +17,12 @@ Read docs/version/0.4.3/spec.md.
 Read docs/version/0.4.3/prompt_plan.md.
 Read docs/version/0.4.3/todo.md.
 Inspect the current diff with git status --short.
-Continue with the next unchecked v0.4.3 prompt.
+Create docs/version/0.5.0/spec.md, prompt_plan.md, and todo.md before implementation.
 ```
 
 Current next prompt:
 
-- v0.4.3 Prompt 1: move shared phase output contracts into `protocol`.
+- v0.5.0 planning handoff: create versioned planning docs for Context Projection And Provider IR.
 
 ## Operating Rule
 

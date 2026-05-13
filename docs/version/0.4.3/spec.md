@@ -1,7 +1,7 @@
 # Rowan v0.4.3 Spec
 
 Last updated: 2026-05-13
-Status: Planned
+Status: Complete
 
 ## Version Goal
 
@@ -148,3 +148,20 @@ Focused tests should cover:
 - Direct, task, thread, multi-turn, limits, invalid schema, invalid tool args, and verify retry tests pass.
 - `bun test packages` passes.
 - `bun run build` passes.
+
+## Implementation Summary
+
+Completed on 2026-05-13.
+
+- Added typed route, plan, execute, and verify phase output contracts to `packages/protocol/src/context.ts`, next to `ModelStreamEvent`.
+- Updated the OpenAI-compatible adapter to emit typed `phase_output` events while keeping provider JSON extraction and schema errors adapter-owned.
+- Added event-neutral tool execution to `packages/runtime/src/tools.ts`, with cached schema validators, before/after hook handling, and structured results.
+- Updated `runAgentLoop()` to consume typed adapter output and runtime tool execution while keeping Agent events, session effects, attempts, verification, thread depth, and outcomes in `agent`.
+- Preserved legacy `structured_output` stream compatibility for local scripted streams.
+
+## Verification
+
+```bash
+bun test packages
+bun run build
+```

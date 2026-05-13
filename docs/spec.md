@@ -14,11 +14,12 @@ Project-level references:
 
 ## Active Version
 
-Active version: `0.4.3` planning
+Active version: `0.4.3` complete
 
-- Previous implemented baseline: `0.4.2`
+- Previous implemented baseline: `0.4.3`
 - Active version docs: `docs/version/0.4.3/`
 - Legacy draft source: `docs/PLAN/v0.4.3/`
+- Next version: `0.5.0` Context Projection And Provider IR planning
 
 ## Product Intent
 
@@ -53,7 +54,7 @@ If a change would make `agent` own provider wire-format repair, tool runtime int
 - `0.4.0`: Protocol Boundary And Runtime Split. Complete.
 - `0.4.1`: Agent Boundary Correction. Complete.
 - `0.4.2`: Agent Loop IO Atomization. Complete.
-- `0.4.3`: Agent Loop Package Boundary Consolidation. Planned.
+- `0.4.3`: Agent Loop Package Boundary Consolidation. Complete.
 - `0.5.0`: Context Projection And Provider IR. Planned.
 - `0.6.0`: Tool Runtime Policy Ports. Planned.
 - `0.7.0`: Replay, Fork, And Compaction. Planned.

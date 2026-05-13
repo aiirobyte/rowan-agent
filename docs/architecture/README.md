@@ -8,7 +8,8 @@ This directory is the stable architecture layer for Rowan. Release plans live in
 2. `docs/adr/`: architecture decisions that should not be re-litigated without new pressure.
 3. `docs/architecture/module-map.md`: current package Modules, Interfaces, Implementations, and Seams.
 4. `docs/architecture/deepening-opportunities.md`: candidate refactors from architecture review.
-5. `docs/PLAN/INDEX.md`: version timeline and implementation tasks.
+5. `docs/architecture/pi-recording-persistence.md`: Pi comparison for recording and persistence ownership.
+6. `docs/PLAN/INDEX.md`: version timeline and implementation tasks.
 
 ## Rules For Architecture Reviews
 

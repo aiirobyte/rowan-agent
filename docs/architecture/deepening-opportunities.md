@@ -4,6 +4,9 @@ Status: candidate review notes from the 2026-05-04 architecture pass. These are 
 
 ## 1. Agent Loop Phase Output Module
 
+**Status**:
+Completed in v0.4.3. `protocol` now owns typed phase output contracts and adapters emit typed `phase_output` stream events.
+
 **Files**:
 `packages/agent/src/loop.ts`, `packages/protocol/src/context.ts`, `packages/agent/src/phases/types.ts`, `packages/adapters/src/openai-compatible.ts`
 
@@ -17,6 +20,9 @@ Move shared phase output contracts into `protocol` and let Provider Adapters emi
 Locality improves because provider-output bugs live in `adapters`. Leverage improves because `agent`, adapter tests, and future providers share one phase-output Interface. Tests can assert typed phase outputs without driving the whole Agent loop.
 
 ## 2. Runtime-Owned Tool Execution Module
+
+**Status**:
+Completed in v0.4.3 for the default local execution path. `runtime` now owns an event-neutral tool execution primitive with lookup, schema validation, hooks, execution, and structured outcomes.
 
 **Files**:
 `packages/agent/src/loop.ts`, `packages/runtime/src/tools.ts`, `packages/runtime/src/types.ts`, `packages/agent/src/phases/types.ts`
@@ -32,14 +38,17 @@ Locality improves because tool execution rules live in one Runtime glue Module. 
 
 ## 3. Agent Run Effects And ExecutionTurn Module
 
+**Status**:
+Partially resolved in v0.4.3 cleanup. Single-call-site step assembly was folded back into the Agent loop. A future deepening should extract a broader phase-effects Module only if it also owns message publication, scope rules, and ExecutionTurn construction together.
+
 **Files**:
-`packages/agent/src/loop.ts`, `packages/agent/src/recorder.ts`, `packages/store/src/types.ts`
+`packages/agent/src/loop.ts`, `packages/store/src/types.ts`
 
 **Problem**:
-Phase transcript collection, `message_delta` publication, ExecutionTurn entries, and diagnostic scope handling are split across the Agent loop and recorder helpers. That keeps the pollution-prevention rule close to many call sites instead of one deep Module.
+Phase transcript collection, `message_delta` publication, ExecutionTurn entries, and diagnostic scope handling still live inside the Agent loop. That keeps the pollution-prevention rule close to many call sites instead of one deep Module.
 
 **Solution**:
-Deepen `recorder.ts` into an Agent-owned phase effects Module. It should concentrate the conversion from phase activity into AgentEvents, event-only messages, Session conversation messages, and ExecutionTurns.
+Only extract an Agent-owned phase effects Module when it can concentrate the conversion from phase activity into AgentEvents, event-only messages, Session conversation messages, and ExecutionTurns together. Do not recreate a shallow wrapper for one persistence callback alone.
 
 **Benefits**:
 Locality improves because conversation, execution, and diagnostic scope rules are maintained in one place. Leverage improves because every phase uses one effect Interface. Tests can verify scope and persistence behavior through this Interface rather than by replaying the whole loop.
