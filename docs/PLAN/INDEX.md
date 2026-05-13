@@ -1,5 +1,8 @@
 # Rowan Agent Plan
 
+> New version work starts from `docs/spec.md`, `docs/prompt_plan.md`, `docs/todo.md`, and `docs/version/<semver>/`.
+> This `docs/PLAN/` tree is retained as legacy planning history and roadmap context.
+
 ## Goal
 
 Keep Rowan Agent planning, implementation notes, and working context organized.
@@ -13,7 +16,7 @@ Architecture-review docs now live outside the release plan tree:
 - `docs/architecture/deepening-opportunities.md`
 - `docs/adr/`
 
-The main project roadmap now lives in:
+The legacy roadmap history remains in:
 
 - `docs/PLAN/ARCHITECTURE.md`
 - `docs/PLAN/ROADMAP.md`
@@ -72,6 +75,7 @@ The main project roadmap now lives in:
 - v0.4.2 implemented: atomized Agent loop inputs/outputs and exposed explicit runtime phase ports while keeping loop ownership in `agent`.
 - v0.4.3 planned: consolidate Agent loop complexity at existing package boundaries before v0.5.0 context projection.
 - Architecture docs reorganized on 2026-05-04 for `improve-codebase-architecture`: root domain context, ADR files, Module map, and deepening opportunities.
+- Planning format changed on 2026-05-13: active version work now starts from `docs/spec.md`, `docs/prompt_plan.md`, `docs/todo.md`, and `docs/version/<semver>/`.
 
 Planning status enum:
 

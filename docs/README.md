@@ -12,11 +12,13 @@ Use this page as the entrypoint for repository documentation.
 
 ## Version Planning
 
-- [`PLAN/INDEX.md`](PLAN/INDEX.md): short plan index.
-- [`PLAN/ROADMAP.md`](PLAN/ROADMAP.md): long-term version roadmap.
-- [`PLAN/ARCHITECTURE.md`](PLAN/ARCHITECTURE.md): versioned technical architecture snapshot.
-- [`PLAN/v0.4.3/`](PLAN/v0.4.3/): current planned release pack.
+- [`spec.md`](spec.md): current version spec entry point.
+- [`prompt_plan.md`](prompt_plan.md): current prompt execution entry point.
+- [`todo.md`](todo.md): cross-session checklist.
+- [`version/README.md`](version/README.md): versioned planning index.
+- [`version/0.4.3/`](version/0.4.3/): current planned release pack.
+- [`PLAN/`](PLAN/): legacy planning tree and historical roadmap context.
 
 ## Rule Of Thumb
 
-Architecture reviews should read `CONTEXT.md` and `docs/adr/` first. Version plans should describe when work happens, not redefine Rowan domain language or settled architecture decisions.
+Architecture reviews should read `CONTEXT.md` and `docs/adr/` first. Version plans should describe when work happens, not redefine Rowan domain language or settled architecture decisions. New version work should start from `docs/spec.md`, `docs/prompt_plan.md`, and `docs/todo.md`.

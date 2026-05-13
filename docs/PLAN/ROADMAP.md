@@ -1,10 +1,13 @@
 # Rowan Agent Roadmap
 
 > 版本：v0.4.3
-> 日期：2026-05-04
+> 日期：2026-05-13
 > 状态：planned
 > 进度：v0.0.0 到 v0.4.2 已实现；v0.4.3 先收敛 Agent loop 包边界，再进入 v0.5.0 context projection/provider IR
-> 相关文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`docs/PLAN/v0.4.2/PLAN.md`、`docs/PLAN/v0.4.3/PLAN.md`
+> 当前入口：`docs/spec.md`、`docs/prompt_plan.md`、`docs/todo.md`、`docs/version/0.4.3/`
+> 历史文档：`docs/PLAN/ARCHITECTURE.md`、`docs/PLAN/v0.0.0/PLAN.md`、`docs/PLAN/v0.1.0/PLAN.md`、`docs/PLAN/v0.2.0/PLAN.md`、`docs/PLAN/v0.3.0/PLAN.md`、`docs/PLAN/v0.3.1/PLAN.md`、`docs/PLAN/v0.3.2/PLAN.md`、`docs/PLAN/v0.3.3/PLAN.md`、`docs/PLAN/v0.3.4/PLAN.md`、`docs/PLAN/v0.3.5/PLAN.md`、`docs/PLAN/v0.4.0/PLAN.md`、`docs/PLAN/v0.4.1/PLAN.md`、`docs/PLAN/v0.4.2/PLAN.md`、`docs/PLAN/v0.4.3/PLAN.md`
+
+This file is retained as long-form roadmap context. Active or resumed version work should use the allmone-style files under `docs/version/<semver>/`.
 
 Architecture-review source docs:
 

@@ -1,5 +1,7 @@
 # Rowan v0.4.3 Task Board
 
+> Migrated planning entry: use `docs/version/0.4.3/todo.md` for active v0.4.3 work. This file is retained as the original planning draft.
+
 > 版本：v0.4.3
 > 日期：2026-05-04
 > 状态：planned
