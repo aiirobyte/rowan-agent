@@ -31,7 +31,7 @@ export type AgentContextSkill = {
   toolNames?: string[];
 };
 
-export type AgentContextSession = {
+export type AgentContextState = {
   version: string;
   id: string;
   parentSessionId?: string;
@@ -40,34 +40,33 @@ export type AgentContextSession = {
   task?: string;
   goal?: string;
   messages: AgentContextMessage[];
-  log: unknown[];
   skills: AgentContextSkill[];
   createdAt: string;
   updatedAt: string;
   title?: string;
 };
 
-export type LlmContext<TSession extends AgentContextSession = AgentContextSession> =
+export type LlmContext<TState extends AgentContextState = AgentContextState> =
   | {
       phase: "route";
-      session: TSession;
+      state: TState;
       runtime?: RuntimeDepth;
     }
   | {
       phase: "plan";
-      session: TSession;
+      state: TState;
       runtime?: RuntimeDepth;
     }
   | {
       phase: "execute";
-      session: TSession;
+      state: TState;
       task: Task;
       toolResults: ToolResult[];
       runtime?: RuntimeDepth;
     }
   | {
       phase: "verify";
-      session: TSession;
+      state: TState;
       task: Task;
       taskOutput: TaskOutput;
       criteria: AcceptanceCriterion[];
@@ -121,8 +120,8 @@ export type StreamOptions = {
   signal?: AbortSignal;
 };
 
-export type StreamFn<TSession extends AgentContextSession = AgentContextSession> = (
+export type StreamFn<TState extends AgentContextState = AgentContextState> = (
   model: ModelRef,
-  context: LlmContext<TSession>,
+  context: LlmContext<TState>,
   options: StreamOptions,
 ) => AsyncIterable<ModelStreamEvent>;

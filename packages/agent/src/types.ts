@@ -1,11 +1,13 @@
 import Type from "typebox";
-import type { AgentMessage, Session as CoreSession, Skill } from "@rowan-agent/session";
-import type { AgentRuntimePort } from "./phases/types";
+import { createId, Validators } from "@rowan-agent/protocol";
+import type { AgentRuntimePort } from "./loop/types";
 import type {
   AcceptanceCriterion,
+  AgentContextMessage,
+  AgentContextSkill,
   AgentLimitUsage,
   AgentRunLimits,
-  ExecutionTurn,
+  ContextScope,
   LlmContext,
   LlmPhase,
   LlmPhaseOutput,
@@ -27,7 +29,7 @@ import type {
   ToolTaskOutput,
   VerificationResult,
 } from "@rowan-agent/protocol";
-export { createId, Validators } from "@rowan-agent/protocol";
+export { createId, Validators };
 export type {
   AgentEffect,
   AgentLoopContext,
@@ -47,14 +49,12 @@ export type {
   ToolRunner,
   ToolRunnerInput,
   VerifyInput,
-} from "./phases/types";
+} from "./loop/types";
 
 export type {
   AcceptanceCriterion,
   AgentLimitUsage,
   AgentRunLimits,
-  ExecutionTurn,
-  ExecutionTurnEntry,
   LlmContext,
   LlmPhase,
   LlmPhaseOutput,
@@ -65,7 +65,6 @@ export type {
   ModelStreamEvent,
   Outcome,
   RuntimeDepth,
-  StepFilter,
   StreamFn,
   StreamOptions,
   Task,
@@ -79,9 +78,42 @@ export type {
 } from "@rowan-agent/protocol";
 
 export const DEFAULT_MAX_THREAD_DEPTH = 4;
+export const AGENT_STATE_SCHEMA_VERSION = "0.4.4";
+
+const CONTEXT_SCOPES = ["conversation", "execution", "diagnostic"] as const;
+
+export type AgentMessage = AgentContextMessage;
+export type Skill = AgentContextSkill;
+
+export type AgentState = {
+  version: string;
+  id: string;
+  parentSessionId?: string;
+  systemPrompt: string;
+  input: string;
+  task?: string;
+  goal?: string;
+  messages: AgentMessage[];
+  skills: Skill[];
+  createdAt: string;
+  updatedAt: string;
+  title?: string;
+};
+
+export type CreateAgentStateInput = {
+  id?: string;
+  systemPrompt: string;
+  input: string;
+  task?: string;
+  goal?: string;
+  skills?: Skill[];
+  parentSessionId?: string;
+  title?: string;
+  messages?: AgentMessage[];
+};
 
 export type ToolContext = {
-  session: CoreSession<AgentEvent>;
+  state: AgentState;
   task: Task;
   toolCallId: string;
   runThread?: RunThread;
@@ -118,10 +150,6 @@ export type AfterToolCall = (input: {
   result: ToolResult;
 }) => Promise<ToolResult>;
 
-export type AgentStepRecorder = (step: ExecutionTurn) => Promise<void>;
-
-type AgentSessionSnapshot = Omit<CoreSession<unknown>, "log" | "messages" | "createdAt" | "updatedAt">;
-
 type AgentRunCommonConfig = {
   context?: AgentContext;
   model: ModelRef;
@@ -137,13 +165,12 @@ type AgentRunCommonConfig = {
 };
 
 export type AgentLoopRunConfig = AgentRunCommonConfig & {
-  kind: "session";
-  session?: CoreSession<AgentEvent>;
-  sessionLifecycle?: "created" | "loaded" | "continued";
+  kind: "run";
+  sessionId?: string;
+  state?: AgentState;
   threadDepth?: number;
   verifyTasks?: boolean;
   runThread?: RunThread;
-  recordStep?: AgentStepRecorder;
 };
 
 export type AgentThreadRunConfig = AgentRunCommonConfig & {
@@ -160,8 +187,9 @@ export type AgentThreadRunConfig = AgentRunCommonConfig & {
 
 export type AgentRunResult =
   | {
-      kind: "session";
-      session: CoreSession<AgentEvent>;
+      kind: "run";
+      sessionId: string;
+      messages: AgentMessage[];
       outcome: Outcome;
       limitUsage: AgentLimitUsage;
       depth: RuntimeDepth;
@@ -169,7 +197,8 @@ export type AgentRunResult =
   | {
       kind: "thread";
       parentSessionId: string;
-      session: CoreSession<AgentEvent>;
+      sessionId: string;
+      messages: AgentMessage[];
       outcome: Outcome;
       limitUsage: AgentLimitUsage;
       depth: RuntimeDepth;
@@ -207,8 +236,6 @@ export type ErrorInfo = {
 };
 
 export type AgentEvent =
-  | { type: "session_created"; session: AgentSessionSnapshot; ts: string }
-  | { type: "session_loaded"; session: AgentSessionSnapshot; ts: string }
   | {
       type: "thread_created";
       parentSessionId: string;
@@ -313,4 +340,101 @@ export function formatLocalTimestamp(date = new Date()): string {
 
 export function nowIso(): string {
   return formatLocalTimestamp();
+}
+
+export function isContextScope(value: unknown): value is ContextScope {
+  return CONTEXT_SCOPES.some((scope) => scope === value);
+}
+
+function defaultScopeForMessage(
+  role: AgentMessage["role"],
+  metadata?: Record<string, unknown>,
+): ContextScope | undefined {
+  if (
+    metadata?.kind === "phase_prompt" ||
+    metadata?.kind === "routing_decision" ||
+    metadata?.kind === "model_message" ||
+    metadata?.kind === "thread_output"
+  ) {
+    return "execution";
+  }
+
+  if (metadata?.kind === "error" || metadata?.kind === "limit_exceeded") {
+    return "diagnostic";
+  }
+
+  if (role === "user" || role === "assistant") {
+    return "conversation";
+  }
+
+  if (role === "tool") {
+    return "execution";
+  }
+
+  return undefined;
+}
+
+export function createMessage(
+  role: AgentMessage["role"],
+  content: string,
+  metadata?: Record<string, unknown>,
+): AgentMessage {
+  const scope = isContextScope(metadata?.scope) ? metadata.scope : defaultScopeForMessage(role, metadata);
+  const normalizedMetadata = scope === undefined
+    ? metadata
+    : { ...metadata, scope };
+
+  return {
+    id: createId("msg"),
+    role,
+    content,
+    createdAt: nowIso(),
+    ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
+  };
+}
+
+export function messageScope(message: AgentMessage): ContextScope | undefined {
+  const scope = message.metadata?.scope;
+  return isContextScope(scope) ? scope : undefined;
+}
+
+export function isConversationMessage(message: AgentMessage): boolean {
+  return messageScope(message) === "conversation";
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function createAgentState(input: CreateAgentStateInput): AgentState {
+  const createdAt = nowIso();
+  const messages = input.messages?.map(clone) ?? [
+    createMessage("user", input.input, { scope: "conversation" }),
+  ];
+
+  return {
+    version: AGENT_STATE_SCHEMA_VERSION,
+    id: input.id ?? createId("ses"),
+    ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
+    systemPrompt: input.systemPrompt,
+    input: input.input,
+    ...(input.task ? { task: input.task } : {}),
+    ...(input.goal ? { goal: input.goal } : {}),
+    messages,
+    skills: input.skills?.map(clone) ?? [],
+    createdAt,
+    updatedAt: createdAt,
+    ...(input.title ? { title: input.title } : {}),
+  };
+}
+
+export function latestUserInput(state: Pick<AgentState, "input" | "messages">): string {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (message.role === "user" && isConversationMessage(message)) {
+      return message.content;
+    }
+  }
+
+  return state.input;
 }

@@ -1,11 +1,11 @@
-import type { Session as CoreSession } from "@rowan-agent/session";
 import type {
+  AgentMessage,
   AgentLimitUsage,
   AgentEvent,
   AgentRunLimits,
+  AgentState,
   AfterToolCall,
   BeforeToolCall,
-  ExecutionTurn,
   LlmPhase,
   LlmPhaseOutputMap,
   ModelRef,
@@ -28,7 +28,6 @@ export type AgentRunStatus =
   | "completed";
 
 export type AgentLoopConfig = {
-  sessionLifecycle: "created" | "loaded" | "continued";
   model: ModelRef;
   stream: StreamFn;
   tools: Tool[];
@@ -43,8 +42,7 @@ export type AgentLoopConfig = {
 };
 
 export type AgentRunState = {
-  session: CoreSession<AgentEvent>;
-  messageLog: AgentMessageSnapshot[];
+  agentState: AgentState;
   status: AgentRunStatus;
   attempt: number;
   task?: Task;
@@ -57,7 +55,7 @@ export type AgentRunState = {
   lastExecuteText?: string;
 };
 
-export type AgentMessageSnapshot = CoreSession<AgentEvent>["messages"][number];
+export type AgentMessageSnapshot = AgentMessage;
 
 export type AgentLoopContext = {
   /** System prompt included with the request. */
@@ -67,20 +65,19 @@ export type AgentLoopContext = {
   /** Tools available for this run. */
   tools: Tool[];
   /** Skills available for this run. */
-  skills: CoreSession<AgentEvent>["skills"];
+  skills: AgentState["skills"];
   config: AgentLoopConfig;
   state: Readonly<AgentRunState>;
   signal?: AbortSignal;
   emit(event: AgentEvent): Promise<void>;
-  record(step: ExecutionTurn): Promise<void>;
   appendEventMessage(message: AgentMessageSnapshot): Promise<void>;
-  appendSessionMessage(message: AgentMessageSnapshot): Promise<void>;
+  appendAgentStateMessage(message: AgentMessageSnapshot): Promise<void>;
   consumeLimit(resource: keyof AgentLimitUsage): void;
   runThread?: RunThread;
 };
 
 export type RouteInput = {
-  session: CoreSession<AgentEvent>;
+  state: AgentState;
   runtime: AgentRunState["depth"];
   tools: Tool[];
   canStartThreadRoute: boolean;
@@ -90,19 +87,19 @@ export type RouteInput = {
 };
 
 export type PlanInput = {
-  session: CoreSession<AgentEvent>;
+  state: AgentState;
   runtime: AgentRunState["depth"];
 };
 
 export type ExecuteInput = {
-  session: CoreSession<AgentEvent>;
+  state: AgentState;
   task: Task;
   toolResults: ToolResult[];
   runtime: AgentRunState["depth"];
 };
 
 export type VerifyInput = {
-  session: CoreSession<AgentEvent>;
+  state: AgentState;
   task: Task;
   taskOutput: TaskOutput;
   criteria: Task["acceptanceCriteria"];
@@ -129,9 +126,8 @@ export type PhaseOutputMap = {
 
 export type AgentEffect =
   | { type: "event"; event: AgentEvent }
-  | { type: "turn"; turn: ExecutionTurn }
   | { type: "event_message"; message: AgentMessageSnapshot }
-  | { type: "session_message"; message: AgentMessageSnapshot };
+  | { type: "agent_state_message"; message: AgentMessageSnapshot };
 
 export type PhaseResult<TPhase extends LlmPhase> =
   | { action: "continue"; output: PhaseOutputMap[TPhase]; effects?: AgentEffect[] }

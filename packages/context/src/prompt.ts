@@ -5,17 +5,17 @@ export type BasePromptInput = {
 
 export type PlanPromptInput = BasePromptInput & {
   currentUserInputJson: string;
-  sessionInputJson: string;
-  sessionTaskJson: string;
-  sessionGoalJson: string;
+  stateInputJson: string;
+  stateTaskJson: string;
+  stateGoalJson: string;
   runtimeDepthJson: string;
 };
 
 export type RoutePromptInput = BasePromptInput & {
   currentUserInputJson: string;
-  sessionInputJson: string;
-  sessionTaskJson: string;
-  sessionGoalJson: string;
+  stateInputJson: string;
+  stateTaskJson: string;
+  stateGoalJson: string;
   runtimeDepthJson: string;
 };
 
@@ -52,19 +52,19 @@ export function buildPlanPrompt(input: PlanPromptInput): string {
     "Prefer setting task.status to \"pending\" and task.attempts to 0.",
     "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
     "Create the task for the current user request below. Use prior conversation only as context.",
-    "If Session task or Session goal is present, this is a worker thread; prioritize that task/goal over broad delegation.",
+    "If Agent state task or Agent state goal is present, this is a worker thread; prioritize that task/goal over broad delegation.",
     "",
     "Current user request:",
     input.currentUserInputJson,
     "",
-    "Session initial input:",
-    input.sessionInputJson,
+    "Agent state initial input:",
+    input.stateInputJson,
     "",
-    "Session task:",
-    input.sessionTaskJson,
+    "Agent state task:",
+    input.stateTaskJson,
     "",
-    "Session goal:",
-    input.sessionGoalJson,
+    "Agent state goal:",
+    input.stateGoalJson,
     "",
     "Runtime thread depth:",
     input.runtimeDepthJson,
@@ -89,7 +89,7 @@ export function buildRoutePrompt(input: RoutePromptInput): string {
     "Set route=\"thread\" only when the user explicitly asks to create/delegate to a thread, or when the work is large enough to need an isolated child runtime.",
     "For route=\"thread\", include thread.prompt, thread.task, and thread.goal. The child thread executes and returns an outcome; this runtime verifies whether that outcome satisfies the goal.",
     "Nested worker threads are allowed while runtime threadDepth is below maxThreadDepth. At maxThreadDepth, do not route to another thread; set route=\"task\" instead.",
-    "If Session task or Session goal is present, this runtime is already a worker thread; do not route to another thread merely because the input mentions thread. Use route=\"task\" or route=\"direct\" unless the assigned task explicitly asks to create/delegate a nested thread.",
+    "If Agent state task or Agent state goal is present, this runtime is already a worker thread; do not route to another thread merely because the input mentions thread. Use route=\"task\" or route=\"direct\" unless the assigned task explicitly asks to create/delegate a nested thread.",
     "If the user explicitly names an available tool, asks to use bash/shell/terminal, or asks Rowan to inspect or modify the workspace, route must not be \"direct\".",
     "If the user asks a factual question about the current workspace, project, repository, codebase, files, languages, dependencies, configuration, structure, versions, assets, or whether something exists there, route must not be \"direct\".",
     "If your answer would say you cannot know without inspecting the workspace, set route=\"task\" instead of returning that as the final answer.",
@@ -101,14 +101,14 @@ export function buildRoutePrompt(input: RoutePromptInput): string {
     "Current user request:",
     input.currentUserInputJson,
     "",
-    "Session initial input:",
-    input.sessionInputJson,
+    "Agent state initial input:",
+    input.stateInputJson,
     "",
-    "Session task:",
-    input.sessionTaskJson,
+    "Agent state task:",
+    input.stateTaskJson,
     "",
-    "Session goal:",
-    input.sessionGoalJson,
+    "Agent state goal:",
+    input.stateGoalJson,
     "",
     "Runtime thread depth:",
     input.runtimeDepthJson,

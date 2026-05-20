@@ -1,6 +1,7 @@
 import Type from "typebox";
-import type { Session as CoreSession, Skill } from "@rowan-agent/session";
 import type {
+  AgentContextState,
+  AgentContextSkill,
   AgentRunLimits,
   Task,
   ToolResult,
@@ -39,7 +40,7 @@ export type RuntimeThreadInput = {
   task?: string;
   goal?: string;
   tools: Tool[];
-  skills?: Skill[];
+  skills?: AgentContextSkill[];
   maxAttempts?: number;
   limits?: AgentRunLimits;
   threadDepth?: number;
@@ -52,11 +53,10 @@ export type RuntimeRunThread<
 > = (input: TInput) => Promise<TResult>;
 
 export type ToolContext<
-  TLogEvent = unknown,
   TThreadResult = unknown,
   TThreadInput extends RuntimeThreadInput = RuntimeThreadInput,
 > = {
-  session: CoreSession<TLogEvent>;
+  state: AgentContextState;
   task: Task;
   toolCallId: string;
   runThread?: RuntimeRunThread<TThreadInput, TThreadResult>;
@@ -64,7 +64,6 @@ export type ToolContext<
 
 export type Tool<
   TArgs = unknown,
-  TLogEvent = unknown,
   TThreadResult = unknown,
   TThreadInput extends RuntimeThreadInput = RuntimeThreadInput,
 > = {
@@ -73,7 +72,7 @@ export type Tool<
   parameters: Type.TSchema;
   execute(
     args: TArgs,
-    context: ToolContext<TLogEvent, TThreadResult, TThreadInput>,
+    context: ToolContext<TThreadResult, TThreadInput>,
     signal?: AbortSignal,
   ): Promise<ToolResult>;
 };

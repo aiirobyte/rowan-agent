@@ -1,8 +1,6 @@
 import { runAgentLoop } from "./loop";
-import {
-  type AgentMessage,
-} from "@rowan-agent/session";
 import type {
+  AgentMessage,
   ModelRef,
   AgentRunLimits,
   StreamFn,
@@ -12,31 +10,27 @@ import type {
   AgentRunResult,
   AgentEvent,
   AgentContext,
-  AgentStepRecorder,
   AgentEventListener,
   Unsubscribe,
 } from "./types";
-
-type AgentSession = Extract<AgentRunResult, { kind: "session" }>["session"];
 
 export type AgentRunConfig = {
   context: AgentContext;
   model: ModelRef;
   stream: StreamFn;
-  session?: AgentSession;
+  sessionId?: string;
   maxAttempts?: number;
   limits?: AgentRunLimits;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
-  recordStep?: AgentStepRecorder;
 };
 
 export type AgentRunOverride = Partial<Omit<AgentRunConfig, "context">> & {
   context: AgentContext;
 };
 
-export type AgentState = {
-  session?: AgentSession;
+export type AgentControllerState = {
+  sessionId?: string;
   context: AgentContext;
   model: ModelRef;
   tools: Tool[];
@@ -46,24 +40,21 @@ export type AgentState = {
 };
 
 export class Agent {
-  readonly state: AgentState;
+  readonly state: AgentControllerState;
   private options: AgentRunConfig;
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
   private currentRun?: Promise<AgentRunResult>;
   private abortController?: AbortController;
-  private shouldEmitSessionLoaded: boolean;
-  private shadowSessionId?: string;
 
   constructor(options: AgentRunConfig) {
     this.options = {
       ...options,
       context: cloneAgentContext(options.context),
     };
-    this.shouldEmitSessionLoaded = Boolean(this.options.session);
     this.state = {
-      ...(this.options.session ? { session: this.options.session } : {}),
+      ...(this.options.sessionId ? { sessionId: this.options.sessionId } : {}),
       context: cloneAgentContext(this.options.context),
       model: this.options.model,
       tools: this.options.context.tools ?? [],
@@ -123,17 +114,12 @@ export class Agent {
     }
 
     const resolved = this.resolveRunConfig(config);
-    const session = resolved.session ?? this.state.session;
-    const hadExistingSession = Boolean(session);
-    const sessionLifecycle = hadExistingSession
-      ? this.shouldEmitSessionLoaded
-        ? "loaded"
-        : "continued"
-      : "created";
-    this.shouldEmitSessionLoaded = false;
+    const previousSessionId = this.state.sessionId ?? this.options.sessionId;
+    const sessionId = resolved.sessionId ?? this.state.sessionId;
+    const hadExistingSession = Boolean(sessionId && previousSessionId === sessionId);
     this.options = resolved;
-    if (session) {
-      this.state.session = session;
+    if (sessionId) {
+      this.state.sessionId = sessionId;
     }
     this.state.context = cloneAgentContext(resolved.context);
     this.state.model = resolved.model;
@@ -144,15 +130,13 @@ export class Agent {
     this.abortController = new AbortController();
 
     const emit = (event: AgentEvent) => {
-      this.captureLoopSessionEvent(event, resolved.context);
       this.emitToListeners(event);
     };
 
     this.currentRun = runAgentLoop({
-      kind: "session",
+      kind: "run",
       context: resolved.context,
-      ...(session ? { session } : {}),
-      sessionLifecycle,
+      ...(sessionId ? { sessionId } : {}),
       model: resolved.model,
       stream: resolved.stream,
       maxAttempts: resolved.maxAttempts,
@@ -161,19 +145,20 @@ export class Agent {
       signal: this.abortController.signal,
       beforeToolCall: resolved.beforeToolCall,
       afterToolCall: resolved.afterToolCall,
-      ...(resolved.recordStep ? { recordStep: resolved.recordStep } : {}),
       emit,
     });
 
     try {
       const result = await this.currentRun;
-      this.state.session = result.session;
-      this.shadowSessionId = undefined;
-      this.state.context = contextFromSession(result.session, resolved.context.tools);
+      this.state.sessionId = result.sessionId;
+      this.state.context = {
+        ...cloneAgentContext(resolved.context),
+        messages: cloneMessages(result.messages),
+      };
       this.state.currentResult = result;
       this.options = {
         ...resolved,
-        session: result.session,
+        sessionId: result.sessionId,
         context: cloneAgentContext(this.state.context),
       };
       return result;
@@ -204,31 +189,14 @@ export class Agent {
       ...this.options,
       ...config,
       context,
-      session: config?.session ?? this.state.session ?? this.options.session,
+      sessionId: config?.sessionId ?? this.state.sessionId ?? this.options.sessionId,
     };
   }
 
   private createContextSnapshot(): AgentContext {
-    if (this.state.session) {
-      return contextFromSession(this.state.session, this.state.tools);
-    }
     return cloneAgentContext(this.state.context);
   }
 
-  private captureLoopSessionEvent(event: AgentEvent, context: AgentContext): void {
-    if (event.type === "session_created" && !this.state.session) {
-      this.state.session = sessionFromSnapshot(event.session, context, event);
-      this.shadowSessionId = event.session.id;
-      return;
-    }
-
-    if (!this.shadowSessionId || this.state.session?.id !== this.shadowSessionId) {
-      return;
-    }
-
-    this.state.session.log.push(event);
-    this.state.session.updatedAt = event.ts;
-  }
 }
 
 function cloneMessage(message: AgentMessage): AgentMessage {
@@ -248,36 +216,5 @@ function cloneAgentContext(context: AgentContext): AgentContext {
     messages: cloneMessages(context.messages),
     ...(context.tools ? { tools: context.tools.slice() } : {}),
     ...(context.skills ? { skills: context.skills.slice() } : {}),
-  };
-}
-
-function contextFromSession(session: AgentSession, tools?: Tool[]): AgentContext {
-  return {
-    systemPrompt: session.systemPrompt,
-    messages: cloneMessages(session.messages),
-    tools: tools?.slice() ?? [],
-    skills: session.skills.slice(),
-  };
-}
-
-function sessionFromSnapshot(
-  snapshot: Extract<AgentEvent, { type: "session_created" | "session_loaded" }>["session"],
-  context: AgentContext,
-  event: AgentEvent,
-): AgentSession {
-  return {
-    version: snapshot.version,
-    id: snapshot.id,
-    ...(snapshot.parentSessionId ? { parentSessionId: snapshot.parentSessionId } : {}),
-    systemPrompt: snapshot.systemPrompt,
-    input: snapshot.input,
-    ...(snapshot.task ? { task: snapshot.task } : {}),
-    ...(snapshot.goal ? { goal: snapshot.goal } : {}),
-    messages: cloneMessages(context.messages),
-    log: [event],
-    skills: snapshot.skills.slice(),
-    createdAt: event.ts,
-    updatedAt: event.ts,
-    ...(snapshot.title ? { title: snapshot.title } : {}),
   };
 }

@@ -673,15 +673,15 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function latestUserInput(context: Pick<LlmContext, "session">): string {
-  for (let index = context.session.messages.length - 1; index >= 0; index -= 1) {
-    const message = context.session.messages[index];
+function latestUserInput(context: Pick<LlmContext, "state">): string {
+  for (let index = context.state.messages.length - 1; index >= 0; index -= 1) {
+    const message = context.state.messages[index];
     if (message.role === "user") {
       return message.content;
     }
   }
 
-  return context.session.input;
+  return context.state.input;
 }
 
 function normalizeRoutingOutput(
@@ -735,9 +735,9 @@ function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phas
     asString(getRecordValue(raw, "instruction")) ??
     asString(getRecordValue(raw, "description")) ??
     asString(getRecordValue(raw, "message")) ??
-    context.session.task ??
+    context.state.task ??
     latestUserInput(context);
-  const defaultSkillIds = context.session.skills.map((skill) => skill.id);
+  const defaultSkillIds = context.state.skills.map((skill) => skill.id);
   const normalized = {
     ...raw,
     id: asString(getRecordValue(raw, "id")) ?? createId("task"),
@@ -745,7 +745,7 @@ function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phas
     instruction,
     acceptanceCriteria: normalizeAcceptanceCriteria(
       getRecordValue(raw, "acceptanceCriteria"),
-      context.session.goal ?? instruction,
+      context.state.goal ?? instruction,
     ),
     toolNames: normalizeStringArray(getRecordValue(raw, "toolNames", "tools"), []),
     skillIds: normalizeStringArray(getRecordValue(raw, "skillIds", "skills"), defaultSkillIds),

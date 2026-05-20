@@ -39,7 +39,7 @@ function serializeTools(tools: PromptTool[] = []): SerializableTool[] {
 }
 
 function serializeSkills(context: LlmContext): unknown[] {
-  return context.session.skills.map((skill) => ({
+  return context.state.skills.map((skill) => ({
     id: skill.id,
     path: skill.path,
     toolNames: skill.toolNames ?? [],
@@ -48,7 +48,7 @@ function serializeSkills(context: LlmContext): unknown[] {
 }
 
 function buildSystemMessage(context: LlmContext): ChatMessage {
-  return { role: "system", content: buildSystemPrompt(context.session.systemPrompt) };
+  return { role: "system", content: buildSystemPrompt(context.state.systemPrompt) };
 }
 
 function isConversationMessage(message: AgentContextMessage): boolean {
@@ -56,14 +56,14 @@ function isConversationMessage(message: AgentContextMessage): boolean {
 }
 
 function latestUserInput(context: LlmContext): string {
-  for (let index = context.session.messages.length - 1; index >= 0; index -= 1) {
-    const message = context.session.messages[index];
+  for (let index = context.state.messages.length - 1; index >= 0; index -= 1) {
+    const message = context.state.messages[index];
     if (message.role === "user" && isConversationMessage(message)) {
       return message.content;
     }
   }
 
-  return context.session.input;
+  return context.state.input;
 }
 
 function toConversationMessage(message: AgentContextMessage): ChatMessage | undefined {
@@ -82,7 +82,7 @@ function toConversationMessage(message: AgentContextMessage): ChatMessage | unde
 }
 
 function conversationForPhase(context: LlmContext): AgentContextMessage[] {
-  const conversation = context.session.messages.filter(isConversationMessage);
+  const conversation = context.state.messages.filter(isConversationMessage);
 
   if (context.phase === "route") {
     return conversation.slice(-12);
@@ -105,9 +105,9 @@ function buildConversationMessages(context: LlmContext): ChatMessage[] {
 function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, tools: PromptTool[]): string {
   return buildPlanPrompt({
     currentUserInputJson: toJson(latestUserInput(context)),
-    sessionInputJson: toJson(context.session.input),
-    sessionTaskJson: toJson(context.session.task ?? null),
-    sessionGoalJson: toJson(context.session.goal ?? null),
+    stateInputJson: toJson(context.state.input),
+    stateTaskJson: toJson(context.state.task ?? null),
+    stateGoalJson: toJson(context.state.goal ?? null),
     runtimeDepthJson: toJson(context.runtime ?? null),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
@@ -117,9 +117,9 @@ function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, t
 function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>, tools: PromptTool[]): string {
   return buildRoutePrompt({
     currentUserInputJson: toJson(latestUserInput(context)),
-    sessionInputJson: toJson(context.session.input),
-    sessionTaskJson: toJson(context.session.task ?? null),
-    sessionGoalJson: toJson(context.session.goal ?? null),
+    stateInputJson: toJson(context.state.input),
+    stateTaskJson: toJson(context.state.task ?? null),
+    stateGoalJson: toJson(context.state.goal ?? null),
     runtimeDepthJson: toJson(context.runtime ?? null),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
