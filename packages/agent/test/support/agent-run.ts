@@ -28,7 +28,7 @@ export function contextFromAgentTurn(agent: Agent, input: string): AgentContext 
   return appendUserMessage(
     {
       ...agent.state.context,
-      messages: agent.state.session?.messages ?? agent.state.context.messages,
+      messages: agent.state.context.messages,
     },
     input,
   );

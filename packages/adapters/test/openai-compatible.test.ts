@@ -322,7 +322,7 @@ test("createOpenAICompatibleStream maps route response to a task routing decisio
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", state: session }, {}),
   );
   const promptMessage = events.find((event) => event.type === "prompt_message");
   const modelCall = events.find((event) => event.type === "model_requested");
@@ -370,7 +370,7 @@ test("createOpenAICompatibleStream normalizes case-insensitive route keys", asyn
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", state: session }, {}),
   );
   const output = phaseOutput(events, "route");
 
@@ -399,7 +399,7 @@ test("createOpenAICompatibleStream preserves model route decisions without sched
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", state: session }, {}),
   );
   const output = phaseOutput(events, "route");
 
@@ -435,7 +435,7 @@ test("createOpenAICompatibleStream maps plan response to structured task", async
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", state: session }, {}),
   );
   const modelCall = events.find((event) => event.type === "model_requested");
   const text = events.find((event) => event.type === "text_delta");
@@ -483,7 +483,7 @@ test("createOpenAICompatibleStream fills common omitted task fields", async () =
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", state: session }, {}),
   );
   const task = phaseOutput(events, "plan")?.task as Task;
 
@@ -523,7 +523,7 @@ test("createOpenAICompatibleStream normalizes case-insensitive plan keys", async
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", state: session }, {}),
   );
   const task = phaseOutput(events, "plan")?.task as Task;
 
@@ -559,7 +559,7 @@ test("createOpenAICompatibleStream maps execute response to text and tool calls"
     tools: [echoTool],
   });
 
-  const context: LlmContext = { phase: "execute", session, task, toolResults: [] };
+  const context: LlmContext = { phase: "execute", state: session, task, toolResults: [] };
   const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
 
   const text = events.find((event) => event.type === "text_delta");
@@ -597,7 +597,7 @@ test("createOpenAICompatibleStream normalizes case-insensitive execute keys", as
     tools: [echoTool],
   });
 
-  const context: LlmContext = { phase: "execute", session, task, toolResults: [] };
+  const context: LlmContext = { phase: "execute", state: session, task, toolResults: [] };
   const events = await collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {}));
   const output = phaseOutput(events, "execute");
 
@@ -628,7 +628,7 @@ test("createOpenAICompatibleStream rejects execute outputs without a toolCalls a
     tools: [echoTool],
   });
 
-  const context: LlmContext = { phase: "execute", session, task, toolResults: [] };
+  const context: LlmContext = { phase: "execute", state: session, task, toolResults: [] };
 
   await expect(
     collect(stream({ provider: "openai-compatible", name: "test-model" }, context, {})),
@@ -654,7 +654,7 @@ test("createOpenAICompatibleStream maps verify response to verification result",
 
   const context: LlmContext = {
     phase: "verify",
-    session,
+    state: session,
     task,
     taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
@@ -696,7 +696,7 @@ test("createOpenAICompatibleStream rejects legacy status verify output", async (
 
   const context: LlmContext = {
     phase: "verify",
-    session,
+    state: session,
     task,
     taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
@@ -726,7 +726,7 @@ test("createOpenAICompatibleStream rejects execute-shaped verify output", async 
 
   const context: LlmContext = {
     phase: "verify",
-    session,
+    state: session,
     task,
     taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
@@ -755,7 +755,7 @@ test("createOpenAICompatibleStream rejects message-only verify output", async ()
 
   const context: LlmContext = {
     phase: "verify",
-    session,
+    state: session,
     task,
     taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
@@ -787,7 +787,7 @@ test("createOpenAICompatibleStream rejects legacy verify wrappers", async () => 
 
   const context: LlmContext = {
     phase: "verify",
-    session,
+    state: session,
     task,
     taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
@@ -817,7 +817,7 @@ test("createOpenAICompatibleStream maps failed verify output without criteria de
 
   const context: LlmContext = {
     phase: "verify",
-    session,
+    state: session,
     task,
     taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
@@ -855,7 +855,7 @@ test("createOpenAICompatibleStream rejects plan-shaped verify outputs", async ()
 
   const context: LlmContext = {
     phase: "verify",
-    session,
+    state: session,
     task,
     taskOutput: { kind: "tools", toolResults: [] },
     criteria: task.acceptanceCriteria,
@@ -885,6 +885,6 @@ test("createOpenAICompatibleStream reports invalid model schema", async () => {
   });
 
   await expect(
-    collect(stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", session }, {})),
+    collect(stream({ provider: "openai-compatible", name: "test-model" }, { phase: "plan", state: session }, {})),
   ).rejects.toThrow("expected schema");
 });

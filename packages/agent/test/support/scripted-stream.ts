@@ -1,7 +1,6 @@
 import type { StreamFn, Task, TaskOutput, ToolResult } from "../../src/types";
-import { createId } from "../../src/types";
+import { createId, latestUserInput } from "../../src/types";
 import { createDefaultCriteria } from "../../src/task";
-import { latestUserInput } from "@rowan-agent/session";
 
 function wantsEcho(input: string): boolean {
   return /\becho\b|tool|工具|use echo/i.test(input);
@@ -49,14 +48,14 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
   }
 
   if (context.phase === "route") {
-    const currentInput = latestUserInput(context.session);
+    const currentInput = latestUserInput(context.state);
     const route = wantsEcho(currentInput) ? "task" : "direct";
     const message = route === "task" ? "Routing to task execution." : `Direct response: ${currentInput}`;
     yield {
       type: "model_requested",
       phase: "route",
       model,
-      usage: { inputMessages: context.session.messages.length },
+      usage: { inputMessages: context.state.messages.length },
     };
     yield { type: "text_delta", text: message };
     yield {
@@ -71,8 +70,8 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
   }
 
   if (context.phase === "plan") {
-    const skillIds = context.session.skills.map((skill) => skill.id);
-    const currentInput = context.session.task ?? latestUserInput(context.session);
+    const skillIds = context.state.skills.map((skill) => skill.id);
+    const currentInput = context.state.task ?? latestUserInput(context.state);
     yield { type: "text_delta", text: "Planning task..." };
     yield {
       type: "structured_output",

@@ -73,18 +73,14 @@ test("pinoAgentEventLogger includes redacted event payloads at debug level", asy
 test("pinoAgentEventLogger resolves dynamic paths from the first session event", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-logging-dynamic-"));
   const logger = pinoAgentEventLogger((event) =>
-    event.type === "session_created" ? join(root, `${event.session.id}.jsonl`) : undefined
+    event.type === "thread_created" ? join(root, `${event.sessionId}.jsonl`) : undefined
   );
 
   logger({
-    type: "session_created",
-    session: {
-      version: "0.3.3",
-      id: "ses_12345678",
-      systemPrompt: "Test system",
-      input: "hello",
-      skills: [],
-    },
+    type: "thread_created",
+    parentSessionId: "ses_parent",
+    sessionId: "ses_12345678",
+    prompt: "hello",
     ts: "2026-05-03T141659-32+08:00",
   });
   await logger.flush?.();
@@ -92,8 +88,8 @@ test("pinoAgentEventLogger resolves dynamic paths from the first session event",
   expect(logger.path()).toBe(join(root, "ses_12345678.jsonl"));
   const [record] = parseLogLines(await readFile(logger.path() ?? "", "utf8"));
   expect(record).toMatchObject({
-    eventType: "session_created",
-    sessionId: "ses_12345678",
+    eventType: "thread_created",
+    sessionId: "ses_parent",
   });
   expect(record?.msg).toBeUndefined();
   expect(record?.event).toBeUndefined();
@@ -105,14 +101,10 @@ test("pinoAgentEventLogger filters warning and error levels", async () => {
   const logger = pinoAgentEventLogger(logPath, { level: "warn" });
 
   logger({
-    type: "session_created",
-    session: {
-      version: "0.3.3",
-      id: "ses_12345678",
-      systemPrompt: "Test system",
-      input: "hello",
-      skills: [],
-    },
+    type: "model_requested",
+    phase: "route",
+    model: { provider: "test", name: "model" },
+    usage: { inputMessages: 1 },
     ts: "2026-05-03T141659-32+08:00",
   });
   logger({

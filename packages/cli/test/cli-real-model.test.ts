@@ -3,8 +3,8 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentEvent, Outcome } from "@rowan-agent/agent";
-import { LocalJsonAgentStore } from "@rowan-agent/store";
-import { createMessage, createSession } from "@rowan-agent/session";
+import { LocalJsonlSessionManager } from "@rowan-agent/store";
+import { createMessage } from "@rowan-agent/session";
 import { formatOutcomeOutput } from "../src/output";
 
 type AgentEventLogRecord = Record<string, unknown> & {
@@ -122,9 +122,6 @@ async function readLogEvents(path: string): Promise<LoggedEventSummary[]> {
 }
 
 function eventSessionId(event: AgentEvent): string | undefined {
-  if (event.type === "session_created" || event.type === "session_loaded") {
-    return event.session.id;
-  }
   if (event.type === "thread_created" || event.type === "thread_end") {
     return event.sessionId;
   }
@@ -345,28 +342,23 @@ test("CLI config rejects trailing prompt text", async () => {
 
 test("CLI list returns saved sessions in the current workspace", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-list-"));
-  const store = new LocalJsonAgentStore(join(workspace, "sessions"));
-  const older = createSession({
+  const older = await LocalJsonlSessionManager.create(join(workspace, "sessions"), {
     systemPrompt: "Test system",
     input: "old hello",
     title: "Older session",
   });
-  older.createdAt = "2026-05-02T120000-00+08:00";
-  older.updatedAt = "2026-05-02T120001-00+08:00";
-  older.messages.push(createMessage("assistant", "Older answer"));
-  const newer = createSession({
+  await older.appendMessage(createMessage("user", "old hello", { scope: "conversation" }));
+  await older.appendMessage(createMessage("assistant", "Older answer", { scope: "conversation" }));
+  await Bun.sleep(20);
+  const newer = await LocalJsonlSessionManager.create(join(workspace, "sessions"), {
     systemPrompt: "Test system",
     input: "new hello",
     title: "Newer session",
   });
-  newer.createdAt = "2026-05-02T130000-00+08:00";
-  newer.updatedAt = "2026-05-02T130001-00+08:00";
-  newer.messages.push(createMessage("assistant", "Newer answer"));
+  await newer.appendMessage(createMessage("user", "new hello", { scope: "conversation" }));
+  await newer.appendMessage(createMessage("assistant", "Newer answer", { scope: "conversation" }));
 
   try {
-    await store.save(older);
-    await store.save(newer);
-
     const result = await runCli(["list"], {
       ROWAN_WORKSPACE: workspace,
     });
@@ -385,19 +377,15 @@ test("CLI list returns saved sessions in the current workspace", async () => {
     expect(sessions).toHaveLength(2);
     expect(result.stdout).not.toContain("Newer answer");
     expect(result.stdout).not.toContain("Older answer");
-    expect(sessions.map((session) => session.id)).toEqual([older.id, newer.id]);
+    expect(sessions.map((session) => session.id)).toEqual([newer.getSessionId(), older.getSessionId()]);
     expect(sessions[0]).toMatchObject({
-      title: "Older session",
-      createdAt: "2026-05-02T120000-00+08:00",
-      updatedAt: "2026-05-02T120001-00+08:00",
-      messageCount: older.messages.length,
+      title: "Newer session",
+      messageCount: 2,
     });
     expect(sessions[0]).not.toHaveProperty("latestMessage");
     expect(sessions[1]).toMatchObject({
-      title: "Newer session",
-      createdAt: "2026-05-02T130000-00+08:00",
-      updatedAt: "2026-05-02T130001-00+08:00",
-      messageCount: newer.messages.length,
+      title: "Older session",
+      messageCount: 2,
     });
     expect(sessions[1]).not.toHaveProperty("latestMessage");
   } finally {
@@ -544,7 +532,9 @@ test("CLI writes a default log without --log", async () => {
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
     expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
-    expect(result.stderr).toContain("\"eventType\":\"session_created\"");
+    expect(result.stderr).not.toContain("\"eventType\":\"agent_state_created\"");
+    expect(result.stderr).not.toContain("\"eventType\":\"agent_state_loaded\"");
+    expect(result.stderr).toContain("\"eventType\":\"chat_start\"");
     expect(result.stderr).toContain("\"eventType\":\"model_requested\"");
     expect(result.stderr).toContain("\"eventType\":\"outcome\"");
     const metadataLines = result.stderr
@@ -565,15 +555,17 @@ test("CLI writes a default log without --log", async () => {
     const [firstEvent] = await readLogEvents(logPath);
     expect(firstRecord?.time).toEqual(expect.any(Number));
     expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
+    expect(firstEvent?.type).toBe("chat_start");
     expect(firstRecord?.timestamp).toBeUndefined();
     expect(firstRecord?.event).toBeUndefined();
     expect(firstRecord).toMatchObject({
       level: 30,
-      eventType: "session_created",
-      sessionId,
+      eventType: "chat_start",
     });
     expect(firstRecord?.msg).toBeUndefined();
-    expect(logText).toContain("\"eventType\":\"session_created\"");
+    expect(logText).not.toContain("\"eventType\":\"agent_state_created\"");
+    expect(logText).not.toContain("\"eventType\":\"agent_state_loaded\"");
+    expect(logText).toContain("\"eventType\":\"chat_start\"");
     expect(logText).not.toContain("\"msg\":");
     expect(logText).not.toContain("\"event\":");
     expect(logText).not.toContain("\"input\":\"hello\"");
@@ -582,14 +574,19 @@ test("CLI writes a default log without --log", async () => {
     expect(logText).not.toContain("\"eventType\":\"task_created\"");
     expect(logText).toContain("\"eventType\":\"outcome\"");
 
-    const sessionPath = join(workspace, "sessions", `${sessionId}.json`);
-    const session = JSON.parse(await Bun.file(sessionPath).text()) as {
+    const sessionPath = join(workspace, "sessions", `${sessionId}.jsonl`);
+    const sessionLines = (await Bun.file(sessionPath).text()).trim().split("\n");
+    const session = JSON.parse(sessionLines[0] ?? "{}") as {
       version?: string;
-      messages?: Array<{ content?: string }>;
     };
-    expect(session.version).toBe("0.3.3");
-    expect(session.messages?.some((message) => message.content?.includes("Hello from model"))).toBe(true);
-    expect(session.messages?.some((message) => message.content === "Hello from model")).toBe(true);
+    const messageEntries = sessionLines.slice(1).map((line) => JSON.parse(line)) as Array<{
+      type?: string;
+      message?: { content?: string };
+    }>;
+    expect(session.version).toBe("0.4.4");
+    expect(messageEntries.some((entry) => entry.message?.content?.includes("Hello from model"))).toBe(true);
+    expect(messageEntries.some((entry) => entry.message?.content === "Hello from model")).toBe(true);
+    expect(messageEntries.some((entry) => entry.type === "execution_turn")).toBe(false);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
@@ -627,13 +624,12 @@ test("CLI --log-level debug writes redacted event payloads", async () => {
     const logText = await Bun.file(logPath).text();
     const [firstRecord] = await readLogRecords(logPath);
     expect(firstRecord?.event).toMatchObject({
-      type: "session_created",
-      session: {
-        input: "hello",
-      },
+      type: "chat_start",
+      content: [expect.objectContaining({ content: "hello" })],
     });
     expect(logText).toContain("\"event\":");
-    expect(logText).toContain("\"input\":\"hello\"");
+    expect(logText).toContain("\"content\":\"hello\"");
+    expect(logText).not.toContain("\"eventType\":\"agent_state_created\"");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
@@ -814,9 +810,9 @@ test("CLI --session continues a saved one-shot session", async () => {
     const summaries = await Promise.all(
       logFiles.map((file) => summarizeLogFile(join(runsDir, file))),
     );
-    expect(summaries.every((summary) => summary.sessionIds.includes(sessionId))).toBe(true);
-    expect(summaries.some((summary) => summary.eventTypes.session_created === 1)).toBe(true);
-    expect(summaries.some((summary) => summary.eventTypes.session_loaded === 1)).toBe(true);
+    expect(summaries.every((summary) => summary.eventTypes.chat_start === 1)).toBe(true);
+    expect(summaries.every((summary) => summary.eventTypes.agent_state_created === undefined)).toBe(true);
+    expect(summaries.every((summary) => summary.eventTypes.agent_state_loaded === undefined)).toBe(true);
     expect(second.stderr).toContain(`-${sessionId}.jsonl`);
   } finally {
     server?.stop(true);
@@ -877,15 +873,16 @@ test("CLI initial prompt continues into the default interactive session", async 
     expect(secondPrompt).toContain("again");
 
     const sessionFiles = await readdir(join(workspace, "sessions"));
-    expect(sessionFiles).toEqual([`${sessionId}.json`]);
+    expect(sessionFiles).toEqual([`${sessionId}.jsonl`]);
 
     const runsDir = join(workspace, "runs");
     const logFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
     expect(logFiles).toHaveLength(1);
     expect(logFiles[0]?.endsWith(`-${sessionId}.jsonl`)).toBe(true);
     const summary = await summarizeLogFile(join(runsDir, logFiles[0] ?? ""));
-    expect(summary.eventTypes.session_created).toBe(1);
-    expect(summary.eventTypes.session_loaded).toBeUndefined();
+    expect(summary.eventTypes.chat_start).toBe(2);
+    expect(summary.eventTypes.agent_state_created).toBeUndefined();
+    expect(summary.eventTypes.agent_state_loaded).toBeUndefined();
     expect(summary.eventTypes.session_start).toBeUndefined();
     expect(summary.eventTypes.session_end).toBeUndefined();
   } finally {
@@ -943,14 +940,15 @@ test("CLI --session can continue with additional interactive turns", async () =>
     const summaries = await Promise.all(
       logFiles.map((file) => summarizeLogFile(join(runsDir, file))),
     );
-    const loadedSummary = summaries.find((summary) => summary.eventTypes.session_loaded === 1);
+    const loadedSummary = summaries.find((summary) => summary.eventTypes.chat_start === 2);
     expect(loadedSummary).toBeDefined();
-    expect(loadedSummary?.eventTypes.session_created).toBeUndefined();
+    expect(loadedSummary?.eventTypes.agent_state_created).toBeUndefined();
+    expect(loadedSummary?.eventTypes.agent_state_loaded).toBeUndefined();
     expect(loadedSummary?.eventTypes.session_start).toBeUndefined();
     expect(loadedSummary?.eventTypes.session_end).toBeUndefined();
 
     const [firstEvent] = await readLogEvents(loadedSummary?.filePath ?? "");
-    expect(firstEvent?.type).toBe("session_loaded");
+    expect(firstEvent?.type).toBe("chat_start");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

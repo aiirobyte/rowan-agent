@@ -30,8 +30,9 @@ function createToolContext(toolCallId = createId("call")): ToolContext {
     attempts: 0,
   };
 
+  const state = createSession({ systemPrompt: "test", input: "inspect" });
   return {
-    session: createSession({ systemPrompt: "test", input: "inspect" }),
+    state,
     task,
     toolCallId,
   };

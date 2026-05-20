@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import { hasExplicitToolRequest, scheduleTaskRouting } from "../src/phases/routing";
+import { hasExplicitToolRequest, scheduleTaskRouting } from "../src/loop/routing";
 import type { Tool } from "../src/types";
 
 const bashTool: Tool<{ command: string }> = {

@@ -39,7 +39,7 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   });
 
   const messages = buildOpenAICompatibleMessages({
-    context: { phase: "route", session },
+    context: { phase: "route", state: session },
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
@@ -59,9 +59,9 @@ test("route prompt defaults to direct answers unless tools are needed", () => {
   expect(combined).toContain("message must be the complete final user-visible answer");
   expect(combined).toContain('Set route="task" for ordinary tool-backed work');
   expect(combined).toContain('Set route="thread" only when the user explicitly asks');
-  expect(combined).toContain("Session initial input");
-  expect(combined).toContain("Session task");
-  expect(combined).toContain("Session goal");
+  expect(combined).toContain("Agent state initial input");
+  expect(combined).toContain("Agent state task");
+  expect(combined).toContain("Agent state goal");
   expect(combined).toContain("Runtime thread depth");
   expect(combined).toContain("Do not call tools in this phase");
   expect(combined).toContain("forbidden message values");
@@ -87,7 +87,7 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
   });
 
   const messages = buildOpenAICompatibleMessages({
-    context: { phase: "plan", session },
+    context: { phase: "plan", state: session },
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
@@ -116,7 +116,7 @@ test("prompt builder exposes the generated phase prompt message", () => {
   });
 
   const prompt = buildOpenAICompatiblePrompt({
-    context: { phase: "plan", session },
+    context: { phase: "plan", state: session },
     tools: [echoTool],
   });
 
@@ -139,7 +139,7 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
   const messages = buildOpenAICompatibleMessages({
     context: {
       phase: "execute",
-      session,
+      state: session,
       task,
       toolResults: [
         {
@@ -193,7 +193,7 @@ test("prompt builder excludes execution-scoped messages from later prompts", () 
   const messages = buildOpenAICompatibleMessages({
     context: {
       phase: "verify",
-      session,
+      state: session,
       task,
       criteria: task.acceptanceCriteria,
       taskOutput: { kind: "tools", toolResults: [] },
@@ -224,7 +224,7 @@ test("prompt builder does not replay recorded phase prompts as conversation", ()
   );
 
   const messages = buildOpenAICompatibleMessages({
-    context: { phase: "plan", session },
+    context: { phase: "plan", state: session },
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
@@ -249,7 +249,7 @@ test("verify prompt includes phase, lightweight judgement contract, task, criter
   const messages = buildOpenAICompatibleMessages({
     context: {
       phase: "verify",
-      session,
+      state: session,
       task,
       criteria: task.acceptanceCriteria,
       taskOutput: { kind: "tools", toolResults },

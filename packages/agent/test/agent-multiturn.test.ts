@@ -1,14 +1,10 @@
 import { expect, test } from "bun:test";
-import { latestUserInput, type Session } from "@rowan-agent/session";
-import { InMemoryAgentStore } from "@rowan-agent/store";
-import { Agent, type AgentEvent, type ExecutionTurn, type StreamFn } from "../src";
+import { Agent, type StreamFn } from "../src";
 import { createDefaultCriteria } from "../src/task";
-import { createId } from "../src/types";
+import { createId, latestUserInput } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
-
-type AgentSession = Session<AgentEvent>;
 
 test("Agent.run reuses one session for multi-turn direct responses", async () => {
   const routeContexts: string[][] = [];
@@ -17,10 +13,10 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
       return;
     }
 
-    routeContexts.push(context.session.messages.map((message) => message.content));
-    const sawFirstAnswer = context.session.messages.some((message) => message.content.includes("First answer"));
+    routeContexts.push(context.state.messages.map((message) => message.content));
+    const sawFirstAnswer = context.state.messages.some((message) => message.content.includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
-    yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.session.messages.length } };
+    yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.state.messages.length } };
     yield { type: "structured_output", content: { route: "direct", message } };
     yield { type: "done" };
   };
@@ -35,28 +31,29 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
   });
 
   const first = await runAgentTurn(agent, "first");
-  const sessionId = agent.state.session?.id;
+  const sessionId = agent.state.sessionId;
   const second = await runAgentTurn(agent, "second");
 
   expect(first.outcome.message).toBe("First answer");
   expect(second.outcome.message).toBe("Second answer saw the first turn.");
-  expect(agent.state.session?.id).toBe(sessionId);
-  expect(agent.state.session?.messages.filter((message) => message.role === "user")).toHaveLength(2);
-  expect(agent.state.session?.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
-  expect(agent.state.session?.messages.some((message) => message.content.includes("First answer"))).toBe(true);
+  expect(agent.state.sessionId).toBe(sessionId);
+  expect(agent.state.context.messages.filter((message) => message.role === "user")).toHaveLength(2);
+  expect(agent.state.context.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
+  expect(agent.state.context.messages.some((message) => message.content.includes("First answer"))).toBe(true);
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining(["first", expect.stringContaining("First answer"), "second"]),
   );
-  expect(events).toEqual(expect.arrayContaining(["session_created"]));
-  expect(events).not.toContain("session_loaded");
+  expect(events).toEqual(expect.arrayContaining(["chat_start", "outcome"]));
+  expect(events).not.toContain("agent_state_created");
+  expect(events).not.toContain("agent_state_loaded");
 });
 
 test("Agent keeps conversation messages separate from execution steps", async () => {
-  const store = new InMemoryAgentStore<AgentSession>();
   const routeContexts: string[][] = [];
+  const events: string[] = [];
   const stream: StreamFn = async function* taskMultiTurnStream(model, context, options) {
-    if (context.phase === "route" && !context.session.parentSessionId) {
-      routeContexts.push(context.session.messages.map((message) => message.content));
+    if (context.phase === "route" && !context.state.parentSessionId) {
+      routeContexts.push(context.state.messages.map((message) => message.content));
     }
     yield* scriptedStream(model, context, options);
   };
@@ -65,28 +62,17 @@ test("Agent keeps conversation messages separate from execution steps", async ()
     model: { provider: "test", name: "scripted" },
     stream,
   });
-  const runStoredTurn = async (input: string) => {
-    const steps: ExecutionTurn[] = [];
-    const result = await runAgentTurn(agent, input, {
-      recordStep: async (step) => {
-        steps.push(step);
-      },
-    });
-    await store.save(result.session);
-    for (const step of steps) {
-      await store.appendStep(step.sessionId, step);
-    }
-    return result;
-  };
+  agent.subscribe((event) => {
+    events.push(event.type);
+  });
 
-  const first = await runStoredTurn("use echo tool");
-  const sessionId = agent.state.session?.id;
-  const second = await runStoredTurn("use echo tool again");
-  const loaded = sessionId ? await store.load(sessionId) : undefined;
+  const first = await runAgentTurn(agent, "use echo tool");
+  const sessionId = agent.state.sessionId;
+  const second = await runAgentTurn(agent, "use echo tool again");
 
   expect(first.outcome.passed).toBe(true);
   expect(second.outcome.passed).toBe(true);
-  expect(agent.state.session?.id).toBe(sessionId);
+  expect(agent.state.sessionId).toBe(sessionId);
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining([
       "use echo tool",
@@ -94,41 +80,40 @@ test("Agent keeps conversation messages separate from execution steps", async ()
       "use echo tool again",
     ]),
   );
-  expect(loaded?.messages.some((message) => message.content === "Task passed: Use echo tool")).toBe(true);
+  expect(agent.state.context.messages.some((message) => message.content === "Task passed: Use echo tool")).toBe(true);
   expect(
-    loaded?.messages.some(
+    agent.state.context.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "routing_decision",
     ),
   ).toBe(false);
   expect(
-    loaded?.messages.some(
+    agent.state.context.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "model_message",
     ),
   ).toBe(false);
   expect(
-    loaded?.messages.some(
+    agent.state.context.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "outcome",
     ),
   ).toBe(false);
-  const steps = sessionId ? await store.loadSteps(sessionId) : [];
-  expect(steps.some((step) => step.phase === "route")).toBe(true);
-  expect(steps.some((step) => step.phase === "execute")).toBe(true);
-  expect(steps.some((step) => step.entries.some((entry) => entry.kind === "tool_result"))).toBe(true);
+  expect(events).toEqual(expect.arrayContaining(["model_requested", "tool_requested", "tool_end"]));
+  expect(events).not.toContain("agent_state_created");
+  expect(events).not.toContain("agent_state_loaded");
 });
 
 test("Agent does not carry failed task outcomes into later turns", async () => {
   const routeOutcomeContexts: string[][] = [];
   const stream: StreamFn = async function* failedThenDirectStream(model, context) {
     if (context.phase === "route") {
-      const outcomeMessages = context.session.messages
+      const outcomeMessages = context.state.messages
         .filter((message) => message.role === "assistant" && message.metadata?.kind === "outcome")
         .map((message) => message.content);
       routeOutcomeContexts.push(outcomeMessages);
       const hasFailedOutcome = outcomeMessages.includes("Missing some functions to finish the task");
-      const route = latestUserInput(context.session) === "trigger failure" || hasFailedOutcome ? "task" : "direct";
+      const route = latestUserInput(context.state) === "trigger failure" || hasFailedOutcome ? "task" : "direct";
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
-      yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.session.messages.length } };
+      yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.state.messages.length } };
       yield { type: "structured_output", content: { route, message } };
       yield { type: "done" };
       return;
@@ -180,7 +165,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
   expect(second.outcome.message).toBe("Recovered direct answer.");
   expect(routeOutcomeContexts[1]).not.toContain("Missing some functions to finish the task");
   expect(
-    agent.state.session?.messages.some(
+    agent.state.context.messages.some(
       (message) =>
         message.role === "assistant" &&
         message.metadata?.kind === "outcome" &&

@@ -4,7 +4,7 @@ import { createSession } from "@rowan-agent/session";
 import { Agent } from "../src/agent";
 import { runAgentLoop } from "../src/loop";
 import { createDefaultCriteria } from "../src/task";
-import type { AgentEvent, ExecutionTurn, StreamFn, Tool } from "../src/types";
+import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
@@ -43,8 +43,7 @@ test("runAgentLoop creates a thread session with explicit tools and skills", asy
   }));
 
   expect(result.parentSessionId).toBe("ses_parent");
-  expect(result.session.parentSessionId).toBe("ses_parent");
-  expect(result.session.skills).toEqual([skill]);
+  expect(result.sessionId).toEqual(expect.stringMatching(/^ses_/));
   expect(result.outcome.passed).toBe(true);
   expect(result.limitUsage.toolCalls).toBe(1);
   expect(events).toEqual(
@@ -52,20 +51,12 @@ test("runAgentLoop creates a thread session with explicit tools and skills", asy
       expect.objectContaining({
         type: "thread_created",
         parentSessionId: "ses_parent",
-        sessionId: result.session.id,
-      }),
-      expect.objectContaining({
-        type: "session_created",
-        session: expect.objectContaining({
-          id: result.session.id,
-          parentSessionId: "ses_parent",
-          input: "use echo tool",
-        }),
+        sessionId: result.sessionId,
       }),
       expect.objectContaining({
         type: "thread_end",
         parentSessionId: "ses_parent",
-        sessionId: result.session.id,
+        sessionId: result.sessionId,
       }),
     ]),
   );
@@ -109,13 +100,14 @@ test("Agent does not expose startThread; thread runs use explicit loop config", 
   }));
 
   expect(withoutTools.parentSessionId).toBe("ses_parent");
-  expect(withoutTools.session.skills).toEqual([]);
+  expect(withoutTools.sessionId).toEqual(expect.stringMatching(/^ses_/));
   expect(withoutTools.outcome.passed).toBe(false);
   expect(withoutTools.outcome.message).toContain("missing required echo evidence");
   expect(withTools.outcome.passed).toBe(true);
 });
 
 test("thread model limits returns a structured failed outcome", async () => {
+  const events: AgentEvent[] = [];
   const result = asThreadResult(await runAgentLoop({
     kind: "thread",
     parentSessionId: "ses_parent",
@@ -125,6 +117,9 @@ test("thread model limits returns a structured failed outcome", async () => {
     stream: scriptedStream,
     tools: [echoTool],
     limits: { maxModelCalls: 0 },
+    emit: (event) => {
+      events.push(event);
+    },
   }));
 
   expect(result.outcome.passed).toBe(false);
@@ -133,9 +128,9 @@ test("thread model limits returns a structured failed outcome", async () => {
   expect(result.outcome).not.toHaveProperty("evidence");
   expect(result.outcome).not.toHaveProperty("failedCriteria");
   expect(result.limitUsage).toEqual({ modelCalls: 1, toolCalls: 0 });
-  expect(result.session.log.some((event) => event.type === "limit_exceeded")).toBe(true);
+  expect(events.some((event) => event.type === "limit_exceeded")).toBe(true);
   expect(
-    result.session.log.some(
+    events.some(
       (event) =>
         event.type === "limit_exceeded" &&
         event.resource === "modelCalls" &&
@@ -147,6 +142,7 @@ test("thread model limits returns a structured failed outcome", async () => {
 });
 
 test("thread tool limits stops before executing extra tools", async () => {
+  const events: AgentEvent[] = [];
   let executed = false;
   const trackedEcho: typeof echoTool = {
     ...echoTool,
@@ -165,6 +161,9 @@ test("thread tool limits stops before executing extra tools", async () => {
     stream: scriptedStream,
     tools: [trackedEcho],
     limits: { maxToolCalls: 0 },
+    emit: (event) => {
+      events.push(event);
+    },
   }));
 
   expect(executed).toBe(false);
@@ -175,7 +174,7 @@ test("thread tool limits stops before executing extra tools", async () => {
   expect(result.outcome).not.toHaveProperty("failedCriteria");
   expect(result.limitUsage).toEqual({ modelCalls: 1, toolCalls: 1 });
   expect(
-    result.session.log.some(
+    events.some(
       (event) =>
         event.type === "limit_exceeded" &&
         event.resource === "toolCalls" &&
@@ -184,12 +183,11 @@ test("thread tool limits stops before executing extra tools", async () => {
         event.usage.toolCalls === 1,
     ),
   ).toBe(true);
-  expect(result.session.log.some((event) => event.type === "tool_start")).toBe(false);
+  expect(events.some((event) => event.type === "tool_start")).toBe(false);
 });
 
 test("worker thread smoke tests do not recursively route on bare thread wording", async () => {
   const events: AgentEvent[] = [];
-  const recordedSteps: ExecutionTurn[] = [];
   let routeCalls = 0;
   let planCalls = 0;
 
@@ -200,7 +198,7 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
         type: "model_requested",
         phase: "route",
         model,
-        usage: { inputMessages: context.session.messages.length },
+        usage: { inputMessages: context.state.messages.length },
       };
       yield {
         type: "structured_output",
@@ -209,9 +207,9 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
           message: "Creating another thread.",
           thread: {
             prompt: "测试 thread",
-            task: context.session.task ??
+            task: context.state.task ??
               "Execute a simple test within an isolated child runtime to verify thread creation and execution.",
-            goal: context.session.goal ??
+            goal: context.state.goal ??
               "Return a confirmation that the thread executed successfully with a test result.",
           },
         },
@@ -227,7 +225,7 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
         content: {
           id: createId("task"),
           title: "Confirm worker thread runtime",
-          instruction: context.session.task ?? "Confirm this worker thread is running.",
+          instruction: context.state.task ?? "Confirm this worker thread is running.",
           acceptanceCriteria: createDefaultCriteria("The worker thread returns a success confirmation."),
           toolNames: [],
           skillIds: [],
@@ -264,9 +262,6 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
     context: createTestContext({ tools: [echoTool] }),
     model: { provider: "test", name: "thread-smoke-test" },
     stream: smokeTestStream,
-    recordStep: async (step) => {
-      recordedSteps.push(step);
-    },
   });
   agent.subscribe((event) => {
     events.push(event);
@@ -292,17 +287,14 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
     ),
   ).toBe(true);
   expect(
-    recordedSteps.some(
-      (step) =>
-        step.sessionId === outcome.session.id &&
-        step.phase === "execute" &&
-        step.entries.some(
-          (entry) =>
-            entry.kind === "structured_output" &&
-            typeof entry.content === "object" &&
-            entry.content !== null &&
-            "kind" in entry.content &&
-            entry.content.kind === "thread",
+    events.some(
+      (event) =>
+        event.type === "message_delta" &&
+        (Array.isArray(event.delta) ? event.delta : [event.delta]).some(
+          (delta) =>
+            delta.metadata?.kind === "thread_output" &&
+            delta.content.includes("\"kind\":\"thread\"") &&
+            delta.content.includes("child runtime active"),
         ),
     ),
   ).toBe(true);
@@ -324,7 +316,7 @@ test("worker threads can recursively route until the thread depth limit", async 
         type: "model_requested",
         phase: "route",
         model,
-        usage: { inputMessages: context.session.messages.length },
+        usage: { inputMessages: context.state.messages.length },
       };
       yield {
         type: "structured_output",
@@ -349,7 +341,7 @@ test("worker threads can recursively route until the thread depth limit", async 
         content: {
           id: createId("task"),
           title: "Use echo tool",
-          instruction: context.session.task ?? "Use echo tool.",
+          instruction: context.state.task ?? "Use echo tool.",
           acceptanceCriteria: createDefaultCriteria("Echo evidence is returned."),
           toolNames: ["echo"],
           skillIds: [],
@@ -445,7 +437,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
     },
   };
   const parentStream: StreamFn = async function* parentStream(model, context, options) {
-    if (context.session.parentSessionId) {
+    if (context.state.parentSessionId) {
       yield* scriptedStream(model, context, options);
       return;
     }
@@ -511,8 +503,8 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
   const events: AgentEvent[] = [];
   const session = createSession<AgentEvent>({
     systemPrompt: "Test system",
-    input: "delegate echo to a nested thread",
-    task: "Delegate echo to a nested thread.",
+    input: "call helper tool",
+    task: "Call helper tool.",
     goal: "Nested thread outcome must be returned as delegate evidence.",
   });
   const agent = new Agent({
@@ -522,13 +514,13 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
     }),
     model: { provider: "test", name: "parent" },
     stream: parentStream,
-    session,
+    sessionId: session.id,
   });
   agent.subscribe((event) => {
     events.push(event);
   });
 
-  const outcome = await runAgentTurn(agent, "delegate echo to a nested thread");
+  const outcome = await runAgentTurn(agent, "call helper tool");
 
   expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome).not.toHaveProperty("evidence");
