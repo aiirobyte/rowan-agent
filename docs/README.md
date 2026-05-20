@@ -16,6 +16,7 @@ Use this page as the entrypoint for repository documentation.
 - [`prompt_plan.md`](prompt_plan.md): current prompt execution entry point.
 - [`todo.md`](todo.md): cross-session checklist.
 - [`version/README.md`](version/README.md): versioned planning index.
+- [`version/0.4.5/`](version/0.4.5/): active release pack.
 - [`version/0.4.4/`](version/0.4.4/): completed release pack.
 - [`PLAN/`](PLAN/): legacy planning tree and historical roadmap context.
 

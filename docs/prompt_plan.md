@@ -1,28 +1,28 @@
 # Rowan Current Prompt Plan
 
-Last updated: 2026-05-14
+Last updated: 2026-05-21
 
 Specific version prompt plans live under `docs/version/<semver>/prompt_plan.md`.
 
 ## Active Version
 
-v0.4.4 is complete. Prepare v0.5.0 planning:
+v0.4.5 is active. Continue with Prompt 1:
 
 ```text
 Read AGENT.md.
 Read docs/todo.md.
 Read docs/spec.md.
 Read docs/version/README.md.
-Read docs/version/0.4.4/spec.md.
-Read docs/version/0.4.4/prompt_plan.md.
-Read docs/version/0.4.4/todo.md.
+Read docs/version/0.4.5/spec.md.
+Read docs/version/0.4.5/prompt_plan.md.
+Read docs/version/0.4.5/todo.md.
 Inspect the current diff with git status --short.
-Create docs/version/0.5.0/spec.md, prompt_plan.md, and todo.md before implementation.
+Start Prompt 1: add phase config contracts and tests before rewriting the loop.
 ```
 
 Current next prompt:
 
-- v0.5.0 planning handoff: create versioned planning docs for Context Projection And Provider IR.
+- v0.4.5 Prompt 1: Phase Config Contracts.
 
 ## Operating Rule
 
