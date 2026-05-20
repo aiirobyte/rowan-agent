@@ -25,11 +25,11 @@ async function sourceFiles(dir: string): Promise<string[]> {
 test("packages follow Rowan dependency direction", async () => {
   const rules: Record<string, Set<string>> = {
     protocol: new Set(),
-    session: new Set(),
+    session: new Set(["protocol"]),
     store: new Set(["protocol", "session"]),
     context: new Set(["protocol", "session"]),
-    runtime: new Set(["protocol", "session"]),
-    agent: new Set(["protocol", "runtime", "session", "store"]),
+    runtime: new Set(["protocol"]),
+    agent: new Set(["protocol", "runtime"]),
     adapters: new Set(["context", "protocol"]),
     logging: new Set(["agent"]),
     cli: new Set(["agent", "adapters", "logging", "protocol", "runtime", "session", "store"]),
@@ -45,6 +45,16 @@ test("packages follow Rowan dependency direction", async () => {
         if (imported && !allowed.has(imported)) {
           violations.push(`${file} imports ${match[1]}`);
         }
+      }
+    }
+
+    const packageJson = JSON.parse(await readFile(join("packages", packageName, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    for (const dependency of Object.keys(packageJson.dependencies ?? {})) {
+      const imported = dependency.startsWith("@rowan-agent/") ? dependency.split("/")[1] : undefined;
+      if (imported && !allowed.has(imported)) {
+        violations.push(`packages/${packageName}/package.json depends on ${dependency}`);
       }
     }
   }
