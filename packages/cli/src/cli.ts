@@ -9,20 +9,23 @@ import {
 import {
   Agent,
   DEFAULT_MAX_THREAD_DEPTH,
+  createMessage,
   formatLocalTimestamp,
+  isConversationMessage,
   type AgentEvent,
   type AgentEventListener,
-  type ExecutionTurn,
+  type AgentMessage,
   type Outcome,
 } from "@rowan-agent/agent";
 import {
   consoleAgentEventLogger,
   pinoAgentEventLogger,
   type AgentEventLogLevel,
-  type AgentEventLogPath,
 } from "@rowan-agent/logging";
-import { createMessage, type AgentMessage, type Session, type SessionListItem } from "@rowan-agent/session";
-import { LocalJsonAgentStore } from "@rowan-agent/store";
+import {
+  type SessionManagerSessionListItem,
+} from "@rowan-agent/session";
+import { LocalJsonlSessionManager } from "@rowan-agent/store";
 import {
   createCoreTools,
   loadSkills,
@@ -101,29 +104,6 @@ function createDefaultLogPath(workspace: WorkspacePaths, sessionId: string): str
   return join(workspace.runsDir, `${formatLocalTimestamp()}-${sessionId}.jsonl`);
 }
 
-function logSessionIdFromEvent(event: AgentEvent): string | undefined {
-  if (event.type === "session_created" || event.type === "session_loaded") {
-    return event.session.parentSessionId ?? event.session.id;
-  }
-  if (
-    event.type === "thread_created" ||
-    event.type === "thread_end"
-  ) {
-    return event.parentSessionId;
-  }
-  if ("sessionId" in event && typeof event.sessionId === "string") {
-    return event.sessionId;
-  }
-  return undefined;
-}
-
-function createDefaultLogPathResolver(workspace: WorkspacePaths): AgentEventLogPath {
-  return (event) => {
-    const sessionId = logSessionIdFromEvent(event);
-    return sessionId ? createDefaultLogPath(workspace, sessionId) : undefined;
-  };
-}
-
 function resolveOptionalWorkspacePath(path: string | undefined, workspace: WorkspacePaths): string | undefined {
   return path ? resolveInWorkspace(path, workspace) : undefined;
 }
@@ -181,7 +161,7 @@ Run logs:
   CLI output prints Session id once, Message id before each turn result, and Log path last once per entry.
 
 Sessions:
-  Sessions are saved automatically to <workspace>/sessions/<session-id>.json.
+  Sessions are saved automatically to <workspace>/sessions/<session-id>.jsonl.
   Use --session <id> to continue a saved conversation.
   Interactive controls: :session, :exit, :quit.
 
@@ -372,11 +352,10 @@ function parseArgs(argv: string[]): CliArgs {
 
   return parsed;
 }
-type AgentSession = Session<AgentEvent>;
-type CliSessionListItem = Pick<SessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
+type CliSessionListItem = Pick<SessionManagerSessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
 type ConfiguredAgent = {
   agent: Agent;
-  agentStore: LocalJsonAgentStore<AgentSession>;
+  sessionManager?: LocalJsonlSessionManager;
 };
 
 function configuredValue(flagValue: string | undefined, envValue: string | undefined, defaultValue?: string): string | undefined {
@@ -465,12 +444,10 @@ async function runConfigCommand(args: CliArgs): Promise<void> {
 
 async function runListCommand(_args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  const agentStore = new LocalJsonAgentStore<AgentSession>(workspace.sessionsDir);
-  const sessions = [...(await agentStore.list())]
-    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+  const sessions = [...(await LocalJsonlSessionManager.list(workspace.sessionsDir))]
     .map<CliSessionListItem>((session) => ({
       id: session.id,
-      title: session.title,
+      ...(session.title ? { title: session.title } : {}),
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       messageCount: session.messageCount,
@@ -484,9 +461,10 @@ async function createConfiguredAgent(
 ): Promise<ConfiguredAgent> {
   const skills = await loadSkills(args.skills, workspace);
   const tools = createCoreTools({ root: workspace.root });
-  const agentStore = new LocalJsonAgentStore<AgentSession>(workspace.sessionsDir);
-  const session = args.sessionId ? await agentStore.load(args.sessionId) : undefined;
-  if (args.sessionId && !session) {
+  const sessionManager = args.sessionId
+    ? await LocalJsonlSessionManager.open(workspace.sessionsDir, args.sessionId)
+    : undefined;
+  if (args.sessionId && !sessionManager) {
     throw new Error(`Session not found: ${args.sessionId}`);
   }
   const config = resolveOpenAICompatibleConfig({
@@ -499,16 +477,22 @@ async function createConfiguredAgent(
       DEFAULT_OPENAI_TIMEOUT_MS,
     tools,
   });
-  const agent = new Agent({
-    context: {
-      systemPrompt: session?.systemPrompt ?? "You are Rowan, a minimal agent kernel.",
-      messages: session?.messages ?? [],
+  const context = sessionManager
+    ? await sessionManager.buildAgentContext({
       tools,
-      skills: session?.skills ?? skills,
-    },
+      ...(args.skills.length > 0 ? { skills } : {}),
+    })
+    : {
+      systemPrompt: "You are Rowan, a minimal agent kernel.",
+      messages: [],
+      tools,
+      skills,
+    };
+  const agent = new Agent({
+    context,
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompatibleStream(config),
-    ...(session ? { session } : {}),
+    ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
     limits: {
       maxThreadDepth:
         args.maxThreadDepth ??
@@ -517,92 +501,90 @@ async function createConfiguredAgent(
     },
   });
 
-  return { agent, agentStore };
-}
-
-async function saveRunArtifacts(input: {
-  agentStore: LocalJsonAgentStore<AgentSession>;
-  session: AgentSession;
-  steps: ExecutionTurn[];
-}): Promise<void> {
-  await input.agentStore.save(input.session);
-  for (const step of input.steps) {
-    await input.agentStore.appendStep(step.sessionId, step);
-  }
+  return { agent, sessionManager };
 }
 
 async function promptWithLog(input: {
   agent: Agent;
-  agentStore: LocalJsonAgentStore<AgentSession>;
+  sessionManager?: LocalJsonlSessionManager;
   prompt: string;
-  logPath: AgentEventLogPath;
+  workspace: WorkspacePaths;
+  logPath?: string;
   logMode?: "replace" | "append";
   logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
-}): Promise<Outcome> {
-  const eventLogger = pinoAgentEventLogger(input.logPath, { mode: input.logMode, level: input.logLevel });
-  const consoleLogger = consoleAgentEventLogger({ level: input.logLevel });
-  let messageId: string | undefined;
-  const listener: AgentEventListener = ((event: AgentEvent) => {
-    eventLogger(event);
-    consoleLogger(event);
+}): Promise<{ outcome: Outcome; sessionManager: LocalJsonlSessionManager }> {
+  let sessionManager = input.sessionManager;
+  let unsubscribe: (() => void) | undefined;
+  let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
+  try {
+    if (!sessionManager) {
+      sessionManager = await LocalJsonlSessionManager.create(input.workspace.sessionsDir, {
+        systemPrompt: input.agent.state.context.systemPrompt,
+        input: input.prompt,
+        skills: input.agent.state.context.skills ?? [],
+      });
+    }
 
-    if (event.type === "chat_start" && !messageId) {
-      messageId = currentTurnMessageId(event.content);
-      if (messageId) {
-        input.onMessageId?.(messageId);
+    const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, sessionManager.getSessionId());
+    const runEventLogger = pinoAgentEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
+    eventLogger = runEventLogger;
+    const consoleLogger = consoleAgentEventLogger({ level: input.logLevel });
+    let messageId: string | undefined;
+    const listener: AgentEventListener = ((event: AgentEvent) => {
+      runEventLogger(event);
+      consoleLogger(event);
+
+      if (event.type === "chat_start" && !messageId) {
+        messageId = currentTurnMessageId(event.content);
+        if (messageId) {
+          input.onMessageId?.(messageId);
+        }
+      }
+    }) as AgentEventListener;
+    listener.flush = async () => {
+      await runEventLogger.flush();
+      await consoleLogger.flush();
+    };
+
+    unsubscribe = input.agent.subscribe(listener);
+
+    const userMessage = createMessage("user", input.prompt, { scope: "conversation" });
+    await sessionManager.appendMessage(userMessage);
+    const context = await sessionManager.buildAgentContext({
+      tools: input.agent.state.tools,
+      skills: input.agent.state.context.skills ?? [],
+    });
+    const result = await input.agent.run({
+      context,
+      sessionId: sessionManager.getSessionId(),
+    });
+    const newMessages = result.messages.slice(context.messages.length);
+    for (const message of newMessages) {
+      if (message.role !== "user" && isConversationMessage(message)) {
+        await sessionManager.appendMessage(message);
       }
     }
-  }) as AgentEventListener;
-  listener.flush = async () => {
-    await eventLogger.flush();
-    await consoleLogger.flush();
-  };
-
-  const unsubscribe = input.agent.subscribe(listener);
-  const pendingSteps: ExecutionTurn[] = [];
-  try {
-    const result = await input.agent.run({
-      context: {
-        ...input.agent.state.context,
-        messages: [
-          ...(input.agent.state.session?.messages ?? input.agent.state.context.messages),
-          createMessage("user", input.prompt, { scope: "conversation" }),
-        ],
-      },
-      recordStep: async (step) => {
-        pendingSteps.push(step);
-      },
-    });
-    await saveRunArtifacts({
-      agentStore: input.agentStore,
-      session: result.session,
-      steps: pendingSteps,
-    });
-    return result.outcome;
+    await sessionManager.appendOutcome(result.outcome);
+    return { outcome: result.outcome, sessionManager };
   } catch (error) {
-    if (input.agent.state.session) {
-      await saveRunArtifacts({
-        agentStore: input.agentStore,
-        session: input.agent.state.session,
-        steps: pendingSteps,
-      }).catch(() => undefined);
-    }
     throw error;
   } finally {
     try {
       await input.agent.flushEvents();
     } finally {
-      input.onLogPath?.(eventLogger.path());
-      unsubscribe();
+      input.onLogPath?.(eventLogger?.path());
+      unsubscribe?.();
     }
   }
 }
 
 async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  const { agent, agentStore } = await createConfiguredAgent(args, workspace);
+  const configured = await createConfiguredAgent(args, workspace);
+  const { agent } = configured;
+  let sessionManager = configured.sessionManager;
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args);
@@ -612,7 +594,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   let hasPrintedLog = false;
 
   const printSessionOnce = () => {
-    const sessionId = agent.state.session?.id;
+    const sessionId = sessionManager?.getSessionId() ?? agent.state.sessionId;
     if (!hasPrintedSession && sessionId) {
       console.error(`Session id: ${sessionId}`);
       hasPrintedSession = true;
@@ -626,7 +608,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     }
   };
 
-  if (agent.state.session) {
+  if (agent.state.sessionId) {
     printSessionOnce();
   }
 
@@ -642,11 +624,12 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     };
 
     try {
-      const outcome = await promptWithLog({
+      const run = await promptWithLog({
         agent,
-        agentStore,
+        sessionManager,
         prompt,
-        logPath: activeLogPath ?? createDefaultLogPathResolver(workspace),
+        workspace,
+        logPath: activeLogPath,
         logMode: hasWrittenLog ? "append" : "replace",
         logLevel,
         onLogPath: (path) => {
@@ -654,16 +637,15 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
             activeLogPath = path;
             hasWrittenLog = true;
             writtenLogPath = path;
-          } else if (!activeLogPath && agent.state.session) {
-            activeLogPath = createDefaultLogPath(workspace, agent.state.session.id);
           }
         },
         onMessageId: (id) => {
           messageId = id;
         },
       });
+      sessionManager = run.sessionManager;
       printRunHeader();
-      console.log(formatOutcomeOutput(outcome));
+      console.log(formatOutcomeOutput(run.outcome));
     } catch (error) {
       printRunHeader();
       throw error;
@@ -697,7 +679,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         return;
       }
       if (prompt === ":session") {
-        console.log(agent.state.session?.id ?? "(no session yet)");
+        console.log(sessionManager?.getSessionId() ?? agent.state.sessionId ?? "(no session yet)");
         if (process.stdin.isTTY) {
           process.stdout.write("> ");
         }
