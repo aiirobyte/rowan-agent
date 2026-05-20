@@ -155,6 +155,7 @@ export function createMessage(
 }
 
 export function createSession<TLogEvent = never>(input: {
+  id?: string;
   systemPrompt: string;
   input: string;
   task?: string;
@@ -170,7 +171,7 @@ export function createSession<TLogEvent = never>(input: {
 
   return {
     version: SESSION_SCHEMA_VERSION,
-    id: createId("ses"),
+    id: input.id ?? createId("ses"),
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
     systemPrompt: input.systemPrompt,
     input: input.input,
