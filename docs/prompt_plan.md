@@ -1,21 +1,21 @@
 # Rowan Current Prompt Plan
 
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 
 Specific version prompt plans live under `docs/version/<semver>/prompt_plan.md`.
 
 ## Active Version
 
-v0.4.3 is complete. Prepare v0.5.0 planning:
+v0.4.4 is complete. Prepare v0.5.0 planning:
 
 ```text
 Read AGENT.md.
 Read docs/todo.md.
 Read docs/spec.md.
 Read docs/version/README.md.
-Read docs/version/0.4.3/spec.md.
-Read docs/version/0.4.3/prompt_plan.md.
-Read docs/version/0.4.3/todo.md.
+Read docs/version/0.4.4/spec.md.
+Read docs/version/0.4.4/prompt_plan.md.
+Read docs/version/0.4.4/todo.md.
 Inspect the current diff with git status --short.
 Create docs/version/0.5.0/spec.md, prompt_plan.md, and todo.md before implementation.
 ```

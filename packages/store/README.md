@@ -2,48 +2,42 @@
 
 ## Main Features
 
-`@rowan-agent/store` provides Rowan `AgentStore` implementations. Compared with `SessionStore`, an `AgentStore` saves the session itself plus each phase's `ExecutionTurn`, which makes it possible to replay model prompts, structured output, tool calls, and tool results.
-
-The package currently includes in-memory storage and local JSON file storage. They are intended for tests/temporary runs and CLI/local persistence respectively.
+`@rowan-agent/store` provides local filesystem persistence for the Rowan `SessionManager` interface. The current implementation stores sessions as append-only JSONL files so conversation messages, outcomes, and branch metadata are durable as they happen.
 
 ## Architecture
 
-`src/types.ts` defines the `AgentStore` interface, the TypeBox schema for `ExecutionTurn`, runtime validators, deep cloning, and step filtering.
+`src/jsonl.ts` implements `LocalJsonlSessionManager`. Each session lives in `<workspace>/sessions/<session-id>.jsonl`. The first line is a `header` record; later lines are append-only `SessionEntry` records.
 
-`src/memory.ts` implements `InMemoryAgentStore`, keeping sessions and steps in a Map for single-process tests.
-
-`src/json.ts` implements `LocalJsonAgentStore`, writing each session to one `<session-id>.json` file. Writes go through a temporary file and rename to reduce partial-write risk; reads validate the session id and schema version.
+The old whole-state JSON `AgentStore` path is not retained in v0.4.4.
 
 ## Usage Flow
 
-1. Use `InMemoryAgentStore` for tests or short-lived runs.
-2. Use `LocalJsonAgentStore(sessionsDir)` for CLI or local persistence.
-3. At the composition root, save `Agent.run()` results and use `recordStep` to collect execution steps.
-4. For debugging, call `loadSteps(sessionId, filter)` to filter execution records by phase, scope, or time.
+1. Use `LocalJsonlSessionManager.create(sessionsDir, input)` to start a new durable session.
+2. Use `LocalJsonlSessionManager.open(sessionsDir, id)` to resume a session.
+3. Append the user message before `Agent.run()`.
+4. Pass `sessionId` and `buildAgentContext()` output into the Agent.
+5. Append assistant conversation messages and the final `Outcome` after the run returns.
 
 ```ts
-import { LocalJsonAgentStore } from "@rowan-agent/store";
+import { LocalJsonlSessionManager } from "@rowan-agent/store";
+import { createMessage } from "@rowan-agent/session";
 
-const store = new LocalJsonAgentStore("sessions");
+const manager = await LocalJsonlSessionManager.create("sessions", {
+  systemPrompt: "You are Rowan.",
+  input: "inspect the workspace",
+});
+await manager.appendMessage(createMessage("user", "inspect the workspace", { scope: "conversation" }));
 
 const agent = new Agent({
-  context: {
-    systemPrompt: "You are Rowan.",
-    messages: [],
-    tools,
-  },
+  context: await manager.buildAgentContext({ tools }),
+  sessionId: manager.getSessionId(),
   model,
   stream,
 });
 
-const steps = [];
 const result = await agent.run({
-  recordStep: async (step) => {
-    steps.push(step);
-  },
+  context: await manager.buildAgentContext({ tools }),
+  sessionId: manager.getSessionId(),
 });
-await store.save(result.session);
-for (const step of steps) {
-  await store.appendStep(step.sessionId, step);
-}
+await manager.appendOutcome(result.outcome);
 ```

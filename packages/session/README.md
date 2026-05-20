@@ -2,9 +2,9 @@
 
 ## Main Features
 
-`@rowan-agent/session` defines Rowan sessions, messages, skills, and the session storage interface. It creates new sessions, appends user input, separates conversation/execution/diagnostic message scopes, and converts live sessions into persistable structures.
+`@rowan-agent/session` defines Rowan sessions, messages, skills, scoped message rules, and append-only SessionManager contracts. It creates live Session values for the Agent loop, separates conversation/execution/diagnostic message scopes, and reconstructs model-visible context from durable Session entries.
 
-It also provides `InMemorySessionStore` for tests or lightweight scenarios that do not need execution-step storage.
+It also provides `InMemorySessionManager` for tests or lightweight scenarios that do not need filesystem persistence.
 
 ## Architecture
 
@@ -23,20 +23,28 @@ It also provides `InMemorySessionStore` for tests or lightweight scenarios that 
 - `sessionFromPersisted` restores a runtime session from persisted data.
 - `SessionStore` defines the create/load/save/list/delete interface.
 
+`src/session-manager.ts` contains the current v0.4.4 persistence contract:
+
+- `SessionHeader` is the first JSONL record for a durable session.
+- `SessionEntry` stores append-only message, outcome, compaction, branch summary, session info, custom records, and optional derived execution-turn records.
+- `SessionManager` appends entries, branches by active leaf, lists entries, and rebuilds an Agent context from the selected leaf.
+- `InMemorySessionManager` implements the same interface without filesystem IO.
+
 ## Usage Flow
 
-1. Call `createSession` to create a session.
-2. Call `appendUserTurn` whenever the user continues the conversation.
-3. During execution, write events to `session.log` and user-facing messages to `session.messages`.
-4. Before saving, call `toPersistedSession`, or use a storage class that implements `SessionStore`.
+1. Use `InMemorySessionManager.create()` in tests, or `LocalJsonlSessionManager.create/open()` from `@rowan-agent/store` in local runtime code.
+2. Append the current user message before calling `Agent.run()`.
+3. Call `buildAgentContext()` and pass the result plus `sessionId` into `Agent.run()`.
+4. Append assistant conversation messages and `Outcome` entries after the run returns.
 
 ```ts
-import { appendUserTurn, createSession } from "@rowan-agent/session";
+import { InMemorySessionManager, createMessage } from "@rowan-agent/session";
 
-const session = createSession({
+const manager = InMemorySessionManager.create({
   systemPrompt: "You are Rowan.",
   input: "hello",
 });
 
-appendUserTurn(session, "continue");
+await manager.appendMessage(createMessage("user", "hello", { scope: "conversation" }));
+const context = await manager.buildAgentContext();
 ```

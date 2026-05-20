@@ -64,45 +64,44 @@ This gives Pi three useful properties:
 
 ## Rowan Shape
 
-Rowan already has the right domain terms, but the current implementation mixes two concerns more than Pi does.
+Rowan now follows the same split in the current v0.4.4 implementation: Agent owns live state, while durable Session persistence is append-only and external.
 
 ### Agent Memory
 
 Rowan `Agent` is the public facade for:
 
-- Session lifecycle;
+- live `AgentState` construction;
 - event fanout;
 - cancellation;
 - current run state;
 - the Agent loop entrypoint.
 
-Its state contains both a live `context` snapshot and an optional durable `session`. `Agent.run()` resolves a Session, passes it to `runAgentLoop()`, then replaces `state.session` and `state.context` with the returned values.
+Its public controller state contains `sessionId`, a live `context` snapshot, current model/tool config, run status, the latest run result, and error state. It no longer contains a durable `state.session`.
 
-The Agent loop mutates the Session during the run:
+The Agent loop constructs and mutates an in-memory `AgentState` during the run:
 
-- `syncSessionFromContext()` copies context messages into the Session;
-- `appendSessionMessage()` appends conversation messages;
+- `syncAgentStateFromContext()` copies context messages into AgentState;
+- `appendAgentStateMessage()` appends conversation messages to AgentState;
 - execution-scoped event messages stay in the loop message log;
-- the loop returns `AgentRunResult` with the Session and Outcome.
+- the loop returns `AgentRunResult` with `sessionId`, produced messages, and Outcome.
 
-This works, but it makes `Agent` partly an in-memory reducer and partly a durable aggregate owner.
+This keeps Agent as an in-memory reducer without making it a durable aggregate owner.
 
 ### Session Persistence
 
-Rowan persistence is currently a whole-state AgentStore:
+Rowan persistence is now owned by SessionManager:
 
-- `LocalJsonAgentStore` writes one `<session-id>.json` file per Session.
-- The file contains the persisted Session fields plus a `steps` array of `ExecutionTurn` entries.
-- `save(session)` rewrites the Session state.
-- `appendStep(sessionId, step)` reads the same JSON file, appends to `steps`, and rewrites it.
-- The CLI collects `ExecutionTurn` entries in memory, runs the Agent, then saves the returned Session and appends the collected steps.
+- `LocalJsonlSessionManager` writes one `<session-id>.jsonl` file per durable Session.
+- The first record is a header; later records are append-only messages, outcomes, branch summaries, compactions, session info, custom entries, or optional derived execution-turn entries.
+- `buildAgentContext()` reconstructs the model-visible Agent context from the selected leaf.
+- The CLI appends the user message before `Agent.run()`, then appends produced assistant messages and Outcome after the run result. Execution details are observed through the normal AgentEvent stream, not through an Agent-loop persistence callback.
 
-This shape is simple, but it has weaker persistence properties than Pi:
+This gives Rowan the Pi-style persistence properties:
 
-1. A long run is durable only after the run returns, except for run logs.
-2. Session messages and execution history are stored as one rewritten JSON document.
-3. Branching and compaction would require invasive changes to the Session object and store schema.
-4. Context reconstruction is implicit in `session.messages`, not an explicit persistence operation.
+1. Session messages and outcomes are append-only entries, not one rewritten JSON document.
+2. Execution observability stays in AgentEvents and run logs unless an outer harness derives additional records.
+3. Branching and compaction are SessionManager features, not Agent features.
+4. Context reconstruction is explicit in `buildAgentContext()`.
 
 ## Target Direction
 
@@ -141,7 +140,6 @@ type SessionManager = {
   getSessionFile(): string | undefined;
   appendMessage(message: AgentMessage): Promise<string>;
   appendOutcome(outcome: Outcome): Promise<string>;
-  appendExecutionTurn(turn: ExecutionTurn): Promise<string>;
   appendCompaction(input: CompactionInput): Promise<string>;
   branch(entryId: string): Promise<void>;
   buildAgentContext(input?: { leafId?: string; tools?: Tool[]; skills?: Skill[] }): Promise<AgentContext>;
@@ -163,6 +161,7 @@ type SessionEntry =
 ```
 
 Execution entries are durable history but are not automatically projected into conversation context. `buildAgentContext()` decides which entry types become model-visible messages.
+The core Agent loop does not produce these entries directly; they are reserved for outer harnesses or future event-derived projections.
 
 ### 2. Change Agent To Pi-Style Live Memory
 
@@ -248,7 +247,6 @@ Adopting Pi's implementation shape should not flatten Rowan's domain model.
 Keep:
 
 - `ContextScope` rules for conversation, execution, and diagnostic content;
-- `ExecutionTurn` as phase-level driver history;
 - `Task`, `Thread`, and `Outcome` as Rowan concepts;
 - Agent loop route / plan / execute / verify ordering;
 - Runtime glue ownership of tools and skills;
@@ -269,23 +267,22 @@ Add JSONL Session Manager tests first:
 - creates a header and appends message entries;
 - reconstructs AgentContext from the current leaf;
 - excludes execution entries from conversation context by default;
-- appends `ExecutionTurn` entries without rewriting old entries;
 - supports branch by moving the leaf;
 - lists Sessions by latest activity.
 
-Keep `LocalJsonAgentStore` during this phase.
+Replace the old whole-state `LocalJsonAgentStore` path during this phase; v0.4.4 does not keep compatibility shims.
 
-### Phase 2: Teach CLI To Use Session Manager For New Sessions
+### Phase 2: Teach CLI To Use Session Manager
 
-For fresh CLI runs:
+For CLI runs:
 
 - create a JSONL Session;
 - append the initial user message before calling Agent;
 - build context from Session Manager;
 - append assistant messages and Outcome during event handling;
-- append `ExecutionTurn` entries as soon as the Agent loop produces them.
+- keep execution details in the AgentEvent log unless an outer harness derives separate records.
 
-Existing `.json` Sessions continue to load through the old store.
+No legacy `.json` Session compatibility is kept for v0.4.4.
 
 ### Phase 3: Convert Agent To Live Memory Only
 
@@ -312,17 +309,15 @@ Move loop output from durable Session to produced messages plus Outcome.
 Tests should prove:
 
 - direct, task, thread, retry, limit, and verification behavior remains unchanged;
-- `ExecutionTurn.sessionId` is stable;
 - child Thread Sessions can be opened and reconstructed through Session Manager.
 
-### Phase 5: Migrate Or Bridge Old Session Files
+### Phase 5: Remove Old Store Surface
 
-Add one of two compatibility paths:
+Remove the old whole-state store path:
 
-1. Read old `<session-id>.json` files and export them into new JSONL files on first load.
-2. Keep a read-only legacy adapter and write all new activity to JSONL.
-
-Prefer migration-on-load once the JSONL Session Manager has enough coverage.
+1. Remove `LocalJsonAgentStore`, `InMemoryAgentStore`, and `AgentStore` exports.
+2. Update CLI and tests to use JSONL SessionManager directly.
+3. Ensure no code reads or writes old `<session-id>.json` files.
 
 ## Recommended Final Shape
 
@@ -342,7 +337,7 @@ Agent loop
   -> route / plan / execute / verify
   -> Thread creation
   -> Outcome
-  -> produced messages and ExecutionTurns
+  -> produced messages
 
 Session Manager
   -> append-only JSONL tree

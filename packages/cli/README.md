@@ -20,7 +20,7 @@ The CLI composes these packages:
 - `@rowan-agent/agent` creates the agent.
 - `@rowan-agent/runtime` provides core tools and resolves workspace, runs, sessions, and skills paths.
 - `@rowan-agent/logging` writes console and file logs.
-- `@rowan-agent/store` persists session JSON.
+- `@rowan-agent/store` persists append-only JSONL sessions.
 
 ## Usage Flow
 

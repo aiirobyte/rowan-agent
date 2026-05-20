@@ -31,24 +31,24 @@ Completed in v0.4.3 for the default local execution path. `runtime` now owns an 
 The default tool path in the Agent loop performs lookup, schema compilation, argument validation, approval hook calls, execution, review hook calls, limit consumption, and event publication. The ToolRunner Seam is therefore only hypothetical for the default path. Deleting this code would spread the same complexity across local, MCP, plugin, and future policy paths.
 
 **Solution**:
-Move event-neutral tool execution to `runtime`. The runtime Module should resolve tools, validate args, invoke hooks, execute the tool, normalize the ToolResult, and return structured execution outcomes. The Agent loop should translate those outcomes into AgentEvents, Session messages, ExecutionTurns, and limit effects.
+Move event-neutral tool execution to `runtime`. The runtime Module should resolve tools, validate args, invoke hooks, execute the tool, normalize the ToolResult, and return structured execution outcomes. The Agent loop should translate those outcomes into AgentEvents, Session messages, and limit effects.
 
 **Benefits**:
 Locality improves because tool execution rules live in one Runtime glue Module. Leverage improves because local tools, MCP tools, plugins, and policy can reuse one Interface. Tests can cover unknown tools, invalid args, blocked calls, successful calls, and after-hook review without a full Agent run.
 
-## 3. Agent Run Effects And ExecutionTurn Module
+## 3. Agent Run Effects Module
 
 **Status**:
-Partially resolved in v0.4.3 cleanup. Single-call-site step assembly was folded back into the Agent loop. A future deepening should extract a broader phase-effects Module only if it also owns message publication, scope rules, and ExecutionTurn construction together.
+Partially resolved in v0.4.4 cleanup. The Agent loop no longer exposes `recordStep` or constructs `ExecutionTurn` records; a future deepening should extract a broader phase-effects Module only if it owns message publication, scope rules, and event emission together.
 
 **Files**:
 `packages/agent/src/loop.ts`, `packages/store/src/types.ts`
 
 **Problem**:
-Phase transcript collection, `message_delta` publication, ExecutionTurn entries, and diagnostic scope handling still live inside the Agent loop. That keeps the pollution-prevention rule close to many call sites instead of one deep Module.
+Phase transcript collection, `message_delta` publication, event emission, and diagnostic scope handling still live inside the Agent loop. That keeps the pollution-prevention rule close to many call sites instead of one deep Module.
 
 **Solution**:
-Only extract an Agent-owned phase effects Module when it can concentrate the conversion from phase activity into AgentEvents, event-only messages, Session conversation messages, and ExecutionTurns together. Do not recreate a shallow wrapper for one persistence callback alone.
+Only extract an Agent-owned phase effects Module when it can concentrate the conversion from phase activity into AgentEvents, event-only messages, and Session conversation messages together. Do not recreate a shallow wrapper for one persistence callback alone.
 
 **Benefits**:
 Locality improves because conversation, execution, and diagnostic scope rules are maintained in one place. Leverage improves because every phase uses one effect Interface. Tests can verify scope and persistence behavior through this Interface rather than by replaying the whole loop.
@@ -73,7 +73,7 @@ Locality improves because visibility and viewport rules live in `context`. Lever
 `packages/cli/src/cli.ts`
 
 **Problem**:
-The CLI Module currently combines argument parsing, config snapshot, Agent composition, logging, Session persistence, and interactive terminal flow. Its Interface is nearly as complex as its Implementation, and tests must often exercise the full command path.
+Partially improved in v0.4.4: Session persistence is now a SessionManager composition concern instead of an end-of-run AgentStore save. The CLI Module still combines argument parsing, config snapshot, Agent composition, logging, and interactive terminal flow. Its Interface is nearly as complex as its Implementation, and tests must often exercise the full command path.
 
 **Solution**:
 Split CLI runtime composition from terminal interaction. Keep `cli.ts` as the command entrypoint, but move config resolution, Agent construction, run persistence, and interactive prompt handling behind smaller stable Interfaces.

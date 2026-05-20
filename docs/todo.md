@@ -1,6 +1,6 @@
 # Rowan Todo
 
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 
 Use this file as the cross-session checklist. In a new AI window, start with:
 
@@ -10,42 +10,35 @@ Read AGENT.md and docs/todo.md, then continue with the active version's next unc
 
 ## Active Version
 
-Active version: `0.4.3` complete
+Active version: `0.4.4` complete
 
 - Previous implemented baseline: `0.4.3`
-- Active version docs: `docs/version/0.4.3/`
-- Legacy draft source: `docs/PLAN/v0.4.3/`
+- Active version docs: `docs/version/0.4.4/`
+- Planning source: `docs/architecture/pi-recording-persistence.md`
 - Next version: `0.5.0` Context Projection And Provider IR planning
 
 ## Current Target
 
-Target: v0.4.3 Agent Loop Package Boundary Consolidation. Complete.
+Target: v0.4.4 Agent Run Persistence And Data Flow Refactor. Complete.
 
 Definition of done:
 
-- [x] Create `docs/version/0.4.3/spec.md`.
-- [x] Create `docs/version/0.4.3/prompt_plan.md`.
-- [x] Create `docs/version/0.4.3/todo.md`.
-- [x] Create root `docs/spec.md`, `docs/prompt_plan.md`, and `docs/todo.md` entry points.
-- [x] Create `docs/version/README.md`.
-- [x] Move shared phase output contracts into `protocol`.
-- [x] Add a typed phase-output stream event or equivalent cross-package contract.
-- [x] Preserve `StreamFn` compatibility where needed during migration.
-- [x] Update OpenAI-compatible adapter output normalization and tests.
-- [x] Add a runtime-owned, event-neutral tool execution primitive.
-- [x] Move default tool argument validation and hook handling out of `agent/src/loop.ts`.
-- [x] Cache compiled tool parameter validators if the runtime primitive compiles schemas.
-- [x] Update `runAgentLoop()` to consume typed adapter output and runtime tool execution.
-- [x] Preserve Agent-owned lifecycle, events, turns, attempts, verification, thread depth, and outcomes.
-- [x] Keep `agent` free of `adapters` imports.
-- [x] Avoid new `packages/agent/src/runtime.ts` or `packages/agent/src/model-stream.ts`.
-- [x] Update package boundary tests.
-- [x] Add runtime tool execution tests.
-- [x] Preserve direct, task, thread, multi-turn, limits, invalid schema, invalid tool args, and verify retry tests.
+- [x] Create `docs/version/0.4.4/spec.md`.
+- [x] Create `docs/version/0.4.4/prompt_plan.md`.
+- [x] Create `docs/version/0.4.4/todo.md`.
+- [x] Update root docs and version index for v0.4.4.
+- [x] Add append-only SessionManager contracts in `packages/session`.
+- [x] Add in-memory SessionManager and context reconstruction tests.
+- [x] Add local JSONL SessionManager in `packages/store`.
+- [x] Remove old JSON AgentStore APIs and references.
+- [x] Refactor Agent public state to `sessionId/context` live memory.
+- [x] Refactor run output away from durable `result.session`.
+- [x] Update CLI to append SessionManager entries as runs stream.
+- [x] Confirm no legacy `<session-id>.json` compatibility remains.
+- [x] Update READMEs and architecture docs.
 - [x] Run `bun test packages`.
 - [x] Run `bun run build`.
-- [x] Update root docs after every meaningful v0.4.3 coding session.
-- [x] Update root docs and `docs/version/README.md` after v0.4.3 completion.
+- [x] Update root docs after v0.4.4 completion.
 
 ## Next Prompt
 
@@ -70,6 +63,7 @@ Expected next change:
 - [x] v0.4.1 Agent Boundary Correction.
 - [x] v0.4.2 Agent Loop IO Atomization.
 - [x] v0.4.3 Agent Loop Package Boundary Consolidation.
+- [x] v0.4.4 Agent Run Persistence And Data Flow Refactor.
 - [ ] v0.5.0 Context Projection And Provider IR.
 - [ ] v0.6.0 Tool Runtime Policy Ports.
 - [ ] v0.7.0 Replay, Fork, And Compaction.
@@ -83,6 +77,8 @@ Expected next change:
 - Do not move route / plan / execute / verify ordering into `runtime`.
 - Do not make `agent` import `adapters`.
 - Do not start v0.5.0 context projection in v0.4.3.
+- Do not keep compatibility for old `<session-id>.json` session files in v0.4.4.
+- Do not make `Agent` own durable persistence in v0.4.4.
 - Do not add public API compatibility shims unless the user explicitly asks.
 - Keep docs architecture decisions grounded in `CONTEXT.md` and `docs/adr/`.
 
@@ -92,4 +88,6 @@ Expected next change:
 - Root `docs/spec.md`, `docs/prompt_plan.md`, and `docs/todo.md` are current-session entry points.
 - `docs/PLAN/` remains the legacy planning tree and historical reference for v0.0.0-v0.4.3 drafts.
 - v0.4.3 completed on 2026-05-13 with `bun test packages` and `bun run build` passing.
+- v0.4.4 was inserted before v0.5.0 on 2026-05-14 for Pi-style run persistence and data-flow refactoring.
+- v0.4.4 completed on 2026-05-14 with `bun test packages` and `bun run build` passing.
 - Update this file and the active version todo after every meaningful coding session.

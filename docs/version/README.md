@@ -1,6 +1,6 @@
 # Version Plans
 
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 
 Specific version planning lives under:
 
@@ -30,6 +30,7 @@ The root files in `docs/` are the current-session entry points. They point agent
 - `0.4.1`: Agent Boundary Correction. Complete.
 - `0.4.2`: Agent Loop IO Atomization. Complete.
 - `0.4.3`: Agent Loop Package Boundary Consolidation. Complete.
+- `0.4.4`: Agent Run Persistence And Data Flow Refactor. Complete.
 - `0.5.0`: Context Projection And Provider IR. Planned.
 - `0.6.0`: Tool Runtime Policy Ports. Planned.
 - `0.7.0`: Replay, Fork, And Compaction. Planned.
