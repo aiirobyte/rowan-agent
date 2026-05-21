@@ -1,6 +1,7 @@
 import Type from "typebox";
 import { createId, Validators } from "@rowan-agent/protocol";
 import type { AgentRuntimePort } from "./loop/types";
+import type { AgentPhaseConfig } from "./loop/phase-config";
 import type {
   AcceptanceCriterion,
   AgentContextMessage,
@@ -169,8 +170,8 @@ export type AgentLoopRunConfig = AgentRunCommonConfig & {
   sessionId?: string;
   state?: AgentState;
   threadDepth?: number;
-  verifyTasks?: boolean;
   runThread?: RunThread;
+  phaseConfig?: AgentPhaseConfig;
 };
 
 export type AgentThreadRunConfig = AgentRunCommonConfig & {
@@ -182,7 +183,6 @@ export type AgentThreadRunConfig = AgentRunCommonConfig & {
   goal?: string;
   skills?: Skill[];
   threadDepth?: number;
-  verify?: boolean;
 };
 
 export type AgentRunResult =
@@ -237,29 +237,30 @@ export type ErrorInfo = {
 
 export type AgentEvent =
   | {
-      type: "thread_created";
-      parentSessionId: string;
+      type: "chat_start";
+      content: AgentMessage[];
       sessionId: string;
-      prompt: string;
+      /** Present when this is a thread run */
+      parentSessionId?: string;
+      prompt?: string;
       task?: string;
       goal?: string;
       threadDepth?: number;
       maxThreadDepth?: number;
       ts: string;
     }
+  | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; ts: string }
   | {
-      type: "thread_end";
-      parentSessionId: string;
+      type: "chat_end";
+      content: AgentMessage[];
       sessionId: string;
-      outcome: Outcome;
-      limitUsage: AgentLimitUsage;
+      /** Present when this is a thread run */
+      outcome?: Outcome;
+      limitUsage?: AgentLimitUsage;
       threadDepth?: number;
       maxThreadDepth?: number;
       ts: string;
     }
-  | { type: "chat_start"; content: AgentMessage[]; ts: string }
-  | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; ts: string }
-  | { type: "chat_end"; content: AgentMessage[]; ts: string }
   | {
       type: "model_requested";
       phase: LlmPhase;

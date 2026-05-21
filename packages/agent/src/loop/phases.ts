@@ -45,6 +45,9 @@ import {
   routePhase,
   verifyPhase,
 } from "./shared";
+import type { AgentPhaseContext, AgentPhaseDefinition, AgentPhaseTransition } from "./phase-config";
+import type { AgentLoopRuntime } from "../loop";
+import { createAgentLoopContext } from "../loop";
 
 export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
   context: AgentLoopContext;
@@ -68,7 +71,7 @@ export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
     }
 
     flushedText += text;
-    await input.context.appendEventMessage(
+    await input.context.appendMessage(
       createMessage("assistant", text, {
         kind: "model_message",
         phase: input.metadataPhase,
@@ -82,7 +85,7 @@ export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
     assertNotAborted(input.context.signal);
 
     if (event.type === "prompt_message") {
-      await input.context.appendEventMessage(
+      await input.context.appendMessage(
         createMessage(event.message.role, event.message.content, {
           kind: "phase_prompt",
           phase: event.phase,
@@ -205,7 +208,7 @@ export async function routeRequest(
     workerGoal: input.workerGoal,
   });
   if (decision.route !== "direct") {
-    await context.appendEventMessage(
+    await context.appendMessage(
       createMessage("assistant", JSON.stringify(decision), {
         kind: "routing_decision",
         phase: routePhase,
@@ -347,7 +350,7 @@ export async function executeTask(
     }
     const result = createInvalidExecuteToolResult(error);
     input.toolResults.push(result);
-    await context.appendEventMessage(
+    await context.appendMessage(
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
         toolName: result.toolName,
@@ -364,7 +367,7 @@ export async function executeTask(
   for (const toolCall of collected.toolCalls) {
     const result = await executeToolCall({ context, task: input.task, toolCall });
     input.toolResults.push(result);
-    await context.appendEventMessage(
+    await context.appendMessage(
       createMessage("tool", JSON.stringify(result), {
         toolCallId: result.toolCallId,
         toolName: result.toolName,
@@ -504,5 +507,78 @@ export async function runPhase<TPhase extends LlmPhase>(
     }
 
     return { type: "output", output };
+  }
+}
+
+export async function runConfiguredPhase(
+  runtime: AgentLoopRuntime,
+  definition: AgentPhaseDefinition<any, any>,
+  createRun: AgentPhaseContext["createRun"],
+): Promise<AgentPhaseTransition> {
+  const context = createAgentLoopContext(runtime);
+  const phaseContext: AgentPhaseContext = { ...context, createRun };
+  const modelPhase = definition.modelPhase as LlmPhase | undefined;
+  let retries = 0;
+  let retryInput: unknown = undefined;
+
+  while (true) {
+    // 1. buildInput (use retry input if available, otherwise build from definition)
+    let builtInput = retryInput ?? await definition.buildInput(runtime);
+    retryInput = undefined;
+
+    // 2. runtime beforePhase
+    if (modelPhase && context.config.runtime?.beforePhase) {
+      const before = await context.config.runtime.beforePhase(context, modelPhase, builtInput as never);
+      if (hasAbort(before)) {
+        return { type: "abort", outcome: before.abort };
+      }
+      if (hasSkip(before)) {
+        const transition = definition.apply
+          ? await definition.apply(runtime, before.skip, builtInput)
+          : { type: "stop" as const, outcome: { id: "skip", passed: true, message: "Skipped." } };
+        return transition;
+      }
+      if (before && "input" in before && before.input) {
+        builtInput = before.input;
+      }
+    }
+
+    // 3. run (definition runner or model stream)
+    let output: unknown;
+    if (definition.run) {
+      output = await definition.run(phaseContext, builtInput);
+    }
+
+    // 4. parseOutput
+    if (definition.parseOutput && output !== undefined) {
+      output = definition.parseOutput(output, builtInput);
+    }
+
+    // 5. runtime afterPhase
+    if (modelPhase && context.config.runtime?.afterPhase) {
+      const after = await context.config.runtime.afterPhase(context, modelPhase, output as never);
+      if (hasAbort(after)) {
+        return { type: "abort", outcome: after.abort };
+      }
+      if (hasRetry(after) && after.retry) {
+        retries += 1;
+        if (retries > 3) {
+          throw new Error(`Runtime requested too many ${definition.id} phase retries.`);
+        }
+        retryInput = after.retry;
+        continue;
+      }
+      if (hasOutput(after) && after.output) {
+        output = after.output;
+      }
+    }
+
+    // 6. apply (definition effects and transition)
+    if (definition.apply) {
+      return await definition.apply(runtime, output, builtInput);
+    }
+
+    // Default: stop
+    return { type: "stop", outcome: { id: "default", passed: true, message: "Phase completed." } };
   }
 }

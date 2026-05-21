@@ -1,7 +1,7 @@
 # Rowan v0.4.5 Prompt Plan
 
 Last updated: 2026-05-21
-Status: Planned
+Status: Complete
 
 ## Version Target
 
@@ -31,7 +31,7 @@ Guardrails:
 
 ### Prompt 1: Phase Config Contracts
 
-Status: Planned
+Status: Complete
 
 Goal: Add the configurable phase module and default phase definition contracts.
 
@@ -51,7 +51,7 @@ Guardrails:
 
 ### Prompt 2: Base Phase Runner
 
-Status: Planned
+Status: Complete
 
 Goal: Keep `runPhase()` as the single rigid base phase execution path that does not know individual phase names.
 
@@ -80,7 +80,7 @@ Guardrails:
 
 ### Prompt 3: Built-in Phase Definitions
 
-Status: Planned
+Status: Complete
 
 Goal: Re-express current route, plan, execute, verify, and thread behavior as built-in phase definitions.
 
@@ -102,7 +102,7 @@ Guardrails:
 
 ### Prompt 4: Generic Loop Rewrite
 
-Status: Planned
+Status: Complete
 
 Goal: Replace `runAgentLoop()` phase branches with a generic phase-machine loop.
 
@@ -128,7 +128,7 @@ Guardrails:
 
 ### Prompt 5: Tests, Docs, And Handoff
 
-Status: Planned
+Status: Complete
 
 Goal: Verify compatibility and update docs after the phase-configured loop lands.
 
@@ -153,15 +153,15 @@ Guardrails:
 
 - [x] Versioned docs created for v0.4.5.
 - [x] Root docs point to v0.4.5 as active.
-- [ ] Phase config contracts exist.
-- [ ] Base `runPhase()` runner supports configured phases.
-- [ ] Built-in phase definitions preserve current behavior.
-- [ ] `runAgentLoop()` uses the generic phase-machine path.
-- [ ] Hard-coded route/plan/execute/verify branches are removed from the loop.
-- [ ] Custom phase config is covered by tests.
-- [ ] Default direct/task/thread/verify/retry behavior is covered by tests.
-- [ ] READMEs and architecture docs updated.
-- [ ] `bun test packages`.
-- [ ] `bun run build`.
-- [ ] `git diff --check`.
+- [x] Phase config contracts exist.
+- [x] Base `runPhase()` runner supports configured phases.
+- [x] Built-in phase definitions preserve current behavior.
+- [x] `runAgentLoop()` uses the generic phase-machine path.
+- [x] Hard-coded route/plan/execute/verify branches are removed from the loop.
+- [x] Custom phase config is covered by tests.
+- [x] Default direct/task/thread/verify/retry behavior is covered by tests.
+- [x] READMEs and architecture docs updated.
+- [x] `bun test packages` (agent: 72 pass).
+- [x] `bun run build`.
+- [x] `git diff --check`.
 - [ ] Root docs updated for v0.4.5 completion and v0.5.0 handoff.

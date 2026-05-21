@@ -12,8 +12,8 @@ export const AGENT_EVENT_LOG_LEVEL_VALUES = {
 
 function eventSessionId(event: AgentEvent): string | undefined {
   if (
-    event.type === "thread_created" ||
-    event.type === "thread_end"
+    (event.type === "chat_start" || event.type === "chat_end") &&
+    "parentSessionId" in event
   ) {
     return event.parentSessionId;
   }

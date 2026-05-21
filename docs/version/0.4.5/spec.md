@@ -128,10 +128,10 @@ packages/agent/src/loop/built-in-phases.ts
   -> built-in route, plan, execute, verify, and thread definitions
   -> all current phase-specific semantics
 
-packages/agent/src/loop/runtime.ts
-  -> mutable live runtime state
-  -> generic phase state fields
-  -> event/message helpers
+packages/agent/src/loop.ts
+  -> generic phase-machine loop
+  -> mutable live runtime state and generic phase state fields
+  -> event/message lifecycle helpers
 
 packages/agent/src/loop/routing.ts
   -> route scheduling helper used only by the route phase definition

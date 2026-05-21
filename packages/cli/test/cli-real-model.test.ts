@@ -122,8 +122,8 @@ async function readLogEvents(path: string): Promise<LoggedEventSummary[]> {
 }
 
 function eventSessionId(event: AgentEvent): string | undefined {
-  if (event.type === "thread_created" || event.type === "thread_end") {
-    return event.sessionId;
+  if ((event.type === "chat_start" || event.type === "chat_end") && "parentSessionId" in event) {
+    return event.parentSessionId;
   }
   return undefined;
 }
@@ -136,9 +136,8 @@ async function summarizeLogFile(filePath: string): Promise<LogSummary> {
     if (event.sessionId) {
       sessionIds.add(event.sessionId);
     }
-    if (event.event && (event.event.type === "thread_created" || event.event.type === "thread_end")) {
+    if (event.event && (event.event.type === "chat_start" || event.event.type === "chat_end") && "parentSessionId" in event.event && event.event.parentSessionId) {
       sessionIds.add(event.event.parentSessionId);
-      sessionIds.add(event.event.sessionId);
     }
   }
   return { filePath, eventTypes, sessionIds: [...sessionIds] };

@@ -4,11 +4,26 @@
 
 `@rowan-agent/agent` is the public programming entry point and Agent core for Rowan. It wraps model execution, event subscriptions, tool registration, loop-owned thread delegation, run cancellation, and idle waiting.
 
-The package also owns the route, plan, execute, verify, thread, retry, and outcome flow. Most application code can depend on `@rowan-agent/agent` alone to create an interactive agent.
+The package implements a phase-configured Agent loop. The loop executes a configurable sequence of phase definitions through a single base `runPhase()` runner. Built-in phases (route, thread, plan, execute, verify) preserve the default behavior, while custom phase configurations can extend or replace them.
 
 ## Architecture
 
-`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly, and the loop owns route / plan / execute / verify ordering for both normal runs and child thread runs. Phase helpers live under `src/loop/`. The loop returns a `sessionId`, produced conversation messages, and an `Outcome`; composition roots such as the CLI persist those through a SessionManager.
+`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly.
+
+`src/loop.ts` implements the generic phase-machine loop:
+- Creates the loop runtime from input
+- Resolves the phase configuration (default built-in or custom)
+- Iterates through phases by following transitions (`next`, `stop`, `abort`)
+- Completes the run with an `AgentRunResult`
+
+Phase definitions live under `src/loop/`:
+- `phase-config.ts` — `AgentPhaseDefinition`, `AgentPhaseConfig`, validation, and default config factory
+- `built-in-phases.ts` — built-in route, thread, plan, execute, and verify phase definitions
+- `phases.ts` — base `runPhase()` and `runConfiguredPhase()` runners
+- `routing.ts` — route scheduling helper used by the route phase
+- `thread.ts` — thread execution helper used by the thread phase
+
+Mutable live runtime state and lifecycle helpers live in `src/loop.ts` with the generic phase-machine boundary.
 
 `Agent` keeps a small state object:
 

@@ -32,7 +32,6 @@ export type AgentLoopConfig = {
   stream: StreamFn;
   tools: Tool[];
   maxAttempts: number;
-  verifyTasks: boolean;
   limits?: AgentRunLimits;
   signal?: AbortSignal;
   runtime?: AgentRuntimePort;
@@ -70,8 +69,8 @@ export type AgentLoopContext = {
   state: Readonly<AgentRunState>;
   signal?: AbortSignal;
   emit(event: AgentEvent): Promise<void>;
-  appendEventMessage(message: AgentMessageSnapshot): Promise<void>;
-  appendAgentStateMessage(message: AgentMessageSnapshot): Promise<void>;
+  appendMessage(message: AgentMessageSnapshot): Promise<void>;
+  appendStateMessage(message: AgentMessageSnapshot): Promise<void>;
   consumeLimit(resource: keyof AgentLimitUsage): void;
   runThread?: RunThread;
 };

@@ -20,12 +20,12 @@ import {
   runtimeDepth,
   verifyPhase,
 } from "./shared";
-import type { AgentLoopRuntime } from "./runtime";
+import type { AgentLoopRuntime } from "../loop";
 import {
-  appendEventMessage,
+  appendMessage,
   createAgentLoopContext,
   emit,
-} from "./runtime";
+} from "../loop";
 import {
   runPhase,
   verifyTask,
@@ -120,7 +120,6 @@ export async function executeThreadRoute(
     maxAttempts: input.maxAttempts,
     limits: input.limits,
     threadDepth: input.threadDepth + 1,
-    verify: false,
   });
   const threadOutput = createThreadTaskOutput({
     thread: thread satisfies ThreadRunResult,
@@ -128,7 +127,7 @@ export async function executeThreadRoute(
     task: threadTask,
     goal,
   });
-  await appendEventMessage(
+  await appendMessage(
     input,
     createMessage("assistant", JSON.stringify(threadOutput), {
       kind: "thread_output",
@@ -144,16 +143,6 @@ export async function executeThreadRoute(
     attempt: 1,
     ts: nowIso(),
   });
-
-  if (!input.verifyTasks) {
-    task.status = thread.outcome.passed ? "passed" : "failed";
-    return Validators.outcome.Parse({
-      id: createId("out"),
-      taskId: task.id,
-      passed: thread.outcome.passed,
-      message: thread.outcome.message,
-    });
-  }
 
   input.status = "verifying";
   const verifyPhaseResult = await runPhase(
