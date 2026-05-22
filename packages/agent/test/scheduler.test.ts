@@ -35,7 +35,7 @@ test("scheduler upgrades model direct routing when user explicitly asks for a to
       },
     }),
   ).toEqual({
-    route: "task",
+    route: "plan",
     message: "Creating a task for this request.",
   });
 });
@@ -51,7 +51,7 @@ test("scheduler upgrades model direct routing for workspace fact questions", () 
       },
     }),
   ).toEqual({
-    route: "task",
+    route: "plan",
     message: "Creating a task for this request.",
   });
 });
@@ -61,14 +61,14 @@ test("scheduler routes simple explicit tool requests to task even when threads a
     scheduleTaskRouting({
       input: "使用bash查看当前日期",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "thread",
+      defaultTargetPhase: "plan",
       decision: {
         route: "direct",
         message: "Use bash to check the current date: $(date)",
       },
     }),
   ).toEqual({
-    route: "task",
+    route: "plan",
     message: "Creating a task for this request.",
   });
 });
@@ -78,7 +78,7 @@ test("scheduler can upgrade explicit thread requests to thread routes", () => {
     scheduleTaskRouting({
       input: "创建一个thread使用bash",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "thread",
+      defaultTargetPhase: "plan",
       decision: {
         route: "direct",
         message: "Use bash to check the current date.",
@@ -95,9 +95,9 @@ test("scheduler promotes explicit thread task routes to thread routes", () => {
     scheduleTaskRouting({
       input: "create a thread to use bash",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "thread",
+      defaultTargetPhase: "plan",
       decision: {
-        route: "task",
+        route: "plan",
         message: "Creating a task.",
       },
     }),
@@ -112,7 +112,7 @@ test("scheduler preserves thread routes while thread depth allows it", () => {
     scheduleTaskRouting({
       input: "create a thread to use bash",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "task",
+      defaultTargetPhase: "plan",
       allowThreadRoute: true,
       decision: {
         route: "thread",
@@ -140,7 +140,7 @@ test("scheduler downgrades worker self-recursive thread routes to tasks", () => 
     scheduleTaskRouting({
       input: "测试 thread",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "task",
+      defaultTargetPhase: "plan",
       allowThreadRoute: true,
       workerTask: "Execute a simple test within an isolated child runtime to verify thread creation and execution.",
       workerGoal: "Return a confirmation that the thread executed successfully with a test result.",
@@ -155,7 +155,7 @@ test("scheduler downgrades worker self-recursive thread routes to tasks", () => 
       },
     }),
   ).toEqual({
-    route: "task",
+    route: "plan",
     message: "Creating a task for this worker thread.",
   });
 });
@@ -165,7 +165,7 @@ test("scheduler preserves explicit nested worker thread routes", () => {
     scheduleTaskRouting({
       input: "测试 thread",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "task",
+      defaultTargetPhase: "plan",
       allowThreadRoute: true,
       workerTask: "Delegate echo evidence to a child thread.",
       workerGoal: "Return echo evidence.",
@@ -195,7 +195,7 @@ test("scheduler downgrades simple tool thread routes to task routes", () => {
     scheduleTaskRouting({
       input: "获取当前系统时间",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "task",
+      defaultTargetPhase: "plan",
       allowThreadRoute: true,
       decision: {
         route: "thread",
@@ -208,7 +208,7 @@ test("scheduler downgrades simple tool thread routes to task routes", () => {
       },
     }),
   ).toEqual({
-    route: "task",
+    route: "plan",
     message: "Creating a task for this request.",
   });
 });
@@ -218,7 +218,7 @@ test("scheduler converts thread routes to task routes when depth limit is reache
     scheduleTaskRouting({
       input: "use bash",
       tools: [bashTool],
-      defaultNeedsTaskRoute: "task",
+      defaultTargetPhase: "plan",
       allowThreadRoute: false,
       decision: {
         route: "thread",
@@ -231,7 +231,7 @@ test("scheduler converts thread routes to task routes when depth limit is reache
       },
     }),
   ).toEqual({
-    route: "task",
+    route: "plan",
     message: "Creating a task because the thread depth limit was reached.",
   });
 });

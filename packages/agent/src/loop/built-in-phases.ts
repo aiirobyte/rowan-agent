@@ -6,7 +6,7 @@ import {
 import type {
   AgentRunResult,
   Outcome,
-  TaskRoutingDecision,
+  RoutingDecision,
   VerificationResult,
 } from "../types";
 import {
@@ -43,7 +43,7 @@ import { executeThreadRoute } from "./thread";
 
 export type RoutePhaseInput = RouteInput;
 
-export type RoutePhaseOutput = TaskRoutingDecision & { text: string };
+export type RoutePhaseOutput = RoutingDecision & { text: string };
 
 export const routePhaseDefinition: AgentPhaseDefinition<RoutePhaseInput, RoutePhaseOutput> = {
   id: "route",
@@ -77,13 +77,10 @@ export const routePhaseDefinition: AgentPhaseDefinition<RoutePhaseInput, RoutePh
       return { type: "stop", outcome };
     }
 
-    if (output.route === "thread") {
-      // Thread execution is a tool-like delegation, not a separate phase
-      const outcome = await executeThreadRoute(runtime, output);
-      return { type: "stop", outcome };
-    }
-
-    return { type: "next", phaseId: "plan" };
+    // Route to the target phase (e.g., "plan", "thread", "execute", or custom phase)
+    runtime.lastRouteDecision = output;
+    runtime.status = output.route as AgentLoopRuntime["status"];
+    return { type: "next", phaseId: output.route };
   },
 };
 
@@ -245,14 +242,14 @@ export const verifyPhaseDefinition: AgentPhaseDefinition<VerifyPhaseInput, Verif
 };
 
 export type ThreadPhaseInput = {
-  decision: TaskRoutingDecision;
+  decision: RoutingDecision;
 };
 
 export const threadPhaseDefinition: AgentPhaseDefinition<ThreadPhaseInput, Outcome> = {
   id: "thread",
 
   buildInput(runtime) {
-    const decision = runtime.lastRouteDecision ?? { route: "task" as const, message: "" };
+    const decision = runtime.lastRouteDecision ?? { route: "plan" as const, message: "" };
     return { decision };
   },
 

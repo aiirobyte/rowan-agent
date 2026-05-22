@@ -26,7 +26,7 @@ export type {
   StreamOptions,
   Task,
   TaskOutput,
-  TaskRoutingDecision,
+  RoutingDecision,
   ThreadTaskOutput,
   ToolCall,
   ToolResult,

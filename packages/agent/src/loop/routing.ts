@@ -1,10 +1,10 @@
-import type { TaskRoutingDecision, Tool } from "../types";
+import type { RoutingDecision, Tool } from "../types";
 
 export type TaskRoutingScheduleInput = {
   input: string;
   tools: Tool[];
-  decision: TaskRoutingDecision;
-  defaultNeedsTaskRoute?: "task" | "thread";
+  decision: RoutingDecision;
+  defaultTargetPhase?: string;
   allowThreadRoute?: boolean;
   workerTask?: string | null;
   workerGoal?: string | null;
@@ -77,59 +77,61 @@ export function hasExplicitToolRequest(input: string, tools: Tool[] = []): boole
   ].some((pattern) => pattern.test(input));
 }
 
-export function scheduleTaskRouting(input: TaskRoutingScheduleInput): TaskRoutingDecision {
-  const defaultRoute = input.defaultNeedsTaskRoute ?? "task";
-  if (input.decision.route === "thread" && input.allowThreadRoute === false) {
-    return {
-      route: "task",
-      message: "Creating a task because the thread depth limit was reached.",
-    };
+export function scheduleTaskRouting(input: TaskRoutingScheduleInput): RoutingDecision {
+  const { decision, defaultTargetPhase = "plan", allowThreadRoute = true } = input;
+  let { route } = decision;
+
+  // Downgrade thread route when worker context doesn't warrant it
+  if (route === "thread") {
+    if (!allowThreadRoute) {
+      return {
+        route: defaultTargetPhase,
+        message: "Creating a task because the thread depth limit was reached.",
+      };
+    }
+
+    const workerAssignment = workerAssignmentText(input);
+    if (
+      workerAssignment.trim().length > 0 &&
+      !hasExplicitNestedThreadRequest(workerAssignment)
+    ) {
+      return {
+        route: defaultTargetPhase,
+        message: "Creating a task for this worker thread.",
+      };
+    }
+
+    if (
+      hasExplicitToolRequest(input.input, input.tools) &&
+      !hasExplicitThreadRequest(input.input)
+    ) {
+      return {
+        route: defaultTargetPhase,
+        message: "Creating a task for this request.",
+      };
+    }
   }
 
-  const workerAssignment = workerAssignmentText(input);
-  if (
-    input.decision.route === "thread" &&
-    workerAssignment.trim().length > 0 &&
-    !hasExplicitNestedThreadRequest(workerAssignment)
-  ) {
+  // Upgrade direct route to a phase route when user explicitly asks for a tool
+  if (route === "direct" && hasExplicitToolRequest(input.input, input.tools)) {
+    const targetPhase = hasExplicitThreadRequest(input.input) && allowThreadRoute
+      ? "thread"
+      : defaultTargetPhase;
     return {
-      route: "task",
-      message: "Creating a task for this worker thread.",
-    };
-  }
-
-  if (
-    input.decision.route === "thread" &&
-    hasExplicitToolRequest(input.input, input.tools) &&
-    !hasExplicitThreadRequest(input.input)
-  ) {
-    return {
-      route: "task",
+      route: targetPhase,
       message: "Creating a task for this request.",
     };
   }
 
-  if (input.decision.route !== "direct") {
-    if (
-      defaultRoute === "thread" &&
-      input.decision.route === "task" &&
-      hasExplicitThreadRequest(input.input)
-    ) {
-      return {
-        ...input.decision,
-        route: "thread",
-      };
-    }
-    return input.decision;
+  // Direct route - answer immediately
+  if (route === "direct") {
+    return decision;
   }
 
-  if (!hasExplicitToolRequest(input.input, input.tools)) {
-    return input.decision;
+  // Promote explicit thread requests to thread route
+  if (hasExplicitThreadRequest(input.input) && allowThreadRoute && route !== "thread") {
+    return { ...decision, route: "thread" };
   }
 
-  const route = defaultRoute === "thread" && !hasExplicitThreadRequest(input.input) ? "task" : defaultRoute;
-  return {
-    route,
-    message: "Creating a task for this request.",
-  };
+  return { ...decision, route };
 }

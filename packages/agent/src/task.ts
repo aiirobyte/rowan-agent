@@ -2,7 +2,7 @@ import type {
   AcceptanceCriterion,
   Outcome,
   Task,
-  TaskRoutingDecision,
+  RoutingDecision,
   VerificationResult,
 } from "./types";
 import { createId, Validators } from "./types";
@@ -11,7 +11,7 @@ function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function normalizeThread(value: unknown): TaskRoutingDecision["thread"] | undefined {
+function normalizeThread(value: unknown): RoutingDecision["thread"] | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
@@ -27,26 +27,25 @@ function normalizeThread(value: unknown): TaskRoutingDecision["thread"] | undefi
   return { prompt, task, goal };
 }
 
-function normalizeTaskRoutingInput(value: unknown): TaskRoutingDecision {
+function normalizeRoutingInput(value: unknown): RoutingDecision {
   if (!isRecord(value)) {
     throw new Error("Expected route output to be an object.");
   }
 
   const rawRoute = asNonEmptyString(value.route)?.toLowerCase();
-  const route = rawRoute === "direct" || rawRoute === "task" || rawRoute === "thread" ? rawRoute : undefined;
-  if (!route) {
-    throw new Error("Expected route output to include route.");
+  if (!rawRoute) {
+    throw new Error("Expected route output to include a non-empty route.");
   }
   const message =
     asNonEmptyString(value.message) ??
     asNonEmptyString(value.answer) ??
     asNonEmptyString(value.response) ??
-    (route === "direct" ? "Done." : "Creating a task for this request.");
+    (rawRoute === "direct" ? "Done." : "Creating a task for this request.");
   const thread = normalizeThread(value.thread);
 
-  return Validators.taskRoutingDecision.Parse({
+  return Validators.routingDecision.Parse({
     message,
-    route,
+    route: rawRoute,
     ...(thread ? { thread } : {}),
   });
 }
@@ -55,8 +54,8 @@ export function parseTask(value: unknown): Task {
   return Validators.task.Parse(value);
 }
 
-export function parseTaskRoutingDecision(value: unknown): TaskRoutingDecision {
-  return normalizeTaskRoutingInput(value);
+export function parseRoutingDecision(value: unknown): RoutingDecision {
+  return normalizeRoutingInput(value);
 }
 
 export function normalizeVerificationResult(value: VerificationResult): VerificationResult {

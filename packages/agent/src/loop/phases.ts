@@ -1,7 +1,7 @@
 import { executeRuntimeToolCall } from "@rowan-agent/runtime/tools";
 import {
   parseTask,
-  parseTaskRoutingDecision,
+  parseRoutingDecision,
   parseVerificationResult,
 } from "../task";
 import { scheduleTaskRouting } from "./routing";
@@ -12,7 +12,7 @@ import type {
   ModelStreamEvent,
   Outcome,
   Task,
-  TaskRoutingDecision,
+  RoutingDecision,
   ToolCall,
   ToolResult,
   VerificationResult,
@@ -180,7 +180,7 @@ export async function planTask(context: AgentLoopContext, input: PlanInput): Pro
 export async function routeRequest(
   context: AgentLoopContext,
   input: RouteInput,
-): Promise<TaskRoutingDecision & { text: string }> {
+): Promise<RoutingDecision & { text: string }> {
   const collected = await collectTextAndStructured({
     context,
     events: context.config.stream(
@@ -201,8 +201,8 @@ export async function routeRequest(
   const decision = scheduleTaskRouting({
     input: latestUserInput(input.state),
     tools: input.tools,
-    decision: parseTaskRoutingDecision(rawDecision),
-    defaultNeedsTaskRoute: input.shouldDefaultToThreadRoute ? "thread" : "task",
+    decision: parseRoutingDecision(rawDecision),
+    defaultTargetPhase: "plan",
     allowThreadRoute: input.canStartThreadRoute,
     workerTask: input.workerTask,
     workerGoal: input.workerGoal,

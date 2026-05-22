@@ -110,7 +110,7 @@ test("default config preserves execute/verify retry behavior", async () => {
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryVerifyStream(model, context) {
     if (context.phase === "route") {
-      yield { type: "structured_output", content: { route: "task", message: "Create task." } };
+      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
     }
@@ -175,7 +175,7 @@ test("default config preserves max attempt exhaustion", async () => {
   };
   const stream: StreamFn = async function* failingStream(_model, context) {
     if (context.phase === "route") {
-      yield { type: "structured_output", content: { route: "task", message: "Create task." } };
+      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
     }

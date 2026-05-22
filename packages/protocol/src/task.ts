@@ -26,9 +26,18 @@ export type Task = {
   attempts: number;
 };
 
-export type TaskRoutingDecision = {
-  route: "direct" | "task" | "thread";
+export type RoutingDecision = {
+  /**
+   * Routing target:
+   * - "direct": Answer directly without entering phase loop
+   * - "<phase-id>": Target phase ID to execute (e.g., "plan", "execute", "verify", "custom-phase")
+   */
+  route: "direct" | string;
   message: string;
+  /**
+   * @deprecated Use route to specify target phase instead
+   * Kept for backward compatibility
+   */
   thread?: {
     prompt: string;
     task: string;

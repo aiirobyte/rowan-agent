@@ -6,7 +6,7 @@ import type {
   AgentRunResult,
   Outcome,
   Task,
-  TaskRoutingDecision,
+  RoutingDecision,
 } from "../types";
 import {
   createId,
@@ -38,7 +38,7 @@ function shortThreadTitle(text: string): string {
   return compact.length > 60 ? `${compact.slice(0, 57)}...` : compact;
 }
 
-function createThreadTask(decision: TaskRoutingDecision, fallbackPrompt: string): Task {
+function createThreadTask(decision: RoutingDecision, fallbackPrompt: string): Task {
   const thread = decision.thread;
   const taskText = thread?.task ?? decision.message;
   const goalText = thread?.goal ?? `Thread outcome must satisfy: ${taskText || fallbackPrompt}`;
@@ -64,7 +64,7 @@ function createThreadTask(decision: TaskRoutingDecision, fallbackPrompt: string)
 
 export async function executeThreadRoute(
   input: AgentLoopRuntime,
-  decision: TaskRoutingDecision,
+  decision: RoutingDecision,
 ): Promise<Outcome> {
   if (input.threadDepth >= input.maxThreadDepth) {
     const task = createThreadTask(decision, latestUserInput(input.agentState));

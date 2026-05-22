@@ -9,7 +9,7 @@ import type {
   AgentState,
   Outcome,
   RunThread,
-  TaskRoutingDecision,
+  RoutingDecision,
   Tool,
 } from "./types";
 import {
@@ -67,7 +67,7 @@ export type AgentLoopRuntime = LoopRunInput & {
   toolResults: AgentLoopContext["state"]["toolResults"];
   currentTask?: AgentLoopContext["state"]["task"];
   lastExecuteText?: string;
-  lastRouteDecision?: TaskRoutingDecision;
+  lastRouteDecision?: RoutingDecision;
 };
 
 // ============================================================================

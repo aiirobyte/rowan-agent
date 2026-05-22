@@ -290,7 +290,7 @@ test("worker thread smoke tests do not recursively route on bare thread wording"
         (Array.isArray(event.delta) ? event.delta : [event.delta]).some(
           (delta) =>
             delta.metadata?.kind === "routing_decision" &&
-            delta.content.includes("\"route\":\"task\"") &&
+            delta.content.includes("\"route\":\"plan\"") &&
             delta.content.includes("worker thread"),
         ),
     ),
@@ -433,7 +433,7 @@ test("worker threads can recursively route until the thread depth limit", async 
         (Array.isArray(event.delta) ? event.delta : [event.delta]).some(
           (delta) =>
             delta.metadata?.kind === "routing_decision" &&
-            delta.content.includes("\"route\":\"task\""),
+            delta.content.includes("\"route\":\"plan\""),
         ),
     ),
   ).toBe(true);
@@ -470,7 +470,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       yield {
         type: "structured_output",
         content: {
-          route: "task",
+          route: "plan",
           message: "Start a nested thread.",
         },
       };

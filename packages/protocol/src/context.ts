@@ -5,7 +5,7 @@ import type {
   RuntimeDepth,
   Task,
   TaskOutput,
-  TaskRoutingDecision,
+  RoutingDecision,
   VerificationResult,
 } from "./task";
 import type { ToolCall, ToolResult } from "./tool";
@@ -74,7 +74,7 @@ export type LlmContext<TState extends AgentContextState = AgentContextState> =
     };
 
 export type LlmPhaseOutputMap = {
-  route: TaskRoutingDecision & {
+  route: RoutingDecision & {
     text: string;
   };
   plan: {

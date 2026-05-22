@@ -99,7 +99,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
       yield {
         type: "structured_output",
         content: {
-          route: "task",
+          route: "plan",
           message: "Routing from model.",
         },
       };
@@ -420,7 +420,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryVerifyStream(model, context) {
     if (context.phase === "route") {
-      yield { type: "structured_output", content: { route: "task", message: "Create task." } };
+      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
     }
@@ -496,7 +496,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryExecuteStream(model, context) {
     if (context.phase === "route") {
-      yield { type: "structured_output", content: { route: "task", message: "Create task." } };
+      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
     }
@@ -641,7 +641,7 @@ test("invalid tool args do not execute tool", async () => {
       yield {
         type: "structured_output",
         content: {
-          route: "task",
+          route: "plan",
           message: "Routing invalid args task.",
         },
       };
@@ -915,7 +915,7 @@ test("runtime phase port can abort with an outcome", async () => {
       yield {
         type: "structured_output",
         content: {
-          route: "task",
+          route: "plan",
           message: "Create a task.",
         },
       };

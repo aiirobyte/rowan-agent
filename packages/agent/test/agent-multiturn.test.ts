@@ -110,7 +110,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
         .map((message) => message.content);
       routeOutcomeContexts.push(outcomeMessages);
       const hasFailedOutcome = outcomeMessages.includes("Missing some functions to finish the task");
-      const route = latestUserInput(context.state) === "trigger failure" || hasFailedOutcome ? "task" : "direct";
+      const route = latestUserInput(context.state) === "trigger failure" || hasFailedOutcome ? "plan" : "direct";
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
       yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.state.messages.length } };

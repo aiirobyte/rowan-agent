@@ -8,7 +8,7 @@ import type {
   StreamFn,
   StreamOptions,
   Task,
-  TaskRoutingDecision,
+  RoutingDecision,
   ToolDefinition,
   ToolCall,
   VerificationResult,
@@ -687,24 +687,21 @@ function latestUserInput(context: Pick<LlmContext, "state">): string {
 function normalizeRoutingOutput(
   value: unknown,
   context: Extract<LlmContext, { phase: "route" }>,
-): TaskRoutingDecision {
+): RoutingDecision {
   const raw = unwrapRecord(value, "routingDecision");
   if (!isRecord(raw)) {
     throw validationError("route", "Expected a routing decision object.");
   }
 
   const routeValue = asString(getRecordValue(raw, "route"))?.toLowerCase();
-  const route = routeValue === "direct" || routeValue === "task" || routeValue === "thread"
-    ? routeValue
-    : undefined;
-  if (!route) {
-    throw validationError("route", "Expected route output to include route.");
+  if (!routeValue) {
+    throw validationError("route", "Expected route output to include a non-empty route.");
   }
   const message =
     asString(getRecordValue(raw, "message")) ??
     asString(getRecordValue(raw, "answer")) ??
     asString(getRecordValue(raw, "response")) ??
-    (route === "direct" ? latestUserInput(context) : "Creating a task for this request.");
+    (routeValue === "direct" ? latestUserInput(context) : "Creating a task for this request.");
   const rawThread = getRecordValue(raw, "thread");
   const thread = isRecord(rawThread)
     ? {
@@ -715,10 +712,10 @@ function normalizeRoutingOutput(
     : undefined;
 
   try {
-    return Validators.taskRoutingDecision.Parse({
-      route,
+    return Validators.routingDecision.Parse({
+      route: routeValue,
       message,
-      ...(route === "thread" && thread ? { thread } : {}),
+      ...(thread ? { thread } : {}),
     });
   } catch (error) {
     throw validationError("route", error);
