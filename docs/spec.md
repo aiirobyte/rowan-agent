@@ -1,6 +1,6 @@
 # Rowan Current Spec
 
-Last updated: 2026-05-21
+Last updated: 2026-05-25
 
 This file is the current planning entry point. Specific version plans now live under `docs/version/<semver>/`.
 
@@ -14,12 +14,12 @@ Project-level references:
 
 ## Active Version
 
-Active version: `0.4.5` planned
+Active version: `0.4.6` planned
 
-- Previous implemented baseline: `0.4.4`
-- Active version docs: `docs/version/0.4.5/`
-- Planning source: user correction on phase specialization ownership
-- Next version: `0.5.0` Context Projection And Provider IR planning after v0.4.5
+- Previous implemented baseline: `0.4.5`
+- Active version docs: `docs/version/0.4.6/`
+- Planning source: user corrections on chat entry phase, co-located phase prompts, and phase-internal thread capability
+- Next version: `0.5.0` Context Projection And Provider IR planning after v0.4.6
 
 ## Product Intent
 
@@ -40,7 +40,7 @@ If a change would make `agent` own provider wire-format repair, tool runtime int
 
 `agent` should retain live run lifecycle, Agent events, task/thread semantics, attempts, verification, and `AgentRunResult` assembly. Durable Session persistence belongs to the SessionManager at the composition/store boundary.
 
-v0.4.5 narrows loop ownership further: `runAgentLoop()` should own the generic phase-machine lifecycle, and every phase should run through the same base `runPhase()` path. Route, plan, execute, verify, thread, retry, direct-answer, and stop behavior live in configured phase definitions, not in specialized phase runners. Child/thread Agent run construction should be exposed as a phase-local `createRun` capability from `runPhase()`, not as a separate nested-run helper.
+v0.4.6 narrows loop ownership further: the entry phase is now `chat`, not `route`; phase prompts live beside their phase definitions; thread creation is a phase-internal `createRun` capability, not a phase or tool; and the loop engine reads `entryPhaseId` from config instead of hard-coding the initial phase.
 
 ## Version Index
 
@@ -58,7 +58,8 @@ v0.4.5 narrows loop ownership further: `runAgentLoop()` should own the generic p
 - `0.4.2`: Agent Loop IO Atomization. Complete.
 - `0.4.3`: Agent Loop Package Boundary Consolidation. Complete.
 - `0.4.4`: Agent Run Persistence And Data Flow Refactor. Complete.
-- `0.4.5`: Phase-Configured Agent Loop. Planned.
+- `0.4.5`: Phase-Configured Agent Loop. Complete.
+- `0.4.6`: Loop Phase Refactoring. Planned.
 - `0.5.0`: Context Projection And Provider IR. Planned.
 - `0.6.0`: Tool Runtime Policy Ports. Planned.
 - `0.7.0`: Replay, Fork, And Compaction. Planned.

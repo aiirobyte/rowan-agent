@@ -1,6 +1,6 @@
 # Rowan Todo
 
-Last updated: 2026-05-21
+Last updated: 2026-05-25
 
 Use this file as the cross-session checklist. In a new AI window, start with:
 
@@ -10,47 +10,49 @@ Read AGENT.md and docs/todo.md, then continue with the active version's next unc
 
 ## Active Version
 
-Active version: `0.4.5` planned
+Active version: `0.4.6` planned
 
-- Previous implemented baseline: `0.4.4`
-- Active version docs: `docs/version/0.4.5/`
-- Planning source: user correction on phase specialization ownership
-- Next version: `0.5.0` Context Projection And Provider IR planning after v0.4.5
+- Previous implemented baseline: `0.4.5`
+- Active version docs: `docs/version/0.4.6/`
+- Planning source: user corrections on chat entry phase, co-located phase prompts, and phase-internal thread capability
+- Next version: `0.5.0` Context Projection And Provider IR planning after v0.4.6
 
 ## Current Target
 
-Target: v0.4.5 Phase-Configured Agent Loop. Planned.
+Target: v0.4.6 Loop Phase Refactoring. Planned.
 
 Definition of done:
 
-- [x] Create `docs/version/0.4.5/spec.md`.
-- [x] Create `docs/version/0.4.5/prompt_plan.md`.
-- [x] Create `docs/version/0.4.5/todo.md`.
-- [x] Update root docs and version index for v0.4.5.
-- [ ] Add phase config contracts in `packages/agent/src/loop/phase-config.ts`.
-- [ ] Refactor `packages/agent/src/loop/phases.ts` so `runPhase()` is the base runner for configured phases.
-- [ ] Add built-in phase definitions in `packages/agent/src/loop/built-in-phases.ts`.
-- [ ] Move route scheduling and direct answer decisions into the route phase definition.
-- [ ] Move task creation into the plan phase definition.
-- [ ] Move tool execution effects into the execute phase definition.
-- [ ] Move verification, retry, and pass/fail outcome rules into the verify phase definition.
-- [ ] Move thread route execution behind phase definition behavior using `runPhase()`'s phase-local `createRun` capability.
-- [ ] Refactor `runAgentLoop()` into a generic phase-machine loop.
-- [ ] Support configured/custom phase definitions in tests.
-- [ ] Preserve default direct, task, thread, multi-turn, limits, invalid schema, invalid tool args, and verify retry behavior.
-- [ ] Update READMEs and architecture docs.
-- [ ] Run `bun test packages`.
-- [ ] Run `bun run build`.
-- [ ] Run `git diff --check`.
-- [ ] Update root docs after v0.4.5 completion.
+- [x] Create `docs/version/0.4.6/spec.md`.
+- [x] Create `docs/version/0.4.6/prompt_plan.md`.
+- [x] Create `docs/version/0.4.6/todo.md`.
+- [x] Update `docs/version/README.md`.
+- [ ] Rename `LlmPhase` to `LoopPhase` across the codebase.
+- [ ] Update protocol types: delete `RoutingDecision`, delete `ThreadTaskOutput`.
+- [ ] Create phase module structure under `loop/phases/`.
+- [ ] Move phase prompts to co-located phase modules.
+- [ ] Implement `chatPhaseDefinition` with dynamic phase routing.
+- [ ] Implement `planPhaseDefinition`, `executePhaseDefinition`, `verifyPhaseDefinition`.
+- [ ] Delete `loop/built-in-phases.ts`.
+- [ ] Delete `loop/routing.ts`.
+- [ ] Delete `loop/thread.ts`.
+- [ ] Update phase execution engine for new phase system.
+- [ ] Update main loop: delete `AgentRunStatus`, use `currentPhase`.
+- [ ] Update harness: keep only `buildSystemPrompt` in `prompt.ts`.
+- [ ] Update downstream: engine, logging, CLI.
+- [ ] Update all tests.
+- [ ] Run `npx tsc --noEmit`.
+- [ ] Run `bun test packages/agent/test/`.
+- [ ] Run `bun test packages/logging/test/`.
+- [ ] Run `bun test packages/cli/test/`.
 
 ## Next Prompt
 
-Start v0.4.5 Prompt 1.
+Start v0.4.6 Prompt 1.
 
 Expected next change:
 
-- Add phase config contracts and focused tests before rewriting `runAgentLoop()`.
+- Rename protocol phase types before moving phase definitions.
 
 ## Version Roadmap
 
@@ -68,7 +70,8 @@ Expected next change:
 - [x] v0.4.2 Agent Loop IO Atomization.
 - [x] v0.4.3 Agent Loop Package Boundary Consolidation.
 - [x] v0.4.4 Agent Run Persistence And Data Flow Refactor.
-- [ ] v0.4.5 Phase-Configured Agent Loop.
+- [x] v0.4.5 Phase-Configured Agent Loop.
+- [ ] v0.4.6 Loop Phase Refactoring.
 - [ ] v0.5.0 Context Projection And Provider IR.
 - [ ] v0.6.0 Tool Runtime Policy Ports.
 - [ ] v0.7.0 Replay, Fork, And Compaction.
@@ -84,7 +87,7 @@ Expected next change:
 - Do not add a second phase runner beside the base `runPhase()` path.
 - Do not keep a standalone nested-run/thread constructor outside `runPhase()`.
 - Do not make `agent` import `adapters`.
-- Do not start v0.5.0 context projection in v0.4.5.
+- Do not start v0.5.0 context projection in v0.4.6.
 - Do not keep compatibility for old `<session-id>.json` session files in v0.4.4.
 - Do not make `Agent` own durable persistence in v0.4.4.
 - Do not add public API compatibility shims unless the user explicitly asks.
@@ -99,4 +102,6 @@ Expected next change:
 - v0.4.4 was inserted before v0.5.0 on 2026-05-14 for Pi-style run persistence and data-flow refactoring.
 - v0.4.4 completed on 2026-05-14 with `bun test packages` and `bun run build` passing.
 - v0.4.5 was inserted before v0.5.0 on 2026-05-21 for phase-configured loop refactoring.
+- v0.4.5 completed before v0.4.6 planning.
+- v0.4.6 was inserted before v0.5.0 on 2026-05-25 for loop phase refactoring.
 - Update this file and the active version todo after every meaningful coding session.

@@ -1,28 +1,28 @@
 # Rowan Current Prompt Plan
 
-Last updated: 2026-05-21
+Last updated: 2026-05-25
 
 Specific version prompt plans live under `docs/version/<semver>/prompt_plan.md`.
 
 ## Active Version
 
-v0.4.5 is active. Continue with Prompt 1:
+v0.4.6 is active. Continue with Prompt 1:
 
 ```text
 Read AGENT.md.
 Read docs/todo.md.
 Read docs/spec.md.
 Read docs/version/README.md.
-Read docs/version/0.4.5/spec.md.
-Read docs/version/0.4.5/prompt_plan.md.
-Read docs/version/0.4.5/todo.md.
+Read docs/version/0.4.6/spec.md.
+Read docs/version/0.4.6/prompt_plan.md.
+Read docs/version/0.4.6/todo.md.
 Inspect the current diff with git status --short.
-Start Prompt 1: add phase config contracts and tests before rewriting the loop.
+Start Prompt 1: rename protocol phase types before moving phase definitions.
 ```
 
 Current next prompt:
 
-- v0.4.5 Prompt 1: Phase Config Contracts.
+- v0.4.6 Prompt 1: Protocol Types.
 
 ## Operating Rule
 
