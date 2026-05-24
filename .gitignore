@@ -1,10 +1,10 @@
 .DS_Store
 
-.agent/
+.agents/
 .codex/
 .claude/
 CLAUDE.md
-AGENT.md
+AGENTS.md
 
 node_modules/
 dist/
