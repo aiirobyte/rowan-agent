@@ -3,7 +3,7 @@ import Type from "typebox";
 import { createSession } from "@rowan-agent/session";
 import { Agent } from "../src/agent";
 import { runAgentLoop } from "../src/loop";
-import { createDefaultCriteria } from "../src/task";
+import { createDefaultCriteria } from "@rowan-agent/protocol";
 import type { AgentEvent, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";

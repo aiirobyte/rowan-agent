@@ -1,7 +1,7 @@
 import {
   createFailedOutcome,
   createOutcome,
-} from "../task";
+} from "./built-in-phases";
 import type {
   AgentRunResult,
   Outcome,
@@ -47,14 +47,7 @@ function createThreadTask(decision: RoutingDecision, fallbackPrompt: string): Ta
     id: createId("task"),
     title: `Thread: ${shortThreadTitle(taskText || fallbackPrompt)}`,
     instruction: taskText || fallbackPrompt,
-    acceptanceCriteria: [
-      {
-        id: createId("crit"),
-        type: "model_judge",
-        description: goalText,
-        required: true,
-      },
-    ],
+    acceptanceCriteria: [goalText],
     toolNames: [],
     skillIds: [],
     status: "pending",

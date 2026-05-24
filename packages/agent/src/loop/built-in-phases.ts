@@ -1,12 +1,8 @@
-import {
-  createDirectOutcome,
-  createFailedOutcome,
-  createOutcome,
-} from "../task";
 import type {
   AgentRunResult,
   Outcome,
   RoutingDecision,
+  Task,
   VerificationResult,
 } from "../types";
 import {
@@ -258,6 +254,44 @@ export const threadPhaseDefinition: AgentPhaseDefinition<ThreadPhaseInput, Outco
     return { type: "stop", outcome };
   },
 };
+
+// --- Outcome factories (moved from task.ts) ---
+
+function isInternalPlanningMessage(message: string): boolean {
+  return /^plan\s*:/i.test(message.trim());
+}
+
+export function createOutcome(task: Task, verification: VerificationResult): Outcome {
+  const normalizedVerification = Validators.verificationResult.Parse(verification);
+  return Validators.outcome.Parse({
+    id: createId("out"),
+    taskId: task.id,
+    passed: normalizedVerification.passed,
+    message: normalizedVerification.message,
+  });
+}
+
+export function createFailedOutcome(task: Task, verification?: VerificationResult): Outcome {
+  const message =
+    verification?.message && !isInternalPlanningMessage(verification.message)
+      ? verification.message
+      : "Task did not pass acceptance criteria.";
+
+  return Validators.outcome.Parse({
+    id: createId("out"),
+    taskId: task.id,
+    passed: false,
+    message,
+  });
+}
+
+export function createDirectOutcome(message: string): Outcome {
+  return Validators.outcome.Parse({
+    id: createId("out"),
+    passed: true,
+    message,
+  });
+}
 
 export function createBuiltinPhaseConfig() {
   return {

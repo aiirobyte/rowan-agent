@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { createDefaultCriteria, createFailedOutcome, parseTask, parseVerificationResult } from "../src/task";
+import { createDefaultCriteria, Validators } from "@rowan-agent/protocol";
+import { createFailedOutcome } from "../src/loop/built-in-phases";
 import { createId, nowIso } from "../src/types";
 
 test("parseTask validates structured task schema", () => {
-  const task = parseTask({
+  const task = Validators.task.Parse({
     id: createId("task"),
     title: "Example",
     instruction: "Do the thing",
@@ -15,15 +16,15 @@ test("parseTask validates structured task schema", () => {
   });
 
   expect(task.title).toBe("Example");
-  expect(task.acceptanceCriteria[0]?.type).toBe("model_judge");
+  expect(task.acceptanceCriteria[0]).toBe("Must be done");
 });
 
 test("parseTask rejects invalid task", () => {
-  expect(() => parseTask({ title: "bad" })).toThrow();
+  expect(() => Validators.task.Parse({ title: "bad" })).toThrow();
 });
 
 test("parseVerificationResult accepts lightweight pass/fail judgement", () => {
-  const result = parseVerificationResult({
+  const result = Validators.verificationResult.Parse({
     passed: true,
     message: "Looks fine.",
   });
@@ -35,7 +36,7 @@ test("parseVerificationResult accepts lightweight pass/fail judgement", () => {
 });
 
 test("createFailedOutcome does not expose internal planning messages", () => {
-  const task = parseTask({
+  const task = Validators.task.Parse({
     id: createId("task"),
     title: "Inspect workspace",
     instruction: "Inspect workspace language",

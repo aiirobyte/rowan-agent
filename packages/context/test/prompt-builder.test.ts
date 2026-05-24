@@ -269,7 +269,7 @@ test("verify prompt includes phase, lightweight judgement contract, task, criter
   expect(combined).toContain(task.id);
   expect(combined).toContain("Acceptance criteria");
   expect(combined).toContain("Task output");
-  expect(combined).toContain(task.acceptanceCriteria[0]?.description);
+  expect(combined).toContain(task.acceptanceCriteria[0]);
   expect(combined).toContain("echo evidence");
   expect(combined).toContain("\"toolResults\"");
   expect(combined).not.toContain("Conversation messages:");

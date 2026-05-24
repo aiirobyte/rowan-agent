@@ -9,7 +9,6 @@ import type {
 
 export { createId, Validators } from "@rowan-agent/protocol";
 export type {
-  AcceptanceCriterion,
   AgentLimitUsage,
   AgentRunLimits,
   ExecutionTurn,

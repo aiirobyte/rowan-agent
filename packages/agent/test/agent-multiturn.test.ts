@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Agent, type StreamFn } from "../src";
-import { createDefaultCriteria } from "../src/task";
+import { createDefaultCriteria } from "@rowan-agent/protocol";
 import { createId, latestUserInput } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";

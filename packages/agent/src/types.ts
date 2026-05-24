@@ -3,7 +3,6 @@ import { createId, Validators } from "@rowan-agent/protocol";
 import type { AgentRuntimePort } from "./loop/types";
 import type { AgentPhaseConfig } from "./loop/phase-config";
 import type {
-  AcceptanceCriterion,
   AgentContextMessage,
   AgentContextSkill,
   AgentLimitUsage,
@@ -53,7 +52,6 @@ export type {
 } from "./loop/types";
 
 export type {
-  AcceptanceCriterion,
   AgentLimitUsage,
   AgentRunLimits,
   LlmContext,

@@ -535,10 +535,7 @@ test("createOpenAICompatibleStream normalizes case-insensitive plan keys", async
     toolNames: ["echo"],
     skillIds: [],
   });
-  expect(task.acceptanceCriteria[0]).toMatchObject({
-    description: "Echo evidence is present.",
-    required: true,
-  });
+  expect(task.acceptanceCriteria[0]).toBe("Echo evidence is present.");
 });
 
 test("createOpenAICompatibleStream maps execute response to text and tool calls", async () => {

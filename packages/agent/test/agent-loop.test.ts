@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { runAgentLoop } from "../src/loop";
-import { createDefaultCriteria } from "../src/task";
+import { createDefaultCriteria } from "@rowan-agent/protocol";
 import type { AgentEvent, AgentRuntimePort, StreamFn, Tool } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";

@@ -1,9 +1,4 @@
 import { executeRuntimeToolCall } from "@rowan-agent/runtime/tools";
-import {
-  parseTask,
-  parseRoutingDecision,
-  parseVerificationResult,
-} from "../task";
 import { scheduleTaskRouting } from "./routing";
 import type {
   AgentLoopContext,
@@ -48,6 +43,86 @@ import {
 import type { AgentPhaseContext, AgentPhaseDefinition, AgentPhaseTransition } from "./phase-config";
 import type { AgentLoopRuntime } from "../loop";
 import { createAgentLoopContext } from "../loop";
+
+// --- Parse functions (moved from task.ts) ---
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeThread(value: unknown): RoutingDecision["thread"] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const prompt = asNonEmptyString(record.prompt);
+  const task = asNonEmptyString(record.task);
+  const goal = asNonEmptyString(record.goal);
+  if (!prompt || !task || !goal) {
+    return undefined;
+  }
+
+  return { prompt, task, goal };
+}
+
+function normalizeRoutingInput(value: unknown): RoutingDecision {
+  if (!isRecord(value)) {
+    throw new Error("Expected route output to be an object.");
+  }
+
+  const rawRoute = asNonEmptyString(value.route)?.toLowerCase();
+  if (!rawRoute) {
+    throw new Error("Expected route output to include a non-empty route.");
+  }
+  const message =
+    asNonEmptyString(value.message) ??
+    asNonEmptyString(value.answer) ??
+    asNonEmptyString(value.response) ??
+    (rawRoute === "direct" ? "Done." : "Creating a task for this request.");
+  const thread = normalizeThread(value.thread);
+
+  return Validators.routingDecision.Parse({
+    message,
+    route: rawRoute,
+    ...(thread ? { thread } : {}),
+  });
+}
+
+function parseRoutingDecision(value: unknown): RoutingDecision {
+  return normalizeRoutingInput(value);
+}
+
+function normalizeVerificationInput(value: unknown): VerificationResult {
+  if (!isRecord(value)) {
+    throw new Error("Expected verify output to be an object.");
+  }
+
+  if (typeof value.passed !== "boolean") {
+    throw new Error("Expected verify output to include boolean passed.");
+  }
+
+  const passed = value.passed;
+  const message =
+    typeof value.message === "string" && value.message.trim().length > 0
+      ? value.message
+      : passed === true
+        ? "Task passed."
+        : "Task failed.";
+
+  return Validators.verificationResult.Parse({
+    passed,
+    message,
+  });
+}
+
+function parseVerificationResult(value: unknown): VerificationResult {
+  return Validators.verificationResult.Parse(normalizeVerificationInput(value));
+}
+
+function parseTask(value: unknown): Task {
+  return Validators.task.Parse(value);
+}
 
 export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
   context: AgentLoopContext;

@@ -13,7 +13,7 @@ import type {
   ToolCall,
   VerificationResult,
 } from "@rowan-agent/protocol";
-import { createDefaultCriteria, createId, Validators } from "@rowan-agent/protocol";
+import { createId, Validators } from "@rowan-agent/protocol";
 
 export type OpenAICompatibleFetch = (
   input: Parameters<typeof fetch>[0],
@@ -619,58 +619,25 @@ function normalizeStringArray(value: unknown, fallback: string[]): string[] {
   });
 }
 
-function normalizeCriterionType(value: unknown): "model_judge" | "tool_observation" {
-  const type = asString(value)?.toLowerCase();
-  return type === "tool_observation" ? "tool_observation" : "model_judge";
-}
-
-function normalizeAcceptanceCriteria(value: unknown, instruction: string) {
+function normalizeAcceptanceCriteria(value: unknown, instruction: string): string[] {
   if (!Array.isArray(value) || value.length === 0) {
-    return createDefaultCriteria(`The outcome must address: ${shortTitle(instruction)}`);
+    return [shortTitle(instruction)];
   }
 
   return value.map((criterion, index) => {
     if (typeof criterion === "string") {
-      return {
-        id: createId("crit"),
-        type: "model_judge",
-        description: criterion,
-        required: true,
-      };
+      return criterion;
     }
 
     if (isRecord(criterion)) {
-      const type = normalizeCriterionType(getRecordValue(criterion, "type"));
-      const normalized = {
-        id: asString(getRecordValue(criterion, "id")) ?? createId("crit"),
-        type,
-        description:
-          asString(getRecordValue(criterion, "description", "message", "content", "summary")) ??
-          `Criterion ${index + 1}`,
-        required: normalizeBoolean(getRecordValue(criterion, "required"), true),
-      };
-      const toolName = asString(getRecordValue(criterion, "toolName", "tool_name"));
-      return type === "tool_observation" && toolName ? { ...normalized, toolName } : normalized;
+      return (
+        asString(getRecordValue(criterion, "description", "message", "content", "summary")) ??
+        `Criterion ${index + 1}`
+      );
     }
 
-    return criterion;
+    return String(criterion);
   });
-}
-
-function normalizeBoolean(value: unknown, fallback: boolean): boolean {
-  if (typeof value === "boolean") {
-    return value;
-  }
-
-  const normalized = asString(value)?.toLowerCase();
-  if (normalized === "true" || normalized === "passed" || normalized === "pass" || normalized === "yes") {
-    return true;
-  }
-  if (normalized === "false" || normalized === "failed" || normalized === "fail" || normalized === "no") {
-    return false;
-  }
-
-  return fallback;
 }
 
 function latestUserInput(context: Pick<LlmContext, "state">): string {

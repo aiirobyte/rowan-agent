@@ -1,7 +1,6 @@
 import type { LlmPhase } from "./phase";
 import type { ModelCallUsage, ModelRef } from "./model";
 import type {
-  AcceptanceCriterion,
   RuntimeDepth,
   Task,
   TaskOutput,
@@ -69,7 +68,7 @@ export type LlmContext<TState extends AgentContextState = AgentContextState> =
       state: TState;
       task: Task;
       taskOutput: TaskOutput;
-      criteria: AcceptanceCriterion[];
+      criteria: string[];
       runtime?: RuntimeDepth;
     };
 

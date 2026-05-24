@@ -51,46 +51,24 @@ function requireStringArray(value: unknown, label: string): string[] {
   return value;
 }
 
-function parseAcceptanceCriterion(value: unknown): Task["acceptanceCriteria"][number] {
-  const record = requireRecord(value, "acceptance criterion");
-  const id = requireString(record.id, "acceptance criterion id");
-  const description = requireString(record.description, "acceptance criterion description");
-  const required = requireBoolean(record.required, "acceptance criterion required");
-  const type = record.type;
-
-  if (type === "model_judge") {
-    return { id, type, description, required };
-  }
-
-  if (type === "tool_observation") {
-    const toolName = optionalString(record.toolName, "acceptance criterion toolName");
-    return {
-      id,
-      type,
-      description,
-      required,
-      ...(toolName ? { toolName } : {}),
-    };
-  }
-
-  throw new Error("Expected acceptance criterion type to be model_judge or tool_observation.");
-}
-
 function parseTask(value: unknown): Task {
   const record = requireRecord(value, "task");
   const status = record.status;
   if (status !== "pending" && status !== "running" && status !== "passed" && status !== "failed") {
     throw new Error("Expected task status to be pending, running, passed, or failed.");
   }
-  if (!Array.isArray(record.acceptanceCriteria)) {
-    throw new Error("Expected task acceptanceCriteria to be an array.");
-  }
 
   return {
     id: requireString(record.id, "task id"),
     title: requireString(record.title, "task title"),
     instruction: requireString(record.instruction, "task instruction"),
-    acceptanceCriteria: record.acceptanceCriteria.map(parseAcceptanceCriterion),
+    acceptanceCriteria: Array.isArray(record.acceptanceCriteria)
+      ? record.acceptanceCriteria.map((c: unknown) =>
+          typeof c === "string" ? c
+          : isRecord(c) && typeof c.description === "string" ? c.description
+          : String(c)
+        )
+      : [],
     toolNames: requireStringArray(record.toolNames, "task toolNames"),
     skillIds: requireStringArray(record.skillIds, "task skillIds"),
     status,
@@ -179,13 +157,6 @@ export function createId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
 }
 
-export function createDefaultCriteria(description: string): Task["acceptanceCriteria"] {
-  return [
-    {
-      id: createId("crit"),
-      type: "model_judge",
-      description,
-      required: true,
-    },
-  ];
+export function createDefaultCriteria(description: string): string[] {
+  return [description];
 }

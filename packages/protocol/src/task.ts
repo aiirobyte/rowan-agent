@@ -1,25 +1,10 @@
 import type { ToolResult } from "./tool";
 
-export type AcceptanceCriterion =
-  | {
-      id: string;
-      type: "model_judge";
-      description: string;
-      required: boolean;
-    }
-  | {
-      id: string;
-      type: "tool_observation";
-      description: string;
-      toolName?: string;
-      required: boolean;
-    };
-
 export type Task = {
   id: string;
   title: string;
   instruction: string;
-  acceptanceCriteria: AcceptanceCriterion[];
+  acceptanceCriteria: string[];
   toolNames: string[];
   skillIds: string[];
   status: "pending" | "running" | "passed" | "failed";
