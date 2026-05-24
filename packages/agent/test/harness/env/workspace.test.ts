@@ -5,15 +5,13 @@ import { join } from "node:path";
 import { createDefaultCriteria } from "@rowan-agent/agent";
 import { createSession } from "@rowan-agent/agent";
 import {
-  createId,
   detectRuntimeMode,
   findSourceWorkspaceRoot,
   resolveInWorkspace,
   resolveWorkspacePaths,
   resolveWorkspacePath,
-  type Tool,
-  type ToolContext,
 } from "../../../src/harness/env";
+import { createId, type Tool, type ToolContext } from "../../../src/harness/types";
 import { createCoreTools } from "../../../src/harness/tools";
 import { loadSkill, resolveSkillPath } from "../../../src/harness/skills";
 

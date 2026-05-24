@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import Type from "typebox";
 import Schema from "typebox/schema";
 import { Validators, type Task, type ToolCall, type ToolResult } from "../protocol";
-import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "./env/types";
+import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "./types";
 
 const DEFAULT_MAX_READ_BYTES = 64_000;
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;

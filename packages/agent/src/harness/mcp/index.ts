@@ -1,4 +1,4 @@
-import type { Tool } from "../env/types";
+import type { Tool } from "../types";
 
 export type McpToolProvider = {
   name: string;

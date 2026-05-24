@@ -5,9 +5,9 @@ import type {
   AgentRunLimits,
   Task,
   ToolResult,
-} from "../../protocol";
+} from "../protocol";
 
-export { createId, Validators } from "../../protocol";
+export { createId, Validators } from "../protocol";
 export type {
   AgentLimitUsage,
   AgentRunLimits,
@@ -31,7 +31,7 @@ export type {
   ToolResult,
   ToolTaskOutput,
   VerificationResult,
-} from "../../protocol";
+} from "../protocol";
 
 export type RuntimeThreadInput = {
   parentSessionId?: string;
