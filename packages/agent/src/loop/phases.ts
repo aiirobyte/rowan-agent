@@ -1,4 +1,4 @@
-import { executeRuntimeToolCall } from "@rowan-agent/runtime/tools";
+import { executeRuntimeToolCall } from "../harness/tools";
 import { scheduleTaskRouting } from "./routing";
 import type {
   AgentLoopContext,

@@ -13,9 +13,6 @@
   "dependencies": {
     "@rowan-agent/adapters": "workspace:*",
     "@rowan-agent/agent": "workspace:*",
-    "@rowan-agent/logging": "workspace:*",
-    "@rowan-agent/runtime": "workspace:*",
-    "@rowan-agent/session": "workspace:*",
-    "@rowan-agent/store": "workspace:*"
+    "@rowan-agent/logging": "workspace:*"
   }
 }

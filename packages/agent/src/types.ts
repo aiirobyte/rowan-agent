@@ -1,5 +1,5 @@
 import Type from "typebox";
-import { createId, Validators } from "@rowan-agent/protocol";
+import { createId, Validators } from "./protocol";
 import type { AgentRuntimePort } from "./loop/types";
 import type { AgentPhaseConfig } from "./loop/phase-config";
 import type {
@@ -28,7 +28,7 @@ import type {
   ToolResult,
   ToolTaskOutput,
   VerificationResult,
-} from "@rowan-agent/protocol";
+} from "./protocol";
 export { createId, Validators };
 export type {
   AgentEffect,
@@ -74,7 +74,7 @@ export type {
   ToolResult,
   ToolTaskOutput,
   VerificationResult,
-} from "@rowan-agent/protocol";
+} from "./protocol";
 
 export const DEFAULT_MAX_THREAD_DEPTH = 4;
 export const AGENT_STATE_SCHEMA_VERSION = "0.4.4";

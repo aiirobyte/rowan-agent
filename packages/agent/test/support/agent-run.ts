@@ -1,4 +1,4 @@
-import { createMessage, type AgentMessage } from "@rowan-agent/session";
+import { createMessage, type AgentMessage } from "@rowan-agent/agent";
 import type { Agent, AgentRunOverride } from "../../src/agent";
 import type { AgentContext, Tool } from "../../src/types";
 

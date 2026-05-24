@@ -8,8 +8,6 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/protocol": "workspace:*",
-    "@rowan-agent/runtime": "workspace:*",
     "typebox": "^1.0.0"
   }
 }

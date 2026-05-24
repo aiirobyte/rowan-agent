@@ -14,9 +14,9 @@ import {
   type LlmPhaseOutputMap,
   type ModelStreamEvent,
   type Task,
-} from "@rowan-agent/protocol";
-import { createId, createSession } from "@rowan-agent/session";
-import type { Tool } from "@rowan-agent/runtime/types";
+} from "@rowan-agent/agent";
+import { createId, createSession } from "@rowan-agent/agent";
+import type { Tool } from "@rowan-agent/agent";
 import { echoTool } from "../../agent/test/support/echo-tool";
 
 function jsonResponse(content: string, usage?: Record<string, number>): Response {

@@ -24,8 +24,8 @@ import {
 } from "@rowan-agent/logging";
 import {
   type SessionManagerSessionListItem,
-} from "@rowan-agent/session";
-import { LocalJsonlSessionManager } from "@rowan-agent/store";
+} from "@rowan-agent/agent";
+import { LocalJsonlSessionManager } from "@rowan-agent/agent";
 import {
   createCoreTools,
   loadSkills,
@@ -33,7 +33,7 @@ import {
   type WorkspacePaths,
   resolveInWorkspace,
   resolveWorkspacePaths,
-} from "@rowan-agent/runtime";
+} from "@rowan-agent/agent";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
 
 type CliCommand = "config" | "list";

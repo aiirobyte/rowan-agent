@@ -1,4 +1,4 @@
-import { buildOpenAICompatiblePrompt, type ChatMessage } from "@rowan-agent/context";
+import { buildOpenAICompatiblePrompt, type ChatMessage } from "@rowan-agent/agent";
 import { extractJsonObject } from "./json-extract";
 import type {
   LlmContext,
@@ -12,8 +12,8 @@ import type {
   ToolDefinition,
   ToolCall,
   VerificationResult,
-} from "@rowan-agent/protocol";
-import { createId, Validators } from "@rowan-agent/protocol";
+} from "@rowan-agent/agent";
+import { createId, Validators } from "@rowan-agent/agent";
 
 export type OpenAICompatibleFetch = (
   input: Parameters<typeof fetch>[0],

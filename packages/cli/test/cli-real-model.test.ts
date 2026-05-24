@@ -3,8 +3,8 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentEvent, Outcome } from "@rowan-agent/agent";
-import { LocalJsonlSessionManager } from "@rowan-agent/store";
-import { createMessage } from "@rowan-agent/session";
+import { LocalJsonlSessionManager } from "@rowan-agent/agent";
+import { createMessage } from "@rowan-agent/agent";
 import { formatOutcomeOutput } from "../src/output";
 
 type AgentEventLogRecord = Record<string, unknown> & {

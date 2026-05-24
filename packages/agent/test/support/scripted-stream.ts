@@ -1,6 +1,6 @@
 import type { StreamFn, Task, TaskOutput, ToolResult } from "../../src/types";
 import { createId, latestUserInput } from "../../src/types";
-import { createDefaultCriteria } from "@rowan-agent/protocol";
+import { createDefaultCriteria } from "@rowan-agent/agent";
 
 function wantsEcho(input: string): boolean {
   return /\becho\b|tool|工具|use echo/i.test(input);

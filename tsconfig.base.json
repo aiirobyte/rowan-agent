@@ -7,24 +7,14 @@
     "noEmit": true,
     "types": ["bun"],
     "paths": {
-      "@rowan-agent/protocol": ["./packages/protocol/src/index.ts"],
-      "@rowan-agent/protocol/*": ["./packages/protocol/src/*"],
       "@rowan-agent/agent": ["./packages/agent/src/index.ts"],
       "@rowan-agent/agent/*": ["./packages/agent/src/*"],
-      "@rowan-agent/session": ["./packages/session/src/index.ts"],
-      "@rowan-agent/session/*": ["./packages/session/src/*"],
-      "@rowan-agent/store": ["./packages/store/src/index.ts"],
-      "@rowan-agent/store/*": ["./packages/store/src/*"],
       "@rowan-agent/logging": ["./packages/logging/src/index.ts"],
       "@rowan-agent/logging/*": ["./packages/logging/src/*"],
       "@rowan-agent/adapters": ["./packages/adapters/src/index.ts"],
       "@rowan-agent/adapters/*": ["./packages/adapters/src/*"],
-      "@rowan-agent/runtime": ["./packages/runtime/src/index.ts"],
-      "@rowan-agent/runtime/*": ["./packages/runtime/src/*"],
       "@rowan-agent/cli": ["./packages/cli/src/index.ts"],
-      "@rowan-agent/cli/*": ["./packages/cli/src/*"],
-      "@rowan-agent/context": ["./packages/context/src/index.ts"],
-      "@rowan-agent/context/*": ["./packages/context/src/*"]
+      "@rowan-agent/cli/*": ["./packages/cli/src/*"]
     }
   }
 }

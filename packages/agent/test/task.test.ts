@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createDefaultCriteria, Validators } from "@rowan-agent/protocol";
+import { createDefaultCriteria, Validators } from "@rowan-agent/agent";
 import { createFailedOutcome } from "../src/loop/built-in-phases";
 import { createId, nowIso } from "../src/types";
 

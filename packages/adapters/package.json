@@ -8,7 +8,6 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/context": "workspace:*",
-    "@rowan-agent/protocol": "workspace:*"
+    "@rowan-agent/agent": "workspace:*"
   }
 }
