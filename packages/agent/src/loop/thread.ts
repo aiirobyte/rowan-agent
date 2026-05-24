@@ -12,7 +12,6 @@ import {
   createId,
   createMessage,
   latestUserInput,
-  nowIso,
   Validators,
 } from "../types";
 import {
@@ -24,7 +23,6 @@ import type { AgentLoopRuntime } from "../loop";
 import {
   appendMessage,
   createAgentLoopContext,
-  emit,
 } from "../loop";
 import {
   runPhase,
@@ -89,20 +87,8 @@ export async function executeThreadRoute(
     currentInput,
   );
 
-  await emit(input, {
-    type: "task_created",
-    task,
-    ts: nowIso(),
-  });
-
   task.status = "running";
   task.attempts = 1;
-  await emit(input, {
-    type: "task_start",
-    taskId: task.id,
-    attempt: 1,
-    ts: nowIso(),
-  });
 
   const thread = await input.runThread({
     prompt,
@@ -129,13 +115,6 @@ export async function executeThreadRoute(
       scope: "execution",
     }),
   );
-
-  await emit(input, {
-    type: "task_end",
-    taskId: task.id,
-    attempt: 1,
-    ts: nowIso(),
-  });
 
   input.status = "verifying";
   const verifyPhaseResult = await runPhase(

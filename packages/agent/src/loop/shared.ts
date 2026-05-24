@@ -2,7 +2,6 @@ import type {
   AgentLimitUsage,
   AgentMessage,
   AgentState,
-  ErrorInfo,
   LlmPhase,
   Outcome,
   RuntimeDepth,
@@ -36,49 +35,6 @@ export class LimitExceededError extends Error {
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function detailsFromError(error: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(error)) {
-    return undefined;
-  }
-
-  const details = error.details;
-  const normalizedDetails = isRecord(details) ? { ...details } : {};
-  const status = typeof error.status === "number" ? error.status : undefined;
-  const name = asString(error.name);
-
-  if (status !== undefined) {
-    normalizedDetails.status = status;
-  }
-  if (name && name !== "Error") {
-    normalizedDetails.name = name;
-  }
-
-  return Object.keys(normalizedDetails).length > 0 ? normalizedDetails : undefined;
-}
-
-export function makeError(error: unknown): ErrorInfo {
-  const record = isRecord(error) ? error : undefined;
-  const code = asString(record?.code) ?? "agent_loop_failed";
-  const message = error instanceof Error ? error.message : error === undefined ? "Agent loop failed." : String(error);
-  const retryable = asBoolean(record?.retryable) ?? false;
-  const details = detailsFromError(error);
-
-  return {
-    code,
-    message,
-    retryable,
-    ...(details ? { details } : {}),
-  };
 }
 
 export function errorMessage(error: unknown): string {

@@ -16,7 +16,7 @@ type AgentEventLogRecord = Record<string, unknown> & {
 };
 
 type LoggedEventSummary = {
-  type: AgentEvent["type"];
+  type: string;
   ts?: string;
   phase?: string;
   sessionId?: string;
@@ -737,13 +737,15 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     const logPath = join(workspace, logMatch?.[1] ?? "");
     const logText = await Bun.file(logPath).text();
     const logEvents = await readLogEvents(logPath);
-    const routeCallIndex = logEvents.findIndex(
-      (event) => event.type === "model_requested" && event.phase === "route",
+    const routePhaseIndex = logEvents.findIndex(
+      (event) => event.type === "phase_start" && event.phase === "route",
     );
-    const taskCreatedIndex = logEvents.findIndex((event) => event.type === "task_created");
-    expect(routeCallIndex).toBeGreaterThanOrEqual(0);
-    expect(taskCreatedIndex).toBeGreaterThan(routeCallIndex);
-    expect(logText).toContain("\"eventType\":\"tool_start\"");
+    const executePhaseIndex = logEvents.findIndex(
+      (event) => event.type === "phase_start" && event.phase === "execute",
+    );
+    expect(routePhaseIndex).toBeGreaterThanOrEqual(0);
+    expect(executePhaseIndex).toBeGreaterThan(routePhaseIndex);
+    expect(logText).toContain("\"eventType\":\"tool_execution_start\"");
     expect(logText).not.toContain("\"toolName\":\"bash\"");
     expect(logText).not.toContain("cli-bash-ok");
   } finally {

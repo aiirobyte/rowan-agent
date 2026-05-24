@@ -226,19 +226,12 @@ export type RunThread = (
   input: AgentThreadStartConfig,
 ) => Promise<Extract<AgentRunResult, { kind: "thread" }>>;
 
-export type ErrorInfo = {
-  code: string;
-  message: string;
-  retryable: boolean;
-  details?: Record<string, unknown>;
-};
-
 export type AgentEvent =
+  // Agent lifecycle
   | {
       type: "chat_start";
-      content: AgentMessage[];
       sessionId: string;
-      /** Present when this is a thread run */
+      content: AgentMessage[];
       parentSessionId?: string;
       prompt?: string;
       task?: string;
@@ -247,56 +240,27 @@ export type AgentEvent =
       maxThreadDepth?: number;
       ts: string;
     }
-  | { type: "message_delta"; delta: AgentMessage | AgentMessage[]; ts: string }
   | {
       type: "chat_end";
-      content: AgentMessage[];
       sessionId: string;
-      /** Present when this is a thread run */
+      content: AgentMessage[];
       outcome?: Outcome;
       limitUsage?: AgentLimitUsage;
       threadDepth?: number;
       maxThreadDepth?: number;
       ts: string;
     }
-  | {
-      type: "model_requested";
-      phase: LlmPhase;
-      model: ModelRef;
-      usage: ModelCallUsage;
-      ts: string;
-    }
-  | { type: "task_created"; task: Task; ts: string }
-  | { type: "task_start"; taskId: string; attempt: number; ts: string }
-  | { type: "task_end"; taskId: string; attempt: number; ts: string }
-  | { type: "tool_requested"; toolCall: ToolCall; ts: string }
-  | { type: "tool_approval_requested"; taskId: string; toolName: string; args: unknown; ts: string }
-  | {
-      type: "tool_approval_result";
-      taskId: string;
-      toolName: string;
-      args: unknown;
-      decision: { allow: true } | { allow: false; reason: string };
-      ts: string;
-    }
-  | { type: "tool_start"; toolName: string; args: unknown; ts: string }
-  | { type: "tool_end"; toolName: string; result: ToolResult; ts: string }
-  | { type: "tool_blocked"; toolName: string; reason: string; ts: string }
-  | { type: "tool_result_review_requested"; taskId: string; toolName: string; result: ToolResult; ts: string }
-  | { type: "tool_result_review_result"; taskId: string; toolName: string; result: ToolResult; ts: string }
-  | { type: "verification_start"; taskId: string; ts: string }
-  | { type: "verification_end"; taskId: string; result: VerificationResult; ts: string }
-  | {
-      type: "limit_exceeded";
-      resource: keyof AgentLimitUsage;
-      limit: number;
-      usage: AgentLimitUsage;
-      message: string;
-      taskId?: string;
-      ts: string;
-    }
-  | { type: "outcome"; outcome: Outcome; ts: string }
-  | { type: "error"; error: ErrorInfo; ts: string };
+  // Phase lifecycle
+  | { type: "phase_start"; phase: LlmPhase; ts: string }
+  | { type: "phase_end"; phase: LlmPhase; ts: string }
+  // Message lifecycle
+  | { type: "message_start"; message: AgentMessage; ts: string }
+  | { type: "message_update"; message: AgentMessage; delta: string; ts: string }
+  | { type: "message_end"; message: AgentMessage; ts: string }
+  // Tool execution lifecycle
+  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; ts: string }
+  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; ts: string }
+  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean; ts: string };
 
 export type AgentEventListener = ((event: AgentEvent) => void | Promise<void>) & {
   flush?: () => void | Promise<void>;

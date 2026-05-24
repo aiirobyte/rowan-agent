@@ -43,9 +43,7 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining(["first", expect.stringContaining("First answer"), "second"]),
   );
-  expect(events).toEqual(expect.arrayContaining(["chat_start", "outcome"]));
-  expect(events).not.toContain("agent_state_created");
-  expect(events).not.toContain("agent_state_loaded");
+  expect(events).toEqual(expect.arrayContaining(["chat_start"]));
 });
 
 test("Agent keeps conversation messages separate from execution steps", async () => {
@@ -96,9 +94,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
       (message) => message.role === "assistant" && message.metadata?.kind === "outcome",
     ),
   ).toBe(false);
-  expect(events).toEqual(expect.arrayContaining(["model_requested", "tool_requested", "tool_end"]));
-  expect(events).not.toContain("agent_state_created");
-  expect(events).not.toContain("agent_state_loaded");
+  expect(events).toEqual(expect.arrayContaining(["tool_execution_start", "tool_execution_end"]));
 });
 
 test("Agent does not carry failed task outcomes into later turns", async () => {

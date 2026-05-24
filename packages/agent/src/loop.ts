@@ -26,7 +26,6 @@ import {
   cloneLimitUsage,
   createLimitExceededOutcome,
   LimitExceededError,
-  makeError,
   runtimeDepth,
   snapshotMessage,
   snapshotMessages,
@@ -156,7 +155,9 @@ export async function appendMessage(
     runtime.agentState.messages.push(message);
   }
   runtime.transcript.push(message);
-  await emit(runtime, { type: "message_delta", delta: snapshotMessage(message), ts: nowIso() });
+  const snapshot = snapshotMessage(message);
+  await emit(runtime, { type: "message_start", message: snapshot, ts: nowIso() });
+  await emit(runtime, { type: "message_end", message: snapshot, ts: nowIso() });
 }
 
 export async function appendAssistantMessage(
@@ -263,7 +264,6 @@ export async function completeRun(runtime: AgentLoopRuntime, outcome: Outcome): 
     outcome: result.outcome,
     limitUsage: result.limitUsage,
   });
-  await emit(runtime, { type: "outcome", outcome, ts: nowIso() });
   return result;
 }
 
@@ -375,7 +375,13 @@ function createLoopThread(parent: AgentLoopRuntime): RunThread {
 export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResult> {
   const runtime = createLoopRuntime(input);
   runtime.runThread ??= createLoopThread(runtime);
+  return runWithLifecycle(runtime, runLoop);
+}
 
+async function runWithLifecycle(
+  runtime: AgentLoopRuntime,
+  loop: (runtime: AgentLoopRuntime) => Promise<AgentRunResult>,
+): Promise<AgentRunResult> {
   try {
     if (runtime.kind === "thread" && runtime.threadDepth > runtime.maxThreadDepth) {
       const outcome = Validators.outcome.Parse({
@@ -389,13 +395,13 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
     assertNotAborted(runtime.signal);
     await emitChat(runtime, "chat_start");
 
-    return await runPhaseLoop(runtime);
+    return await loop(runtime);
   } catch (error) {
     return handleLoopError(runtime, error);
   }
 }
 
-async function runPhaseLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
+async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
   const config = runtime.phaseConfig ?? createBuiltinPhaseConfig();
   if (runtime.phaseConfig) validatePhaseConfig(config);
 
@@ -425,18 +431,8 @@ async function runPhaseLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> 
 async function handleLoopError(runtime: AgentLoopRuntime, error: unknown): Promise<AgentRunResult> {
   if (error instanceof LimitExceededError) {
     const outcome = createLimitExceededOutcome(error, runtime.currentTask);
-    await emit(runtime, {
-      type: "limit_exceeded",
-      resource: error.resource,
-      limit: error.limit,
-      usage: error.usage,
-      message: error.message,
-      ...(runtime.currentTask ? { taskId: runtime.currentTask.id } : {}),
-      ts: nowIso(),
-    });
     return completeRun(runtime, outcome);
   }
 
-  await emit(runtime, { type: "error", error: makeError(error), ts: nowIso() });
   throw error;
 }

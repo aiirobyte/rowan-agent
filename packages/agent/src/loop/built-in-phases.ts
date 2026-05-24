@@ -9,7 +9,6 @@ import {
   createId,
   createMessage,
   latestUserInput,
-  nowIso,
   Validators,
 } from "../types";
 import type {
@@ -20,7 +19,6 @@ import type { AgentLoopRuntime } from "../loop";
 import {
   appendMessage,
   createAgentLoopContext,
-  emit,
   appendAssistantMessage,
 } from "../loop";
 import {
@@ -110,11 +108,6 @@ export const planPhaseDefinition: AgentPhaseDefinition<
 
   async apply(runtime, output): Promise<AgentPhaseTransition> {
     runtime.currentTask = output.task;
-    await emit(runtime, {
-      type: "task_created",
-      task: output.task,
-      ts: nowIso(),
-    });
     return { type: "next", phaseId: "execute" };
   },
 };
@@ -136,13 +129,6 @@ export const executePhaseDefinition: AgentPhaseDefinition<ExecutePhaseInput, Exe
     task.status = "running";
     task.attempts = runtime.attempt;
 
-    await emit(runtime, {
-      type: "task_start",
-      taskId: task.id,
-      attempt: runtime.attempt,
-      ts: nowIso(),
-    });
-
     return {
       state: runtime.agentState,
       task,
@@ -159,13 +145,6 @@ export const executePhaseDefinition: AgentPhaseDefinition<ExecutePhaseInput, Exe
     if (output.text.trim().length > 0) {
       runtime.lastExecuteText = output.text;
     }
-
-    await emit(runtime, {
-      type: "task_end",
-      taskId: input.task.id,
-      attempt: runtime.attempt,
-      ts: nowIso(),
-    });
 
     // Check if verify phase exists in the phase config
     const hasVerifyPhase = runtime.phaseConfig?.phases.some((p) => p.id === "verify") ?? true;

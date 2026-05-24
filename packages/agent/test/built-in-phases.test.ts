@@ -53,10 +53,8 @@ test("default config preserves task plan/execute/verify behavior", async () => {
   });
 
   expect(outcome.outcome.passed).toBe(true);
-  expect(events).toContain("task_created");
-  expect(events).toContain("tool_end");
-  expect(events).toContain("verification_end");
-  expect(events).toContain("outcome");
+  expect(events).toContain("tool_execution_end");
+  expect(events).toContain("phase_end");
 });
 
 test("custom phase config without verify phase skips verification", async () => {
@@ -86,10 +84,7 @@ test("custom phase config without verify phase skips verification", async () => 
   });
 
   expect(outcome.outcome.passed).toBe(true);
-  expect(events).toContain("task_created");
-  expect(events).toContain("tool_end");
-  expect(events).not.toContain("verification_start");
-  expect(events).not.toContain("verification_end");
+  expect(events).toContain("tool_execution_end");
 });
 
 test("default config preserves execute/verify retry behavior", async () => {

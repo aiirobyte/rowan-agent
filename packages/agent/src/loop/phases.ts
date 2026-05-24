@@ -32,7 +32,6 @@ import {
   createInvalidExecuteToolResult,
   createInvalidModelVerification,
   createToolTaskOutput,
-  errorMessage,
   executePhase,
   isInvalidModelSchemaError,
   isRecord,
@@ -42,7 +41,7 @@ import {
 } from "./shared";
 import type { AgentPhaseContext, AgentPhaseDefinition, AgentPhaseTransition } from "./phase-config";
 import type { AgentLoopRuntime } from "../loop";
-import { createAgentLoopContext } from "../loop";
+import { createAgentLoopContext, emit } from "../loop";
 
 // --- Parse functions (moved from task.ts) ---
 
@@ -160,24 +159,11 @@ export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
     assertNotAborted(input.context.signal);
 
     if (event.type === "prompt_message") {
-      await input.context.appendMessage(
-        createMessage(event.message.role, event.message.content, {
-          kind: "phase_prompt",
-          phase: event.phase,
-          scope: "execution",
-        }),
-      );
+      // Internal execution detail — not emitted as a message event.
     }
 
     if (event.type === "model_requested") {
       input.context.consumeLimit("modelCalls");
-      await input.context.emit({
-        type: "model_requested",
-        phase: event.phase,
-        model: event.model,
-        usage: event.usage,
-        ts: nowIso(),
-      });
     }
 
     if (event.type === "text_delta") {
@@ -185,7 +171,6 @@ export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
     }
 
     if (event.type === "structured_output") {
-      await flushText();
       structured = event.content;
     }
 
@@ -201,11 +186,6 @@ export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
         for (const outputToolCall of (event.output as LlmPhaseOutputMap["execute"]).toolCalls) {
           const toolCall = Validators.toolCall.Parse(outputToolCall);
           toolCalls.push(toolCall);
-          await input.context.emit({
-            type: "tool_requested",
-            toolCall,
-            ts: nowIso(),
-          });
         }
       }
     }
@@ -214,11 +194,6 @@ export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
       await flushText();
       const toolCall = Validators.toolCall.Parse(event.toolCall);
       toolCalls.push(toolCall);
-      await input.context.emit({
-        type: "tool_requested",
-        toolCall,
-        ts: nowIso(),
-      });
     }
 
     if (event.type === "done") {
@@ -322,43 +297,11 @@ async function executeToolCall(input: {
     afterToolCall: input.context.config.afterToolCall,
     signal: input.context.signal,
     observe: async (event) => {
-      if (event.type === "approval_requested") {
-        await input.context.emit({
-          type: "tool_approval_requested",
-          taskId: input.task.id,
-          toolName: event.tool.name,
-          args: event.args,
-          ts: nowIso(),
-        });
-        return;
-      }
-
-      if (event.type === "approval_result") {
-        await input.context.emit({
-          type: "tool_approval_result",
-          taskId: input.task.id,
-          toolName: event.tool.name,
-          args: event.args,
-          decision: event.decision,
-          ts: nowIso(),
-        });
-        return;
-      }
-
-      if (event.type === "tool_blocked") {
-        await input.context.emit({
-          type: "tool_blocked",
-          toolName: event.tool.name,
-          reason: event.reason,
-          ts: nowIso(),
-        });
-        return;
-      }
-
       if (event.type === "tool_start") {
         input.context.consumeLimit("toolCalls");
         await input.context.emit({
-          type: "tool_start",
+          type: "tool_execution_start",
+          toolCallId: input.toolCall.id,
           toolName: event.tool.name,
           args: event.args,
           ts: nowIso(),
@@ -366,34 +309,16 @@ async function executeToolCall(input: {
         return;
       }
 
-      if (event.type === "result_review_requested") {
+      if (event.type === "tool_end") {
         await input.context.emit({
-          type: "tool_result_review_requested",
-          taskId: input.task.id,
-          toolName: event.tool.name,
+          type: "tool_execution_end",
+          toolCallId: input.toolCall.id,
+          toolName: event.toolName,
           result: event.result,
+          isError: !event.result.ok,
           ts: nowIso(),
         });
-        return;
       }
-
-      if (event.type === "result_review_result") {
-        await input.context.emit({
-          type: "tool_result_review_result",
-          taskId: input.task.id,
-          toolName: event.tool.name,
-          result: event.result,
-          ts: nowIso(),
-        });
-        return;
-      }
-
-      await input.context.emit({
-        type: "tool_end",
-        toolName: event.toolName,
-        result: event.result,
-        ts: nowIso(),
-      });
     },
   });
 }
@@ -463,12 +388,6 @@ export async function verifyTask(
   context: AgentLoopContext,
   input: VerifyInput,
 ): Promise<VerificationResult> {
-  await context.emit({
-    type: "verification_start",
-    taskId: input.task.id,
-    ts: nowIso(),
-  });
-
   let collected: Awaited<ReturnType<typeof collectTextAndStructured>>;
   try {
     collected = await collectTextAndStructured({
@@ -492,12 +411,6 @@ export async function verifyTask(
       throw error;
     }
     const result = createInvalidModelVerification(input.task, error);
-    await context.emit({
-      type: "verification_end",
-      taskId: input.task.id,
-      result,
-      ts: nowIso(),
-    });
     return result;
   }
 
@@ -509,12 +422,6 @@ export async function verifyTask(
         passed: false,
         message: "Verifier did not produce structured output.",
       };
-  await context.emit({
-    type: "verification_end",
-    taskId: input.task.id,
-    result,
-    ts: nowIso(),
-  });
 
   return result;
 }
@@ -597,6 +504,8 @@ export async function runConfiguredPhase(
   let retryInput: unknown = undefined;
 
   while (true) {
+    await emit(runtime, { type: "phase_start", phase: definition.id as LlmPhase, ts: nowIso() });
+
     // 1. buildInput (use retry input if available, otherwise build from definition)
     let builtInput = retryInput ?? await definition.buildInput(runtime);
     retryInput = undefined;
@@ -605,12 +514,14 @@ export async function runConfiguredPhase(
     if (modelPhase && context.config.runtime?.beforePhase) {
       const before = await context.config.runtime.beforePhase(context, modelPhase, builtInput as never);
       if (hasAbort(before)) {
+        await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
         return { type: "abort", outcome: before.abort };
       }
       if (hasSkip(before)) {
         const transition = definition.apply
           ? await definition.apply(runtime, before.skip, builtInput)
           : { type: "stop" as const, outcome: { id: "skip", passed: true, message: "Skipped." } };
+        await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
         return transition;
       }
       if (before && "input" in before && before.input) {
@@ -633,6 +544,7 @@ export async function runConfiguredPhase(
     if (modelPhase && context.config.runtime?.afterPhase) {
       const after = await context.config.runtime.afterPhase(context, modelPhase, output as never);
       if (hasAbort(after)) {
+        await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
         return { type: "abort", outcome: after.abort };
       }
       if (hasRetry(after) && after.retry) {
@@ -650,10 +562,13 @@ export async function runConfiguredPhase(
 
     // 6. apply (definition effects and transition)
     if (definition.apply) {
-      return await definition.apply(runtime, output, builtInput);
+      const transition = await definition.apply(runtime, output, builtInput);
+      await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
+      return transition;
     }
 
     // Default: stop
+    await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
     return { type: "stop", outcome: { id: "default", passed: true, message: "Phase completed." } };
   }
 }

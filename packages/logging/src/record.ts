@@ -23,25 +23,15 @@ function eventSessionId(event: AgentEvent): string | undefined {
   return undefined;
 }
 
-function eventTaskId(event: AgentEvent): string | undefined {
-  return "taskId" in event && typeof event.taskId === "string" ? event.taskId : undefined;
-}
-
 function eventPhase(event: AgentEvent): string | undefined {
   return "phase" in event && typeof event.phase === "string" ? event.phase : undefined;
 }
 
-export function eventLogLevel(event: AgentEvent): Exclude<WritableAgentEventLogLevel, "debug"> {
-  if (event.type === "error") {
-    return "error";
+export function eventLogLevel(event: AgentEvent): WritableAgentEventLogLevel {
+  if (event.type === "message_update" || event.type === "tool_execution_update") {
+    return "debug";
   }
-  if (
-    event.type === "limit_exceeded" ||
-    event.type === "tool_blocked" ||
-    (event.type === "tool_approval_result" && !event.decision.allow) ||
-    (event.type === "verification_end" && !event.result.passed) ||
-    (event.type === "outcome" && !event.outcome.passed)
-  ) {
+  if (event.type === "tool_execution_end" && event.isError) {
     return "warn";
   }
   return "info";
@@ -53,13 +43,11 @@ export function shouldWriteEvent(eventLevel: WritableAgentEventLogLevel, configu
 
 export function createAgentEventLogFields(event: AgentEvent, includeEventPayload: boolean): Record<string, unknown> {
   const sessionId = eventSessionId(event);
-  const taskId = eventTaskId(event);
   const phase = eventPhase(event);
   return {
     eventType: event.type,
     eventTs: event.ts,
     ...(sessionId ? { sessionId } : {}),
-    ...(taskId ? { taskId } : {}),
     ...(phase ? { phase } : {}),
     ...(includeEventPayload ? { event } : {}),
   };

@@ -74,10 +74,8 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
   expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome).not.toHaveProperty("evidence");
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
-  expect(events).toContain("task_created");
-  expect(events).toContain("tool_end");
-  expect(events).toContain("verification_end");
-  expect(events).toContain("outcome");
+  expect(events).toContain("tool_execution_end");
+  expect(events).toContain("phase_end");
   expect(session.messages.some((message) => message.role === "tool")).toBe(false);
   expect(events.length).toBeGreaterThan(0);
 });
@@ -161,25 +159,23 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
   const messageIndex = (content: string) =>
     indexOf(
       (event) =>
-        event.type === "message_delta" &&
-        (Array.isArray(event.delta)
-          ? event.delta.some((message) => message.content === content)
-          : event.delta.content === content),
+        event.type === "message_end" &&
+        event.message.content === content,
     );
 
   expect(messageIndex("Planning from model.")).toBeLessThan(
-    indexOf((event) => event.type === "task_created"),
+    indexOf((event) => event.type === "phase_start" && event.phase === "execute"),
   );
   expect(messageIndex("Executing from model.")).toBeLessThan(
-    indexOf((event) => event.type === "tool_requested"),
+    indexOf((event) => event.type === "tool_execution_start"),
   );
   expect(messageIndex("Verifying from model.")).toBeLessThan(
-    indexOf((event) => event.type === "verification_end"),
+    indexOf((event) => event.type === "phase_end" && event.phase === "verify"),
   );
   expect(session.messages.some((message) => message.content === "Planned task: Ordered messages")).toBe(false);
 });
 
-test("runAgentLoop records prompt messages emitted by the model adapter", async () => {
+test("runAgentLoop does not emit prompt messages as events", async () => {
   const session = createState({
     systemPrompt: "Test system",
     input: "hello",
@@ -216,40 +212,13 @@ test("runAgentLoop records prompt messages emitted by the model adapter", async 
     },
   });
 
-  const promptMessage = emittedEvents.find(
-    (event) =>
-      event.type === "message_delta" &&
-      !Array.isArray(event.delta) &&
-      event.delta.metadata?.kind === "phase_prompt" &&
-      event.delta.metadata.phase === "route",
-  );
-  const sessionPromptMessage = session.messages.find(
-    (message) => message.metadata?.kind === "phase_prompt" && message.metadata.phase === "route",
-  );
-  const promptIndex = emittedEvents.findIndex(
-    (event) =>
-      event.type === "message_delta" &&
-      !Array.isArray(event.delta) &&
-      event.delta.metadata?.kind === "phase_prompt",
-  );
-  const modelRequestedIndex = emittedEvents.findIndex((event) => event.type === "model_requested");
-
-  expect(sessionPromptMessage).toBeUndefined();
-  expect(promptMessage).toEqual(
-    expect.objectContaining({
-      type: "message_delta",
-      delta: expect.objectContaining({
-        role: "user",
-        content: expect.stringContaining("Phase: route"),
-        metadata: expect.objectContaining({
-          kind: "phase_prompt",
-          phase: "route",
-        }),
-      }),
-    }),
-  );
-  expect(promptIndex).toBeGreaterThan(-1);
-  expect(promptIndex).toBeLessThan(modelRequestedIndex);
+  expect(
+    emittedEvents.some(
+      (event) =>
+        event.type === "message_end" &&
+        event.message.metadata?.kind === "phase_prompt",
+    ),
+  ).toBe(false);
 });
 
 test("runAgentLoop can return a direct response without creating a task", async () => {
@@ -274,40 +243,21 @@ test("runAgentLoop can return a direct response without creating a task", async 
   expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.taskId).toBeUndefined();
   expect(outcome.outcome.message).toBe("Direct response: hello");
-  expect(events).toContain("model_requested");
-  expect(events).toContain("outcome");
-  expect(events).not.toContain("task_created");
-  expect(events).not.toContain("verification_start");
-  expect(events.indexOf("chat_end")).toBeLessThan(events.indexOf("outcome"));
-  const routeDecision = emittedEvents.find(
-    (event) =>
-      event.type === "message_delta" &&
-      !Array.isArray(event.delta) &&
-      event.delta.metadata?.kind === "routing_decision" &&
-      event.delta.metadata.phase === "route",
-  );
-  const sessionRouteDecision = session.messages.find(
-    (message) => message.metadata?.kind === "routing_decision" && message.metadata.phase === "route",
-  );
-  expect(sessionRouteDecision).toBeUndefined();
-  expect(routeDecision).toBeUndefined();
   expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
   expect(
     emittedEvents.filter(
       (event) =>
-        event.type === "message_delta" &&
-        !Array.isArray(event.delta) &&
-        event.delta.role === "assistant" &&
-        event.delta.metadata?.scope === "conversation",
+        event.type === "message_end" &&
+        event.message.role === "assistant" &&
+        event.message.metadata?.scope === "conversation",
     ),
   ).toHaveLength(1);
   expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
   expect(
     emittedEvents.some(
       (event) =>
-        event.type === "message_delta" &&
-        !Array.isArray(event.delta) &&
-        event.delta.metadata?.kind === "outcome",
+        event.type === "message_end" &&
+        event.message.metadata?.kind === "outcome",
     ),
   ).toBe(false);
   expect(
@@ -339,15 +289,14 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
   });
 
   expect(outcome.outcome.passed).toBe(false);
-  expect(events.some((event) => event.type === "tool_end")).toBe(true);
+  expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
 });
 
-test("runAgentLoop preserves provider error details in error events", async () => {
+test("runAgentLoop throws provider errors to the caller", async () => {
   const session = createState({
     systemPrompt: "Test system",
     input: "hello",
   });
-  const events: AgentEvent[] = [];
   const stream: StreamFn = async function* failingStream() {
     throw Object.assign(new Error("OpenAI-compatible request failed with status 400 Bad Request: Invalid model."), {
       code: "http_error",
@@ -364,37 +313,15 @@ test("runAgentLoop preserves provider error details in error events", async () =
     });
   };
 
-	await expect(
+  await expect(
     runAgentLoop({
-    kind: "run",
+      kind: "run",
       state: session,
       model: { provider: "test", name: "failing" },
       stream,
       tools: [echoTool],
-      emit: (event) => {
-        events.push(event);
-      },
     }),
   ).rejects.toThrow("Invalid model");
-
-  const errorEvent = events.find((event) => event.type === "error");
-  expect(errorEvent).toMatchObject({
-    type: "error",
-    error: {
-      code: "http_error",
-      message: "OpenAI-compatible request failed with status 400 Bad Request: Invalid model.",
-      retryable: false,
-      details: {
-        endpoint: "https://api.example/v1/chat/completions",
-        model: "bad-model",
-        status: 400,
-        providerError: {
-          message: "Invalid model.",
-          code: "model_not_found",
-        },
-      },
-    },
-  });
 });
 
 function invalidModelSchemaError(message: string): Error & { code: string } {
@@ -471,8 +398,8 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
   expect(
     events.some(
       (event) =>
-        event.type === "verification_end" &&
-        event.result.message === "Model returned invalid verification output.",
+        event.type === "phase_end" &&
+        event.phase === "verify",
     ),
   ).toBe(true);
 });
@@ -572,18 +499,6 @@ test("beforeToolCall hook can block execution", async () => {
   });
 
   expect(outcome.outcome.passed).toBe(false);
-  expect(events.map((event) => event.type)).toContain("tool_approval_requested");
-  expect(events.map((event) => event.type)).toContain("tool_approval_result");
-  expect(events.some((event) => event.type === "tool_blocked")).toBe(true);
-  expect(
-    events.some(
-      (event) =>
-        event.type === "tool_approval_result" &&
-        event.toolName === "echo" &&
-        !event.decision.allow &&
-        event.decision.reason === "blocked in test",
-    ),
-  ).toBe(true);
 });
 
 test("afterToolCall hook review is logged with original and reviewed result", async () => {
@@ -609,15 +524,6 @@ test("afterToolCall hook review is logged with original and reviewed result", as
   });
 
   expect(outcome.outcome.passed).toBe(true);
-  expect(events.some((event) => event.type === "tool_result_review_requested")).toBe(true);
-  expect(
-    events.some(
-      (event) =>
-        event.type === "tool_result_review_result" &&
-        event.result.toolName === "echo" &&
-        event.result.content === "use echo tool reviewed",
-    ),
-  ).toBe(true);
 });
 
 test("invalid tool args do not execute tool", async () => {
@@ -709,7 +615,7 @@ test("invalid tool args do not execute tool", async () => {
 
   expect(outcome.outcome.passed).toBe(false);
   expect(executed).toBe(false);
-  expect(events.some((event) => event.type === "tool_end")).toBe(true);
+  expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
 });
 
 test("runtime beforePhase can adjust phase input", async () => {
@@ -951,5 +857,5 @@ test("runtime phase port can abort with an outcome", async () => {
 
   expect(outcome.outcome.passed).toBe(false);
   expect(outcome.outcome.message).toBe("Aborted by runtime.");
-  expect(events.some((event) => event.type === "task_created")).toBe(false);
+  expect(outcome.outcome.passed).toBe(false);
 });

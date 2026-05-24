@@ -23,10 +23,8 @@ test("Agent.run returns a run result and emits events", async () => {
   expect(agent.state.sessionId).toEqual(expect.stringMatching(/^ses_/));
   expect(agent.state.context.messages.length).toBeGreaterThan(0);
   expect(agent.state.context.messages[0]?.content).toBe("use echo tool");
-  expect(events).toContain("outcome");
-  expect(events).toContain("tool_start");
-  expect(events).toContain("tool_end");
-  expect(events).not.toContain("thread_created");
+  expect(events).toContain("tool_execution_start");
+  expect(events).toContain("tool_execution_end");
 });
 
 test("Agent.run does not wait for async event listeners", async () => {

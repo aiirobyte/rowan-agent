@@ -19,10 +19,8 @@ test("pinoAgentEventLogger writes summary Pino JSONL records at info by default"
   const logPath = join(root, "run.jsonl");
   const logger = pinoAgentEventLogger(logPath);
   const event: AgentEvent = {
-    type: "model_requested",
+    type: "phase_start",
     phase: "route",
-    model: { provider: "test", name: "model" },
-    usage: { inputMessages: 3 },
     ts: "2026-05-03T141659-32+08:00",
   };
 
@@ -32,7 +30,7 @@ test("pinoAgentEventLogger writes summary Pino JSONL records at info by default"
   expect(logger.path()).toBe(logPath);
   const [record] = parseLogLines(await readFile(logPath, "utf8"));
   expect(record).toMatchObject({
-    eventType: "model_requested",
+    eventType: "phase_start",
     eventTs: "2026-05-03T141659-32+08:00",
     phase: "route",
   });
@@ -48,7 +46,8 @@ test("pinoAgentEventLogger includes redacted event payloads at debug level", asy
   const logPath = join(root, "run.jsonl");
   const logger = pinoAgentEventLogger(logPath, { level: "debug" });
   const event: AgentEvent = {
-    type: "tool_start",
+    type: "tool_execution_start",
+    toolCallId: "call_1",
     toolName: "bash",
     args: { command: "OPENAI_API_KEY=secret-token bun test" },
     ts: "2026-05-03T141659-32+08:00",
@@ -59,9 +58,9 @@ test("pinoAgentEventLogger includes redacted event payloads at debug level", asy
 
   const [record] = parseLogLines(await readFile(logPath, "utf8"));
   expect(record).toMatchObject({
-    eventType: "tool_start",
+    eventType: "tool_execution_start",
     event: {
-      type: "tool_start",
+      type: "tool_execution_start",
       toolName: "bash",
       ts: "2026-05-03T141659-32+08:00",
     },
@@ -102,18 +101,16 @@ test("pinoAgentEventLogger filters warning and error levels", async () => {
   const logger = pinoAgentEventLogger(logPath, { level: "warn" });
 
   logger({
-    type: "model_requested",
+    type: "phase_start",
     phase: "route",
-    model: { provider: "test", name: "model" },
-    usage: { inputMessages: 1 },
     ts: "2026-05-03T141659-32+08:00",
   });
   logger({
-    type: "limit_exceeded",
-    resource: "modelCalls",
-    limit: 1,
-    usage: { modelCalls: 2, toolCalls: 0 },
-    message: "Model call limit exceeded.",
+    type: "tool_execution_end",
+    toolCallId: "call_1",
+    toolName: "bash",
+    result: { toolCallId: "call_1", toolName: "bash", ok: false, content: null, error: "Tool failed." },
+    isError: true,
     ts: "2026-05-03T141700-32+08:00",
   });
   await logger.flush?.();
@@ -122,7 +119,7 @@ test("pinoAgentEventLogger filters warning and error levels", async () => {
   expect(records).toHaveLength(1);
   expect(records[0]).toMatchObject({
     level: 40,
-    eventType: "limit_exceeded",
+    eventType: "tool_execution_end",
     eventTs: "2026-05-03T141700-32+08:00",
   });
   expect(records[0]?.msg).toBeUndefined();
@@ -134,8 +131,8 @@ test("pinoAgentEventLogger silent level does not create a log file", async () =>
   const logger = pinoAgentEventLogger(logPath, { level: "silent" });
 
   logger({
-    type: "error",
-    error: { code: "boom", message: "boom", retryable: false },
+    type: "phase_start",
+    phase: "route",
     ts: "2026-05-03T141659-32+08:00",
   });
   await logger.flush?.();
@@ -155,10 +152,8 @@ test("consoleAgentEventLogger writes Pino-shaped JSONL records to the configured
   });
 
   logger({
-    type: "model_requested",
+    type: "phase_start",
     phase: "route",
-    model: { provider: "test", name: "model" },
-    usage: { inputMessages: 3 },
     ts: "2026-05-03T141659-32+08:00",
   });
   await logger.flush?.();
@@ -166,7 +161,7 @@ test("consoleAgentEventLogger writes Pino-shaped JSONL records to the configured
   const [record] = parseLogLines(chunks.join(""));
   expect(record).toMatchObject({
     level: 30,
-    eventType: "model_requested",
+    eventType: "phase_start",
     eventTs: "2026-05-03T141659-32+08:00",
     phase: "route",
   });
@@ -187,7 +182,8 @@ test("consoleAgentEventLogger debug output includes redacted event payloads", as
   });
 
   logger({
-    type: "tool_start",
+    type: "tool_execution_start",
+    toolCallId: "call_1",
     toolName: "bash",
     args: { command: "OPENAI_API_KEY=secret-token bun test" },
     ts: "2026-05-03T141659-32+08:00",
@@ -197,9 +193,9 @@ test("consoleAgentEventLogger debug output includes redacted event payloads", as
   const [record] = parseLogLines(chunks.join(""));
   expect(record).toMatchObject({
     level: 30,
-    eventType: "tool_start",
+    eventType: "tool_execution_start",
     event: {
-      type: "tool_start",
+      type: "tool_execution_start",
       toolName: "bash",
       ts: "2026-05-03T141659-32+08:00",
     },
