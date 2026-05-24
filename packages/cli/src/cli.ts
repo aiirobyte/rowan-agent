@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import {
   createOpenAICompatibleStream,
   resolveOpenAICompatibleConfig,
-} from "@rowan-agent/adapters";
+} from "@rowan-agent/engine";
 import {
   Agent,
   DEFAULT_MAX_THREAD_DEPTH,

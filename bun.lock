@@ -12,20 +12,10 @@
         "typescript": "latest",
       },
     },
-    "packages/adapters": {
-      "name": "@rowan-agent/adapters",
-      "version": "0.4.4",
-      "dependencies": {
-        "@rowan-agent/context": "workspace:*",
-        "@rowan-agent/protocol": "workspace:*",
-      },
-    },
     "packages/agent": {
       "name": "@rowan-agent/agent",
       "version": "0.4.4",
       "dependencies": {
-        "@rowan-agent/protocol": "workspace:*",
-        "@rowan-agent/runtime": "workspace:*",
         "typebox": "^1.0.0",
       },
     },
@@ -36,20 +26,16 @@
         "rowan": "./src/cli.ts",
       },
       "dependencies": {
-        "@rowan-agent/adapters": "workspace:*",
         "@rowan-agent/agent": "workspace:*",
+        "@rowan-agent/engine": "workspace:*",
         "@rowan-agent/logging": "workspace:*",
-        "@rowan-agent/runtime": "workspace:*",
-        "@rowan-agent/session": "workspace:*",
-        "@rowan-agent/store": "workspace:*",
       },
     },
-    "packages/context": {
-      "name": "@rowan-agent/context",
+    "packages/engine": {
+      "name": "@rowan-agent/engine",
       "version": "0.4.4",
       "dependencies": {
-        "@rowan-agent/protocol": "workspace:*",
-        "@rowan-agent/session": "workspace:*",
+        "@rowan-agent/agent": "workspace:*",
       },
     },
     "packages/logging": {
@@ -60,56 +46,17 @@
         "pino": "^10.3.1",
       },
     },
-    "packages/protocol": {
-      "name": "@rowan-agent/protocol",
-      "version": "0.4.4",
-    },
-    "packages/runtime": {
-      "name": "@rowan-agent/runtime",
-      "version": "0.4.4",
-      "dependencies": {
-        "@rowan-agent/protocol": "workspace:*",
-        "typebox": "^1.0.0",
-      },
-    },
-    "packages/session": {
-      "name": "@rowan-agent/session",
-      "version": "0.4.4",
-      "dependencies": {
-        "@rowan-agent/protocol": "workspace:*",
-        "typebox": "^1.0.0",
-      },
-    },
-    "packages/store": {
-      "name": "@rowan-agent/store",
-      "version": "0.4.4",
-      "dependencies": {
-        "@rowan-agent/protocol": "workspace:*",
-        "@rowan-agent/session": "workspace:*",
-        "typebox": "^1.0.0",
-      },
-    },
   },
   "packages": {
     "@pinojs/redact": ["@pinojs/redact@0.4.0", "", {}, "sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg=="],
-
-    "@rowan-agent/adapters": ["@rowan-agent/adapters@workspace:packages/adapters"],
 
     "@rowan-agent/agent": ["@rowan-agent/agent@workspace:packages/agent"],
 
     "@rowan-agent/cli": ["@rowan-agent/cli@workspace:packages/cli"],
 
-    "@rowan-agent/context": ["@rowan-agent/context@workspace:packages/context"],
+    "@rowan-agent/engine": ["@rowan-agent/engine@workspace:packages/engine"],
 
     "@rowan-agent/logging": ["@rowan-agent/logging@workspace:packages/logging"],
-
-    "@rowan-agent/protocol": ["@rowan-agent/protocol@workspace:packages/protocol"],
-
-    "@rowan-agent/runtime": ["@rowan-agent/runtime@workspace:packages/runtime"],
-
-    "@rowan-agent/session": ["@rowan-agent/session@workspace:packages/session"],
-
-    "@rowan-agent/store": ["@rowan-agent/store@workspace:packages/store"],
 
     "@types/bun": ["@types/bun@1.3.13", "", { "dependencies": { "bun-types": "1.3.13" } }, "sha512-9fqXWk5YIHGGnUau9TEi+qdlTYDAnOj+xLCmSTwXfAIqXr2x4tytJb43E9uCvt09zJURKXwAtkoH4nLQfzeTXw=="],
 
