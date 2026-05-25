@@ -7,34 +7,71 @@ import type {
   AgentMessage,
   AgentRunResult,
   AgentState,
+  LoopPhase,
+  LoopPhaseOutputMap,
+  ModelStreamEvent,
   Outcome,
   RunThread,
+  Task,
   Tool,
+  ToolCall,
+  ToolResult,
 } from "./types";
 import {
   createAgentState,
-  createId,
   createMessage,
   nowIso,
   resolveMaxThreadDepth,
   Validators,
 } from "./types";
 import {
-  assertNotAborted,
-  cloneLimitUsage,
+  createBuiltinPhaseConfig,
+  getBuiltinExtension,
+  resolvePhase,
+  runPhase,
+  validatePhaseConfig,
+  type AgentPhaseConfig,
+  type PhaseContext,
+  type PhaseDefinition,
+} from "./loop/phases";
+import { executeRuntimeToolCall } from "./harness/tools";
+import { assertNotAborted, LimitExceededError } from "./loop/errors";
+import {
+  createDefaultPhaseOutcome,
   createLimitExceededOutcome,
-  LimitExceededError,
+  createSkippedOutcome,
+  createThreadDepthLimitOutcome,
+} from "./loop/outcomes";
+import {
+  cloneLimitUsage,
   runtimeDepth,
   snapshotMessage,
   snapshotMessages,
-} from "./loop/shared";
-import {
-  createBuiltinPhaseConfig,
-  resolvePhase,
-  runConfiguredPhase,
-  validatePhaseConfig,
-  type AgentPhaseConfig,
-} from "./loop/phases";
+} from "./loop/state";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasAbort(value: unknown): value is { abort: Outcome } {
+  return isRecord(value) && isRecord(value.abort);
+}
+
+function hasSkip(value: unknown): value is { skip: unknown } {
+  return isRecord(value) && "skip" in value;
+}
+
+function hasInput(value: unknown): value is { input: unknown } {
+  return isRecord(value) && "input" in value;
+}
+
+function hasOutput(value: unknown): value is { output: unknown } {
+  return isRecord(value) && "output" in value;
+}
+
+function hasRetry(value: unknown): value is { retry: unknown } {
+  return isRecord(value) && "retry" in value;
+}
 
 // ============================================================================
 // Types
@@ -269,6 +306,203 @@ export async function completeRun(runtime: AgentLoopRuntime, outcome: Outcome): 
 }
 
 // ============================================================================
+// Phase Capabilities
+// ============================================================================
+
+async function collectTextAndStructured<TPhase extends LoopPhase>(input: {
+  context: AgentLoopContext;
+  events: AsyncIterable<ModelStreamEvent>;
+  metadataPhase: TPhase;
+  recordText?: boolean;
+}): Promise<{
+  text: string;
+  phaseOutput?: LoopPhaseOutputMap[TPhase];
+  structured?: unknown;
+  toolCalls: ToolCall[];
+}> {
+  const toolCalls: ToolCall[] = [];
+  let text = "";
+  let flushedText = "";
+  let phaseOutput: LoopPhaseOutputMap[TPhase] | undefined;
+  let structured: unknown;
+  const flushText = async () => {
+    if (text.length === 0) {
+      return;
+    }
+
+    flushedText += text;
+    await input.context.appendMessage(
+      createMessage("assistant", text, {
+        kind: "model_message",
+        phase: input.metadataPhase,
+        scope: "execution",
+      }),
+    );
+    text = "";
+  };
+
+  for await (const event of input.events) {
+    assertNotAborted(input.context.signal);
+
+    if (event.type === "model_requested") {
+      input.context.consumeLimit("modelCalls");
+    }
+
+    if (event.type === "text_delta") {
+      text += event.text;
+    }
+
+    if (event.type === "structured_output") {
+      structured = event.content;
+    }
+
+    if (event.type === "phase_output") {
+      if (event.phase !== input.metadataPhase) {
+        throw new Error(`Expected ${input.metadataPhase} phase output, received ${event.phase}.`);
+      }
+
+      await flushText();
+      phaseOutput = event.output as LoopPhaseOutputMap[TPhase];
+
+      if (event.phase === "execute") {
+        for (const outputToolCall of (event.output as LoopPhaseOutputMap["execute"]).toolCalls) {
+          const toolCall = Validators.toolCall.Parse(outputToolCall);
+          toolCalls.push(toolCall);
+        }
+      }
+    }
+
+    if (event.type === "tool_call") {
+      await flushText();
+      const toolCall = Validators.toolCall.Parse(event.toolCall);
+      toolCalls.push(toolCall);
+    }
+
+    if (event.type === "done") {
+      await flushText();
+    }
+  }
+
+  await flushText();
+
+  return { text: flushedText, phaseOutput, structured, toolCalls };
+}
+
+async function executeToolCall(input: {
+  context: AgentLoopContext;
+  task: Task;
+  toolCall: ToolCall;
+}): Promise<ToolResult> {
+  if (input.context.config.runtime?.tools) {
+    return input.context.config.runtime.tools({
+      context: input.context,
+      task: input.task,
+      toolCall: input.toolCall,
+    });
+  }
+
+  const toolContext = {
+    state: input.context.state.agentState,
+    task: input.task,
+    toolCallId: input.toolCall.id,
+    ...(input.context.runThread ? { runThread: input.context.runThread } : {}),
+  };
+  return executeRuntimeToolCall({
+    tools: input.context.config.tools,
+    task: input.task,
+    toolCall: input.toolCall,
+    toolContext,
+    beforeToolCall: input.context.config.beforeToolCall,
+    afterToolCall: input.context.config.afterToolCall,
+    signal: input.context.signal,
+    observe: async (event) => {
+      if (event.type === "tool_start") {
+        input.context.consumeLimit("toolCalls");
+        await input.context.emit({
+          type: "tool_execution_start",
+          toolCallId: input.toolCall.id,
+          toolName: event.tool.name,
+          args: event.args,
+          ts: nowIso(),
+        });
+        return;
+      }
+
+      if (event.type === "tool_end") {
+        await input.context.emit({
+          type: "tool_execution_end",
+          toolCallId: input.toolCall.id,
+          toolName: event.toolName,
+          result: event.result,
+          isError: !event.result.ok,
+          ts: nowIso(),
+        });
+      }
+    },
+  });
+}
+
+function createPhaseContext(
+  runtime: AgentLoopRuntime,
+  definition: PhaseDefinition,
+  createRun: PhaseContext["runs"]["create"],
+): PhaseContext {
+  const loopContext = createAgentLoopContext(runtime);
+
+  return {
+    phaseId: definition.id,
+    state: {
+      agentState: runtime.agentState,
+      currentPhase: runtime.currentPhase,
+      attempt: runtime.attempt,
+      ...(runtime.currentTask ? { task: runtime.currentTask } : {}),
+      toolResults: runtime.toolResults,
+      limitUsage: runtime.limitUsage,
+      depth: runtimeDepth(runtime),
+      ...(runtime.lastExecuteText ? { lastExecuteText: runtime.lastExecuteText } : {}),
+    },
+    messages: {
+      visible: () => [...runtime.transcript],
+      append: (message) => appendMessage(runtime, message),
+      appendState: (message) => appendMessage(runtime, message, true),
+    },
+    model: {
+      collect: async (input) => {
+        return collectTextAndStructured({
+          context: loopContext,
+          events: loopContext.config.stream(
+            loopContext.config.model,
+            input.payload,
+            { signal: loopContext.signal },
+          ),
+          metadataPhase: input.phase,
+          recordText: input.recordText,
+        });
+      },
+    },
+    tools: {
+      execute: async (input) => {
+        return executeToolCall({
+          context: loopContext,
+          task: input.task as Task,
+          toolCall: input.toolCall,
+        });
+      },
+    },
+    runs: {
+      create: createRun,
+    },
+    skills: runtime.agentState.skills.slice(),
+    emit: (event) => emit(runtime, event),
+    consumeLimit: (resource) => {
+      const error = consumeLimit(runtime, resource);
+      if (error) throw error;
+    },
+    ...(runtime.signal ? { signal: runtime.signal } : {}),
+  };
+}
+
+// ============================================================================
 // Context Helpers
 // ============================================================================
 
@@ -385,10 +619,9 @@ async function runWithLifecycle(
 ): Promise<AgentRunResult> {
   try {
     if (runtime.kind === "thread" && runtime.threadDepth > runtime.maxThreadDepth) {
-      const outcome = Validators.outcome.Parse({
-        id: createId("out"),
-        passed: false,
-        message: `Thread depth limit exceeded (${runtime.threadDepth}/${runtime.maxThreadDepth}).`,
+      const outcome = createThreadDepthLimitOutcome({
+        threadDepth: runtime.threadDepth,
+        maxThreadDepth: runtime.maxThreadDepth,
       });
       return completeRun(runtime, outcome);
     }
@@ -417,14 +650,115 @@ async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
       throw new Error(`Phase "${phaseId}" is not defined in the phase config.`);
     }
 
+    const extension = getBuiltinExtension(phaseId);
     runtime.currentPhase = phaseId;
-    const transition = await runConfiguredPhase(runtime, definition, async (input) => runtime.runThread!(input));
 
-    if (transition.type === "stop" || transition.type === "abort") {
-      return completeRun(runtime, transition.outcome);
+    // Build phase input
+    let phaseInput = extension
+      ? await extension.buildInput(runtime, definition)
+      : undefined;
+
+    // Create phase context
+    const context = createPhaseContext(
+      runtime,
+      definition,
+      async (input) => runtime.runThread!(input),
+    );
+
+    // Emit phase_start
+    await emit(runtime, { type: "phase_start", phase: phaseId, ts: nowIso() });
+
+    // beforePhase hook
+    if (definition.modelPhase && runtime.runtime?.beforePhase) {
+      const loopContext = createAgentLoopContext(runtime);
+      const before = await runtime.runtime.beforePhase(
+        loopContext,
+        definition.modelPhase,
+        phaseInput as never,
+      );
+      if (hasAbort(before)) {
+        await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+        return completeRun(runtime, before.abort);
+      }
+      if (hasSkip(before)) {
+        if (extension) {
+          const transition = await extension.applyOutput({
+            runtime,
+            definition,
+            phaseInput,
+            phaseOutput: before.skip,
+          });
+          await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+          if (transition.type === "stop" || transition.type === "abort") {
+            return completeRun(runtime, transition.outcome);
+          }
+          phaseId = transition.phaseId;
+          continue;
+        }
+        await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+        return completeRun(runtime, createSkippedOutcome());
+      }
+      if (hasInput(before) && before.input) {
+        phaseInput = before.input;
+      }
     }
 
-    phaseId = transition.phaseId;
+    // Run phase
+    let output = await runPhase(context, definition, phaseInput);
+
+    // afterPhase hook
+    if (definition.modelPhase && runtime.runtime?.afterPhase) {
+      const loopContext = createAgentLoopContext(runtime);
+      let retries = 0;
+      let retryInput: unknown;
+
+      while (true) {
+        const after = await runtime.runtime.afterPhase(
+          loopContext,
+          definition.modelPhase,
+          output as never,
+        );
+        if (hasAbort(after)) {
+          await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+          return completeRun(runtime, after.abort);
+        }
+        if (hasRetry(after) && after.retry) {
+          retries += 1;
+          if (retries > 3) {
+            throw new Error(`Runtime requested too many ${phaseId} phase retries.`);
+          }
+          retryInput = after.retry;
+          output = await runPhase(context, definition, retryInput);
+          continue;
+        }
+        if (hasOutput(after) && after.output) {
+          output = after.output;
+        }
+        break;
+      }
+    }
+
+    // Emit phase_end
+    await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+
+    // Apply output
+    if (extension) {
+      const transition = await extension.applyOutput({
+        runtime,
+        definition,
+        phaseInput,
+        phaseOutput: output,
+      });
+
+      if (transition.type === "stop" || transition.type === "abort") {
+        return completeRun(runtime, transition.outcome);
+      }
+
+      phaseId = transition.phaseId;
+    } else {
+      // No extension — default to stop
+      return completeRun(runtime, createDefaultPhaseOutcome());
+    }
   }
 
   throw new Error("Phase machine exited without a stop or abort transition.");

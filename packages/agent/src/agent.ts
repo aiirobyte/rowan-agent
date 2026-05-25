@@ -1,4 +1,4 @@
-import { runAgentLoop } from "./loop";
+import { runAgentLoop } from "./agent-loop";
 import type {
   AgentMessage,
   ModelRef,

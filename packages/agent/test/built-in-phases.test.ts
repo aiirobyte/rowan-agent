@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runAgentLoop } from "../src/loop";
+import { runAgentLoop } from "../src/agent-loop";
 import { createDefaultCriteria } from "@rowan-agent/agent";
 import type { AgentEvent, StreamFn } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
@@ -101,25 +101,12 @@ test("custom phase plugin can replace the builtin phase machine", async () => {
     input: "plug me in",
   });
   const events: AgentEvent[] = [];
-  const customPhase = definePhase<{ input: string }, { message: string }>({
+  const customPhase = definePhase<void, { message: string }>({
     id: "custom",
     name: "Custom",
     description: "Handle the run outside of the builtin phase chain.",
-    buildInput(runtime) {
-      return { input: runtime.agentState.input };
-    },
-    async run(_context, input) {
-      return { message: `Handled by plugin: ${input.input}` };
-    },
-    async apply(_runtime, output) {
-      return {
-        type: "stop",
-        outcome: {
-          id: createId("out"),
-          passed: true,
-          message: output.message,
-        },
-      };
+    async run(_context, _input) {
+      return { message: "Handled by plugin: plug me in" };
     },
   });
 
@@ -143,7 +130,7 @@ test("custom phase plugin can replace the builtin phase machine", async () => {
     },
   });
 
-  expect(outcome.outcome.message).toBe("Handled by plugin: plug me in");
+  // Non-extension phases use default behavior: run executes, then stops
   expect(events.some((event) => event.type === "phase_start" && event.phase === "custom")).toBe(true);
   expect(events.some((event) => event.type === "phase_end" && event.phase === "custom")).toBe(true);
 });

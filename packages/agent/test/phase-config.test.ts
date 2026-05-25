@@ -15,7 +15,7 @@ function stubPhase(id: string): PhaseDefinition {
     id,
     name: id,
     description: `${id} phase`,
-    buildInput: () => undefined,
+    run: async () => undefined,
   };
 }
 
@@ -49,7 +49,7 @@ test("validatePhaseConfig rejects empty phases array", () => {
 test("validatePhaseConfig rejects phase with empty id", () => {
   const config: AgentPhaseConfig = {
     entryPhaseId: "a",
-    phases: [{ id: "", name: "", description: "", buildInput: () => undefined }],
+    phases: [{ id: "", name: "", description: "", run: async () => undefined }],
   };
 
   expect(() => validatePhaseConfig(config)).toThrow("non-empty id");

@@ -171,7 +171,7 @@ The important rule: transition and runtime mutation belong here, not inside phas
 - Keep built-in phases as extension-style modules under `loop/phases/built-in/<phase>/`.
 - Update built-in phase definitions so `chat`, `plan`, `execute`, and `verify` only implement input-to-output behavior.
 - Remove `loop/phases/builtin-config.ts` as a separate pass-through module; built-in phase extension aggregation belongs in `loop/phases/built-in/index.ts`.
-- Remove `loop/phases/prompt-builder.ts`; phase-specific Rendering belongs inside the corresponding built-in phase extension.
+- Remove `loop/phases/prompt-builder.ts`; phase-specific Rendering belongs in the context Module, with built-in phase prompt templates consumed from the built-in phase manifests.
 - Update tests around phase contracts, loop-owned input/output adapters, and full loop behavior.
 
 ### Out Of Scope
@@ -189,10 +189,10 @@ The important rule: transition and runtime mutation belong here, not inside phas
 ### Target Module Structure
 
 ```text
-packages/agent/src/loop.ts
+packages/agent/src/agent-loop.ts
   -> runLoop execution owner
   -> current phase selection
-  -> lifecycle, retry, transition, and result creation
+  -> lifecycle, retry, transition, phase context capabilities, and result creation
 
 packages/agent/src/loop/phases/config.ts
   -> AgentPhaseConfig
@@ -200,19 +200,24 @@ packages/agent/src/loop/phases/config.ts
   -> generic phase config validation only
   -> config validation
 
-packages/agent/src/loop/phases/context.ts
-  -> createPhaseContext(runtime)
-  -> model/tool/message/thread/skill capabilities
-
 packages/agent/src/loop/phases/phase.ts
   -> runPhase(context, definition, input)
   -> no AgentLoopRuntime dependency
   -> no transition application
 
+packages/agent/src/loop/phases/built-in/types.ts
+  -> BuiltinPhaseExtension type
+  -> loop-owned buildInput/applyOutput adapter shape
+
 packages/agent/src/loop/phases/built-in/index.ts
   -> built-in extension aggregation
   -> createBuiltinPhaseConfig()
   -> no template-to-implementation indirection
+
+packages/agent/src/harness/context/phase-rendering.ts
+  -> built-in phase prompt Rendering
+  -> manifest prompt template interpolation
+  -> buildPrompt/buildMessages package-root adapter
 
 packages/agent/src/loop/phases/built-in/*/
   -> extension-style phase modules
@@ -220,7 +225,6 @@ packages/agent/src/loop/phases/built-in/*/
   -> pure phase definition
   -> phase input builder
   -> phase output applier
-  -> phase-specific Rendering from PhaseInput/PhaseContext to model prompt
   -> context capability usage
   -> no direct runtime import in phase definitions
 ```
@@ -247,7 +251,7 @@ This consolidation is required. `builtin-config.ts` currently has a shallow Inte
 
 `config.ts` remains necessary, but only as the generic configurable phase contract and validation Module. It should not know built-in manifests, prompt templates, built-in implementation IDs, or phase Rendering.
 
-`prompt-builder.ts` is not necessary as a standalone phase Module in v0.4.7. The Agent loop can still expose model/message capabilities through `PhaseContext`, but each phase owns how its phase input and context are rendered for the model.
+`loop/phases/prompt-builder.ts` is not necessary as a phase Module in v0.4.7. The Agent loop can still expose model/message capabilities through `PhaseContext`, but phase prompt Rendering belongs in `harness/context/phase-rendering.ts` rather than under `loop/phases`.
 
 ### Runtime Flow
 
@@ -289,7 +293,7 @@ runPhase
 - `PhaseDefinition` owns only phase processing.
 - `PhaseContext` owns capability access and hides runtime implementation details.
 - Built-in phase extension modules own their own manifest, input builder, pure definition, and output applier.
-- Built-in phase extension modules own their own phase-specific Rendering.
+- The context Module owns phase-specific Rendering from built-in phase prompt templates.
 - `config.ts` owns generic phase config only; it does not assemble built-in phases.
 - `built-in/index.ts` owns built-in extension aggregation.
 - Protocol types own the shared output contracts.
@@ -323,7 +327,7 @@ Targeted assertions:
 - Built-in phase definitions no longer import `../../../../loop`.
 - Built-in phase behavior is registered through extension-style modules under `built-in/<phase>/`.
 - `builtin-config.ts` is removed or folded into `built-in/index.ts`.
-- `prompt-builder.ts` is removed as a standalone phase module; phase Rendering is local to each phase extension.
+- `loop/phases/prompt-builder.ts` is removed; phase Rendering lives in `harness/context/phase-rendering.ts`.
 - `runConfiguredPhase()` is replaced by `runPhase()`.
 - `runPhase()` returns phase output, not `PhaseTransition`.
 - Runtime hooks, phase events, retry handling, and transition application are loop-owned.

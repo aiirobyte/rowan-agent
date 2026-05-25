@@ -1,7 +1,7 @@
 # Rowan v0.4.7 Prompt Plan
 
 Last updated: 2026-05-25
-Status: Planned
+Status: Complete
 
 ## Version Target
 
@@ -33,7 +33,7 @@ Guardrails:
 
 ### Prompt 1: Lock Phase Boundary Tests
 
-Status: Planned
+Status: Complete
 
 Goal: Add failing tests that describe the new phase boundary before editing implementation.
 
@@ -52,7 +52,7 @@ Guardrails:
 
 ### Prompt 2: Narrow Phase Definition Types
 
-Status: Planned
+Status: Complete
 
 Goal: Change the phase contract so definitions no longer receive loop runtime or apply loop transitions.
 
@@ -72,13 +72,13 @@ Guardrails:
 
 ### Prompt 3: Add Context And Built-In Phase Extension Adapters
 
-Status: Planned
+Status: Complete
 
 Goal: Introduce the loop-owned layer around pure phase definitions while keeping built-in phase behavior co-located in `built-in/<phase>/`.
 
 Expected next change:
 
-1. Create `packages/agent/src/loop/phases/context.ts`.
+1. Add the phase context capability layer; final placement is `packages/agent/src/agent-loop.ts`.
 2. Move model collection and tool execution behind `PhaseContext` capabilities.
 3. Define a built-in phase extension shape with manifest, pure definition, input builder, and output applier.
 4. Update `packages/agent/src/loop/phases/built-in/chat/index.ts` to export the chat extension.
@@ -100,7 +100,7 @@ Guardrails:
 
 ### Prompt 4: Rename And Slim Phase Runner
 
-Status: Planned
+Status: Complete
 
 Goal: Replace `runConfiguredPhase()` with `runPhase()` and make it only invoke the configured phase mechanism.
 
@@ -124,18 +124,18 @@ Guardrails:
 
 ### Prompt 5: Refactor Built-In Phase Implementations
 
-Status: Planned
+Status: Complete
 
-Goal: Convert `chat`, `plan`, `execute`, and `verify` into pure phase definitions with local phase Rendering.
+Goal: Convert `chat`, `plan`, `execute`, and `verify` into pure phase definitions, with prompt Rendering owned by the context Module.
 
 Expected next change:
 
-1. `chat`: render its own prompt from `ChatInput` and `PhaseContext`, keep model collection and output parsing, but remove direct outcome creation and assistant-state mutation.
-2. `plan`: render its own prompt from `PlanInput` and `PhaseContext`, return task output without mutating `runtime.currentTask`.
-3. `execute`: render its own prompt from `ExecuteInput` and `PhaseContext`, use context tool capability, return execution output without choosing `verify` or stop.
-4. `verify`: render its own prompt from `VerifyInput` and `PhaseContext`, return verification result without retry/stop decisions.
+1. `chat`: use `ChatInput` and `PhaseContext` for model collection and output parsing, but remove direct outcome creation and assistant-state mutation.
+2. `plan`: use `PlanInput` and `PhaseContext`, return task output without mutating `runtime.currentTask`.
+3. `execute`: use `ExecuteInput` and `PhaseContext`, use context tool capability, return execution output without choosing `verify` or stop.
+4. `verify`: use `VerifyInput` and `PhaseContext`, return verification result without retry/stop decisions.
 5. Remove imports from built-in phase modules to `../../../../loop`.
-6. Delete `packages/agent/src/loop/phases/prompt-builder.ts` after each phase owns its Rendering.
+6. Move `packages/agent/src/loop/phases/prompt-builder.ts` into the context Module as `packages/agent/src/harness/context/phase-rendering.ts`.
 7. Keep prompt manifests co-located with phase modules.
 
 Guardrails:
@@ -147,13 +147,13 @@ Guardrails:
 
 ### Prompt 6: Wire runLoop To The New Runtime Boundary
 
-Status: Planned
+Status: Complete
 
 Goal: Make `runLoop()` the only owner of phase execution order and runtime mutation.
 
 Expected next change:
 
-1. Update `packages/agent/src/loop.ts`.
+1. Update `packages/agent/src/agent-loop.ts`.
 2. Build phase input before calling `runPhase()`.
 3. Build `PhaseContext` before calling `runPhase()`.
 4. Emit phase lifecycle events around the runner call.
@@ -169,7 +169,7 @@ Guardrails:
 
 ### Prompt 7: Update Exports, Tests, And Documentation Notes
 
-Status: Planned
+Status: Complete
 
 Goal: Clean up references to the old phase definition shape.
 
@@ -189,7 +189,7 @@ Guardrails:
 
 ### Prompt 8: Verification And Handoff
 
-Status: Planned
+Status: Complete
 
 Goal: Verify the refactor and leave the version docs ready for the next session.
 
@@ -218,7 +218,7 @@ Guardrails:
 - [ ] `PhaseContext` is a capability surface, not runtime exposure.
 - [ ] Built-in phase extensions expose input builders.
 - [ ] Built-in phase extensions expose output appliers.
-- [ ] Built-in phase extensions own phase-specific Rendering.
+- [ ] Context Module owns built-in phase Rendering.
 - [ ] `builtin-config.ts` is removed or folded into `built-in/index.ts`.
 - [ ] `prompt-builder.ts` is removed as a standalone phase module.
 - [ ] `config.ts` remains generic and does not import built-ins.

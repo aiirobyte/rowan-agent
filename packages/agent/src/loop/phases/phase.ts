@@ -1,3 +1,5 @@
+import type { PhaseContext, PhaseDefinition } from "./config";
+
 export {
   DEFAULT_PHASE_ID,
   createAgentPhaseConfig,
@@ -14,8 +16,6 @@ export {
   type PhaseTransition,
 } from "./config";
 
-export { runConfiguredPhase } from "./runtime";
-
 export {
   builtinPhaseConfigTemplate,
   chatPhaseDefinition,
@@ -23,13 +23,27 @@ export {
   createBuiltinPhaseConfig,
   createBuiltinPhasePlugin,
   executePhaseDefinition,
+  getBuiltinExtension,
   planPhaseDefinition,
+  verifyPhaseDefinition,
+  chatExtension,
+  planExtension,
+  executeExtension,
+  verifyExtension,
   createPhaseConfigFromTemplate,
   createPhaseDefinitionsFromTemplate,
   createPhasePluginFromTemplate,
-  verifyPhaseDefinition,
-} from "./builtin-config";
+} from "./built-in";
 export type {
   PhaseConfigTemplate,
   PhaseConfigTemplatePhase,
 } from "./config";
+export type { BuiltinPhaseExtension } from "./built-in/types";
+
+export async function runPhase<TInput, TOutput>(
+  context: PhaseContext,
+  definition: PhaseDefinition<TInput, TOutput>,
+  input: TInput,
+): Promise<TOutput> {
+  return definition.run(context, input);
+}

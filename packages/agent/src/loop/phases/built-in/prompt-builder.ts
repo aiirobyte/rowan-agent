@@ -1,4 +1,4 @@
-import type { LlmContext } from "../../protocol";
+import type { LlmContext } from "../../../protocol";
 import {
   createPromptBuilder,
   latestUserInput,
@@ -7,9 +7,9 @@ import {
   toJson,
   type PhasePromptBuilder,
   type PromptTool,
-} from "../../harness/context/prompt-builder";
-import { builtinPhaseConfigTemplate } from "./builtin-config";
-import type { PhaseConfigTemplate, PhaseConfigTemplatePhase } from "./config";
+} from "../../../harness/context/prompt-builder";
+import type { PhaseConfigTemplate, PhaseConfigTemplatePhase } from "../config";
+import { builtinPhaseConfigTemplate } from ".";
 
 function requirePhase<TPhase extends LlmContext["phase"]>(
   context: LlmContext,

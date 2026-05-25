@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { createPromptBuilder } from "../../../src/harness/context/prompt-builder";
-import { buildMessages, buildPrompt } from "../../../src/loop/phases/prompt-builder";
 import { createDefaultCriteria, type Task } from "@rowan-agent/agent";
-import { createId, createMessage, createSession } from "@rowan-agent/agent";
+import { buildMessages, buildPrompt, createId, createMessage, createSession } from "@rowan-agent/agent";
 import type { Tool } from "@rowan-agent/agent";
 
 const echoTool: Tool<{ message: string }> = {

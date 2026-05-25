@@ -1,10 +1,17 @@
 import type {
-  AgentLoopContext,
+  AgentEvent,
+  AgentLimitUsage,
+  AgentMessage,
+  AgentState,
   LoopPhase,
+  LoopPhaseOutputMap,
   Outcome,
   RunThread,
+  Task,
+  ToolCall,
+  ToolResult,
 } from "../../types";
-import type { AgentLoopRuntime } from "../../loop";
+import type { AgentRunState } from "../types";
 
 export type PhaseTransition =
   | { type: "next"; phaseId: string }
@@ -16,15 +23,12 @@ export type PhaseDefinition<TInput = unknown, TOutput = unknown> = {
   name: string;
   description: string;
   modelPhase?: LoopPhase;
-  buildInput(runtime: AgentLoopRuntime): TInput | Promise<TInput>;
-  run?: (context: PhaseContext, input: TInput) => Promise<TOutput>;
-  parseOutput?(raw: unknown, input: TInput): TOutput;
-  apply?(runtime: AgentLoopRuntime, output: TOutput, input: TInput): Promise<PhaseTransition>;
+  run(context: PhaseContext, input: TInput): Promise<TOutput>;
 };
 
 export type PhaseImplementation<TInput = unknown, TOutput = unknown> = Pick<
   PhaseDefinition<TInput, TOutput>,
-  "buildInput" | "run" | "parseOutput" | "apply"
+  "run"
 >;
 
 export type AgentPhasePlugin = {
@@ -33,8 +37,38 @@ export type AgentPhasePlugin = {
   phases: PhaseDefinition<any, any>[];
 };
 
-export type PhaseContext = AgentLoopContext & {
-  createRun?: RunThread;
+export type CollectedModelOutput<TPhase extends LoopPhase> = {
+  text: string;
+  phaseOutput?: LoopPhaseOutputMap[TPhase];
+  structured?: unknown;
+  toolCalls: ToolCall[];
+};
+
+export type PhaseContext = {
+  phaseId: string;
+  state: Readonly<AgentRunState>;
+  messages: {
+    visible(): AgentMessage[];
+    append(message: AgentMessage): Promise<void>;
+    appendState(message: AgentMessage): Promise<void>;
+  };
+  model: {
+    collect<TPhase extends LoopPhase>(input: {
+      phase: TPhase;
+      payload: any;
+      recordText?: boolean;
+    }): Promise<CollectedModelOutput<TPhase>>;
+  };
+  tools: {
+    execute(input: { task: Task; toolCall: ToolCall }): Promise<ToolResult>;
+  };
+  runs: {
+    create: RunThread;
+  };
+  skills: AgentState["skills"];
+  emit(event: AgentEvent): Promise<void>;
+  consumeLimit(resource: keyof AgentLimitUsage): void;
+  signal?: AbortSignal;
 };
 
 export type AgentPhaseConfig = {
@@ -142,7 +176,7 @@ export function createDefaultAgentPhaseConfig(): AgentPhaseConfig {
       id: DEFAULT_PHASE_ID,
       name: "Chat",
       description: "Decide whether to answer directly or transition to another available phase.",
-      buildInput: () => undefined,
+      run: async () => undefined,
     }],
   };
 }

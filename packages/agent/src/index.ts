@@ -9,24 +9,25 @@ export {
 } from "./harness/context";
 
 export {
-  buildPrompt,
   buildMessages,
-} from "./loop/phases/prompt-builder";
-
-export {
+  buildPrompt,
   builtinPhaseConfigTemplate,
   configTemplate,
   createAgentPhaseConfig,
+  createBuiltinPromptBuilder,
   createBuiltinPhaseConfig,
   createBuiltinPhasePlugin,
   createDefaultAgentPhaseConfig,
   createPhaseConfigFromTemplate,
   createPhaseDefinitionsFromTemplate,
+  createPhasePromptBuilder,
+  createPhasePromptBuilders,
   createPhasePluginFromTemplate,
+  builtinPhasePromptBuilders,
   definePhase,
   definePhasePlugin,
   resolvePhase,
-  runConfiguredPhase,
+  runPhase,
   validatePhaseConfig,
   type AgentPhaseConfig,
   type AgentPhaseConfigInput,

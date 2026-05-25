@@ -1,6 +1,6 @@
 # Rowan Todo
 
-Last updated: 2026-05-25
+Last updated: 2026-05-26
 
 Use this file as the cross-session checklist. In a new AI window, start with:
 
@@ -10,7 +10,7 @@ Read AGENT.md and docs/todo.md, then continue with the active version's next unc
 
 ## Active Version
 
-Active version: `0.4.7` planned
+Active version: `0.4.7` complete
 
 - Previous implemented baseline: `0.4.5`
 - Planning baseline: current v0.4.6 phase module shape
@@ -20,7 +20,7 @@ Active version: `0.4.7` planned
 
 ## Current Target
 
-Target: v0.4.7 Phase Definition Runtime Boundary. Planned.
+Target: v0.4.7 Phase Definition Runtime Boundary. Complete.
 
 Definition of done:
 
@@ -32,43 +32,44 @@ Definition of done:
 - [x] Update `docs/todo.md`.
 - [x] Update `docs/version/README.md`.
 - [x] Update `docs/README.md`.
-- [ ] Add failing tests for the new phase/runtime boundary.
-- [ ] Remove `buildInput(runtime)` from `PhaseDefinition`.
-- [ ] Remove `apply(runtime, output, input)` from `PhaseDefinition`.
-- [ ] Remove `AgentLoopRuntime` references from phase definition types.
-- [ ] Add `PhaseContext` as a constrained capability surface.
-- [ ] Keep built-in phases as extension-style modules under `built-in/<phase>/`.
-- [ ] Add built-in phase extension input builders.
-- [ ] Add built-in phase extension output appliers.
-- [ ] Move built-in phase aggregation from `builtin-config.ts` to `built-in/index.ts`.
-- [ ] Delete `builtin-config.ts` after the extension aggregation entrypoint is wired.
-- [ ] Keep `config.ts` as generic phase config validation only.
-- [ ] Move phase-specific Rendering into each built-in phase extension.
-- [ ] Delete `prompt-builder.ts` as a standalone phase module.
-- [ ] Move model collection and tool execution behind `PhaseContext` capabilities.
-- [ ] Replace `runConfiguredPhase()` with `runPhase(context, definition, input)`.
-- [ ] Move runtime hooks, phase events, retry handling, and transition application into loop-owned helpers.
-- [ ] Refactor built-in `chat` phase to return output only.
-- [ ] Refactor built-in `plan` phase to return output only.
-- [ ] Refactor built-in `execute` phase to return output only.
-- [ ] Refactor built-in `verify` phase to return output only.
-- [ ] Remove built-in phase definition imports of `../../../../loop`.
-- [ ] Remove old phase API and runner-name compatibility shims.
-- [ ] Update phase config, runner, and built-in phase tests.
-- [ ] Run `bun test packages/agent/test/phase-config.test.ts`.
-- [ ] Run `bun test packages/agent/test/run-configured-phase.test.ts`.
-- [ ] Run `bun test packages/agent/test/built-in-phases.test.ts`.
-- [ ] Run `bun test packages/agent/test/`.
-- [ ] Run `bun run build`.
-- [ ] Run `git diff --check`.
+- [x] Add failing tests for the new phase/runtime boundary.
+- [x] Remove `buildInput(runtime)` from `PhaseDefinition`.
+- [x] Remove `apply(runtime, output, input)` from `PhaseDefinition`.
+- [x] Remove `AgentLoopRuntime` references from phase definition types.
+- [x] Add `PhaseContext` as a constrained capability surface.
+- [x] Keep built-in phases as extension-style modules under `built-in/<phase>/`.
+- [x] Add built-in phase extension input builders.
+- [x] Add built-in phase extension output appliers.
+- [x] Move built-in phase aggregation from `builtin-config.ts` to `built-in/index.ts`.
+- [x] Delete `builtin-config.ts`.
+- [x] Keep `config.ts` as generic phase config only.
+- [x] Move built-in phase prompt Rendering to `harness/context/phase-rendering.ts` while preserving package-root `buildPrompt` and `buildMessages`.
+- [x] Split loop helper code into `errors.ts`, `state.ts`, and `outcomes.ts`.
+- [x] Remove the shallow `capabilities.ts` forwarding module.
+- [x] Move model collection and tool execution behind `PhaseContext` capabilities.
+- [x] Replace `runConfiguredPhase()` with `runPhase(context, definition, input)`.
+- [x] Move runtime hooks, phase events, retry handling, and transition application into `runLoop()`.
+- [x] Refactor built-in `chat` phase to pure definition + extension.
+- [x] Refactor built-in `plan` phase to pure definition + extension.
+- [x] Refactor built-in `execute` phase to pure definition + extension.
+- [x] Refactor built-in `verify` phase to pure definition + extension.
+- [x] Built-in phase `run` functions do not import from `../../../../loop`.
+- [x] Remove old phase API and runner-name compatibility shims.
+- [x] Update phase config, runner, and built-in phase tests.
+- [x] Run `bun test packages/agent/test/phase-config.test.ts`.
+- [x] Run `bun test packages/agent/test/run-configured-phase.test.ts`.
+- [x] Run `bun test packages/agent/test/built-in-phases.test.ts`.
+- [x] Run `bun test packages/agent/test/`.
+- [x] Run `bun run build`.
+- [x] Run `git diff --check`.
 
 ## Next Prompt
 
-Start v0.4.7 Prompt 1.
+Start v0.5.0 planning.
 
 Expected next change:
 
-- Lock the new phase/runtime boundary with failing tests.
+- Plan Context Projection And Provider IR on top of the completed v0.4.7 phase boundary.
 
 ## Version Roadmap
 
@@ -88,7 +89,7 @@ Expected next change:
 - [x] v0.4.4 Agent Run Persistence And Data Flow Refactor.
 - [x] v0.4.5 Phase-Configured Agent Loop.
 - [ ] v0.4.6 Loop Phase Refactoring.
-- [ ] v0.4.7 Phase Definition Runtime Boundary.
+- [x] v0.4.7 Phase Definition Runtime Boundary.
 - [ ] v0.5.0 Context Projection And Provider IR.
 - [ ] v0.6.0 Tool Runtime Policy Ports.
 - [ ] v0.7.0 Replay, Fork, And Compaction.
@@ -98,7 +99,7 @@ Expected next change:
 
 ## Guardrails
 
-- Keep `agent.ts` as the execution kernel/facade and `loop.ts` as Agent-owned orchestration.
+- Keep `agent.ts` as the execution kernel/facade and `agent-loop.ts` as Agent-owned orchestration.
 - Do not move Agent loop ownership into `runtime`.
 - Do not keep phase-specific control flow in `runAgentLoop()`.
 - Do not add a second phase runner beside the base `runPhase()` path.
@@ -107,7 +108,7 @@ Expected next change:
 - Do not keep phase-specific runtime mutation in phase definitions.
 - Do not keep `runConfiguredPhase()` as a compatibility alias.
 - Do not keep `builtin-config.ts` as a pass-through built-in assembly module.
-- Do not keep phase-specific Rendering in a shared `loop/phases/prompt-builder.ts`.
+- Do not keep phase-specific Rendering in `loop/phases`; context Rendering lives under `harness/context`.
 - Do not make `agent` import `adapters`.
 - Do not start v0.5.0 context projection in v0.4.7.
 - Do not keep compatibility for old `<session-id>.json` session files in v0.4.4.

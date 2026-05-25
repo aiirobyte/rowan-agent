@@ -1,10 +1,19 @@
-import { expect, test } from "bun:test";
-import { runConfiguredPhase } from "../src/loop/phases";
-import type { PhaseDefinition, PhaseTransition } from "../src/loop/phases";
-import type { AgentLoopRuntime } from "../src/loop";
-import { createLoopRuntime } from "../src/loop";
-import type { Outcome } from "../src/types";
-import { createId, createMessage } from "../src/types";
+import { expect, test, describe } from "bun:test";
+import { runPhase } from "../src/loop/phases";
+import type { PhaseContext, PhaseDefinition } from "../src/loop/phases";
+import type { AgentLoopRuntime } from "../src/agent-loop";
+import { createLoopRuntime } from "../src/agent-loop";
+import { createMessage } from "../src/types";
+import {
+  chatPhaseDefinition,
+  planPhaseDefinition,
+  executePhaseDefinition,
+  verifyPhaseDefinition,
+} from "../src/loop/phases";
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
 
 function createTestRuntime(overrides: Record<string, unknown> = {}): AgentLoopRuntime {
   return createLoopRuntime({
@@ -20,8 +29,37 @@ function createTestRuntime(overrides: Record<string, unknown> = {}): AgentLoopRu
   } as any);
 }
 
-function noopCreateRun(): never {
-  throw new Error("createRun not implemented in test");
+function createTestContext(runtime: AgentLoopRuntime): PhaseContext {
+  return {
+    phaseId: "test",
+    state: {
+      agentState: runtime.agentState,
+      currentPhase: "test",
+      attempt: 0,
+      toolResults: [],
+      limitUsage: { modelCalls: 0, toolCalls: 0 },
+      depth: { threadDepth: 0, maxThreadDepth: 4 },
+    },
+    messages: {
+      visible: () => [],
+      append: async () => {},
+      appendState: async () => {},
+    },
+    model: {
+      collect: async () => ({ text: "", toolCalls: [] }),
+    },
+    tools: {
+      execute: async () => ({ toolCallId: "tc", toolName: "t", ok: true, content: null }),
+    },
+    runs: {
+      create: async () => {
+        throw new Error("not implemented");
+      },
+    },
+    skills: [],
+    emit: async () => {},
+    consumeLimit: () => {},
+  };
 }
 
 function testPhase<TInput = unknown, TOutput = unknown>(
@@ -34,201 +72,199 @@ function testPhase<TInput = unknown, TOutput = unknown>(
   };
 }
 
-test("runConfiguredPhase calls buildInput and returns stop when no apply", async () => {
-  const runtime = createTestRuntime();
-  let buildInputCalled = false;
+// ============================================================================
+// runPhase contract — receives input, returns output, no transition
+// ============================================================================
 
-  const definition = testPhase({
-    id: "test",
-    buildInput: (rt) => {
-      buildInputCalled = true;
-      return { from: rt };
-    },
+describe("runPhase contract", () => {
+  test("runPhase accepts already-built input and returns output directly", async () => {
+    const runtime = createTestRuntime();
+    const context = createTestContext(runtime);
+    const builtInput = { value: "pre-built" };
+
+    const definition = testPhase<{ value: string }, { result: string }>({
+      id: "test",
+      run: async (_ctx, input) => {
+        expect(input).toEqual({ value: "pre-built" });
+        return { result: "output" };
+      },
+    });
+
+    const output = await runPhase(context, definition, builtInput);
+
+    expect(output).toEqual({ result: "output" });
   });
 
-  const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
+  test("runPhase returns output without constructing a PhaseTransition", async () => {
+    const runtime = createTestRuntime();
+    const context = createTestContext(runtime);
 
-  expect(buildInputCalled).toBe(true);
-  expect(transition.type).toBe("stop");
-});
+    const definition = testPhase<string, { answer: number }>({
+      id: "test",
+      run: async () => ({ answer: 42 }),
+    });
 
-test("runConfiguredPhase calls run hook with phase context", async () => {
-  const runtime = createTestRuntime();
-  let runInput: unknown;
+    const output = await runPhase(context, definition, "input");
 
-  const definition = testPhase<{ value: string }, { result: string }>({
-    id: "test",
-    buildInput: () => ({ value: "hello" }),
-    run: async (_ctx, input) => {
-      runInput = input;
-      return { result: "world" };
-    },
+    expect(output).toEqual({ answer: 42 });
+    expect(output).not.toHaveProperty("type");
+    expect(output).not.toHaveProperty("phaseId");
+    expect(output).not.toHaveProperty("outcome");
   });
 
-  const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
+  test("runPhase calls definition.run with PhaseContext, not AgentLoopRuntime", async () => {
+    const runtime = createTestRuntime();
+    const context = createTestContext(runtime);
+    let receivedContext: unknown;
 
-  expect(runInput).toEqual({ value: "hello" });
-  expect(transition.type).toBe("stop");
-});
+    const definition = testPhase<string, void>({
+      id: "test",
+      run: async (ctx) => {
+        receivedContext = ctx;
+      },
+    });
 
-test("runConfiguredPhase calls apply hook and returns its transition", async () => {
-  const runtime = createTestRuntime();
-  const expectedOutcome: Outcome = { id: createId("out"), passed: true, message: "done" };
+    await runPhase(context, definition, "input");
 
-  const definition = testPhase<string, string>({
-    id: "test",
-    buildInput: () => "input",
-    run: async () => "output",
-    apply: async (_rt, output, _input): Promise<PhaseTransition> => {
-      expect(output).toBe("output");
-      return { type: "stop", outcome: expectedOutcome };
-    },
+    expect(receivedContext).toBeDefined();
+    expect(receivedContext).toHaveProperty("phaseId");
+    expect(receivedContext).toHaveProperty("messages");
+    expect(receivedContext).toHaveProperty("model");
+    expect(receivedContext).toHaveProperty("tools");
+    expect(receivedContext).toHaveProperty("emit");
+    expect(receivedContext).not.toHaveProperty("agentState");
+    expect(receivedContext).not.toHaveProperty("currentTask");
+    expect(receivedContext).not.toHaveProperty("attempt");
   });
 
-  const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
+  test("runPhase returns void output when definition.run returns undefined", async () => {
+    const runtime = createTestRuntime();
+    const context = createTestContext(runtime);
 
-  expect(transition).toEqual({ type: "stop", outcome: expectedOutcome });
-});
+    const definition = testPhase<string, void>({
+      id: "test",
+      run: async () => {},
+    });
 
-test("runConfiguredPhase returns next transition from apply", async () => {
-  const runtime = createTestRuntime();
+    const output = await runPhase(context, definition, "input");
 
-  const definition = testPhase<string, string>({
-    id: "test",
-    buildInput: () => "input",
-    run: async () => "output",
-    apply: async (): Promise<PhaseTransition> => {
-      return { type: "next", phaseId: "next-phase" };
-    },
+    expect(output).toBeUndefined();
   });
 
-  const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
-
-  expect(transition).toEqual({ type: "next", phaseId: "next-phase" });
-});
-
-test("runConfiguredPhase calls parseOutput before apply", async () => {
-  const runtime = createTestRuntime();
-  let parsedOutput: unknown;
-
-  const definition = testPhase<string, { parsed: boolean }>({
-    id: "test",
-    buildInput: () => "raw",
-    run: async () => "raw-output" as any,
-    parseOutput: (raw) => {
-      return { parsed: true, raw };
-    },
-    apply: async (_rt, output) => {
-      parsedOutput = output;
-      return { type: "stop", outcome: { id: "out", passed: true, message: "ok" } };
-    },
-  });
-
-  await runConfiguredPhase(runtime, definition, noopCreateRun as any);
-
-  expect(parsedOutput).toEqual({ parsed: true, raw: "raw-output" });
-});
-
-test("runConfiguredPhase provides createRun in phase context", async () => {
-  const runtime = createTestRuntime();
-  const customCreateRun = async () => {
-    return {
-      kind: "thread" as const,
-      parentSessionId: "parent",
-      sessionId: "child",
-      messages: [],
-      outcome: { id: "out", passed: true, message: "ok" },
-      limitUsage: { modelCalls: 0, toolCalls: 0 },
-      depth: { threadDepth: 1, maxThreadDepth: 4 },
-      prompt: "test",
+  test("runPhase provides runs.create through PhaseContext", async () => {
+    const runtime = createTestRuntime();
+    const customCreateRun = async () => {
+      return {
+        kind: "thread" as const,
+        parentSessionId: "parent",
+        sessionId: "child",
+        messages: [],
+        outcome: { id: "out", passed: true, message: "ok" },
+        limitUsage: { modelCalls: 0, toolCalls: 0 },
+        depth: { threadDepth: 1, maxThreadDepth: 4 },
+        prompt: "test",
+      };
     };
-  };
 
-  let receivedCreateRun: unknown;
+    const context: PhaseContext = {
+      ...createTestContext(runtime),
+      runs: { create: customCreateRun },
+    };
 
-  const definition = testPhase<string, void>({
-    id: "test",
-    buildInput: () => "input",
-    run: async (ctx) => {
-      receivedCreateRun = ctx.createRun;
-    },
+    let receivedCreateRun: unknown;
+
+    const definition = testPhase<string, void>({
+      id: "test",
+      run: async (ctx) => {
+        receivedCreateRun = ctx.runs.create;
+      },
+    });
+
+    await runPhase(context, definition, "input");
+
+    expect(receivedCreateRun).toBe(customCreateRun);
   });
-
-  await runConfiguredPhase(runtime, definition, customCreateRun);
-
-  expect(receivedCreateRun).toBe(customCreateRun);
 });
 
-test("runConfiguredPhase respects runtime beforePhase abort", async () => {
-  const runtime = createTestRuntime({
-    runtime: {
-      async beforePhase() {
-        return {
-          abort: { id: "out", passed: false, message: "aborted" },
-        };
-      },
-    },
+// ============================================================================
+// Input builders are loop-owned, not definition-owned
+// ============================================================================
+
+describe("loop-owned input builders", () => {
+  test("PhaseDefinition has no buildInput field", () => {
+    const definition: PhaseDefinition<string, string> = {
+      id: "test",
+      name: "Test",
+      description: "Test phase",
+      run: async () => "output",
+    };
+
+    expect(definition).not.toHaveProperty("buildInput");
   });
 
-  const definition = testPhase<string, string>({
-    id: "test",
-    modelPhase: "chat",
-    buildInput: () => "input",
-    run: async () => "output",
+  test("built-in chat phase definition does not include buildInput", () => {
+    expect(chatPhaseDefinition).not.toHaveProperty("buildInput");
   });
 
-  const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
+  test("built-in plan phase definition does not include buildInput", () => {
+    expect(planPhaseDefinition).not.toHaveProperty("buildInput");
+  });
 
-  expect(transition.type).toBe("abort");
-  if (transition.type === "abort") {
-    expect(transition.outcome.message).toBe("aborted");
-  }
+  test("built-in execute phase definition does not include buildInput", () => {
+    expect(executePhaseDefinition).not.toHaveProperty("buildInput");
+  });
+
+  test("built-in verify phase definition does not include buildInput", () => {
+    expect(verifyPhaseDefinition).not.toHaveProperty("buildInput");
+  });
 });
 
-test("runConfiguredPhase respects runtime afterPhase retry up to 3 times", async () => {
-  let attempts = 0;
+// ============================================================================
+// Output appliers are loop-owned, not definition-owned
+// ============================================================================
 
-  const runtime = createTestRuntime({
-    runtime: {
-      async afterPhase() {
-        attempts += 1;
-        if (attempts < 3) {
-          return { retry: { state: runtime.agentState, runtime: { threadDepth: 0, maxThreadDepth: 4 }, tools: [], availablePhases: [] } };
-        }
-        return undefined;
-      },
-    },
+describe("loop-owned output appliers", () => {
+  test("PhaseDefinition has no apply field", () => {
+    const definition: PhaseDefinition<string, string> = {
+      id: "test",
+      name: "Test",
+      description: "Test phase",
+      run: async () => "output",
+    };
+
+    expect(definition).not.toHaveProperty("apply");
   });
 
-  const definition = testPhase<string, string>({
-    id: "test",
-    modelPhase: "chat",
-    buildInput: () => "input",
-    run: async () => "output",
+  test("built-in chat phase definition does not include apply", () => {
+    expect(chatPhaseDefinition).not.toHaveProperty("apply");
   });
 
-  await runConfiguredPhase(runtime, definition, noopCreateRun as any);
+  test("built-in plan phase definition does not include apply", () => {
+    expect(planPhaseDefinition).not.toHaveProperty("apply");
+  });
 
-  expect(attempts).toBe(3);
+  test("built-in execute phase definition does not include apply", () => {
+    expect(executePhaseDefinition).not.toHaveProperty("apply");
+  });
+
+  test("built-in verify phase definition does not include apply", () => {
+    expect(verifyPhaseDefinition).not.toHaveProperty("apply");
+  });
 });
 
-test("runConfiguredPhase throws after too many runtime retries", async () => {
-  const runtime = createTestRuntime({
-    runtime: {
-      async afterPhase() {
-        return { retry: { state: runtime.agentState, runtime: { threadDepth: 0, maxThreadDepth: 4 }, tools: [], availablePhases: [] } };
-      },
-    },
-  });
+// ============================================================================
+// Built-in phase modules do not require AgentLoopRuntime
+// ============================================================================
 
-  const definition = testPhase<string, string>({
-    id: "test",
-    modelPhase: "chat",
-    buildInput: () => "input",
-    run: async () => "output",
+describe("built-in phase runtime boundary", () => {
+  test("built-in phase definitions have no buildInput or apply", () => {
+    expect(chatPhaseDefinition).not.toHaveProperty("buildInput");
+    expect(chatPhaseDefinition).not.toHaveProperty("apply");
+    expect(planPhaseDefinition).not.toHaveProperty("buildInput");
+    expect(planPhaseDefinition).not.toHaveProperty("apply");
+    expect(executePhaseDefinition).not.toHaveProperty("buildInput");
+    expect(executePhaseDefinition).not.toHaveProperty("apply");
+    expect(verifyPhaseDefinition).not.toHaveProperty("buildInput");
+    expect(verifyPhaseDefinition).not.toHaveProperty("apply");
   });
-
-  await expect(
-    runConfiguredPhase(runtime, definition, noopCreateRun as any),
-  ).rejects.toThrow("too many test phase retries");
 });

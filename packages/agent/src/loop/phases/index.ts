@@ -1,17 +1,30 @@
 export {
-  builtinPhaseImplementations,
   builtinPhaseConfigTemplate,
   chatPhaseDefinition,
   configTemplate,
   createBuiltinPhaseConfig,
   createBuiltinPhasePlugin,
   executePhaseDefinition,
+  getBuiltinExtension,
   planPhaseDefinition,
+  verifyPhaseDefinition,
+  chatExtension,
+  planExtension,
+  executeExtension,
+  verifyExtension,
   createPhaseConfigFromTemplate,
   createPhaseDefinitionsFromTemplate,
   createPhasePluginFromTemplate,
-  verifyPhaseDefinition,
-} from "./builtin-config";
+} from "./built-in";
+export {
+  buildMessages,
+  buildPrompt,
+  builtinPhasePromptBuilders,
+  createBuiltinPromptBuilder,
+  createPhasePromptBuilder,
+  createPhasePromptBuilders,
+} from "./built-in/prompt-builder";
+export type { BuiltinPhaseExtension } from "./built-in/types";
 export {
   createAgentPhaseConfig,
   createDefaultAgentPhaseConfig,
@@ -19,6 +32,7 @@ export {
   definePhasePlugin,
   resolvePhase,
   validatePhaseConfig,
+  DEFAULT_PHASE_ID,
   type AgentPhaseConfig,
   type AgentPhaseConfigInput,
   type AgentPhasePlugin,
@@ -27,27 +41,12 @@ export {
   type PhaseContext,
   type PhaseDefinition,
   type PhaseTransition,
+  type CollectedModelOutput,
 } from "./config";
-export type { ChatInput } from "./builtin-phases/chat";
-export type { ExecuteInput } from "./builtin-phases/execute";
-export {
-  buildMessages,
-  buildPrompt,
-  builtinPhasePromptBuilders,
-  createBuiltinPromptBuilder,
-  createPhasePromptBuilder,
-  createPhasePromptBuilders,
-} from "./prompt-builder";
-export {
-  collectTextAndStructured,
-  executeTask,
-  planTask,
-  runConfiguredPhase,
-  runPhase,
-  verifyTask,
-  type RunPhaseOutput,
-} from "./runtime";
-export type { PlanInput } from "./builtin-phases/plan";
+export type { ChatInput } from "./built-in/chat";
+export type { ExecuteInput } from "./built-in/execute";
+export { runPhase } from "./phase";
+export type { PlanInput } from "./built-in/plan";
 export type { PhaseOutput } from "./types";
-export { createFailedOutcome } from "./builtin-phases/verify";
-export type { VerifyInput } from "./builtin-phases/verify";
+export { createFailedOutcome } from "./built-in/verify";
+export type { VerifyInput } from "./built-in/verify";

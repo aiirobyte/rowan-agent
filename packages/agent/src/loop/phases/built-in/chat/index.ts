@@ -1,17 +1,16 @@
-import type { AgentLoopRuntime } from "../../../../loop";
-import {
-  appendAssistantMessage,
-} from "../../../../loop";
-import type { AgentLoopContext, Outcome, PhaseOutput } from "../../../../types";
-import {
-  createId,
-  createMessage,
-  Validators,
-} from "../../../../types";
-import { isRecord, runtimeDepth } from "../../../shared";
+import { appendAssistantMessage } from "../../../../agent-loop";
+import { createId, createMessage, Validators } from "../../../../types";
+import type { Outcome, PhaseOutput } from "../../../../types";
+import { runtimeDepth } from "../../../state";
 import type { ChatInput } from "../../../types";
-import { collectTextAndStructured } from "../../runtime";
-import type { PhaseImplementation, PhaseTransition } from "../../config";
+import type { PhaseContext } from "../../config";
+import type { BuiltinPhaseExtension } from "../types";
+import manifestJson from "./manifest.json";
+import type { PhaseConfigTemplatePhase } from "../../config";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
@@ -51,22 +50,17 @@ export function parseChatOutput(value: unknown, input: ChatInput): PhaseOutput {
 }
 
 export async function runChatPhase(
-  context: AgentLoopContext,
+  context: PhaseContext,
   input: ChatInput,
 ): Promise<PhaseOutput> {
-  const collected = await collectTextAndStructured({
-    context,
-    events: context.config.stream(
-      context.config.model,
-      {
-        phase: "chat",
-        state: input.state,
-        runtime: input.runtime,
-        availablePhases: input.availablePhases,
-      },
-      { signal: context.signal },
-    ),
-    metadataPhase: "chat",
+  const collected = await context.model.collect({
+    phase: "chat",
+    payload: {
+      phase: "chat",
+      state: input.state,
+      runtime: input.runtime,
+      availablePhases: input.availablePhases,
+    },
     recordText: false,
   });
 
@@ -77,7 +71,7 @@ export async function runChatPhase(
 
   const output = parseChatOutput(rawOutput, input);
   if (output.route !== "direct") {
-    await context.appendMessage(
+    await context.messages.append(
       createMessage("assistant", JSON.stringify(output), {
         kind: "phase_output",
         phase: "chat",
@@ -88,8 +82,22 @@ export async function runChatPhase(
   return output;
 }
 
-export const chatPhaseImplementation: PhaseImplementation<ChatInput, PhaseOutput> = {
-  buildInput(runtime: AgentLoopRuntime) {
+const manifest = manifestJson as PhaseConfigTemplatePhase;
+
+export const chatExtension: BuiltinPhaseExtension<ChatInput, PhaseOutput> = {
+  manifest,
+
+  definition: {
+    id: manifest.id,
+    name: manifest.name,
+    description: manifest.description,
+    modelPhase: manifest.modelPhase,
+    async run(context, input) {
+      return runChatPhase(context, input);
+    },
+  },
+
+  buildInput(runtime) {
     const phaseConfig = runtime.phaseConfig;
     const availablePhases = (phaseConfig?.phases ?? [])
       .filter((phase) => phase.id !== "chat")
@@ -109,14 +117,13 @@ export const chatPhaseImplementation: PhaseImplementation<ChatInput, PhaseOutput
     };
   },
 
-  async run(context, input) {
-    return runChatPhase(context, input);
-  },
-
-  async apply(runtime, output): Promise<PhaseTransition> {
+  async applyOutput({ runtime, phaseOutput: output }) {
     if (output.route === "direct") {
       const outcome = createDirectOutcome(output.message);
-      await appendAssistantMessage(runtime, outcome.message, { kind: "direct_answer" });
+      await appendAssistantMessage(runtime, outcome.message, {
+        kind: "direct_answer",
+        scope: "conversation",
+      });
       return { type: "stop", outcome };
     }
 
