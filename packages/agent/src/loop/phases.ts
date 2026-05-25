@@ -1,20 +1,17 @@
 import { executeRuntimeToolCall } from "../harness/tools";
-import { scheduleTaskRouting } from "./routing";
 import type {
   AgentLoopContext,
-  LlmPhase,
-  LlmPhaseOutputMap,
+  LoopPhase,
+  LoopPhaseOutputMap,
   ModelStreamEvent,
   Outcome,
   Task,
-  RoutingDecision,
   ToolCall,
   ToolResult,
   VerificationResult,
 } from "../types";
 import {
   createMessage,
-  latestUserInput,
   nowIso,
   Validators,
 } from "../types";
@@ -24,7 +21,6 @@ import type {
   PhaseInputMap,
   PhaseOutputMap,
   PlanInput,
-  RouteInput,
   VerifyInput,
 } from "./types";
 import {
@@ -32,65 +28,14 @@ import {
   createInvalidExecuteToolResult,
   createInvalidModelVerification,
   createToolTaskOutput,
-  executePhase,
   isInvalidModelSchemaError,
   isRecord,
-  planPhase,
-  routePhase,
-  verifyPhase,
 } from "./shared";
-import type { AgentPhaseContext, AgentPhaseDefinition, AgentPhaseTransition } from "./phase-config";
+import type { PhaseContext, PhaseDefinition, PhaseTransition } from "./phase-config";
 import type { AgentLoopRuntime } from "../loop";
 import { createAgentLoopContext, emit } from "../loop";
 
 // --- Parse functions (moved from task.ts) ---
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function normalizeThread(value: unknown): RoutingDecision["thread"] | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const record = value as Record<string, unknown>;
-  const prompt = asNonEmptyString(record.prompt);
-  const task = asNonEmptyString(record.task);
-  const goal = asNonEmptyString(record.goal);
-  if (!prompt || !task || !goal) {
-    return undefined;
-  }
-
-  return { prompt, task, goal };
-}
-
-function normalizeRoutingInput(value: unknown): RoutingDecision {
-  if (!isRecord(value)) {
-    throw new Error("Expected route output to be an object.");
-  }
-
-  const rawRoute = asNonEmptyString(value.route)?.toLowerCase();
-  if (!rawRoute) {
-    throw new Error("Expected route output to include a non-empty route.");
-  }
-  const message =
-    asNonEmptyString(value.message) ??
-    asNonEmptyString(value.answer) ??
-    asNonEmptyString(value.response) ??
-    (rawRoute === "direct" ? "Done." : "Creating a task for this request.");
-  const thread = normalizeThread(value.thread);
-
-  return Validators.routingDecision.Parse({
-    message,
-    route: rawRoute,
-    ...(thread ? { thread } : {}),
-  });
-}
-
-function parseRoutingDecision(value: unknown): RoutingDecision {
-  return normalizeRoutingInput(value);
-}
 
 function normalizeVerificationInput(value: unknown): VerificationResult {
   if (!isRecord(value)) {
@@ -123,21 +68,21 @@ function parseTask(value: unknown): Task {
   return Validators.task.Parse(value);
 }
 
-export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
+export async function collectTextAndStructured<TPhase extends LoopPhase>(input: {
   context: AgentLoopContext;
   events: AsyncIterable<ModelStreamEvent>;
   metadataPhase: TPhase;
   recordText?: boolean;
 }): Promise<{
   text: string;
-  phaseOutput?: LlmPhaseOutputMap[TPhase];
+  phaseOutput?: LoopPhaseOutputMap[TPhase];
   structured?: unknown;
   toolCalls: ToolCall[];
 }> {
   const toolCalls: ToolCall[] = [];
   let text = "";
   let flushedText = "";
-  let phaseOutput: LlmPhaseOutputMap[TPhase] | undefined;
+  let phaseOutput: LoopPhaseOutputMap[TPhase] | undefined;
   let structured: unknown;
   const flushText = async () => {
     if (text.length === 0) {
@@ -180,10 +125,10 @@ export async function collectTextAndStructured<TPhase extends LlmPhase>(input: {
       }
 
       await flushText();
-      phaseOutput = event.output as LlmPhaseOutputMap[TPhase];
+      phaseOutput = event.output as LoopPhaseOutputMap[TPhase];
 
-      if (event.phase === executePhase) {
-        for (const outputToolCall of (event.output as LlmPhaseOutputMap["execute"]).toolCalls) {
+      if (event.phase === "execute") {
+        for (const outputToolCall of (event.output as LoopPhaseOutputMap["execute"]).toolCalls) {
           const toolCall = Validators.toolCall.Parse(outputToolCall);
           toolCalls.push(toolCall);
         }
@@ -211,13 +156,13 @@ export async function planTask(context: AgentLoopContext, input: PlanInput): Pro
     context,
     events: context.config.stream(
       context.config.model,
-      { phase: planPhase, state: input.state, runtime: input.runtime },
+      { phase: "plan", state: input.state, runtime: input.runtime },
       { signal: context.signal },
     ),
-    metadataPhase: planPhase,
+    metadataPhase: "plan",
   });
 
-  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["plan"] | undefined;
+  const phaseOutput = collected.phaseOutput as LoopPhaseOutputMap["plan"] | undefined;
   const rawTask = phaseOutput?.task ?? collected.structured;
   if (!rawTask) {
     throw new Error("Planner did not produce a structured task.");
@@ -225,48 +170,6 @@ export async function planTask(context: AgentLoopContext, input: PlanInput): Pro
 
   const task = parseTask(rawTask);
   return { task, text: phaseOutput?.text ?? collected.text };
-}
-
-export async function routeRequest(
-  context: AgentLoopContext,
-  input: RouteInput,
-): Promise<RoutingDecision & { text: string }> {
-  const collected = await collectTextAndStructured({
-    context,
-    events: context.config.stream(
-      context.config.model,
-      { phase: routePhase, state: input.state, runtime: input.runtime },
-      { signal: context.signal },
-    ),
-    metadataPhase: routePhase,
-    recordText: false,
-  });
-
-  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["route"] | undefined;
-  const rawDecision = phaseOutput ?? collected.structured;
-  if (!rawDecision) {
-    throw new Error("Router did not produce a structured task routing decision.");
-  }
-
-  const decision = scheduleTaskRouting({
-    input: latestUserInput(input.state),
-    tools: input.tools,
-    decision: parseRoutingDecision(rawDecision),
-    defaultTargetPhase: "plan",
-    allowThreadRoute: input.canStartThreadRoute,
-    workerTask: input.workerTask,
-    workerGoal: input.workerGoal,
-  });
-  if (decision.route !== "direct") {
-    await context.appendMessage(
-      createMessage("assistant", JSON.stringify(decision), {
-        kind: "routing_decision",
-        phase: routePhase,
-        scope: "execution",
-      }),
-    );
-  }
-  return { ...decision, text: phaseOutput?.text ?? decision.message };
 }
 
 async function executeToolCall(input: {
@@ -334,7 +237,7 @@ export async function executeTask(
       events: context.config.stream(
         context.config.model,
         {
-          phase: executePhase,
+          phase: "execute",
           state: input.state,
           task: input.task,
           toolResults: input.toolResults,
@@ -342,7 +245,7 @@ export async function executeTask(
         },
         { signal: context.signal },
       ),
-      metadataPhase: executePhase,
+      metadataPhase: "execute",
     });
   } catch (error) {
     if (!isInvalidModelSchemaError(error)) {
@@ -376,7 +279,7 @@ export async function executeTask(
     );
   }
 
-  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["execute"] | undefined;
+  const phaseOutput = collected.phaseOutput as LoopPhaseOutputMap["execute"] | undefined;
   return {
     text: phaseOutput?.text ?? collected.text,
     toolCalls: collected.toolCalls,
@@ -395,7 +298,7 @@ export async function verifyTask(
       events: context.config.stream(
         context.config.model,
         {
-          phase: verifyPhase,
+          phase: "verify",
           state: input.state,
           task: input.task,
           taskOutput: input.taskOutput,
@@ -404,7 +307,7 @@ export async function verifyTask(
         },
         { signal: context.signal },
       ),
-      metadataPhase: verifyPhase,
+      metadataPhase: "verify",
     });
   } catch (error) {
     if (!isInvalidModelSchemaError(error)) {
@@ -414,7 +317,7 @@ export async function verifyTask(
     return result;
   }
 
-  const phaseOutput = collected.phaseOutput as LlmPhaseOutputMap["verify"] | undefined;
+  const phaseOutput = collected.phaseOutput as LoopPhaseOutputMap["verify"] | undefined;
   const rawVerification = phaseOutput ?? collected.structured;
   const result = rawVerification
     ? parseVerificationResult(rawVerification)
@@ -426,7 +329,7 @@ export async function verifyTask(
   return result;
 }
 
-export type RunPhaseOutput<TPhase extends LlmPhase> =
+export type RunPhaseOutput<TPhase extends LoopPhase> =
   | { type: "output"; output: PhaseOutputMap[TPhase] }
   | { type: "abort"; outcome: Outcome };
 
@@ -434,23 +337,23 @@ function hasAbort(value: unknown): value is { abort: Outcome } {
   return isRecord(value) && isRecord(value.abort);
 }
 
-function hasSkip<TPhase extends LlmPhase>(value: unknown): value is { skip: PhaseOutputMap[TPhase] } {
+function hasSkip<TPhase extends LoopPhase>(value: unknown): value is { skip: PhaseOutputMap[TPhase] } {
   return isRecord(value) && "skip" in value;
 }
 
-function hasInput<TPhase extends LlmPhase>(value: unknown): value is { input: PhaseInputMap[TPhase] } {
+function hasInput<TPhase extends LoopPhase>(value: unknown): value is { input: PhaseInputMap[TPhase] } {
   return isRecord(value) && "input" in value;
 }
 
-function hasOutput<TPhase extends LlmPhase>(value: unknown): value is { output: PhaseOutputMap[TPhase] } {
+function hasOutput<TPhase extends LoopPhase>(value: unknown): value is { output: PhaseOutputMap[TPhase] } {
   return isRecord(value) && "output" in value;
 }
 
-function hasRetry<TPhase extends LlmPhase>(value: unknown): value is { retry: PhaseInputMap[TPhase] } {
+function hasRetry<TPhase extends LoopPhase>(value: unknown): value is { retry: PhaseInputMap[TPhase] } {
   return isRecord(value) && "retry" in value;
 }
 
-export async function runPhase<TPhase extends LlmPhase>(
+export async function runPhase<TPhase extends LoopPhase>(
   context: AgentLoopContext,
   phase: TPhase,
   input: PhaseInputMap[TPhase],
@@ -494,34 +397,37 @@ export async function runPhase<TPhase extends LlmPhase>(
 
 export async function runConfiguredPhase(
   runtime: AgentLoopRuntime,
-  definition: AgentPhaseDefinition<any, any>,
-  createRun: AgentPhaseContext["createRun"],
-): Promise<AgentPhaseTransition> {
+  definition: PhaseDefinition<any, any>,
+  createRun: PhaseContext["createRun"],
+): Promise<PhaseTransition> {
   const context = createAgentLoopContext(runtime);
-  const phaseContext: AgentPhaseContext = { ...context, createRun };
-  const modelPhase = definition.modelPhase as LlmPhase | undefined;
+  const phaseContext: PhaseContext = { ...context, createRun };
+  const modelPhase = definition.modelPhase as LoopPhase | undefined;
   let retries = 0;
   let retryInput: unknown = undefined;
 
   while (true) {
-    await emit(runtime, { type: "phase_start", phase: definition.id as LlmPhase, ts: nowIso() });
+    await emit(runtime, { type: "phase_start", phase: definition.id, ts: nowIso() });
 
-    // 1. buildInput (use retry input if available, otherwise build from definition)
-    let builtInput = retryInput ?? await definition.buildInput(runtime);
-    retryInput = undefined;
+    // 1. buildInput (always build defaults, then overlay retry input)
+    let builtInput = await definition.buildInput(runtime);
+    if (retryInput) {
+      builtInput = { ...builtInput, ...(retryInput as object) };
+      retryInput = undefined;
+    }
 
     // 2. runtime beforePhase
     if (modelPhase && context.config.runtime?.beforePhase) {
       const before = await context.config.runtime.beforePhase(context, modelPhase, builtInput as never);
       if (hasAbort(before)) {
-        await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
+        await emit(runtime, { type: "phase_end", phase: definition.id, ts: nowIso() });
         return { type: "abort", outcome: before.abort };
       }
       if (hasSkip(before)) {
         const transition = definition.apply
           ? await definition.apply(runtime, before.skip, builtInput)
           : { type: "stop" as const, outcome: { id: "skip", passed: true, message: "Skipped." } };
-        await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
+        await emit(runtime, { type: "phase_end", phase: definition.id, ts: nowIso() });
         return transition;
       }
       if (before && "input" in before && before.input) {
@@ -544,7 +450,7 @@ export async function runConfiguredPhase(
     if (modelPhase && context.config.runtime?.afterPhase) {
       const after = await context.config.runtime.afterPhase(context, modelPhase, output as never);
       if (hasAbort(after)) {
-        await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
+        await emit(runtime, { type: "phase_end", phase: definition.id, ts: nowIso() });
         return { type: "abort", outcome: after.abort };
       }
       if (hasRetry(after) && after.retry) {
@@ -563,12 +469,12 @@ export async function runConfiguredPhase(
     // 6. apply (definition effects and transition)
     if (definition.apply) {
       const transition = await definition.apply(runtime, output, builtInput);
-      await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
+      await emit(runtime, { type: "phase_end", phase: definition.id, ts: nowIso() });
       return transition;
     }
 
     // Default: stop
-    await emit(runtime, { type: "phase_end", phase: definition.id as LlmPhase, ts: nowIso() });
+    await emit(runtime, { type: "phase_end", phase: definition.id, ts: nowIso() });
     return { type: "stop", outcome: { id: "default", passed: true, message: "Phase completed." } };
   }
 }
