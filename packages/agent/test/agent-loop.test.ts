@@ -298,12 +298,12 @@ test("runAgentLoop throws provider errors to the caller", async () => {
     input: "hello",
   });
   const stream: StreamFn = async function* failingStream() {
-    throw Object.assign(new Error("OpenAI-compatible request failed with status 400 Bad Request: Invalid model."), {
+    throw Object.assign(new Error("Provider request failed with status 400 Bad Request: Invalid model."), {
       code: "http_error",
       status: 400,
       retryable: false,
       details: {
-        endpoint: "https://api.example/v1/chat/completions",
+        endpoint: "https://api.example/v1/model",
         model: "bad-model",
         providerError: {
           message: "Invalid model.",

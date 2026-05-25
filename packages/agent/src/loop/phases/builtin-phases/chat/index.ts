@@ -1,17 +1,17 @@
-import type { AgentLoopRuntime } from "../../../loop";
+import type { AgentLoopRuntime } from "../../../../loop";
 import {
   appendAssistantMessage,
-} from "../../../loop";
-import type { AgentLoopContext, Outcome, PhaseOutput } from "../../../types";
+} from "../../../../loop";
+import type { AgentLoopContext, Outcome, PhaseOutput } from "../../../../types";
 import {
   createId,
   createMessage,
   Validators,
-} from "../../../types";
-import { collectTextAndStructured } from "../../phases";
-import { isRecord, runtimeDepth } from "../../shared";
-import type { PhaseDefinition, PhaseTransition } from "../types";
-import type { ChatInput } from "./types";
+} from "../../../../types";
+import { isRecord, runtimeDepth } from "../../../shared";
+import type { ChatInput } from "../../../types";
+import { collectTextAndStructured } from "../../runtime";
+import type { PhaseImplementation, PhaseTransition } from "../../config";
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
@@ -88,13 +88,8 @@ export async function runChatPhase(
   return output;
 }
 
-export const chatPhaseDefinition: PhaseDefinition<ChatInput, PhaseOutput> = {
-  id: "chat",
-  name: "Chat",
-  description: "Decide whether to answer directly or transition to another available phase.",
-  modelPhase: "chat",
-
-  buildInput(runtime) {
+export const chatPhaseImplementation: PhaseImplementation<ChatInput, PhaseOutput> = {
+  buildInput(runtime: AgentLoopRuntime) {
     const phaseConfig = runtime.phaseConfig;
     const availablePhases = (phaseConfig?.phases ?? [])
       .filter((phase) => phase.id !== "chat")
@@ -128,3 +123,5 @@ export const chatPhaseDefinition: PhaseDefinition<ChatInput, PhaseOutput> = {
     return { type: "next", phaseId: output.route };
   },
 };
+
+export type { ChatInput } from "../../../types";

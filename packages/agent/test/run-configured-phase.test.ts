@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { runConfiguredPhase } from "../src/loop/phases";
-import type { PhaseDefinition, PhaseTransition } from "../src/loop/phase-config";
+import type { PhaseDefinition, PhaseTransition } from "../src/loop/phases";
 import type { AgentLoopRuntime } from "../src/loop";
 import { createLoopRuntime } from "../src/loop";
 import type { Outcome } from "../src/types";

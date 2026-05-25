@@ -1,7 +1,7 @@
 import Type from "typebox";
 import { createId, Validators } from "./protocol";
 import type { AgentRuntimePort } from "./loop/types";
-import type { AgentPhaseConfig } from "./loop/phase-config";
+import type { AgentPhaseConfig } from "./loop/phases";
 import type {
   AgentContextMessage,
   AgentContextSkill,

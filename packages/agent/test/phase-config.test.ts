@@ -1,10 +1,14 @@
 import { expect, test } from "bun:test";
 import {
+  builtinPhaseConfigTemplate,
+  createAgentPhaseConfig,
   createDefaultAgentPhaseConfig,
+  createPhaseConfigFromTemplate,
+  definePhasePlugin,
   resolvePhase,
   validatePhaseConfig,
-} from "../src/loop/phase-config";
-import type { AgentPhaseConfig, PhaseDefinition } from "../src/loop/phase-config";
+} from "../src/loop/phases";
+import type { AgentPhaseConfig, PhaseDefinition } from "../src/loop/phases";
 
 function stubPhase(id: string): PhaseDefinition {
   return {
@@ -103,6 +107,74 @@ test("createDefaultAgentPhaseConfig passes validation", () => {
   const config = createDefaultAgentPhaseConfig();
 
   expect(() => validatePhaseConfig(config)).not.toThrow();
+});
+
+test("createAgentPhaseConfig composes phases from plugins", () => {
+  const first = stubPhase("first");
+  const second = stubPhase("second");
+
+  const config = createAgentPhaseConfig({
+    plugins: [
+      definePhasePlugin({
+        id: "core",
+        entryPhaseId: "first",
+        phases: [first],
+      }),
+      definePhasePlugin({
+        id: "extra",
+        phases: [second],
+      }),
+    ],
+  });
+
+  expect(config.entryPhaseId).toBe("first");
+  expect(config.phases).toEqual([first, second]);
+  expect(resolvePhase(config, "second")).toBe(second);
+});
+
+test("createAgentPhaseConfig lets explicit entryPhaseId override plugin entry", () => {
+  const config = createAgentPhaseConfig({
+    entryPhaseId: "override",
+    plugins: [
+      definePhasePlugin({
+        id: "core",
+        entryPhaseId: "first",
+        phases: [stubPhase("first"), stubPhase("override")],
+      }),
+    ],
+  });
+
+  expect(config.entryPhaseId).toBe("override");
+});
+
+test("createAgentPhaseConfig rejects duplicate plugin ids", () => {
+  expect(() =>
+    createAgentPhaseConfig({
+      plugins: [
+        definePhasePlugin({ id: "duplicate", phases: [stubPhase("a")] }),
+        definePhasePlugin({ id: "duplicate", phases: [stubPhase("b")] }),
+      ],
+    }),
+  ).toThrow("Duplicate phase plugin id: duplicate");
+});
+
+test("builtin phase config is created from a persistent template", () => {
+  const config = createPhaseConfigFromTemplate(builtinPhaseConfigTemplate);
+
+  expect(builtinPhaseConfigTemplate.entryPhaseId).toBe("chat");
+  expect(builtinPhaseConfigTemplate.phases.map((phase) => phase.id)).toEqual([
+    "chat",
+    "plan",
+    "execute",
+    "verify",
+  ]);
+  expect(config.entryPhaseId).toBe("chat");
+  expect(config.phases.map((phase) => phase.id)).toEqual([
+    "chat",
+    "plan",
+    "execute",
+    "verify",
+  ]);
 });
 
 test("custom three-phase config runs validation correctly", () => {

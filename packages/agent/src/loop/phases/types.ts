@@ -3,7 +3,7 @@ import type {
   PhaseContext,
   PhaseDefinition,
   PhaseTransition,
-} from "../phase-config";
+} from "./config";
 
 export type {
   PhaseContext,

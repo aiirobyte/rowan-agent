@@ -1,19 +1,14 @@
-import { appendAssistantMessage } from "../../../loop";
-import type { ExecuteOutput } from "../../../types";
-import { executeTask } from "../../phases";
+import { appendAssistantMessage } from "../../../../loop";
+import type { ExecuteOutput } from "../../../../types";
 import {
   createUnverifiedTaskOutcome,
   runtimeDepth,
-} from "../../shared";
-import type { PhaseDefinition, PhaseTransition } from "../types";
-import type { ExecuteInput } from "./types";
+} from "../../../shared";
+import type { ExecuteInput } from "../../../types";
+import { executeTask } from "../../runtime";
+import type { PhaseImplementation, PhaseTransition } from "../../config";
 
-export const executePhaseDefinition: PhaseDefinition<ExecuteInput, ExecuteOutput> = {
-  id: "execute",
-  name: "Execute",
-  description: "Call allowed tools for the current task and collect tool results.",
-  modelPhase: "execute",
-
+export const executePhaseImplementation: PhaseImplementation<ExecuteInput, ExecuteOutput> = {
   async buildInput(runtime) {
     const task = runtime.currentTask!;
     runtime.attempt = (runtime.attempt || 0) + 1;
@@ -53,3 +48,5 @@ export const executePhaseDefinition: PhaseDefinition<ExecuteInput, ExecuteOutput
     return { type: "next", phaseId: "verify" };
   },
 };
+
+export type { ExecuteInput } from "../../../types";

@@ -1,4 +1,4 @@
-import { buildOpenAICompatiblePrompt, type ChatMessage } from "@rowan-agent/agent";
+import { buildPrompt, type PromptMessage } from "@rowan-agent/agent";
 import { extractJsonObject } from "./json-extract";
 import type {
   LlmContext,
@@ -304,7 +304,7 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function summarizeRequestUsage(messages: ChatMessage[]): Pick<ModelCallUsage, "inputMessages"> {
+function summarizeRequestUsage(messages: PromptMessage[]): Pick<ModelCallUsage, "inputMessages"> {
   return {
     inputMessages: messages.length,
   };
@@ -372,7 +372,7 @@ function normalizeHttpError(
   });
 }
 
-function buildChatCompletionBody(config: OpenAICompatibleConfig, messages: ChatMessage[]): Record<string, unknown> {
+function buildChatCompletionBody(config: OpenAICompatibleConfig, messages: PromptMessage[]): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
@@ -479,7 +479,7 @@ async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void
 
 async function callOpenAICompatibleChatCompletionOnce(
   config: OpenAICompatibleConfig,
-  messages: ChatMessage[],
+  messages: PromptMessage[],
   options: StreamOptions = {},
   requestBody = buildChatCompletionBody(config, messages),
 ): Promise<OpenAICompatibleChatCompletionResult> {
@@ -538,7 +538,7 @@ async function callOpenAICompatibleChatCompletionOnce(
 
 export async function callOpenAICompatibleChatCompletion(
   config: OpenAICompatibleConfig,
-  messages: ChatMessage[],
+  messages: PromptMessage[],
   options: StreamOptions = {},
   requestBody = buildChatCompletionBody(config, messages),
 ): Promise<OpenAICompatibleChatCompletionResult> {
@@ -791,7 +791,7 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
   };
 
   return async function* openAICompatibleStream(model, context, options): AsyncIterable<ModelStreamEvent> {
-    const prompt = buildOpenAICompatiblePrompt({ context, tools: normalizedConfig.tools });
+    const prompt = buildPrompt({ context, tools: normalizedConfig.tools });
     const requestUsage = summarizeRequestUsage(prompt.messages);
     const requestBody = buildChatCompletionBody(normalizedConfig, prompt.messages);
     yield {

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import { buildOpenAICompatibleMessages, buildOpenAICompatiblePrompt } from "../../../src/harness/context/prompt-builder";
+import { createPromptBuilder } from "../../../src/harness/context/prompt-builder";
+import { buildMessages, buildPrompt } from "../../../src/loop/phases/prompt-builder";
 import { createDefaultCriteria, type Task } from "@rowan-agent/agent";
 import { createId, createMessage, createSession } from "@rowan-agent/agent";
 import type { Tool } from "@rowan-agent/agent";
@@ -32,13 +33,40 @@ function createTestTask(): Task {
   };
 }
 
+test("generic prompt builder delegates phase content to registered phase builders", () => {
+  const session = createSession({
+    systemPrompt: "Test system",
+    input: "Use echo.",
+  });
+  const promptBuilder = createPromptBuilder([
+    {
+      phase: "chat",
+      conversationLimit: 1,
+      build({ context, tools }) {
+        return `Custom ${context.phase} prompt with ${tools.map((tool) => tool.name).join(",")}`;
+      },
+    },
+  ]);
+
+  const prompt = promptBuilder.buildPrompt({
+    context: { phase: "chat", state: session },
+    tools: [echoTool],
+  });
+
+  expect(prompt.phasePromptMessage).toEqual({
+    role: "user",
+    content: "Custom chat prompt with echo",
+  });
+  expect(prompt.messages.at(-1)).toEqual(prompt.phasePromptMessage);
+});
+
 test("chat prompt defaults to direct answers unless another phase is needed", () => {
   const session = createSession({
     systemPrompt: "Test system",
     input: "What is 2 + 2?",
   });
 
-  const messages = buildOpenAICompatibleMessages({
+  const messages = buildMessages({
     context: { phase: "chat", state: session },
     tools: [echoTool],
   });
@@ -77,7 +105,7 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
     ],
   });
 
-  const messages = buildOpenAICompatibleMessages({
+  const messages = buildMessages({
     context: { phase: "plan", state: session },
     tools: [echoTool],
   });
@@ -106,7 +134,7 @@ test("prompt builder exposes the generated phase prompt message", () => {
     input: "Plan with echo.",
   });
 
-  const prompt = buildOpenAICompatiblePrompt({
+  const prompt = buildPrompt({
     context: { phase: "plan", state: session },
     tools: [echoTool],
   });
@@ -127,7 +155,7 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
   const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
   const task = createTestTask();
 
-  const messages = buildOpenAICompatibleMessages({
+  const messages = buildMessages({
     context: {
       phase: "execute",
       state: session,
@@ -181,7 +209,7 @@ test("prompt builder excludes execution-scoped messages from later prompts", () 
   );
   const task = createTestTask();
 
-  const messages = buildOpenAICompatibleMessages({
+  const messages = buildMessages({
     context: {
       phase: "verify",
       state: session,
@@ -214,7 +242,7 @@ test("prompt builder does not replay recorded phase prompts as conversation", ()
     }),
   );
 
-  const messages = buildOpenAICompatibleMessages({
+  const messages = buildMessages({
     context: { phase: "plan", state: session },
     tools: [echoTool],
   });
@@ -237,7 +265,7 @@ test("verify prompt includes phase, lightweight judgement contract, task, criter
     },
   ];
 
-  const messages = buildOpenAICompatibleMessages({
+  const messages = buildMessages({
     context: {
       phase: "verify",
       state: session,

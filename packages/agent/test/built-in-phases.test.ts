@@ -7,9 +7,12 @@ import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 import {
   chatPhaseDefinition,
+  createAgentPhaseConfig,
+  definePhase,
+  definePhasePlugin,
   planPhaseDefinition,
   executePhaseDefinition,
-} from "../src/loop/phases/index";
+} from "../src/loop/phases";
 
 function createState(input: Parameters<typeof createBaseAgentState>[0]) {
   return createBaseAgentState(input);
@@ -70,14 +73,19 @@ test("custom phase config without verify phase skips verification", async () => 
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
     tools: [echoTool],
-    phaseConfig: {
+    phaseConfig: createAgentPhaseConfig({
       entryPhaseId: "chat",
-      phases: [
-        chatPhaseDefinition,
-        planPhaseDefinition,
-        executePhaseDefinition,
+      plugins: [
+        definePhasePlugin({
+          id: "no-verify",
+          phases: [
+            chatPhaseDefinition,
+            planPhaseDefinition,
+            executePhaseDefinition,
+          ],
+        }),
       ],
-    },
+    }),
     emit: (event) => {
       events.push(event.type);
     },
@@ -85,6 +93,59 @@ test("custom phase config without verify phase skips verification", async () => 
 
   expect(outcome.outcome.passed).toBe(true);
   expect(events).toContain("tool_execution_end");
+});
+
+test("custom phase plugin can replace the builtin phase machine", async () => {
+  const session = createState({
+    systemPrompt: "Test system",
+    input: "plug me in",
+  });
+  const events: AgentEvent[] = [];
+  const customPhase = definePhase<{ input: string }, { message: string }>({
+    id: "custom",
+    name: "Custom",
+    description: "Handle the run outside of the builtin phase chain.",
+    buildInput(runtime) {
+      return { input: runtime.agentState.input };
+    },
+    async run(_context, input) {
+      return { message: `Handled by plugin: ${input.input}` };
+    },
+    async apply(_runtime, output) {
+      return {
+        type: "stop",
+        outcome: {
+          id: createId("out"),
+          passed: true,
+          message: output.message,
+        },
+      };
+    },
+  });
+
+  const outcome = await runAgentLoop({
+    kind: "run",
+    state: session,
+    model: { provider: "test", name: "unused" },
+    stream: async function* () {},
+    tools: [],
+    phaseConfig: createAgentPhaseConfig({
+      plugins: [
+        definePhasePlugin({
+          id: "custom-plugin",
+          entryPhaseId: "custom",
+          phases: [customPhase],
+        }),
+      ],
+    }),
+    emit: (event) => {
+      events.push(event);
+    },
+  });
+
+  expect(outcome.outcome.message).toBe("Handled by plugin: plug me in");
+  expect(events.some((event) => event.type === "phase_start" && event.phase === "custom")).toBe(true);
+  expect(events.some((event) => event.type === "phase_end" && event.phase === "custom")).toBe(true);
 });
 
 test("default config preserves execute/verify retry behavior", async () => {

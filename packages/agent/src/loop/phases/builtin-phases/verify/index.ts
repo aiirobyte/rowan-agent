@@ -1,16 +1,16 @@
-import type { Outcome, Task, VerificationResult } from "../../../types";
-import { appendAssistantMessage } from "../../../loop";
+import { appendAssistantMessage } from "../../../../loop";
+import type { Outcome, Task, VerificationResult } from "../../../../types";
 import {
   createId,
   Validators,
-} from "../../../types";
-import { verifyTask } from "../../phases";
+} from "../../../../types";
 import {
   createToolTaskOutput,
   runtimeDepth,
-} from "../../shared";
-import type { PhaseDefinition, PhaseTransition } from "../types";
-import type { VerifyInput } from "./types";
+} from "../../../shared";
+import type { VerifyInput } from "../../../types";
+import { verifyTask } from "../../runtime";
+import type { PhaseImplementation, PhaseTransition } from "../../config";
 
 function isInternalPlanningMessage(message: string): boolean {
   return /^plan\s*:/i.test(message.trim());
@@ -40,12 +40,7 @@ export function createFailedOutcome(task: Task, verification?: VerificationResul
   });
 }
 
-export const verifyPhaseDefinition: PhaseDefinition<VerifyInput, VerificationResult> = {
-  id: "verify",
-  name: "Verify",
-  description: "Judge whether the task output satisfies the task acceptance criteria.",
-  modelPhase: "verify",
-
+export const verifyPhaseImplementation: PhaseImplementation<VerifyInput, VerificationResult> = {
   buildInput(runtime) {
     const task = runtime.currentTask!;
     const taskOutput = createToolTaskOutput(runtime.toolResults);
@@ -84,3 +79,5 @@ export const verifyPhaseDefinition: PhaseDefinition<VerifyInput, VerificationRes
     return { type: "stop", outcome };
   },
 };
+
+export type { VerifyInput } from "../../../types";

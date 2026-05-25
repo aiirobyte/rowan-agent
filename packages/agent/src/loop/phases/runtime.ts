@@ -1,4 +1,4 @@
-import { executeRuntimeToolCall } from "../harness/tools";
+import { executeRuntimeToolCall } from "../../harness/tools";
 import type {
   AgentLoopContext,
   LoopPhase,
@@ -9,12 +9,12 @@ import type {
   ToolCall,
   ToolResult,
   VerificationResult,
-} from "../types";
+} from "../../types";
 import {
   createMessage,
   nowIso,
   Validators,
-} from "../types";
+} from "../../types";
 import type {
   ExecuteInput,
   ExecuteOutput,
@@ -22,7 +22,7 @@ import type {
   PhaseOutputMap,
   PlanInput,
   VerifyInput,
-} from "./types";
+} from "../types";
 import {
   assertNotAborted,
   createInvalidExecuteToolResult,
@@ -30,12 +30,10 @@ import {
   createToolTaskOutput,
   isInvalidModelSchemaError,
   isRecord,
-} from "./shared";
-import type { PhaseContext, PhaseDefinition, PhaseTransition } from "./phase-config";
-import type { AgentLoopRuntime } from "../loop";
-import { createAgentLoopContext, emit } from "../loop";
-
-// --- Parse functions (moved from task.ts) ---
+} from "../shared";
+import type { AgentLoopRuntime } from "../../loop";
+import { createAgentLoopContext, emit } from "../../loop";
+import type { PhaseContext, PhaseDefinition, PhaseTransition } from "./config";
 
 function normalizeVerificationInput(value: unknown): VerificationResult {
   if (!isRecord(value)) {
@@ -102,10 +100,6 @@ export async function collectTextAndStructured<TPhase extends LoopPhase>(input: 
 
   for await (const event of input.events) {
     assertNotAborted(input.context.signal);
-
-    if (event.type === "prompt_message") {
-      // Internal execution detail — not emitted as a message event.
-    }
 
     if (event.type === "model_requested") {
       input.context.consumeLimit("modelCalls");
@@ -409,14 +403,12 @@ export async function runConfiguredPhase(
   while (true) {
     await emit(runtime, { type: "phase_start", phase: definition.id, ts: nowIso() });
 
-    // 1. buildInput (always build defaults, then overlay retry input)
     let builtInput = await definition.buildInput(runtime);
     if (retryInput) {
       builtInput = { ...builtInput, ...(retryInput as object) };
       retryInput = undefined;
     }
 
-    // 2. runtime beforePhase
     if (modelPhase && context.config.runtime?.beforePhase) {
       const before = await context.config.runtime.beforePhase(context, modelPhase, builtInput as never);
       if (hasAbort(before)) {
@@ -435,18 +427,15 @@ export async function runConfiguredPhase(
       }
     }
 
-    // 3. run (definition runner or model stream)
     let output: unknown;
     if (definition.run) {
       output = await definition.run(phaseContext, builtInput);
     }
 
-    // 4. parseOutput
     if (definition.parseOutput && output !== undefined) {
       output = definition.parseOutput(output, builtInput);
     }
 
-    // 5. runtime afterPhase
     if (modelPhase && context.config.runtime?.afterPhase) {
       const after = await context.config.runtime.afterPhase(context, modelPhase, output as never);
       if (hasAbort(after)) {
@@ -466,14 +455,12 @@ export async function runConfiguredPhase(
       }
     }
 
-    // 6. apply (definition effects and transition)
     if (definition.apply) {
       const transition = await definition.apply(runtime, output, builtInput);
       await emit(runtime, { type: "phase_end", phase: definition.id, ts: nowIso() });
       return transition;
     }
 
-    // Default: stop
     await emit(runtime, { type: "phase_end", phase: definition.id, ts: nowIso() });
     return { type: "stop", outcome: { id: "default", passed: true, message: "Phase completed." } };
   }

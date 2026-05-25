@@ -19,7 +19,6 @@ import {
   resolveMaxThreadDepth,
   Validators,
 } from "./types";
-import { runConfiguredPhase } from "./loop/phases";
 import {
   assertNotAborted,
   cloneLimitUsage,
@@ -29,9 +28,13 @@ import {
   snapshotMessage,
   snapshotMessages,
 } from "./loop/shared";
-import { createBuiltinPhaseConfig } from "./loop/phases/index";
-import type { AgentPhaseConfig } from "./loop/phase-config";
-import { validatePhaseConfig, resolvePhase } from "./loop/phase-config";
+import {
+  createBuiltinPhaseConfig,
+  resolvePhase,
+  runConfiguredPhase,
+  validatePhaseConfig,
+  type AgentPhaseConfig,
+} from "./loop/phases";
 
 // ============================================================================
 // Types
