@@ -1,1 +1,1 @@
-export type LlmPhase = "route" | "plan" | "execute" | "verify";
+export type LoopPhase = "chat" | "plan" | "execute" | "verify";

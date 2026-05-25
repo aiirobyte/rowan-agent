@@ -6,10 +6,10 @@ import { createAgentState as createBaseAgentState, createId, createMessage } fro
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 import {
-  routePhaseDefinition,
+  chatPhaseDefinition,
   planPhaseDefinition,
   executePhaseDefinition,
-} from "../src/loop/built-in-phases";
+} from "../src/loop/phases/index";
 
 function createState(input: Parameters<typeof createBaseAgentState>[0]) {
   return createBaseAgentState(input);
@@ -71,9 +71,9 @@ test("custom phase config without verify phase skips verification", async () => 
     stream: scriptedStream,
     tools: [echoTool],
     phaseConfig: {
-      entryPhaseId: "route",
+      entryPhaseId: "chat",
       phases: [
-        routePhaseDefinition,
+        chatPhaseDefinition,
         planPhaseDefinition,
         executePhaseDefinition,
       ],
@@ -104,7 +104,7 @@ test("default config preserves execute/verify retry behavior", async () => {
   };
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryVerifyStream(model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
@@ -169,7 +169,7 @@ test("default config preserves max attempt exhaustion", async () => {
     attempts: 0,
   };
   const stream: StreamFn = async function* failingStream(_model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;

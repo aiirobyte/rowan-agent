@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { runConfiguredPhase } from "../src/loop/phases";
-import type { AgentPhaseDefinition, AgentPhaseTransition } from "../src/loop/phase-config";
+import type { PhaseDefinition, PhaseTransition } from "../src/loop/phase-config";
 import type { AgentLoopRuntime } from "../src/loop";
 import { createLoopRuntime } from "../src/loop";
 import type { Outcome } from "../src/types";
@@ -24,17 +24,27 @@ function noopCreateRun(): never {
   throw new Error("createRun not implemented in test");
 }
 
+function testPhase<TInput = unknown, TOutput = unknown>(
+  definition: Omit<PhaseDefinition<TInput, TOutput>, "name" | "description">,
+): PhaseDefinition<TInput, TOutput> {
+  return {
+    name: "Test",
+    description: "Test phase",
+    ...definition,
+  };
+}
+
 test("runConfiguredPhase calls buildInput and returns stop when no apply", async () => {
   const runtime = createTestRuntime();
   let buildInputCalled = false;
 
-  const definition: AgentPhaseDefinition = {
+  const definition = testPhase({
     id: "test",
     buildInput: (rt) => {
       buildInputCalled = true;
       return { from: rt };
     },
-  };
+  });
 
   const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
 
@@ -46,14 +56,14 @@ test("runConfiguredPhase calls run hook with phase context", async () => {
   const runtime = createTestRuntime();
   let runInput: unknown;
 
-  const definition: AgentPhaseDefinition<{ value: string }, { result: string }> = {
+  const definition = testPhase<{ value: string }, { result: string }>({
     id: "test",
     buildInput: () => ({ value: "hello" }),
     run: async (_ctx, input) => {
       runInput = input;
       return { result: "world" };
     },
-  };
+  });
 
   const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
 
@@ -65,15 +75,15 @@ test("runConfiguredPhase calls apply hook and returns its transition", async () 
   const runtime = createTestRuntime();
   const expectedOutcome: Outcome = { id: createId("out"), passed: true, message: "done" };
 
-  const definition: AgentPhaseDefinition<string, string> = {
+  const definition = testPhase<string, string>({
     id: "test",
     buildInput: () => "input",
     run: async () => "output",
-    apply: async (_rt, output, _input): Promise<AgentPhaseTransition> => {
+    apply: async (_rt, output, _input): Promise<PhaseTransition> => {
       expect(output).toBe("output");
       return { type: "stop", outcome: expectedOutcome };
     },
-  };
+  });
 
   const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
 
@@ -83,14 +93,14 @@ test("runConfiguredPhase calls apply hook and returns its transition", async () 
 test("runConfiguredPhase returns next transition from apply", async () => {
   const runtime = createTestRuntime();
 
-  const definition: AgentPhaseDefinition<string, string> = {
+  const definition = testPhase<string, string>({
     id: "test",
     buildInput: () => "input",
     run: async () => "output",
-    apply: async (): Promise<AgentPhaseTransition> => {
+    apply: async (): Promise<PhaseTransition> => {
       return { type: "next", phaseId: "next-phase" };
     },
-  };
+  });
 
   const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
 
@@ -101,7 +111,7 @@ test("runConfiguredPhase calls parseOutput before apply", async () => {
   const runtime = createTestRuntime();
   let parsedOutput: unknown;
 
-  const definition: AgentPhaseDefinition<string, { parsed: boolean }> = {
+  const definition = testPhase<string, { parsed: boolean }>({
     id: "test",
     buildInput: () => "raw",
     run: async () => "raw-output" as any,
@@ -112,7 +122,7 @@ test("runConfiguredPhase calls parseOutput before apply", async () => {
       parsedOutput = output;
       return { type: "stop", outcome: { id: "out", passed: true, message: "ok" } };
     },
-  };
+  });
 
   await runConfiguredPhase(runtime, definition, noopCreateRun as any);
 
@@ -136,13 +146,13 @@ test("runConfiguredPhase provides createRun in phase context", async () => {
 
   let receivedCreateRun: unknown;
 
-  const definition: AgentPhaseDefinition<string, void> = {
+  const definition = testPhase<string, void>({
     id: "test",
     buildInput: () => "input",
     run: async (ctx) => {
       receivedCreateRun = ctx.createRun;
     },
-  };
+  });
 
   await runConfiguredPhase(runtime, definition, customCreateRun);
 
@@ -160,12 +170,12 @@ test("runConfiguredPhase respects runtime beforePhase abort", async () => {
     },
   });
 
-  const definition: AgentPhaseDefinition<string, string> = {
+  const definition = testPhase<string, string>({
     id: "test",
-    modelPhase: "route",
+    modelPhase: "chat",
     buildInput: () => "input",
     run: async () => "output",
-  };
+  });
 
   const transition = await runConfiguredPhase(runtime, definition, noopCreateRun as any);
 
@@ -183,19 +193,19 @@ test("runConfiguredPhase respects runtime afterPhase retry up to 3 times", async
       async afterPhase() {
         attempts += 1;
         if (attempts < 3) {
-          return { retry: { state: runtime.agentState, runtime: { threadDepth: 0, maxThreadDepth: 4 }, tools: [], canStartThreadRoute: false, shouldDefaultToThreadRoute: false } };
+          return { retry: { state: runtime.agentState, runtime: { threadDepth: 0, maxThreadDepth: 4 }, tools: [], availablePhases: [] } };
         }
         return undefined;
       },
     },
   });
 
-  const definition: AgentPhaseDefinition<string, string> = {
+  const definition = testPhase<string, string>({
     id: "test",
-    modelPhase: "route",
+    modelPhase: "chat",
     buildInput: () => "input",
     run: async () => "output",
-  };
+  });
 
   await runConfiguredPhase(runtime, definition, noopCreateRun as any);
 
@@ -206,17 +216,17 @@ test("runConfiguredPhase throws after too many runtime retries", async () => {
   const runtime = createTestRuntime({
     runtime: {
       async afterPhase() {
-        return { retry: { state: runtime.agentState, runtime: { threadDepth: 0, maxThreadDepth: 4 }, tools: [], canStartThreadRoute: false, shouldDefaultToThreadRoute: false } };
+        return { retry: { state: runtime.agentState, runtime: { threadDepth: 0, maxThreadDepth: 4 }, tools: [], availablePhases: [] } };
       },
     },
   });
 
-  const definition: AgentPhaseDefinition<string, string> = {
+  const definition = testPhase<string, string>({
     id: "test",
-    modelPhase: "route",
+    modelPhase: "chat",
     buildInput: () => "input",
     run: async () => "output",
-  };
+  });
 
   await expect(
     runConfiguredPhase(runtime, definition, noopCreateRun as any),

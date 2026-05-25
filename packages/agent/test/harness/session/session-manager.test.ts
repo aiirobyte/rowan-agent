@@ -9,7 +9,7 @@ function executionTurn(sessionId: string): ExecutionTurn {
   return {
     id: "step_route",
     sessionId,
-    phase: "route",
+    phase: "chat",
     requestedAtMs: 1,
     completedAtMs: 2,
     model: { provider: "test", name: "model" },

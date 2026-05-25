@@ -1,10 +1,9 @@
-import type { LlmPhase } from "./phase";
+import type { LoopPhase } from "./phase";
 import type { ModelCallUsage, ModelRef } from "./model";
 import type {
   RuntimeDepth,
   Task,
   TaskOutput,
-  RoutingDecision,
   VerificationResult,
 } from "./task";
 import type { ToolCall, ToolResult } from "./tool";
@@ -47,9 +46,14 @@ export type AgentContextState = {
 
 export type LlmContext<TState extends AgentContextState = AgentContextState> =
   | {
-      phase: "route";
+      phase: "chat";
       state: TState;
       runtime?: RuntimeDepth;
+      availablePhases?: Array<{
+        id: string;
+        name: string;
+        description: string;
+      }>;
     }
   | {
       phase: "plan";
@@ -72,10 +76,14 @@ export type LlmContext<TState extends AgentContextState = AgentContextState> =
       runtime?: RuntimeDepth;
     };
 
-export type LlmPhaseOutputMap = {
-  route: RoutingDecision & {
-    text: string;
-  };
+export type PhaseOutput = {
+  route: "direct" | string;
+  message: string;
+  text: string;
+};
+
+export type LoopPhaseOutputMap = {
+  chat: PhaseOutput;
   plan: {
     task: Task;
     text: string;
@@ -87,27 +95,27 @@ export type LlmPhaseOutputMap = {
   verify: VerificationResult;
 };
 
-export type LlmPhaseOutput<TPhase extends LlmPhase = LlmPhase> = LlmPhaseOutputMap[TPhase];
+export type LoopPhaseOutput<TPhase extends LoopPhase = LoopPhase> = LoopPhaseOutputMap[TPhase];
 
-export type LlmPhaseOutputEvent<TPhase extends LlmPhase = LlmPhase> = {
+export type LoopPhaseOutputEvent<TPhase extends LoopPhase = LoopPhase> = {
   [TKey in TPhase]: {
     type: "phase_output";
     phase: TKey;
-    output: LlmPhaseOutputMap[TKey];
+    output: LoopPhaseOutputMap[TKey];
   };
 }[TPhase];
 
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
-  | LlmPhaseOutputEvent
+  | LoopPhaseOutputEvent
   | {
       type: "prompt_message";
-      phase: LlmPhase;
+      phase: LoopPhase;
       message: Pick<AgentContextMessage, "role" | "content">;
     }
   | {
       type: "model_requested";
-      phase: LlmPhase;
+      phase: LoopPhase;
       model: ModelRef;
       usage: ModelCallUsage;
     }

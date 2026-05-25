@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createDefaultCriteria, Validators } from "@rowan-agent/agent";
-import { createFailedOutcome } from "../src/loop/built-in-phases";
+import { createFailedOutcome } from "../src/loop/phases/verify";
 import { createId, nowIso } from "../src/types";
 
 test("parseTask validates structured task schema", () => {

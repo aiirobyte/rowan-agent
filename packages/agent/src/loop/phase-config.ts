@@ -1,32 +1,34 @@
 import type {
   AgentLoopContext,
-  LlmPhase,
+  LoopPhase,
   Outcome,
   RunThread,
 } from "../types";
 import type { AgentLoopRuntime } from "../loop";
 
-export type AgentPhaseTransition =
+export type PhaseTransition =
   | { type: "next"; phaseId: string }
   | { type: "stop"; outcome: Outcome }
   | { type: "abort"; outcome: Outcome };
 
-export type AgentPhaseDefinition<TInput = unknown, TOutput = unknown> = {
+export type PhaseDefinition<TInput = unknown, TOutput = unknown> = {
   id: string;
-  modelPhase?: LlmPhase;
+  name: string;
+  description: string;
+  modelPhase?: LoopPhase;
   buildInput(runtime: AgentLoopRuntime): TInput | Promise<TInput>;
-  run?: (context: AgentPhaseContext, input: TInput) => Promise<TOutput>;
+  run?: (context: PhaseContext, input: TInput) => Promise<TOutput>;
   parseOutput?(raw: unknown, input: TInput): TOutput;
-  apply?(runtime: AgentLoopRuntime, output: TOutput, input: TInput): Promise<AgentPhaseTransition>;
+  apply?(runtime: AgentLoopRuntime, output: TOutput, input: TInput): Promise<PhaseTransition>;
 };
 
-export type AgentPhaseContext = AgentLoopContext & {
-  createRun: RunThread;
+export type PhaseContext = AgentLoopContext & {
+  createRun?: RunThread;
 };
 
 export type AgentPhaseConfig = {
   entryPhaseId: string;
-  phases: AgentPhaseDefinition<any, any>[];
+  phases: PhaseDefinition<any, any>[];
 };
 
 export function validatePhaseConfig(config: AgentPhaseConfig): void {
@@ -54,18 +56,20 @@ export function validatePhaseConfig(config: AgentPhaseConfig): void {
   }
 }
 
-export function resolvePhase(config: AgentPhaseConfig, phaseId: string): AgentPhaseDefinition | undefined {
+export function resolvePhase(config: AgentPhaseConfig, phaseId: string): PhaseDefinition | undefined {
   return config.phases.find((phase) => phase.id === phaseId);
 }
 
-const DEFAULT_PHASE_IDS = ["route", "thread", "plan", "execute", "verify"] as const;
+export const DEFAULT_PHASE_ID = "chat";
 
 export function createDefaultAgentPhaseConfig(): AgentPhaseConfig {
   return {
-    entryPhaseId: "route",
-    phases: DEFAULT_PHASE_IDS.map((id) => ({
-      id,
+    entryPhaseId: DEFAULT_PHASE_ID,
+    phases: [{
+      id: DEFAULT_PHASE_ID,
+      name: "Chat",
+      description: "Decide whether to answer directly or transition to another available phase.",
       buildInput: () => undefined,
-    })),
+    }],
   };
 }

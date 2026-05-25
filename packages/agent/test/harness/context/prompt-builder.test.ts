@@ -32,43 +32,34 @@ function createTestTask(): Task {
   };
 }
 
-test("route prompt defaults to direct answers unless tools are needed", () => {
+test("chat prompt defaults to direct answers unless another phase is needed", () => {
   const session = createSession({
     systemPrompt: "Test system",
     input: "What is 2 + 2?",
   });
 
   const messages = buildOpenAICompatibleMessages({
-    context: { phase: "route", state: session },
+    context: { phase: "chat", state: session },
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
 
   expect(messages).toHaveLength(3);
-  expect(combined).toContain("Phase: route");
+  expect(combined).toContain("Phase: chat");
   expect(combined).toContain("Route only the current user request below.");
   expect(combined).toContain("Current user request:");
   expect(combined).toContain("\"What is 2 + 2?\"");
-  expect(combined).toContain('{ "message": string, "route": "direct" | "task" | "thread"');
-  expect(combined).toContain('Default to answering the user directly with route="direct".');
-  expect(combined).toContain("normal chat, greetings, explanations, calculations");
-  expect(combined).toContain("workspace inspection");
-  expect(combined).toContain('route must not be "direct"');
-  expect(combined).toContain("factual question about the current workspace");
-  expect(combined).toContain("cannot know without inspecting the workspace");
+  expect(combined).toContain('{ "message": string, "route": "direct" | string }');
+  expect(combined).toContain("Use route=\"direct\" when you can fully answer");
+  expect(combined).toContain("Use another route only when it matches one of the available phase ids");
+  expect(combined).toContain("current workspace, repository, files, tools, or commands");
   expect(combined).toContain("message must be the complete final user-visible answer");
-  expect(combined).toContain('Set route="task" for ordinary tool-backed work');
-  expect(combined).toContain('Set route="thread" only when the user explicitly asks');
   expect(combined).toContain("Agent state initial input");
   expect(combined).toContain("Agent state task");
   expect(combined).toContain("Agent state goal");
   expect(combined).toContain("Runtime thread depth");
+  expect(combined).toContain("Available phases");
   expect(combined).toContain("Do not call tools in this phase");
-  expect(combined).toContain("forbidden message values");
-  expect(combined).toContain("\"routed\"");
-  expect(combined).toContain("你好！有什么我可以帮你？");
-  expect(combined).toContain("2 + 2 = 4.");
-  expect(combined).toContain("thread.prompt");
   expect(combined).toContain("echo");
 });
 
@@ -174,7 +165,7 @@ test("prompt builder excludes execution-scoped messages from later prompts", () 
   session.messages.push(
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
       kind: "routing_decision",
-      phase: "route",
+      phase: "chat",
     }),
     createMessage("assistant", "{\"message\":\"Planning.\",\"task\":{\"title\":\"Echo\"}}", {
       kind: "model_message",
@@ -213,13 +204,13 @@ test("prompt builder excludes execution-scoped messages from later prompts", () 
 test("prompt builder does not replay recorded phase prompts as conversation", () => {
   const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
   session.messages.push(
-    createMessage("user", "Phase: route\n\nInternal routing prompt.", {
+    createMessage("user", "Phase: chat\n\nInternal routing prompt.", {
       kind: "phase_prompt",
-      phase: "route",
+      phase: "chat",
     }),
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
       kind: "routing_decision",
-      phase: "route",
+      phase: "chat",
     }),
   );
 

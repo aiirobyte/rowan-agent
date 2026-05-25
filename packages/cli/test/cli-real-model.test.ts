@@ -738,7 +738,7 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     const logText = await Bun.file(logPath).text();
     const logEvents = await readLogEvents(logPath);
     const routePhaseIndex = logEvents.findIndex(
-      (event) => event.type === "phase_start" && event.phase === "route",
+      (event) => event.type === "phase_start" && event.phase === "chat",
     );
     const executePhaseIndex = logEvents.findIndex(
       (event) => event.type === "phase_start" && event.phase === "execute",

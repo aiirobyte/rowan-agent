@@ -47,13 +47,13 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
     throw new Error("Stream aborted.");
   }
 
-  if (context.phase === "route") {
+  if (context.phase === "chat") {
     const currentInput = latestUserInput(context.state);
     const route = wantsEcho(currentInput) ? "plan" : "direct";
     const message = route === "plan" ? "Routing to task execution." : `Direct response: ${currentInput}`;
     yield {
       type: "model_requested",
-      phase: "route",
+      phase: "chat",
       model,
       usage: { inputMessages: context.state.messages.length },
     };
@@ -98,10 +98,12 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
     return;
   }
 
-  yield { type: "text_delta", text: "Verifying task outcome..." };
-  yield {
-    type: "structured_output",
-    content: createScriptedVerification(context.task, context.taskOutput),
-  };
-  yield { type: "done" };
+  if (context.phase === "verify") {
+    yield { type: "text_delta", text: "Verifying task outcome..." };
+    yield {
+      type: "structured_output",
+      content: createScriptedVerification(context.task, context.taskOutput),
+    };
+    yield { type: "done" };
+  }
 };

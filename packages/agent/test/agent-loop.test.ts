@@ -19,7 +19,7 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
   }> = [];
   const runtime: AgentRuntimePort = {
     async beforePhase(context, phase) {
-      if (phase !== "route") {
+      if (phase !== "chat") {
         return;
       }
       seenContexts.push({
@@ -92,7 +92,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     attempts: 0,
   };
   const stream: StreamFn = async function* orderedMessageStream(_model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       yield { type: "text_delta", text: "Routing from model." };
       yield {
         type: "structured_output",
@@ -184,13 +184,13 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
   const stream: StreamFn = async function* promptRecordingStream(model) {
     yield {
       type: "prompt_message",
-      phase: "route",
+      phase: "chat",
       message: {
         role: "user",
-        content: "Phase: route\n\nCurrent user request:\n\"hello\"",
+        content: "Phase: chat\n\nCurrent user request:\n\"hello\"",
       },
     };
-    yield { type: "model_requested", phase: "route", model, usage: { inputMessages: 3 } };
+    yield { type: "model_requested", phase: "chat", model, usage: { inputMessages: 3 } };
     yield {
       type: "structured_output",
       content: {
@@ -346,7 +346,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
   };
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryVerifyStream(model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
@@ -422,7 +422,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   let executeCalls = 0;
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryExecuteStream(model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
@@ -543,7 +543,7 @@ test("invalid tool args do not execute tool", async () => {
     },
   };
   const invalidArgsStream: StreamFn = async function* invalidArgsStream(_model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       yield {
         type: "structured_output",
         content: {
@@ -624,7 +624,7 @@ test("runtime beforePhase can adjust phase input", async () => {
     input: "adjust route input",
   });
   const stream: StreamFn = async function* adjustableRouteStream(_model, context) {
-    if (context.phase !== "route") {
+    if (context.phase !== "chat") {
       return;
     }
 
@@ -640,7 +640,7 @@ test("runtime beforePhase can adjust phase input", async () => {
   };
   const runtime: AgentRuntimePort = {
     async beforePhase(_context, phase, input) {
-      if (phase !== "route") {
+      if (phase !== "chat") {
         return;
       }
 
@@ -675,7 +675,7 @@ test("runtime afterPhase can adjust phase output", async () => {
     input: "adjust route output",
   });
   const stream: StreamFn = async function* routeStream(_model, context) {
-    if (context.phase !== "route") {
+    if (context.phase !== "chat") {
       return;
     }
 
@@ -697,7 +697,7 @@ test("runtime afterPhase can adjust phase output", async () => {
     tools: [],
     runtime: {
       async afterPhase(_context, phase, output) {
-        if (phase !== "route") {
+        if (phase !== "chat") {
           return;
         }
 
@@ -734,7 +734,7 @@ test("runtime beforePhase can skip a phase", async () => {
     tools: [],
     runtime: {
       async beforePhase(_context, phase) {
-        if (phase !== "route") {
+        if (phase !== "chat") {
           return;
         }
 
@@ -761,7 +761,7 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
   });
   let routeCalls = 0;
   const stream: StreamFn = async function* retryableRouteStream(_model, context) {
-    if (context.phase !== "route") {
+    if (context.phase !== "chat") {
       return;
     }
 
@@ -785,7 +785,7 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
     tools: [],
     runtime: {
       async afterPhase(_context, phase, output) {
-        if (phase !== "route" || !("message" in output) || output.message !== "Needs retry.") {
+        if (phase !== "chat" || !("message" in output) || output.message !== "Needs retry.") {
           return;
         }
 
@@ -817,7 +817,7 @@ test("runtime phase port can abort with an outcome", async () => {
   });
   const events: AgentEvent[] = [];
   const stream: StreamFn = async function* taskRouteStream(_model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       yield {
         type: "structured_output",
         content: {

@@ -20,7 +20,7 @@ test("pinoAgentEventLogger writes summary Pino JSONL records at info by default"
   const logger = pinoAgentEventLogger(logPath);
   const event: AgentEvent = {
     type: "phase_start",
-    phase: "route",
+    phase: "chat",
     ts: "2026-05-03T141659-32+08:00",
   };
 
@@ -32,7 +32,7 @@ test("pinoAgentEventLogger writes summary Pino JSONL records at info by default"
   expect(record).toMatchObject({
     eventType: "phase_start",
     eventTs: "2026-05-03T141659-32+08:00",
-    phase: "route",
+    phase: "chat",
   });
   expect(record?.level).toBe(30);
   expect(record?.msg).toBeUndefined();
@@ -102,7 +102,7 @@ test("pinoAgentEventLogger filters warning and error levels", async () => {
 
   logger({
     type: "phase_start",
-    phase: "route",
+    phase: "chat",
     ts: "2026-05-03T141659-32+08:00",
   });
   logger({
@@ -132,7 +132,7 @@ test("pinoAgentEventLogger silent level does not create a log file", async () =>
 
   logger({
     type: "phase_start",
-    phase: "route",
+    phase: "chat",
     ts: "2026-05-03T141659-32+08:00",
   });
   await logger.flush?.();
@@ -153,7 +153,7 @@ test("consoleAgentEventLogger writes Pino-shaped JSONL records to the configured
 
   logger({
     type: "phase_start",
-    phase: "route",
+    phase: "chat",
     ts: "2026-05-03T141659-32+08:00",
   });
   await logger.flush?.();
@@ -163,7 +163,7 @@ test("consoleAgentEventLogger writes Pino-shaped JSONL records to the configured
     level: 30,
     eventType: "phase_start",
     eventTs: "2026-05-03T141659-32+08:00",
-    phase: "route",
+    phase: "chat",
   });
   expect(record?.time).toEqual(expect.any(Number));
   expect(record?.msg).toBeUndefined();

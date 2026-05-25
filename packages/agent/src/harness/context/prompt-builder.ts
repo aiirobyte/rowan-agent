@@ -1,10 +1,10 @@
 import type { AgentContextMessage, LlmContext, ToolDefinition } from "../../protocol";
+import { buildChatPrompt } from "../../loop/phases/chat/prompt";
+import { buildExecutePrompt } from "../../loop/phases/execute/prompt";
+import { buildPlanPrompt } from "../../loop/phases/plan/prompt";
+import { buildVerifyPrompt } from "../../loop/phases/verify/prompt";
 import {
-  buildExecutePrompt,
-  buildPlanPrompt,
-  buildRoutePrompt,
   buildSystemPrompt,
-  buildVerifyPrompt,
 } from "./prompt";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -84,7 +84,7 @@ function toConversationMessage(message: AgentContextMessage): ChatMessage | unde
 function conversationForPhase(context: LlmContext): AgentContextMessage[] {
   const conversation = context.state.messages.filter(isConversationMessage);
 
-  if (context.phase === "route") {
+  if (context.phase === "chat") {
     return conversation.slice(-12);
   }
 
@@ -114,13 +114,14 @@ function buildPhasePlanPrompt(context: Extract<LlmContext, { phase: "plan" }>, t
   });
 }
 
-function buildPhaseRoutePrompt(context: Extract<LlmContext, { phase: "route" }>, tools: PromptTool[]): string {
-  return buildRoutePrompt({
+function buildPhaseChatPrompt(context: Extract<LlmContext, { phase: "chat" }>, tools: PromptTool[]): string {
+  return buildChatPrompt({
     currentUserInputJson: toJson(latestUserInput(context)),
     stateInputJson: toJson(context.state.input),
     stateTaskJson: toJson(context.state.task ?? null),
     stateGoalJson: toJson(context.state.goal ?? null),
     runtimeDepthJson: toJson(context.runtime ?? null),
+    availablePhasesJson: toJson(context.availablePhases ?? []),
     loadedSkillsJson: toJson(serializeSkills(context)),
     availableToolsJson: toJson(serializeTools(tools)),
   });
@@ -147,8 +148,8 @@ function buildPhaseVerifyPrompt(context: Extract<LlmContext, { phase: "verify" }
 }
 
 function buildPhasePromptMessage(context: LlmContext, tools: PromptTool[]): ChatMessage {
-  if (context.phase === "route") {
-    return { role: "user", content: buildPhaseRoutePrompt(context, tools) };
+  if (context.phase === "chat") {
+    return { role: "user", content: buildPhaseChatPrompt(context, tools) };
   }
 
   if (context.phase === "plan") {

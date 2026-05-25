@@ -9,7 +9,6 @@ import type {
   AgentState,
   Outcome,
   RunThread,
-  RoutingDecision,
   Tool,
 } from "./types";
 import {
@@ -30,7 +29,7 @@ import {
   snapshotMessage,
   snapshotMessages,
 } from "./loop/shared";
-import { createBuiltinPhaseConfig } from "./loop/built-in-phases";
+import { createBuiltinPhaseConfig } from "./loop/phases/index";
 import type { AgentPhaseConfig } from "./loop/phase-config";
 import { validatePhaseConfig, resolvePhase } from "./loop/phase-config";
 
@@ -61,12 +60,11 @@ export type AgentLoopRuntime = LoopRunInput & {
   limitUsage: AgentLimitUsage;
   threadDepth: number;
   maxThreadDepth: number;
-  status: AgentLoopContext["state"]["status"];
+  currentPhase: string;
   attempt: number;
   toolResults: AgentLoopContext["state"]["toolResults"];
   currentTask?: AgentLoopContext["state"]["task"];
   lastExecuteText?: string;
-  lastRouteDecision?: RoutingDecision;
 };
 
 // ============================================================================
@@ -110,7 +108,7 @@ export function createLoopRuntime(input: AgentLoopInput): AgentLoopRuntime {
     transcript: snapshotMessages(agentState.messages),
     limitUsage: { modelCalls: 0, toolCalls: 0 },
     maxThreadDepth: resolveMaxThreadDepth(input.limits),
-    status: "routing",
+    currentPhase: "",
     attempt: 0,
     toolResults: [],
   };
@@ -218,7 +216,7 @@ export function createAgentLoopContext(runtime: AgentLoopRuntime): AgentLoopCont
     },
     state: {
       agentState: runtime.agentState,
-      status: runtime.status,
+      currentPhase: runtime.currentPhase,
       attempt: runtime.attempt,
       ...(runtime.currentTask ? { task: runtime.currentTask } : {}),
       toolResults: runtime.toolResults,
@@ -404,6 +402,7 @@ async function runWithLifecycle(
 async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
   const config = runtime.phaseConfig ?? createBuiltinPhaseConfig();
   if (runtime.phaseConfig) validatePhaseConfig(config);
+  runtime.phaseConfig = config;
 
   let phaseId = config.entryPhaseId;
 
@@ -415,7 +414,7 @@ async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
       throw new Error(`Phase "${phaseId}" is not defined in the phase config.`);
     }
 
-    runtime.status = phaseId as AgentLoopRuntime["status"];
+    runtime.currentPhase = phaseId;
     const transition = await runConfiguredPhase(runtime, definition, async (input) => runtime.runThread!(input));
 
     if (transition.type === "stop" || transition.type === "abort") {

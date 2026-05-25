@@ -1,4 +1,4 @@
-import type { Outcome, Task, RoutingDecision, VerificationResult } from "./task";
+import type { Outcome, Task, VerificationResult } from "./task";
 import type { ToolCall, ToolResult } from "./tool";
 
 type Parser<T> = {
@@ -76,29 +76,6 @@ function parseTask(value: unknown): Task {
   };
 }
 
-function parseRoutingDecision(value: unknown): RoutingDecision {
-  const record = requireRecord(value, "task routing decision");
-  const route = record.route;
-  if (typeof route !== "string" || route.trim().length === 0) {
-    throw new Error("Expected route to be a non-empty string (e.g., \"direct\", \"plan\", \"execute\", \"phase-id\").");
-  }
-
-  const threadRecord = record.thread === undefined ? undefined : requireRecord(record.thread, "thread route");
-  return {
-    route,
-    message: requireString(record.message, "task routing message"),
-    ...(threadRecord
-      ? {
-          thread: {
-            prompt: requireString(threadRecord.prompt, "thread prompt"),
-            task: requireString(threadRecord.task, "thread task"),
-            goal: requireString(threadRecord.goal, "thread goal"),
-          },
-        }
-      : {}),
-  };
-}
-
 function parseToolCall(value: unknown): ToolCall {
   const record = requireRecord(value, "tool call");
   return {
@@ -139,14 +116,12 @@ function parseOutcome(value: unknown): Outcome {
 
 export const Validators: {
   task: Parser<Task>;
-  routingDecision: Parser<RoutingDecision>;
   toolCall: Parser<ToolCall>;
   toolResult: Parser<ToolResult>;
   verificationResult: Parser<VerificationResult>;
   outcome: Parser<Outcome>;
 } = {
   task: { Parse: parseTask },
-  routingDecision: { Parse: parseRoutingDecision },
   toolCall: { Parse: parseToolCall },
   toolResult: { Parse: parseToolResult },
   verificationResult: { Parse: parseVerificationResult },

@@ -9,14 +9,14 @@ import { scriptedStream } from "./support/scripted-stream";
 test("Agent.run reuses one session for multi-turn direct responses", async () => {
   const routeContexts: string[][] = [];
   const stream: StreamFn = async function* directMultiTurnStream(model, context) {
-    if (context.phase !== "route") {
+    if (context.phase !== "chat") {
       return;
     }
 
     routeContexts.push(context.state.messages.map((message) => message.content));
     const sawFirstAnswer = context.state.messages.some((message) => message.content.includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
-    yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.state.messages.length } };
+    yield { type: "model_requested", phase: "chat", model, usage: { inputMessages: context.state.messages.length } };
     yield { type: "structured_output", content: { route: "direct", message } };
     yield { type: "done" };
   };
@@ -50,7 +50,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   const routeContexts: string[][] = [];
   const events: string[] = [];
   const stream: StreamFn = async function* taskMultiTurnStream(model, context, options) {
-    if (context.phase === "route" && !context.state.parentSessionId) {
+    if (context.phase === "chat" && !context.state.parentSessionId) {
       routeContexts.push(context.state.messages.map((message) => message.content));
     }
     yield* scriptedStream(model, context, options);
@@ -100,7 +100,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
 test("Agent does not carry failed task outcomes into later turns", async () => {
   const routeOutcomeContexts: string[][] = [];
   const stream: StreamFn = async function* failedThenDirectStream(model, context) {
-    if (context.phase === "route") {
+    if (context.phase === "chat") {
       const outcomeMessages = context.state.messages
         .filter((message) => message.role === "assistant" && message.metadata?.kind === "outcome")
         .map((message) => message.content);
@@ -109,7 +109,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
       const route = latestUserInput(context.state) === "trigger failure" || hasFailedOutcome ? "plan" : "direct";
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
-      yield { type: "model_requested", phase: "route", model, usage: { inputMessages: context.state.messages.length } };
+      yield { type: "model_requested", phase: "chat", model, usage: { inputMessages: context.state.messages.length } };
       yield { type: "structured_output", content: { route, message } };
       yield { type: "done" };
       return;

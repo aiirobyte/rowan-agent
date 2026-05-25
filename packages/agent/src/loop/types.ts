@@ -6,8 +6,8 @@ import type {
   AgentState,
   AfterToolCall,
   BeforeToolCall,
-  LlmPhase,
-  LlmPhaseOutputMap,
+  LoopPhase,
+  LoopPhaseOutputMap,
   ModelRef,
   Outcome,
   RunThread,
@@ -19,13 +19,6 @@ import type {
   ToolResult,
   VerificationResult,
 } from "../types";
-
-export type AgentRunStatus =
-  | "routing"
-  | "planning"
-  | "executing"
-  | "verifying"
-  | "completed";
 
 export type AgentLoopConfig = {
   model: ModelRef;
@@ -42,7 +35,7 @@ export type AgentLoopConfig = {
 
 export type AgentRunState = {
   agentState: AgentState;
-  status: AgentRunStatus;
+  currentPhase: string;
   attempt: number;
   task?: Task;
   toolResults: ToolResult[];
@@ -75,12 +68,15 @@ export type AgentLoopContext = {
   runThread?: RunThread;
 };
 
-export type RouteInput = {
+export type ChatInput = {
   state: AgentState;
   runtime: AgentRunState["depth"];
   tools: Tool[];
-  canStartThreadRoute: boolean;
-  shouldDefaultToThreadRoute: boolean;
+  availablePhases: Array<{
+    id: string;
+    name: string;
+    description: string;
+  }>;
   workerTask?: string;
   workerGoal?: string;
 };
@@ -105,22 +101,22 @@ export type VerifyInput = {
   runtime: AgentRunState["depth"];
 };
 
-export type ExecuteOutput = LlmPhaseOutputMap["execute"] & {
+export type ExecuteOutput = LoopPhaseOutputMap["execute"] & {
   taskOutput: TaskOutput;
 };
 
 export type PhaseInputMap = {
-  route: RouteInput;
+  chat: ChatInput;
   plan: PlanInput;
   execute: ExecuteInput;
   verify: VerifyInput;
 };
 
 export type PhaseOutputMap = {
-  route: LlmPhaseOutputMap["route"];
-  plan: LlmPhaseOutputMap["plan"];
+  chat: LoopPhaseOutputMap["chat"];
+  plan: LoopPhaseOutputMap["plan"];
   execute: ExecuteOutput;
-  verify: LlmPhaseOutputMap["verify"];
+  verify: LoopPhaseOutputMap["verify"];
 };
 
 export type AgentEffect =
@@ -128,18 +124,18 @@ export type AgentEffect =
   | { type: "event_message"; message: AgentMessageSnapshot }
   | { type: "agent_state_message"; message: AgentMessageSnapshot };
 
-export type PhaseResult<TPhase extends LlmPhase> =
+export type PhaseResult<TPhase extends LoopPhase> =
   | { action: "continue"; output: PhaseOutputMap[TPhase]; effects?: AgentEffect[] }
   | { action: "skip"; output: PhaseOutputMap[TPhase]; reason?: string }
   | { action: "retry"; input?: PhaseInputMap[TPhase]; reason?: string }
   | { action: "abort"; outcome: Outcome; reason?: string };
 
-export type BeforePhaseResult<TPhase extends LlmPhase> =
+export type BeforePhaseResult<TPhase extends LoopPhase> =
   | { input?: PhaseInputMap[TPhase] }
   | { skip: PhaseOutputMap[TPhase] }
   | { abort: Outcome };
 
-export type AfterPhaseResult<TPhase extends LlmPhase> =
+export type AfterPhaseResult<TPhase extends LoopPhase> =
   | { output?: PhaseOutputMap[TPhase] }
   | { retry?: PhaseInputMap[TPhase] }
   | { abort: Outcome };
@@ -155,13 +151,13 @@ export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
 export type AgentRuntimePort = {
   beforePhase?(
     context: AgentLoopContext,
-    phase: LlmPhase,
-    input: PhaseInputMap[LlmPhase],
-  ): Promise<BeforePhaseResult<LlmPhase> | void>;
+    phase: LoopPhase,
+    input: PhaseInputMap[LoopPhase],
+  ): Promise<BeforePhaseResult<LoopPhase> | void>;
   afterPhase?(
     context: AgentLoopContext,
-    phase: LlmPhase,
-    output: PhaseOutputMap[LlmPhase],
-  ): Promise<AfterPhaseResult<LlmPhase> | void>;
+    phase: LoopPhase,
+    output: PhaseOutputMap[LoopPhase],
+  ): Promise<AfterPhaseResult<LoopPhase> | void>;
   tools?: ToolRunner;
 };

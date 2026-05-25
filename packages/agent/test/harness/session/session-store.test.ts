@@ -24,7 +24,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   session.messages.push(
     createMessage("assistant", "{\"route\":\"direct\",\"message\":\"internal\"}", {
       kind: "routing_decision",
-      phase: "route",
+      phase: "chat",
     }),
   );
 

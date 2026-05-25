@@ -4,11 +4,13 @@ import {
   resolvePhase,
   validatePhaseConfig,
 } from "../src/loop/phase-config";
-import type { AgentPhaseConfig, AgentPhaseDefinition } from "../src/loop/phase-config";
+import type { AgentPhaseConfig, PhaseDefinition } from "../src/loop/phase-config";
 
-function stubPhase(id: string): AgentPhaseDefinition {
+function stubPhase(id: string): PhaseDefinition {
   return {
     id,
+    name: id,
+    description: `${id} phase`,
     buildInput: () => undefined,
   };
 }
@@ -43,7 +45,7 @@ test("validatePhaseConfig rejects empty phases array", () => {
 test("validatePhaseConfig rejects phase with empty id", () => {
   const config: AgentPhaseConfig = {
     entryPhaseId: "a",
-    phases: [{ id: "", buildInput: () => undefined }],
+    phases: [{ id: "", name: "", description: "", buildInput: () => undefined }],
   };
 
   expect(() => validatePhaseConfig(config)).toThrow("non-empty id");
@@ -86,11 +88,15 @@ test("resolvePhase returns undefined for unknown id", () => {
   expect(resolvePhase(config, "missing")).toBeUndefined();
 });
 
-test("createDefaultAgentPhaseConfig returns config with built-in phase ids", () => {
+test("createDefaultAgentPhaseConfig returns chat as the default phase id", () => {
   const config = createDefaultAgentPhaseConfig();
 
-  expect(config.entryPhaseId).toBe("route");
-  expect(config.phases.map((p) => p.id)).toEqual(["route", "thread", "plan", "execute", "verify"]);
+  expect(config.entryPhaseId).toBe("chat");
+  expect(config.phases.map((p) => p.id)).toEqual(["chat"]);
+  expect(config.phases[0]).toMatchObject({
+    name: "Chat",
+    description: expect.any(String),
+  });
 });
 
 test("createDefaultAgentPhaseConfig passes validation", () => {

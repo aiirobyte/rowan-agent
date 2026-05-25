@@ -2,21 +2,14 @@ import type {
   AgentLimitUsage,
   AgentMessage,
   AgentState,
-  LlmPhase,
   Outcome,
   RuntimeDepth,
   Task,
-  ThreadTaskOutput,
   ToolResult,
   ToolTaskOutput,
   VerificationResult,
 } from "../types";
 import { createId, Validators } from "../types";
-
-export const routePhase = "route" satisfies LlmPhase;
-export const planPhase = "plan" satisfies LlmPhase;
-export const executePhase = "execute" satisfies LlmPhase;
-export const verifyPhase = "verify" satisfies LlmPhase;
 
 export class LimitExceededError extends Error {
   readonly resource: keyof AgentLimitUsage;
@@ -117,32 +110,6 @@ export function createToolTaskOutput(toolResults: ToolResult[]): ToolTaskOutput 
   return {
     kind: "tools",
     toolResults,
-  };
-}
-
-export function createThreadTaskOutput(input: {
-  thread: {
-    sessionId: string;
-    parentSessionId: string;
-    outcome: Outcome;
-    limitUsage: AgentLimitUsage;
-    depth: RuntimeDepth;
-  };
-  prompt: string;
-  task: string;
-  goal: string;
-}): ThreadTaskOutput {
-  return {
-    kind: "thread",
-    sessionId: input.thread.sessionId,
-    parentSessionId: input.thread.parentSessionId,
-    prompt: input.prompt,
-    task: input.task,
-    goal: input.goal,
-    outcome: input.thread.outcome,
-    limitUsage: input.thread.limitUsage,
-    threadDepth: input.thread.depth.threadDepth,
-    maxThreadDepth: input.thread.depth.maxThreadDepth,
   };
 }
 

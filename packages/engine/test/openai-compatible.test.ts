@@ -10,8 +10,8 @@ import {
 import {
   createDefaultCriteria,
   type LlmContext,
-  type LlmPhase,
-  type LlmPhaseOutputMap,
+  type LoopPhase,
+  type LoopPhaseOutputMap,
   type ModelStreamEvent,
   type Task,
 } from "@rowan-agent/agent";
@@ -40,12 +40,12 @@ async function collect(events: AsyncIterable<ModelStreamEvent>): Promise<ModelSt
   return collected;
 }
 
-function phaseOutput<TPhase extends LlmPhase>(
+function phaseOutput<TPhase extends LoopPhase>(
   events: ModelStreamEvent[],
   phase: TPhase,
-): LlmPhaseOutputMap[TPhase] | undefined {
+): LoopPhaseOutputMap[TPhase] | undefined {
   const event = events.find((entry) => entry.type === "phase_output" && entry.phase === phase);
-  return event?.type === "phase_output" ? event.output as LlmPhaseOutputMap[TPhase] : undefined;
+  return event?.type === "phase_output" ? event.output as LoopPhaseOutputMap[TPhase] : undefined;
 }
 
 function createTask(): Task {
@@ -322,19 +322,19 @@ test("createOpenAICompatibleStream maps route response to a task routing decisio
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", state: session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "chat", state: session }, {}),
   );
   const promptMessage = events.find((event) => event.type === "prompt_message");
   const modelCall = events.find((event) => event.type === "model_requested");
-  const output = phaseOutput(events, "route");
+  const output = phaseOutput(events, "chat");
 
   expect(promptMessage).toEqual(
     expect.objectContaining({
       type: "prompt_message",
-      phase: "route",
+      phase: "chat",
       message: expect.objectContaining({
         role: "user",
-        content: expect.stringContaining("Phase: route"),
+        content: expect.stringContaining("Phase: chat"),
       }),
     }),
   );
@@ -342,7 +342,7 @@ test("createOpenAICompatibleStream maps route response to a task routing decisio
     events.findIndex((event) => event.type === "model_requested"),
   );
   expect(modelCall?.type).toBe("model_requested");
-  expect((modelCall as Extract<ModelStreamEvent, { type: "model_requested" }>).phase).toBe("route");
+  expect((modelCall as Extract<ModelStreamEvent, { type: "model_requested" }>).phase).toBe("chat");
   expect(events.some((event) => event.type === "text_delta")).toBe(false);
   expect(output).toEqual({
     message: "Hello directly.",
@@ -370,9 +370,9 @@ test("createOpenAICompatibleStream normalizes case-insensitive route keys", asyn
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", state: session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "chat", state: session }, {}),
   );
-  const output = phaseOutput(events, "route");
+  const output = phaseOutput(events, "chat");
 
   expect(output).toEqual({
     message: "Hello directly.",
@@ -399,9 +399,9 @@ test("createOpenAICompatibleStream preserves model route decisions without sched
   });
 
   const events = await collect(
-    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "route", state: session }, {}),
+    stream({ provider: "openai-compatible", name: "test-model" }, { phase: "chat", state: session }, {}),
   );
-  const output = phaseOutput(events, "route");
+  const output = phaseOutput(events, "chat");
 
   expect(output).toEqual({
     message: "Use bash to check the current date: $(date)",

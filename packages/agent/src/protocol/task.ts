@@ -11,25 +11,6 @@ export type Task = {
   attempts: number;
 };
 
-export type RoutingDecision = {
-  /**
-   * Routing target:
-   * - "direct": Answer directly without entering phase loop
-   * - "<phase-id>": Target phase ID to execute (e.g., "plan", "execute", "verify", "custom-phase")
-   */
-  route: "direct" | string;
-  message: string;
-  /**
-   * @deprecated Use route to specify target phase instead
-   * Kept for backward compatibility
-   */
-  thread?: {
-    prompt: string;
-    task: string;
-    goal: string;
-  };
-};
-
 export type VerificationResult = {
   passed: boolean;
   message: string;
@@ -63,17 +44,4 @@ export type ToolTaskOutput = {
   toolResults: ToolResult[];
 };
 
-export type ThreadTaskOutput = {
-  kind: "thread";
-  sessionId: string;
-  parentSessionId: string;
-  prompt: string;
-  task: string;
-  goal: string;
-  outcome: Outcome;
-  limitUsage: AgentLimitUsage;
-  threadDepth: number;
-  maxThreadDepth: number;
-};
-
-export type TaskOutput = ToolTaskOutput | ThreadTaskOutput;
+export type TaskOutput = ToolTaskOutput;

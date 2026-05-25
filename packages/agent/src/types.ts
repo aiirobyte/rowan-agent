@@ -9,21 +9,20 @@ import type {
   AgentRunLimits,
   ContextScope,
   LlmContext,
-  LlmPhase,
-  LlmPhaseOutput,
-  LlmPhaseOutputEvent,
-  LlmPhaseOutputMap,
+  LoopPhase,
+  LoopPhaseOutput,
+  LoopPhaseOutputEvent,
+  LoopPhaseOutputMap,
   ModelCallUsage,
   ModelRef,
   ModelStreamEvent,
   Outcome,
+  PhaseOutput,
   RuntimeDepth,
   StreamFn,
   StreamOptions,
   Task,
   TaskOutput,
-  RoutingDecision,
-  ThreadTaskOutput,
   ToolCall,
   ToolResult,
   ToolTaskOutput,
@@ -35,17 +34,16 @@ export type {
   AgentLoopContext,
   AgentLoopConfig,
   AgentRunState,
-  AgentRunStatus,
   AgentRuntimePort,
   AfterPhaseResult,
   BeforePhaseResult,
+  ChatInput,
   ExecuteInput,
   ExecuteOutput,
   PhaseInputMap,
   PhaseOutputMap,
   PhaseResult,
   PlanInput,
-  RouteInput,
   ToolRunner,
   ToolRunnerInput,
   VerifyInput,
@@ -55,21 +53,20 @@ export type {
   AgentLimitUsage,
   AgentRunLimits,
   LlmContext,
-  LlmPhase,
-  LlmPhaseOutput,
-  LlmPhaseOutputEvent,
-  LlmPhaseOutputMap,
+  LoopPhase,
+  LoopPhaseOutput,
+  LoopPhaseOutputEvent,
+  LoopPhaseOutputMap,
   ModelCallUsage,
   ModelRef,
   ModelStreamEvent,
   Outcome,
+  PhaseOutput,
   RuntimeDepth,
   StreamFn,
   StreamOptions,
   Task,
   TaskOutput,
-  RoutingDecision,
-  ThreadTaskOutput,
   ToolCall,
   ToolResult,
   ToolTaskOutput,
@@ -77,7 +74,7 @@ export type {
 } from "./protocol";
 
 export const DEFAULT_MAX_THREAD_DEPTH = 4;
-export const AGENT_STATE_SCHEMA_VERSION = "0.4.4";
+export const AGENT_STATE_SCHEMA_VERSION = "0.4.6";
 
 const CONTEXT_SCOPES = ["conversation", "execution", "diagnostic"] as const;
 
@@ -251,8 +248,8 @@ export type AgentEvent =
       ts: string;
     }
   // Phase lifecycle
-  | { type: "phase_start"; phase: LlmPhase; ts: string }
-  | { type: "phase_end"; phase: LlmPhase; ts: string }
+  | { type: "phase_start"; phase: string; ts: string }
+  | { type: "phase_end"; phase: string; ts: string }
   // Message lifecycle
   | { type: "message_start"; message: AgentMessage; ts: string }
   | { type: "message_update"; message: AgentMessage; delta: string; ts: string }

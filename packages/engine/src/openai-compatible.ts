@@ -2,13 +2,13 @@ import { buildOpenAICompatiblePrompt, type ChatMessage } from "@rowan-agent/agen
 import { extractJsonObject } from "./json-extract";
 import type {
   LlmContext,
-  LlmPhaseOutputMap,
+  LoopPhaseOutputMap,
   ModelCallUsage,
   ModelStreamEvent,
+  PhaseOutput,
   StreamFn,
   StreamOptions,
   Task,
-  RoutingDecision,
   ToolDefinition,
   ToolCall,
   VerificationResult,
@@ -651,42 +651,34 @@ function latestUserInput(context: Pick<LlmContext, "state">): string {
   return context.state.input;
 }
 
-function normalizeRoutingOutput(
+function normalizeChatOutput(
   value: unknown,
-  context: Extract<LlmContext, { phase: "route" }>,
-): RoutingDecision {
-  const raw = unwrapRecord(value, "routingDecision");
+  context: Extract<LlmContext, { phase: "chat" }>,
+): PhaseOutput {
+  const raw = unwrapRecord(value, "phaseOutput", "chatOutput", "routingDecision");
   if (!isRecord(raw)) {
-    throw validationError("route", "Expected a routing decision object.");
+    throw validationError("chat", "Expected a chat phase output object.");
   }
 
-  const routeValue = asString(getRecordValue(raw, "route"))?.toLowerCase();
+  const routeValue = asString(getRecordValue(raw, "route"));
   if (!routeValue) {
-    throw validationError("route", "Expected route output to include a non-empty route.");
+    throw validationError("chat", "Expected chat output to include a non-empty route.");
   }
   const message =
     asString(getRecordValue(raw, "message")) ??
     asString(getRecordValue(raw, "answer")) ??
     asString(getRecordValue(raw, "response")) ??
     (routeValue === "direct" ? latestUserInput(context) : "Creating a task for this request.");
-  const rawThread = getRecordValue(raw, "thread");
-  const thread = isRecord(rawThread)
-    ? {
-        prompt: asString(getRecordValue(rawThread, "prompt", "input")) ?? latestUserInput(context),
-        task: asString(getRecordValue(rawThread, "task", "instruction")) ?? message,
-        goal: asString(getRecordValue(rawThread, "goal", "acceptanceGoal", "acceptance_goal")) ?? message,
-      }
-    : undefined;
+  const text = asString(getRecordValue(raw, "text")) ?? message;
 
-  try {
-    return Validators.routingDecision.Parse({
-      route: routeValue,
-      message,
-      ...(thread ? { thread } : {}),
-    });
-  } catch (error) {
-    throw validationError("route", error);
+  if (routeValue !== "direct") {
+    const allowed = new Set((context.availablePhases ?? []).map((phase) => phase.id));
+    if (!allowed.has(routeValue) || routeValue === "chat") {
+      throw validationError("chat", `Chat phase routed to unavailable phase "${routeValue}".`);
+    }
   }
+
+  return { route: routeValue, message, text };
 }
 
 function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phase: "plan" }>): Task {
@@ -826,15 +818,11 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     const value = extractJsonObject(result.content);
 
-    if (context.phase === "route") {
-      const decision = normalizeRoutingOutput(value, context);
-      const output: LlmPhaseOutputMap["route"] = {
-        ...decision,
-        text: decision.message,
-      };
+    if (context.phase === "chat") {
+      const output: LoopPhaseOutputMap["chat"] = normalizeChatOutput(value, context);
       yield {
         type: "phase_output",
-        phase: "route",
+        phase: "chat",
         output,
       };
       yield { type: "done" };
@@ -843,7 +831,7 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     if (context.phase === "plan") {
       const task = normalizeTaskOutput(value, context);
-      const output: LlmPhaseOutputMap["plan"] = {
+      const output: LoopPhaseOutputMap["plan"] = {
         task,
         text: result.content,
       };
@@ -862,7 +850,7 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
 
     if (context.phase === "execute") {
       const output = normalizeExecuteOutput(value);
-      const phaseOutput: LlmPhaseOutputMap["execute"] = {
+      const phaseOutput: LoopPhaseOutputMap["execute"] = {
         text: result.content,
         toolCalls: output.toolCalls,
       };
@@ -880,7 +868,7 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
     }
 
     const verification = normalizeVerificationOutput(value, context);
-    const output: LlmPhaseOutputMap["verify"] = verification;
+    const output: LoopPhaseOutputMap["verify"] = verification;
     yield {
       type: "text_delta",
       text: result.content,
