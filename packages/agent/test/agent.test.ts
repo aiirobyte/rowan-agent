@@ -67,7 +67,7 @@ test("Agent rejects concurrent runs", async () => {
 });
 
 test("Agent.abort stops an active run", async () => {
-  const hangingStream: StreamFn = async function* hangingStream(_model, _context, options) {
+  const hangingStream: StreamFn = async function* hangingStream(_request, options) {
     yield { type: "text_delta", text: "working" };
     await new Promise((_resolve, reject) => {
       options.signal?.addEventListener("abort", () => reject(new Error("aborted")));

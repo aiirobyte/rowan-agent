@@ -16,6 +16,7 @@
       "name": "@rowan-agent/agent",
       "version": "0.4.4",
       "dependencies": {
+        "@rowan-agent/engine": "workspace:*",
         "typebox": "^1.0.0",
       },
     },
@@ -34,9 +35,6 @@
     "packages/engine": {
       "name": "@rowan-agent/engine",
       "version": "0.4.4",
-      "dependencies": {
-        "@rowan-agent/agent": "workspace:*",
-      },
     },
     "packages/logging": {
       "name": "@rowan-agent/logging",

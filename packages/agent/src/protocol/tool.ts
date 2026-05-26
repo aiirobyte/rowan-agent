@@ -1,8 +1,4 @@
-export type ToolDefinition = {
-  name: string;
-  description: string;
-  parameters: unknown;
-};
+export type { LlmToolDefinition as ToolDefinition } from "@rowan-agent/engine";
 
 export type ToolCall = {
   id: string;

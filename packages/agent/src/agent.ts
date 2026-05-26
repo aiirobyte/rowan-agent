@@ -1,7 +1,7 @@
 import { runAgentLoop } from "./agent-loop";
 import type {
   AgentMessage,
-  ModelRef,
+  LlmModelRef,
   AgentRunLimits,
   StreamFn,
   BeforeToolCall,
@@ -16,7 +16,7 @@ import type {
 
 export type AgentRunConfig = {
   context: AgentContext;
-  model: ModelRef;
+  model: LlmModelRef;
   stream: StreamFn;
   sessionId?: string;
   maxAttempts?: number;
@@ -32,7 +32,7 @@ export type AgentRunOverride = Partial<Omit<AgentRunConfig, "context">> & {
 export type AgentControllerState = {
   sessionId?: string;
   context: AgentContext;
-  model: ModelRef;
+  model: LlmModelRef;
   tools: Tool[];
   isRunning: boolean;
   currentResult?: AgentRunResult;

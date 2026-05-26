@@ -2,12 +2,12 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import { runAgentLoop } from "../src/agent-loop";
 import { createDefaultCriteria } from "@rowan-agent/agent";
-import type { AgentEvent, AgentRuntimePort, EngineContext, StreamFn, Tool } from "../src/types";
+import type { AgentEvent, AgentRuntimePort, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-function detectPhase(messages: EngineContext["messages"]): string {
+function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const match = messages[i].content.match(/^Phase:\s*(\w+)/);
     if (match) return match[1];
@@ -15,7 +15,7 @@ function detectPhase(messages: EngineContext["messages"]): string {
   return "chat";
 }
 
-function extractUserRequest(messages: EngineContext["messages"]): string {
+function extractUserRequest(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const match = messages[i].content.match(/Current user request:\s*\n"([^"]+)"/);
     if (match) return match[1];
@@ -69,6 +69,47 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
   ]);
 });
 
+test("runAgentLoop requests the LLM with a fixed request object", async () => {
+  const seenRequests: unknown[] = [];
+  const controller = new AbortController();
+  const stream: StreamFn = async function* requestRecordingStream(request, options) {
+    seenRequests.push(request);
+    expect(options.signal).toBe(controller.signal);
+    yield {
+      type: "text_delta",
+      text: JSON.stringify({ route: "direct", message: "Done." }),
+    };
+    yield { type: "done" };
+  };
+
+  await runAgentLoop({
+    kind: "run",
+    context: {
+      systemPrompt: "Test system",
+      messages: [createMessage("user", "hello", { scope: "conversation" })],
+      tools: [echoTool],
+    },
+    model: { provider: "test-provider", name: "test-model" },
+    stream,
+    signal: controller.signal,
+  });
+
+  expect(seenRequests).toHaveLength(1);
+  const request = seenRequests[0] as {
+    model?: unknown;
+    system?: string;
+    messages?: Array<{ role: string; content: string }>;
+    tools?: Array<{ name: string; description: string }>;
+  };
+  expect(request.model).toEqual({ provider: "test-provider", name: "test-model" });
+  expect(request.system).toContain("Test system");
+  expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
+  expect(request.messages?.at(-1)?.content).toContain("Phase: chat");
+  expect(request.tools).toEqual([
+    expect.objectContaining({ name: "echo", description: echoTool.description }),
+  ]);
+});
+
 test("runAgentLoop completes task with echo tool and verification", async () => {
   const session = createState({
     systemPrompt: "Test system",
@@ -107,34 +148,25 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     status: "pending" as const,
     attempts: 0,
   };
-  const stream: StreamFn = async function* orderedMessageStream(_model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* orderedMessageStream(request) {
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "text_delta", text: "Routing from model." };
-      yield {
-        type: "structured_output",
-        content: {
-          route: "plan",
-          message: "Routing from model.",
-        },
-      };
+      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Routing from model." }) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "plan") {
-      yield { type: "text_delta", text: "Planning from model." };
-      yield { type: "structured_output", content: task };
+      yield { type: "text_delta", text: JSON.stringify(task) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "execute") {
-      yield { type: "text_delta", text: "Executing from model." };
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           message: "Executing from model.",
           toolCalls: [
             {
@@ -143,20 +175,13 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
               args: { message: "ordered" },
             },
           ],
-        },
+        }),
       };
       yield { type: "done" };
       return;
     }
 
-    yield { type: "text_delta", text: "Verifying from model." };
-    yield {
-      type: "structured_output",
-      content: {
-        passed: true,
-        message: "Verified.",
-      },
-    };
+    yield { type: "text_delta", text: JSON.stringify({ passed: true, message: "Verified." }) };
     yield { type: "done" };
   };
   const session = createState({
@@ -204,14 +229,11 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
     input: "hello",
   });
   const emittedEvents: AgentEvent[] = [];
-  const stream: StreamFn = async function* promptRecordingStream(model) {
-    yield { type: "model_requested", model, usage: { inputMessages: 3 } };
+  const stream: StreamFn = async function* promptRecordingStream(request) {
+    yield { type: "model_requested", model: request.model, usage: { inputMessages: 3 } };
     yield {
-      type: "structured_output",
-      content: {
-        route: "direct",
-        message: "Hello.",
-      },
+      type: "text_delta",
+      text: JSON.stringify({ route: "direct", message: "Hello." }),
     };
     yield { type: "done" };
   };
@@ -360,42 +382,39 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     attempts: 0,
   };
   let verifyCalls = 0;
-  const stream: StreamFn = async function* retryVerifyStream(model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* retryVerifyStream(request) {
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
+      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "structured_output", content: task };
+      yield { type: "text_delta", text: JSON.stringify(task) };
       yield { type: "done" };
       return;
     }
     if (phase === "execute") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           message: "Calling echo.",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
-        },
+        }),
       };
       yield { type: "done" };
       return;
     }
 
     verifyCalls += 1;
-    yield { type: "model_requested", model, usage: { inputMessages: 1 } };
+    yield { type: "model_requested", model: request.model, usage: { inputMessages: 1 } };
     if (verifyCalls === 1) {
       throw invalidModelSchemaError("Model output for verify did not match the expected schema.");
     }
     yield {
-      type: "structured_output",
-      content: {
-        passed: true,
-        message: "Verified after retry.",
-      },
+      type: "text_delta",
+      text: JSON.stringify({ passed: true, message: "Verified after retry." }),
     };
     yield { type: "done" };
   };
@@ -441,31 +460,31 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   };
   let executeCalls = 0;
   let verifyCalls = 0;
-  const stream: StreamFn = async function* retryExecuteStream(model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* retryExecuteStream(request) {
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
+      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "structured_output", content: task };
+      yield { type: "text_delta", text: JSON.stringify(task) };
       yield { type: "done" };
       return;
     }
     if (phase === "execute") {
       executeCalls += 1;
-      yield { type: "model_requested", model, usage: { inputMessages: 1 } };
+      yield { type: "model_requested", model: request.model, usage: { inputMessages: 1 } };
       if (executeCalls === 1) {
         throw invalidModelSchemaError("Model output for execute did not include toolCalls.");
       }
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           message: "Calling echo.",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
-        },
+        }),
       };
       yield { type: "done" };
       return;
@@ -473,8 +492,8 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
 
     verifyCalls += 1;
     yield {
-      type: "structured_output",
-      content:
+      type: "text_delta",
+      text: JSON.stringify(
         verifyCalls === 1
           ? {
               passed: false,
@@ -484,6 +503,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
               passed: true,
               message: "Verified after execute retry.",
             },
+      ),
     };
     yield { type: "done" };
   };
@@ -567,16 +587,16 @@ test("invalid tool args do not execute tool", async () => {
       };
     },
   };
-  const invalidArgsStream: StreamFn = async function* invalidArgsStream(_model, context) {
-    const phase = detectPhase(context.messages);
+  const invalidArgsStream: StreamFn = async function* invalidArgsStream(request) {
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           route: "plan",
           message: "Routing invalid args task.",
-        },
+        }),
       };
       yield { type: "done" };
       return;
@@ -584,8 +604,8 @@ test("invalid tool args do not execute tool", async () => {
 
     if (phase === "plan") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           id: createId("task"),
           title: "Invalid args task",
           instruction: "Call strict tool",
@@ -594,7 +614,7 @@ test("invalid tool args do not execute tool", async () => {
           skillIds: [],
           status: "pending",
           attempts: 0,
-        },
+        }),
       };
       yield { type: "done" };
       return;
@@ -602,8 +622,8 @@ test("invalid tool args do not execute tool", async () => {
 
     if (phase === "execute") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           message: "Calling strict tool.",
           toolCalls: [
             {
@@ -612,18 +632,15 @@ test("invalid tool args do not execute tool", async () => {
               args: { value: 123 },
             },
           ],
-        },
+        }),
       };
       yield { type: "done" };
       return;
     }
 
     yield {
-      type: "structured_output",
-      content: {
-        passed: false,
-        message: "Invalid args prevented execution.",
-      },
+      type: "text_delta",
+      text: JSON.stringify({ passed: false, message: "Invalid args prevented execution." }),
     };
     yield { type: "done" };
   };
@@ -655,18 +672,15 @@ test("runtime beforePhase can adjust phase input", async () => {
     systemPrompt: "Test system",
     input: "adjust route input",
   });
-  const stream: StreamFn = async function* adjustableRouteStream(_model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* adjustableRouteStream(request) {
+    const phase = detectPhase(request.messages);
     if (phase !== "chat") {
       return;
     }
 
     yield {
-      type: "structured_output",
-      content: {
-        route: "direct",
-        message: "Adjusted route input.",
-      },
+      type: "text_delta",
+      text: JSON.stringify({ route: "direct", message: "Adjusted route input." }),
     };
     yield { type: "done" };
   };
@@ -706,18 +720,15 @@ test("runtime afterPhase can adjust phase output", async () => {
     systemPrompt: "Test system",
     input: "adjust route output",
   });
-  const stream: StreamFn = async function* routeStream(_model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* routeStream(request) {
+    const phase = detectPhase(request.messages);
     if (phase !== "chat") {
       return;
     }
 
     yield {
-      type: "structured_output",
-      content: {
-        route: "direct",
-        message: "Original route output.",
-      },
+      type: "text_delta",
+      text: JSON.stringify({ route: "direct", message: "Original route output." }),
     };
     yield { type: "done" };
   };
@@ -793,19 +804,19 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
     input: "retry route",
   });
   let routeCalls = 0;
-  const stream: StreamFn = async function* retryableRouteStream(_model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* retryableRouteStream(request) {
+    const phase = detectPhase(request.messages);
     if (phase !== "chat") {
       return;
     }
 
     routeCalls += 1;
     yield {
-      type: "structured_output",
-      content: {
+      type: "text_delta",
+      text: JSON.stringify({
         route: "direct",
         message: routeCalls > 1 ? "Retried with adjusted input." : "Needs retry.",
-      },
+      }),
     };
     yield { type: "done" };
   };
@@ -849,15 +860,12 @@ test("runtime phase port can abort with an outcome", async () => {
     input: "abort during plan",
   });
   const events: AgentEvent[] = [];
-  const stream: StreamFn = async function* taskRouteStream(_model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* taskRouteStream(request) {
+    const phase = detectPhase(request.messages);
     if (phase === "chat") {
       yield {
-        type: "structured_output",
-        content: {
-          route: "plan",
-          message: "Create a task.",
-        },
+        type: "text_delta",
+        text: JSON.stringify({ route: "plan", message: "Create a task." }),
       };
       yield { type: "done" };
     }

@@ -1,12 +1,11 @@
 import type { AgentContextMessage, ContextScope } from "./context";
-import type { ModelCallUsage, ModelRef } from "./model";
+import type { LlmModelUsage, LlmModelRef } from "./model";
 import type { LoopPhase } from "./phase";
 import type { ToolCall, ToolResult } from "./tool";
 
 export type ExecutionTurnEntry =
   | { kind: "prompt"; message: Pick<AgentContextMessage, "role" | "content"> }
   | { kind: "assistant_text"; text: string }
-  | { kind: "structured_output"; content: unknown }
   | { kind: "tool_call"; toolCall: ToolCall }
   | { kind: "tool_result"; result: ToolResult };
 
@@ -17,8 +16,8 @@ export type ExecutionTurn = {
   phase: LoopPhase;
   requestedAtMs: number;
   completedAtMs: number;
-  model: ModelRef;
-  usage?: ModelCallUsage;
+  model: LlmModelRef;
+  usage?: LlmModelUsage;
   scope: ContextScope;
   entries: ExecutionTurnEntry[];
 };

@@ -1,12 +1,17 @@
 import type { LoopPhase } from "./phase";
-import type { ModelCallUsage, ModelRef } from "./model";
 import type {
   RuntimeDepth,
   Task,
   TaskOutput,
   VerificationResult,
 } from "./task";
-import type { ToolCall, ToolDefinition, ToolResult } from "./tool";
+import type { ToolCall, ToolResult } from "./tool";
+export type {
+  LlmRequest,
+  LlmStreamEvent,
+  LlmStreamOptions,
+  StreamFn,
+} from "@rowan-agent/engine";
 
 export type ContextScope = "conversation" | "execution" | "diagnostic";
 
@@ -96,28 +101,3 @@ export type LoopPhaseOutputMap = {
 };
 
 export type LoopPhaseOutput<TPhase extends LoopPhase = LoopPhase> = LoopPhaseOutputMap[TPhase];
-
-export type EngineContext = {
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
-  tools?: ToolDefinition[];
-};
-
-export type EngineStreamEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "structured_output"; content: unknown }
-  | {
-      type: "model_requested";
-      model: ModelRef;
-      usage: ModelCallUsage;
-    }
-  | { type: "done" };
-
-export type StreamOptions = {
-  signal?: AbortSignal;
-};
-
-export type StreamFn = (
-  model: ModelRef,
-  context: EngineContext,
-  options: StreamOptions,
-) => AsyncIterable<EngineStreamEvent>;

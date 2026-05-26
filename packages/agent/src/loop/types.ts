@@ -8,7 +8,7 @@ import type {
   BeforeToolCall,
   LoopPhase,
   LoopPhaseOutputMap,
-  ModelRef,
+  LlmModelRef,
   Outcome,
   RunThread,
   StreamFn,
@@ -21,7 +21,7 @@ import type {
 } from "../types";
 
 export type AgentLoopConfig = {
-  model: ModelRef;
+  model: LlmModelRef;
   stream: StreamFn;
   tools: Tool[];
   maxAttempts: number;

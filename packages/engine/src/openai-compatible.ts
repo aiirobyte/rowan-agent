@@ -1,14 +1,15 @@
-import { extractJsonObject } from "./json-extract";
 import type {
-  EngineContext,
-  EngineStreamEvent,
-  ModelCallUsage,
+  LlmModelUsage,
+  LlmRequest,
+  LlmResponse,
+  LlmStreamEvent,
+  LlmTokenUsage,
+  LlmStreamOptions,
+  LlmToolDefinition,
   StreamFn,
-  StreamOptions,
-  ToolDefinition,
-} from "@rowan-agent/agent";
+} from "./protocol";
 
-type PromptMessage = { role: "system" | "user" | "assistant"; content: string };
+type OpenAIChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export type OpenAICompatibleFetch = (
   input: Parameters<typeof fetch>[0],
@@ -24,7 +25,7 @@ export type OpenAICompatibleConfig = {
   maxRetries?: number;
   retryDelayMs?: number;
   fetch?: OpenAICompatibleFetch;
-  tools?: ToolDefinition[];
+  tools?: LlmToolDefinition[];
   responseFormat?: boolean;
 };
 
@@ -37,7 +38,7 @@ export type ResolveOpenAICompatibleConfigInput = {
   maxRetries?: number;
   retryDelayMs?: number;
   fetch?: OpenAICompatibleFetch;
-  tools?: ToolDefinition[];
+  tools?: LlmToolDefinition[];
   responseFormat?: boolean;
   env?: Record<string, string | undefined>;
 };
@@ -83,15 +84,11 @@ type ChatCompletionResponse = {
   };
 };
 
-export type OpenAICompatibleChatCompletionResult = {
+type OpenAICompatibleChatCompletionResult = {
   content: string;
   requestContent: string;
   responseContent: string;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-  };
+  usage?: import("./protocol").LlmTokenUsage;
 };
 
 function defaultEnv(): Record<string, string | undefined> {
@@ -290,15 +287,16 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function summarizeRequestUsage(messages: PromptMessage[]): Pick<ModelCallUsage, "inputMessages"> {
+function summarizeRequestUsage(request: LlmRequest): Pick<LlmModelUsage, "inputMessages"> {
+  const count = request.messages.length + (request.system ? 1 : 0);
   return {
-    inputMessages: messages.length,
+    inputMessages: count,
   };
 }
 
 function normalizeProviderUsage(
   usage: ChatCompletionResponse["usage"],
-): OpenAICompatibleChatCompletionResult["usage"] {
+): LlmTokenUsage | undefined {
   if (!usage) {
     return undefined;
   }
@@ -320,7 +318,7 @@ function normalizeProviderUsage(
 
 function summarizeResponseUsage(
   result: OpenAICompatibleChatCompletionResult,
-): Omit<ModelCallUsage, "inputMessages"> {
+): Omit<LlmModelUsage, "inputMessages"> {
   return {
     ...(result.usage?.inputTokens !== undefined ? { inputTokens: result.usage.inputTokens } : {}),
     ...(result.usage?.outputTokens !== undefined ? { outputTokens: result.usage.outputTokens } : {}),
@@ -358,7 +356,15 @@ function normalizeHttpError(
   });
 }
 
-function buildChatCompletionBody(config: OpenAICompatibleConfig, messages: PromptMessage[]): Record<string, unknown> {
+function buildChatCompletionBody(config: OpenAICompatibleConfig, request: LlmRequest): Record<string, unknown> {
+  const messages: OpenAIChatMessage[] = [];
+  if (request.system) {
+    messages.push({ role: "system", content: request.system });
+  }
+  for (const msg of request.messages) {
+    messages.push({ role: msg.role, content: msg.content });
+  }
+
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
@@ -465,9 +471,9 @@ async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void
 
 async function callOpenAICompatibleChatCompletionOnce(
   config: OpenAICompatibleConfig,
-  messages: PromptMessage[],
-  options: StreamOptions = {},
-  requestBody = buildChatCompletionBody(config, messages),
+  request: LlmRequest,
+  options: LlmStreamOptions = {},
+  requestBody = buildChatCompletionBody(config, request),
 ): Promise<OpenAICompatibleChatCompletionResult> {
   const fetchImpl = config.fetch ?? fetch;
   const { signal, cleanup } = createRequestSignal({
@@ -524,9 +530,9 @@ async function callOpenAICompatibleChatCompletionOnce(
 
 export async function callOpenAICompatibleChatCompletion(
   config: OpenAICompatibleConfig,
-  messages: PromptMessage[],
-  options: StreamOptions = {},
-  requestBody = buildChatCompletionBody(config, messages),
+  request: LlmRequest,
+  options: LlmStreamOptions = {},
+  requestBody = buildChatCompletionBody(config, request),
 ): Promise<OpenAICompatibleChatCompletionResult> {
   const maxRetries = normalizeRetryNumber(config.maxRetries, DEFAULT_MAX_RETRIES);
   const retryDelayMs = normalizeRetryNumber(config.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
@@ -536,7 +542,7 @@ export async function callOpenAICompatibleChatCompletion(
     attempts += 1;
 
     try {
-      return await callOpenAICompatibleChatCompletionOnce(config, messages, options, requestBody);
+      return await callOpenAICompatibleChatCompletionOnce(config, request, options, requestBody);
     } catch (error) {
       const requestError = normalizeRequestError(error, options.signal);
       if (!shouldRetryRequest({ error: requestError, attempts, maxRetries, parentSignal: options.signal })) {
@@ -554,21 +560,20 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
     baseUrl: normalizeBaseUrl(config.baseUrl),
   };
 
-  return async function* openAICompatibleStream(model, context, options): AsyncIterable<EngineStreamEvent> {
-    const messages = context.messages;
-    const requestUsage = summarizeRequestUsage(messages);
-    const requestBody = buildChatCompletionBody(normalizedConfig, messages);
+  return async function* openAICompatibleStream(request, options): AsyncIterable<LlmStreamEvent> {
+    const requestUsage = summarizeRequestUsage(request);
+    const requestBody = buildChatCompletionBody(normalizedConfig, request);
 
     const result = await callOpenAICompatibleChatCompletion(
       normalizedConfig,
-      messages,
+      request,
       options,
       requestBody,
     );
 
     yield {
       type: "model_requested",
-      model,
+      model: request.model,
       usage: {
         ...requestUsage,
         ...summarizeResponseUsage(result),
@@ -576,19 +581,15 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
     };
 
     const content = result.content;
-
-    let value: unknown;
-    try {
-      value = extractJsonObject(content);
-    } catch {
-      // Response is not JSON — yield only text
-    }
-
-    if (value !== undefined && value !== null) {
-      yield { type: "structured_output", content: value };
-    }
+    const usage = result.usage;
 
     yield { type: "text_delta", text: content };
-    yield { type: "done" };
+    yield {
+      type: "done",
+      response: {
+        content,
+        ...(usage ? { usage } : {}),
+      },
+    };
   };
 }

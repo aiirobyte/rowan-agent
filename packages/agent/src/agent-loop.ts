@@ -1,3 +1,4 @@
+import { extractJsonObject } from "@rowan-agent/engine";
 import type {
   AgentContext as AgentRunContext,
   AgentEvent,
@@ -7,7 +8,7 @@ import type {
   AgentMessage,
   AgentRunResult,
   AgentState,
-  EngineStreamEvent,
+  LlmStreamEvent,
   LoopPhase,
   Outcome,
   RunThread,
@@ -309,7 +310,7 @@ export async function completeRun(runtime: AgentLoopRuntime, outcome: Outcome): 
 
 async function collectTextAndStructured(input: {
   context: AgentLoopContext;
-  events: AsyncIterable<EngineStreamEvent>;
+  events: AsyncIterable<LlmStreamEvent>;
   metadataPhase: string;
   recordText?: boolean;
 }): Promise<{
@@ -318,7 +319,6 @@ async function collectTextAndStructured(input: {
 }> {
   let text = "";
   let flushedText = "";
-  let structured: unknown;
   const flushText = async () => {
     if (text.length === 0) {
       return;
@@ -346,16 +346,19 @@ async function collectTextAndStructured(input: {
       text += event.text;
     }
 
-    if (event.type === "structured_output") {
-      structured = event.content;
-    }
-
     if (event.type === "done") {
       await flushText();
     }
   }
 
   await flushText();
+
+  let structured: unknown;
+  try {
+    structured = extractJsonObject(flushedText);
+  } catch {
+    // Response is not JSON — structured remains undefined
+  }
 
   return { text: flushedText, structured };
 }
@@ -435,13 +438,19 @@ function createPhaseContext(
           context: input.payload,
           tools: loopContext.tools,
         });
+        const [systemMsg, ...rest] = prompt.messages;
         return collectTextAndStructured({
           context: loopContext,
-          events: loopContext.config.stream(
-            loopContext.config.model,
-            { messages: prompt.messages, tools: loopContext.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) },
-            { signal: loopContext.signal },
-          ),
+          events: loopContext.config.stream({
+            model: loopContext.config.model,
+            system: systemMsg?.role === "system" ? systemMsg.content : undefined,
+            messages: rest.filter((m) => m.role !== "system") as Array<{ role: "user" | "assistant"; content: string }>,
+            tools: loopContext.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            })),
+          }, { signal: loopContext.signal }),
           metadataPhase: input.phase,
           recordText: input.recordText,
         });

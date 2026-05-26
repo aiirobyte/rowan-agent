@@ -4,13 +4,13 @@ import { createSession } from "@rowan-agent/agent";
 import { Agent } from "../src/agent";
 import { runAgentLoop } from "../src/agent-loop";
 import { createDefaultCriteria } from "@rowan-agent/agent";
-import type { AgentEvent, EngineContext, StreamFn, Tool } from "../src/types";
+import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-function detectPhase(messages: EngineContext["messages"]): string {
+function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const match = messages[i].content.match(/^Phase:\s*(\w+)/);
     if (match) return match[1];
@@ -18,8 +18,8 @@ function detectPhase(messages: EngineContext["messages"]): string {
   return "chat";
 }
 
-function isThreadRun(messages: EngineContext["messages"]): boolean {
-  return messages.some((m) => m.content.includes("Agent state task:"));
+function isThreadRun(messages: LlmRequest["messages"]): boolean {
+  return messages.some((m: { content: string }) => m.content.includes("Agent state task:"));
 }
 
 type ThreadResult = Extract<Awaited<ReturnType<typeof runAgentLoop>>, { kind: "thread" }>;
@@ -189,21 +189,21 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       };
     },
   };
-  const parentStream: StreamFn = async function* parentStream(model, context, options) {
-    if (isThreadRun(context.messages)) {
-      yield* scriptedStream(model, context, options);
+  const parentStream: StreamFn = async function* parentStream(request, options) {
+    if (isThreadRun(request.messages)) {
+      yield* scriptedStream(request, options);
       return;
     }
 
-    const phase = detectPhase(context.messages);
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           route: "plan",
           message: "Start a nested thread.",
-        },
+        }),
       };
       yield { type: "done" };
       return;
@@ -211,8 +211,8 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
 
     if (phase === "plan") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           id: createId("task"),
           title: "Delegate thread work",
           instruction: "Ask a nested thread to use echo.",
@@ -221,7 +221,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
           skillIds: [],
           status: "pending",
           attempts: 0,
-        },
+        }),
       };
       yield { type: "done" };
       return;
@@ -229,8 +229,8 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
 
     if (phase === "execute") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           message: "Calling delegate tool.",
           toolCalls: [
             {
@@ -239,7 +239,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
               args: { prompt: "use echo tool" },
             },
           ],
-        },
+        }),
       };
       yield { type: "done" };
       return;
@@ -247,11 +247,11 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
 
     // verify phase - assume passed since delegate tool returns nested outcome
     yield {
-      type: "structured_output",
-      content: {
+      type: "text_delta",
+      text: JSON.stringify({
         passed: true,
         message: "Nested thread outcome was returned.",
-      },
+      }),
     };
     yield { type: "done" };
   };

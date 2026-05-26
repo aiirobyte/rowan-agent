@@ -8,19 +8,19 @@ import type {
   AgentLimitUsage,
   AgentRunLimits,
   ContextScope,
-  EngineContext,
-  EngineStreamEvent,
+  LlmModelRef,
+  LlmModelUsage,
+  LlmRequest,
+  LlmStreamEvent,
+  LlmStreamOptions,
   LlmContext,
   LoopPhase,
   LoopPhaseOutput,
   LoopPhaseOutputMap,
-  ModelCallUsage,
-  ModelRef,
   Outcome,
   PhaseOutput,
   RuntimeDepth,
   StreamFn,
-  StreamOptions,
   Task,
   TaskOutput,
   ToolCall,
@@ -52,19 +52,19 @@ export type {
 export type {
   AgentLimitUsage,
   AgentRunLimits,
-  EngineContext,
-  EngineStreamEvent,
+  LlmModelRef,
+  LlmModelUsage,
+  LlmRequest,
+  LlmStreamEvent,
+  LlmStreamOptions,
   LlmContext,
   LoopPhase,
   LoopPhaseOutput,
   LoopPhaseOutputMap,
-  ModelCallUsage,
-  ModelRef,
   Outcome,
   PhaseOutput,
   RuntimeDepth,
   StreamFn,
-  StreamOptions,
   Task,
   TaskOutput,
   ToolCall,
@@ -148,7 +148,7 @@ export type AfterToolCall = (input: {
 
 type AgentRunCommonConfig = {
   context?: AgentContext;
-  model: ModelRef;
+  model: LlmModelRef;
   stream: StreamFn;
   tools?: Tool[];
   maxAttempts?: number;

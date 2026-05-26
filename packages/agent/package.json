@@ -8,6 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
+    "@rowan-agent/engine": "workspace:*",
     "typebox": "^1.0.0"
   }
 }

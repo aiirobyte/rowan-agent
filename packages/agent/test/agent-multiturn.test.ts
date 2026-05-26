@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { Agent, type StreamFn } from "../src";
 import { createDefaultCriteria } from "@rowan-agent/agent";
-import type { EngineContext } from "../src/types";
+import type { LlmRequest } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-function detectPhase(messages: EngineContext["messages"]): string {
+function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const match = messages[i].content.match(/^Phase:\s*(\w+)/);
     if (match) return match[1];
@@ -17,17 +17,17 @@ function detectPhase(messages: EngineContext["messages"]): string {
 
 test("Agent.run reuses one session for multi-turn direct responses", async () => {
   const routeContexts: string[][] = [];
-  const stream: StreamFn = async function* directMultiTurnStream(model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* directMultiTurnStream(request) {
+    const phase = detectPhase(request.messages);
     if (phase !== "chat") {
       return;
     }
 
-    routeContexts.push(context.messages.map((message) => message.content));
-    const sawFirstAnswer = context.messages.some((message) => message.content.includes("First answer"));
+    routeContexts.push(request.messages.map((message) => message.content));
+    const sawFirstAnswer = request.messages.some((message) => message.content.includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
-    yield { type: "model_requested", model, usage: { inputMessages: context.messages.length } };
-    yield { type: "structured_output", content: { route: "direct", message } };
+    yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
+    yield { type: "text_delta", text: JSON.stringify({ route: "direct", message }) };
     yield { type: "done" };
   };
   const agent = new Agent({
@@ -59,12 +59,12 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
 test("Agent keeps conversation messages separate from execution steps", async () => {
   const routeContexts: string[][] = [];
   const events: string[] = [];
-  const stream: StreamFn = async function* taskMultiTurnStream(model, context, options) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* taskMultiTurnStream(request, options) {
+    const phase = detectPhase(request.messages);
     if (phase === "chat") {
-      routeContexts.push(context.messages.map((message) => message.content));
+      routeContexts.push(request.messages.map((message) => message.content));
     }
-    yield* scriptedStream(model, context, options);
+    yield* scriptedStream(request, options);
   };
   const agent = new Agent({
     context: createTestContext({ tools: createEchoTools() }),
@@ -110,31 +110,31 @@ test("Agent keeps conversation messages separate from execution steps", async ()
 
 test("Agent does not carry failed task outcomes into later turns", async () => {
   const routeOutcomeContexts: string[][] = [];
-  const stream: StreamFn = async function* failedThenDirectStream(model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* failedThenDirectStream(request) {
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      const outcomeMessages = context.messages
+      const outcomeMessages = request.messages
         .filter((message) => message.role === "assistant" && message.content.includes("Missing some functions"))
         .map((message) => message.content);
       routeOutcomeContexts.push(outcomeMessages);
       const hasFailedOutcome = outcomeMessages.some((m) => m.includes("Missing some functions to finish the task"));
       // Extract current user request from the phase prompt, not the full prompt
-      const lastUserMsg = context.messages.filter((m) => m.role === "user").pop()?.content ?? "";
+      const lastUserMsg = request.messages.filter((m) => m.role === "user").pop()?.content ?? "";
       const currentRequest = lastUserMsg.match(/Current user request:\s*\n"([^"]+)"/)?.[1] ?? "";
       const route = currentRequest.includes("trigger failure") || hasFailedOutcome ? "plan" : "direct";
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
-      yield { type: "model_requested", model, usage: { inputMessages: context.messages.length } };
-      yield { type: "structured_output", content: { route, message } };
+      yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
+      yield { type: "text_delta", text: JSON.stringify({ route, message }) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "plan") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           id: createId("task"),
           title: "Fail once",
           instruction: "Return a failed verification result.",
@@ -143,7 +143,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
           skillIds: [],
           status: "pending",
           attempts: 0,
-        },
+        }),
       };
       yield { type: "done" };
       return;
@@ -156,8 +156,8 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
     }
 
     yield {
-      type: "structured_output",
-      content: { passed: false, message: "Missing some functions to finish the task" },
+      type: "text_delta",
+      text: JSON.stringify({ passed: false, message: "Missing some functions to finish the task" }),
     };
     yield { type: "done" };
   };

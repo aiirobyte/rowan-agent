@@ -10,6 +10,8 @@
     "paths": {
       "@rowan-agent/agent": ["./packages/agent/src/index.ts"],
       "@rowan-agent/agent/*": ["./packages/agent/src/*"],
+      "@rowan-agent/engine": ["./packages/engine/src/index.ts"],
+      "@rowan-agent/engine/*": ["./packages/engine/src/*"],
       "@rowan-agent/logging": ["./packages/logging/src/index.ts"],
       "@rowan-agent/logging/*": ["./packages/logging/src/*"],
       "@rowan-agent/adapters": ["./packages/adapters/src/index.ts"],

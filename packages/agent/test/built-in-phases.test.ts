@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { runAgentLoop } from "../src/agent-loop";
 import { createDefaultCriteria } from "@rowan-agent/agent";
-import type { AgentEvent, EngineContext, StreamFn } from "../src/types";
+import type { AgentEvent, LlmRequest, StreamFn } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
 
-function detectPhase(messages: EngineContext["messages"]): string {
+function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const match = messages[i].content.match(/^Phase:\s*(\w+)/);
     if (match) return match[1];
@@ -159,42 +159,42 @@ test("default config preserves execute/verify retry behavior", async () => {
     attempts: 0,
   };
   let verifyCalls = 0;
-  const stream: StreamFn = async function* retryVerifyStream(model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* retryVerifyStream(request) {
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
+      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "structured_output", content: task };
+      yield { type: "text_delta", text: JSON.stringify(task) };
       yield { type: "done" };
       return;
     }
     if (phase === "execute") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           message: "Calling echo.",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
-        },
+        }),
       };
       yield { type: "done" };
       return;
     }
 
     verifyCalls += 1;
-    yield { type: "model_requested", model, usage: { inputMessages: 1 } };
+    yield { type: "model_requested", model: request.model, usage: { inputMessages: 1 } };
     if (verifyCalls === 1) {
       yield {
-        type: "structured_output",
-        content: { passed: false, message: "Missing echo evidence." },
+        type: "text_delta",
+        text: JSON.stringify({ passed: false, message: "Missing echo evidence." }),
       };
     } else {
       yield {
-        type: "structured_output",
-        content: { passed: true, message: "Verified after retry." },
+        type: "text_delta",
+        text: JSON.stringify({ passed: true, message: "Verified after retry." }),
       };
     }
     yield { type: "done" };
@@ -229,34 +229,34 @@ test("default config preserves max attempt exhaustion", async () => {
     status: "pending" as const,
     attempts: 0,
   };
-  const stream: StreamFn = async function* failingStream(_model, context) {
-    const phase = detectPhase(context.messages);
+  const stream: StreamFn = async function* failingStream(request) {
+    const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
+      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "structured_output", content: task };
+      yield { type: "text_delta", text: JSON.stringify(task) };
       yield { type: "done" };
       return;
     }
     if (phase === "execute") {
       yield {
-        type: "structured_output",
-        content: {
+        type: "text_delta",
+        text: JSON.stringify({
           message: "Calling echo.",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "fail" } }],
-        },
+        }),
       };
       yield { type: "done" };
       return;
     }
 
     yield {
-      type: "structured_output",
-      content: { passed: false, message: "Always fails." },
+      type: "text_delta",
+      text: JSON.stringify({ passed: false, message: "Always fails." }),
     };
     yield { type: "done" };
   };
