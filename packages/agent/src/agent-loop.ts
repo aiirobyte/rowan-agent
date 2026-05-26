@@ -7,9 +7,8 @@ import type {
   AgentMessage,
   AgentRunResult,
   AgentState,
+  EngineStreamEvent,
   LoopPhase,
-  LoopPhaseOutputMap,
-  ModelStreamEvent,
   Outcome,
   RunThread,
   Task,
@@ -22,7 +21,6 @@ import {
   createMessage,
   nowIso,
   resolveMaxThreadDepth,
-  Validators,
 } from "./types";
 import {
   createBuiltinPhaseConfig,
@@ -33,6 +31,7 @@ import {
   type PhaseContext,
   type PhaseDefinition,
 } from "./loop/phases";
+import { buildPrompt } from "./loop/phases";
 import { executeRuntimeToolCall } from "./harness/tools";
 import { assertNotAborted, LimitExceededError } from "./loop/errors";
 import {
@@ -308,21 +307,17 @@ export async function completeRun(runtime: AgentLoopRuntime, outcome: Outcome): 
 // Phase Capabilities
 // ============================================================================
 
-async function collectTextAndStructured<TPhase extends LoopPhase>(input: {
+async function collectTextAndStructured(input: {
   context: AgentLoopContext;
-  events: AsyncIterable<ModelStreamEvent>;
-  metadataPhase: TPhase;
+  events: AsyncIterable<EngineStreamEvent>;
+  metadataPhase: string;
   recordText?: boolean;
 }): Promise<{
   text: string;
-  phaseOutput?: LoopPhaseOutputMap[TPhase];
   structured?: unknown;
-  toolCalls: ToolCall[];
 }> {
-  const toolCalls: ToolCall[] = [];
   let text = "";
   let flushedText = "";
-  let phaseOutput: LoopPhaseOutputMap[TPhase] | undefined;
   let structured: unknown;
   const flushText = async () => {
     if (text.length === 0) {
@@ -355,28 +350,6 @@ async function collectTextAndStructured<TPhase extends LoopPhase>(input: {
       structured = event.content;
     }
 
-    if (event.type === "phase_output") {
-      if (event.phase !== input.metadataPhase) {
-        throw new Error(`Expected ${input.metadataPhase} phase output, received ${event.phase}.`);
-      }
-
-      await flushText();
-      phaseOutput = event.output as LoopPhaseOutputMap[TPhase];
-
-      if (event.phase === "execute") {
-        for (const outputToolCall of (event.output as LoopPhaseOutputMap["execute"]).toolCalls) {
-          const toolCall = Validators.toolCall.Parse(outputToolCall);
-          toolCalls.push(toolCall);
-        }
-      }
-    }
-
-    if (event.type === "tool_call") {
-      await flushText();
-      const toolCall = Validators.toolCall.Parse(event.toolCall);
-      toolCalls.push(toolCall);
-    }
-
     if (event.type === "done") {
       await flushText();
     }
@@ -384,7 +357,7 @@ async function collectTextAndStructured<TPhase extends LoopPhase>(input: {
 
   await flushText();
 
-  return { text: flushedText, phaseOutput, structured, toolCalls };
+  return { text: flushedText, structured };
 }
 
 async function executeToolCall(input: {
@@ -458,11 +431,15 @@ function createPhaseContext(
     },
     model: {
       collect: async (input) => {
+        const prompt = buildPrompt({
+          context: input.payload,
+          tools: loopContext.tools,
+        });
         return collectTextAndStructured({
           context: loopContext,
           events: loopContext.config.stream(
             loopContext.config.model,
-            input.payload,
+            { messages: prompt.messages, tools: loopContext.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) },
             { signal: loopContext.signal },
           ),
           metadataPhase: input.phase,

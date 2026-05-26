@@ -3,8 +3,6 @@ import type {
   AgentLimitUsage,
   AgentMessage,
   AgentState,
-  LoopPhase,
-  LoopPhaseOutputMap,
   Outcome,
   RunThread,
   Task,
@@ -36,11 +34,9 @@ export type AgentPhasePlugin = {
   phases: PhaseDefinition<any, any>[];
 };
 
-export type CollectedModelOutput<TPhase extends LoopPhase> = {
+export type CollectedModelOutput = {
   text: string;
-  phaseOutput?: LoopPhaseOutputMap[TPhase];
   structured?: unknown;
-  toolCalls: ToolCall[];
 };
 
 export type PhaseContext = {
@@ -52,11 +48,11 @@ export type PhaseContext = {
     appendState(message: AgentMessage): Promise<void>;
   };
   model: {
-    collect<TPhase extends LoopPhase>(input: {
-      phase: TPhase;
+    collect(input: {
+      phase: string;
       payload: any;
       recordText?: boolean;
-    }): Promise<CollectedModelOutput<TPhase>>;
+    }): Promise<CollectedModelOutput>;
   };
   tools: {
     execute(input: { task: Task; toolCall: ToolCall }): Promise<ToolResult>;

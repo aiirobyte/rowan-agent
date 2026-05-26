@@ -6,7 +6,7 @@ import type {
   TaskOutput,
   VerificationResult,
 } from "./task";
-import type { ToolCall, ToolResult } from "./tool";
+import type { ToolCall, ToolDefinition, ToolResult } from "./tool";
 
 export type ContextScope = "conversation" | "execution" | "diagnostic";
 
@@ -97,38 +97,27 @@ export type LoopPhaseOutputMap = {
 
 export type LoopPhaseOutput<TPhase extends LoopPhase = LoopPhase> = LoopPhaseOutputMap[TPhase];
 
-export type LoopPhaseOutputEvent<TPhase extends LoopPhase = LoopPhase> = {
-  [TKey in TPhase]: {
-    type: "phase_output";
-    phase: TKey;
-    output: LoopPhaseOutputMap[TKey];
-  };
-}[TPhase];
+export type EngineContext = {
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  tools?: ToolDefinition[];
+};
 
-export type ModelStreamEvent =
+export type EngineStreamEvent =
   | { type: "text_delta"; text: string }
-  | LoopPhaseOutputEvent
-  | {
-      type: "prompt_message";
-      phase: LoopPhase;
-      message: Pick<AgentContextMessage, "role" | "content">;
-    }
+  | { type: "structured_output"; content: unknown }
   | {
       type: "model_requested";
-      phase: LoopPhase;
       model: ModelRef;
       usage: ModelCallUsage;
     }
-  | { type: "tool_call"; toolCall: ToolCall }
-  | { type: "structured_output"; content: unknown }
   | { type: "done" };
 
 export type StreamOptions = {
   signal?: AbortSignal;
 };
 
-export type StreamFn<TState extends AgentContextState = AgentContextState> = (
+export type StreamFn = (
   model: ModelRef,
-  context: LlmContext<TState>,
+  context: EngineContext,
   options: StreamOptions,
-) => AsyncIterable<ModelStreamEvent>;
+) => AsyncIterable<EngineStreamEvent>;

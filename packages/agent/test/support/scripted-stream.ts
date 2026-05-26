@@ -1,12 +1,44 @@
-import type { StreamFn, Task, TaskOutput, ToolResult } from "../../src/types";
-import { createId, latestUserInput } from "../../src/types";
+import type { EngineContext, EngineStreamEvent, StreamFn } from "../../src/types";
+import { createId } from "../../src/types";
 import { createDefaultCriteria } from "@rowan-agent/agent";
+
+function detectPhase(messages: EngineContext["messages"]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const match = messages[i].content.match(/^Phase:\s*(\w+)/);
+    if (match) {
+      return match[1];
+    }
+  }
+  return "chat";
+}
 
 function wantsEcho(input: string): boolean {
   return /\becho\b|tool|工具|use echo/i.test(input);
 }
 
-function createScriptedTask(input: string, skillIds: string[]): Task {
+function extractUserRequest(messages: EngineContext["messages"]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === "user") {
+      const match = msg.content.match(/Current user request:\s*\n"([^"]+)"/);
+      if (match) {
+        return match[1];
+      }
+    }
+  }
+  return "";
+}
+
+function createScriptedTask(input: string, skillIds: string[]): {
+  id: string;
+  title: string;
+  instruction: string;
+  acceptanceCriteria: string[];
+  toolNames: string[];
+  skillIds: string[];
+  status: string;
+  attempts: number;
+} {
   const shouldUseEcho = wantsEcho(input);
   return {
     id: createId("task"),
@@ -24,38 +56,21 @@ function createScriptedTask(input: string, skillIds: string[]): Task {
   };
 }
 
-function toolResultsFromTaskOutput(taskOutput: TaskOutput): ToolResult[] {
-  return taskOutput.kind === "tools" ? taskOutput.toolResults : [];
-}
-
-function createScriptedVerification(task: Task, taskOutput: TaskOutput): { passed: boolean; message: string } {
-  const requiredEcho = task.toolNames.includes("echo");
-  const toolResults = toolResultsFromTaskOutput(taskOutput);
-  const hasEcho = toolResults.some((result) => result.toolName === "echo" && result.ok);
-  const passed = requiredEcho ? hasEcho : true;
-
-  return {
-    passed,
-    message: passed
-      ? `Task passed: ${task.title}`
-      : `Task failed: missing required echo evidence for ${task.title}`,
-  };
-}
-
 export const scriptedStream: StreamFn = async function* scriptedStream(model, context, options) {
   if (options.signal?.aborted) {
     throw new Error("Stream aborted.");
   }
 
-  if (context.phase === "chat") {
-    const currentInput = latestUserInput(context.state);
-    const route = wantsEcho(currentInput) ? "plan" : "direct";
-    const message = route === "plan" ? "Routing to task execution." : `Direct response: ${currentInput}`;
+  const phase = detectPhase(context.messages);
+  const userRequest = extractUserRequest(context.messages);
+
+  if (phase === "chat") {
+    const route = wantsEcho(userRequest) ? "plan" : "direct";
+    const message = route === "plan" ? "Routing to task execution." : `Direct response: ${userRequest}`;
     yield {
       type: "model_requested",
-      phase: "chat",
       model,
-      usage: { inputMessages: context.state.messages.length },
+      usage: { inputMessages: context.messages.length },
     };
     yield { type: "text_delta", text: message };
     yield {
@@ -69,40 +84,54 @@ export const scriptedStream: StreamFn = async function* scriptedStream(model, co
     return;
   }
 
-  if (context.phase === "plan") {
-    const skillIds = context.state.skills.map((skill) => skill.id);
-    const currentInput = context.state.task ?? latestUserInput(context.state);
+  if (phase === "plan") {
+    const input = userRequest || "hello";
     yield { type: "text_delta", text: "Planning task..." };
     yield {
       type: "structured_output",
-      content: createScriptedTask(currentInput, skillIds),
+      content: createScriptedTask(input, []),
     };
     yield { type: "done" };
     return;
   }
 
-  if (context.phase === "execute") {
-    if (context.task.toolNames.includes("echo")) {
-      yield {
-        type: "tool_call",
-        toolCall: {
-          id: createId("call"),
-          name: "echo",
-          args: { message: context.task.instruction },
-        },
-      };
-    } else {
-      yield { type: "text_delta", text: `No tool needed for: ${context.task.instruction}` };
-    }
+  if (phase === "execute") {
+    // Always yield tool call - the execute handler handles unknown/blocked tools
+    yield {
+      type: "structured_output",
+      content: {
+        message: "Calling echo tool.",
+        toolCalls: [
+          {
+            id: createId("call"),
+            name: "echo",
+            args: { message: userRequest || "echo" },
+          },
+        ],
+      },
+    };
     yield { type: "done" };
     return;
   }
 
-  if (context.phase === "verify") {
+  if (phase === "verify") {
+    // The verify prompt includes task output with tool results as JSON.
+    // Check if echo tool evidence is present in the prompt content.
+    const lastUserMsg = context.messages.filter((m) => m.role === "user").pop()?.content ?? "";
+    const requiresEcho = lastUserMsg.includes("echo") && lastUserMsg.includes("acceptanceCriteria");
+    const hasEchoEvidence = /"toolName"\s*:\s*"echo"/.test(lastUserMsg) && /"ok"\s*:\s*true/.test(lastUserMsg);
+    const passed = requiresEcho ? hasEchoEvidence : true;
+    // Extract task title from verify prompt for the message
+    const taskTitleMatch = lastUserMsg.match(/"title"\s*:\s*"([^"]+)"/);
+    const taskTitle = taskTitleMatch?.[1] ?? (userRequest || "task");
+    const message = passed
+      ? `Task passed: ${taskTitle}`
+      : `Task failed: missing required echo evidence for ${taskTitle}`;
+
     yield { type: "text_delta", text: "Verifying task outcome..." };
     yield {
       type: "structured_output",
-      content: createScriptedVerification(context.task, context.taskOutput),
+      content: { passed, message },
     };
     yield { type: "done" };
   }

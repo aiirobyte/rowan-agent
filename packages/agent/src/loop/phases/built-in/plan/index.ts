@@ -29,14 +29,14 @@ export const planHandler: PhaseHandler<
       payload: { phase: "plan", state: input.state, runtime: input.runtime },
     });
 
-    const phaseOutput = collected.phaseOutput as { task?: unknown; text?: string } | undefined;
-    const rawTask = phaseOutput?.task ?? collected.structured;
+    const raw = collected.structured as Record<string, unknown> | undefined;
+    const rawTask = raw?.task ?? raw;
     if (!rawTask) {
       throw new Error("Planner did not produce a structured task.");
     }
 
     const task = parseTask(rawTask);
-    return { task, text: phaseOutput?.text ?? collected.text };
+    return { task, text: collected.text };
   }),
 
   conversationLimit: 20,

@@ -1,19 +1,14 @@
-import { buildPrompt, type PromptMessage } from "@rowan-agent/agent";
 import { extractJsonObject } from "./json-extract";
 import type {
-  LlmContext,
-  LoopPhaseOutputMap,
+  EngineContext,
+  EngineStreamEvent,
   ModelCallUsage,
-  ModelStreamEvent,
-  PhaseOutput,
   StreamFn,
   StreamOptions,
-  Task,
   ToolDefinition,
-  ToolCall,
-  VerificationResult,
 } from "@rowan-agent/agent";
-import { createId, Validators } from "@rowan-agent/agent";
+
+type PromptMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export type OpenAICompatibleFetch = (
   input: Parameters<typeof fetch>[0],
@@ -163,15 +158,6 @@ function getRecordValue(record: Record<string, unknown>, ...keys: string[]): unk
   }
 
   return undefined;
-}
-
-function unwrapRecord(value: unknown, ...keys: string[]): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  const wrapped = getRecordValue(value, ...keys);
-  return isRecord(wrapped) ? wrapped : value;
 }
 
 function createRequestSignal(input: {
@@ -562,253 +548,26 @@ export async function callOpenAICompatibleChatCompletion(
   }
 }
 
-function formatUnknown(value: unknown): string {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function validationError(phase: LlmContext["phase"], error: unknown): OpenAICompatibleError {
-  const detail = formatUnknown(error);
-  return new OpenAICompatibleError({
-    code: "invalid_model_schema",
-    message: `Model output for ${phase} did not match the expected schema: ${detail}`,
-    details: { error: detail },
-  });
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function shortTitle(input: string): string {
-  const trimmed = input.trim().replace(/\s+/g, " ");
-  if (!trimmed) {
-    return "Respond to user";
-  }
-  return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed;
-}
-
-function normalizeStringArray(value: unknown, fallback: string[]): string[] {
-  if (typeof value === "string" && value.trim().length > 0) {
-    return [value.trim()];
-  }
-
-  if (!Array.isArray(value)) {
-    return fallback;
-  }
-
-  return value.flatMap((item) => {
-    if (typeof item === "string" && item.trim().length > 0) {
-      return [item.trim()];
-    }
-    if (isRecord(item)) {
-      const name = asString(getRecordValue(item, "name")) ?? asString(getRecordValue(item, "id"));
-      return name ? [name] : [];
-    }
-    return [];
-  });
-}
-
-function normalizeAcceptanceCriteria(value: unknown, instruction: string): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    return [shortTitle(instruction)];
-  }
-
-  return value.map((criterion, index) => {
-    if (typeof criterion === "string") {
-      return criterion;
-    }
-
-    if (isRecord(criterion)) {
-      return (
-        asString(getRecordValue(criterion, "description", "message", "content", "summary")) ??
-        `Criterion ${index + 1}`
-      );
-    }
-
-    return String(criterion);
-  });
-}
-
-function latestUserInput(context: Pick<LlmContext, "state">): string {
-  for (let index = context.state.messages.length - 1; index >= 0; index -= 1) {
-    const message = context.state.messages[index];
-    if (message.role === "user") {
-      return message.content;
-    }
-  }
-
-  return context.state.input;
-}
-
-function normalizeChatOutput(
-  value: unknown,
-  context: Extract<LlmContext, { phase: "chat" }>,
-): PhaseOutput {
-  const raw = unwrapRecord(value, "phaseOutput", "chatOutput", "routingDecision");
-  if (!isRecord(raw)) {
-    throw validationError("chat", "Expected a chat phase output object.");
-  }
-
-  const routeValue = asString(getRecordValue(raw, "route"));
-  if (!routeValue) {
-    throw validationError("chat", "Expected chat output to include a non-empty route.");
-  }
-  const message =
-    asString(getRecordValue(raw, "message")) ??
-    asString(getRecordValue(raw, "answer")) ??
-    asString(getRecordValue(raw, "response")) ??
-    (routeValue === "direct" ? latestUserInput(context) : "Creating a task for this request.");
-  const text = asString(getRecordValue(raw, "text")) ?? message;
-
-  if (routeValue !== "direct") {
-    const allowed = new Set((context.availablePhases ?? []).map((phase) => phase.id));
-    if (!allowed.has(routeValue) || routeValue === "chat") {
-      throw validationError("chat", `Chat phase routed to unavailable phase "${routeValue}".`);
-    }
-  }
-
-  return { route: routeValue, message, text };
-}
-
-function normalizeTaskOutput(value: unknown, context: Extract<LlmContext, { phase: "plan" }>): Task {
-  const raw = unwrapRecord(value, "task");
-  if (!isRecord(raw)) {
-    throw validationError("plan", "Expected an object containing a task.");
-  }
-
-  const instruction =
-    asString(getRecordValue(raw, "instruction")) ??
-    asString(getRecordValue(raw, "description")) ??
-    asString(getRecordValue(raw, "message")) ??
-    context.state.task ??
-    latestUserInput(context);
-  const defaultSkillIds = context.state.skills.map((skill) => skill.id);
-  const normalized = {
-    ...raw,
-    id: asString(getRecordValue(raw, "id")) ?? createId("task"),
-    title: asString(getRecordValue(raw, "title")) ?? asString(getRecordValue(raw, "name")) ?? shortTitle(instruction),
-    instruction,
-    acceptanceCriteria: normalizeAcceptanceCriteria(
-      getRecordValue(raw, "acceptanceCriteria"),
-      context.state.goal ?? instruction,
-    ),
-    toolNames: normalizeStringArray(getRecordValue(raw, "toolNames", "tools"), []),
-    skillIds: normalizeStringArray(getRecordValue(raw, "skillIds", "skills"), defaultSkillIds),
-    status: asString(getRecordValue(raw, "status")) ?? "pending",
-    attempts: asNumber(getRecordValue(raw, "attempts")) ?? 0,
-  };
-
-  try {
-    return Validators.task.Parse(normalized);
-  } catch (error) {
-    throw validationError("plan", error);
-  }
-}
-
-function normalizeExecuteOutput(value: unknown): { message?: string; toolCalls: ToolCall[] } {
-  const raw = unwrapRecord(value, "executeOutput", "executeResult", "executionResult");
-  if (!isRecord(raw)) {
-    throw validationError("execute", "Expected an execute output object.");
-  }
-
-  const toolCallsValue = getRecordValue(raw, "toolCalls", "tool_calls", "toolCall");
-  if (!Array.isArray(toolCallsValue)) {
-    throw validationError("execute", "Expected execute output to include a toolCalls array.");
-  }
-
-  const rawToolCalls = toolCallsValue;
-  const toolCalls = rawToolCalls.map((toolCall) => {
-    if (!isRecord(toolCall)) {
-      throw validationError("execute", "Each tool call must be an object.");
-    }
-
-    try {
-      return Validators.toolCall.Parse({
-        id:
-          asString(getRecordValue(toolCall, "id")) ??
-          asString(getRecordValue(toolCall, "toolCallId", "tool_call_id")) ??
-          createId("call"),
-        name: asString(getRecordValue(toolCall, "name", "toolName", "tool_name")),
-        args: getRecordValue(toolCall, "args", "arguments") ?? {},
-      });
-    } catch (error) {
-      throw validationError("execute", error);
-    }
-  });
-
-  const message = asString(getRecordValue(raw, "message"));
-  return {
-    ...(message ? { message } : {}),
-    toolCalls,
-  };
-}
-
-function normalizeVerificationOutput(
-  value: unknown,
-  _context: Extract<LlmContext, { phase: "verify" }>,
-): VerificationResult {
-  const raw = value;
-  if (!isRecord(raw)) {
-    throw validationError("verify", "Expected a verify judgement object.");
-  }
-
-  if (raw.task !== undefined || raw.toolCalls !== undefined || raw.tool_calls !== undefined) {
-    throw validationError("verify", "Expected a verify judgement object, received another phase output.");
-  }
-
-  if (typeof raw.passed !== "boolean") {
-    throw validationError("verify", "Expected verify output to include boolean passed.");
-  }
-
-  const passed = raw.passed;
-  const message = asString(raw.message) ?? (passed ? "Task passed." : "Task failed.");
-
-  try {
-    return Validators.verificationResult.Parse({
-      passed,
-      message,
-    });
-  } catch (error) {
-    throw validationError("verify", error);
-  }
-}
-
 export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): StreamFn {
   const normalizedConfig = {
     ...config,
     baseUrl: normalizeBaseUrl(config.baseUrl),
   };
 
-  return async function* openAICompatibleStream(model, context, options): AsyncIterable<ModelStreamEvent> {
-    const prompt = buildPrompt({ context, tools: normalizedConfig.tools });
-    const requestUsage = summarizeRequestUsage(prompt.messages);
-    const requestBody = buildChatCompletionBody(normalizedConfig, prompt.messages);
-    yield {
-      type: "prompt_message",
-      phase: context.phase,
-      message: prompt.phasePromptMessage,
-    };
+  return async function* openAICompatibleStream(model, context, options): AsyncIterable<EngineStreamEvent> {
+    const messages = context.messages;
+    const requestUsage = summarizeRequestUsage(messages);
+    const requestBody = buildChatCompletionBody(normalizedConfig, messages);
 
     const result = await callOpenAICompatibleChatCompletion(
       normalizedConfig,
-      prompt.messages,
+      messages,
       options,
       requestBody,
     );
+
     yield {
       type: "model_requested",
-      phase: context.phase,
       model,
       usage: {
         ...requestUsage,
@@ -816,68 +575,20 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig): St
       },
     };
 
-    const value = extractJsonObject(result.content);
+    const content = result.content;
 
-    if (context.phase === "chat") {
-      const output: LoopPhaseOutputMap["chat"] = normalizeChatOutput(value, context);
-      yield {
-        type: "phase_output",
-        phase: "chat",
-        output,
-      };
-      yield { type: "done" };
-      return;
+    let value: unknown;
+    try {
+      value = extractJsonObject(content);
+    } catch {
+      // Response is not JSON — yield only text
     }
 
-    if (context.phase === "plan") {
-      const task = normalizeTaskOutput(value, context);
-      const output: LoopPhaseOutputMap["plan"] = {
-        task,
-        text: result.content,
-      };
-      yield {
-        type: "text_delta",
-        text: result.content,
-      };
-      yield {
-        type: "phase_output",
-        phase: "plan",
-        output,
-      };
-      yield { type: "done" };
-      return;
+    if (value !== undefined && value !== null) {
+      yield { type: "structured_output", content: value };
     }
 
-    if (context.phase === "execute") {
-      const output = normalizeExecuteOutput(value);
-      const phaseOutput: LoopPhaseOutputMap["execute"] = {
-        text: result.content,
-        toolCalls: output.toolCalls,
-      };
-      yield {
-        type: "text_delta",
-        text: result.content,
-      };
-      yield {
-        type: "phase_output",
-        phase: "execute",
-        output: phaseOutput,
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    const verification = normalizeVerificationOutput(value, context);
-    const output: LoopPhaseOutputMap["verify"] = verification;
-    yield {
-      type: "text_delta",
-      text: result.content,
-    };
-    yield {
-      type: "phase_output",
-      phase: "verify",
-      output,
-    };
+    yield { type: "text_delta", text: content };
     yield { type: "done" };
   };
 }

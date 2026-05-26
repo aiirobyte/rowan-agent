@@ -1,10 +1,18 @@
 import { expect, test } from "bun:test";
 import { runAgentLoop } from "../src/agent-loop";
 import { createDefaultCriteria } from "@rowan-agent/agent";
-import type { AgentEvent, StreamFn } from "../src/types";
+import type { AgentEvent, EngineContext, StreamFn } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream } from "./support/scripted-stream";
+
+function detectPhase(messages: EngineContext["messages"]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const match = messages[i].content.match(/^Phase:\s*(\w+)/);
+    if (match) return match[1];
+  }
+  return "chat";
+}
 import {
   chatPhaseDefinition,
   createAgentPhaseConfig,
@@ -152,27 +160,32 @@ test("default config preserves execute/verify retry behavior", async () => {
   };
   let verifyCalls = 0;
   const stream: StreamFn = async function* retryVerifyStream(model, context) {
-    if (context.phase === "chat") {
+    const phase = detectPhase(context.messages);
+
+    if (phase === "chat") {
       yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
     }
-    if (context.phase === "plan") {
+    if (phase === "plan") {
       yield { type: "structured_output", content: task };
       yield { type: "done" };
       return;
     }
-    if (context.phase === "execute") {
+    if (phase === "execute") {
       yield {
-        type: "tool_call",
-        toolCall: { id: createId("call"), name: "echo", args: { message: "retry" } },
+        type: "structured_output",
+        content: {
+          message: "Calling echo.",
+          toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
+        },
       };
       yield { type: "done" };
       return;
     }
 
     verifyCalls += 1;
-    yield { type: "model_requested", phase: "verify", model, usage: { inputMessages: 1 } };
+    yield { type: "model_requested", model, usage: { inputMessages: 1 } };
     if (verifyCalls === 1) {
       yield {
         type: "structured_output",
@@ -217,20 +230,25 @@ test("default config preserves max attempt exhaustion", async () => {
     attempts: 0,
   };
   const stream: StreamFn = async function* failingStream(_model, context) {
-    if (context.phase === "chat") {
+    const phase = detectPhase(context.messages);
+
+    if (phase === "chat") {
       yield { type: "structured_output", content: { route: "plan", message: "Create task." } };
       yield { type: "done" };
       return;
     }
-    if (context.phase === "plan") {
+    if (phase === "plan") {
       yield { type: "structured_output", content: task };
       yield { type: "done" };
       return;
     }
-    if (context.phase === "execute") {
+    if (phase === "execute") {
       yield {
-        type: "tool_call",
-        toolCall: { id: createId("call"), name: "echo", args: { message: "fail" } },
+        type: "structured_output",
+        content: {
+          message: "Calling echo.",
+          toolCalls: [{ id: createId("call"), name: "echo", args: { message: "fail" } }],
+        },
       };
       yield { type: "done" };
       return;

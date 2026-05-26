@@ -1,4 +1,4 @@
-import { createMessage } from "../../../../types";
+import { createMessage, Validators } from "../../../../types";
 import type { LlmContext } from "../../../../protocol";
 import { isInvalidModelSchemaError } from "../../../errors";
 import {
@@ -54,7 +54,11 @@ export const executeHandler: PhaseHandler<ExecuteInput, ExecuteOutput> = {
       };
     }
 
-    for (const toolCall of collected.toolCalls) {
+    const raw = collected.structured as Record<string, unknown> | undefined;
+    const rawToolCalls = Array.isArray(raw?.toolCalls) ? raw.toolCalls : [];
+    const toolCalls = rawToolCalls.map((tc: unknown) => Validators.toolCall.Parse(tc));
+
+    for (const toolCall of toolCalls) {
       const result = await context.tools.execute({ task: input.task, toolCall });
       input.toolResults.push(result);
       await context.messages.append(
@@ -66,10 +70,9 @@ export const executeHandler: PhaseHandler<ExecuteInput, ExecuteOutput> = {
       );
     }
 
-    const phaseOutput = collected.phaseOutput as { text?: string } | undefined;
     return {
-      text: phaseOutput?.text ?? collected.text,
-      toolCalls: collected.toolCalls,
+      text: collected.text,
+      toolCalls,
       taskOutput: createToolTaskOutput(input.toolResults),
     };
   }),

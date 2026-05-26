@@ -1,5 +1,5 @@
 import { createId, createMessage, Validators } from "../../../../types";
-import type { LoopPhaseOutputMap, Outcome, Task, VerificationResult } from "../../../../types";
+import type { Outcome, Task, VerificationResult } from "../../../../types";
 import type { LlmContext } from "../../../../protocol";
 import { isInvalidModelSchemaError } from "../../../errors";
 import {
@@ -101,8 +101,7 @@ export const verifyHandler: PhaseHandler<VerifyInput, VerificationResult> = {
       return createInvalidModelVerification(input.task, error);
     }
 
-    const phaseOutput = collected.phaseOutput as LoopPhaseOutputMap["verify"] | undefined;
-    const rawVerification = phaseOutput ?? collected.structured;
+    const rawVerification = collected.structured;
     return rawVerification
       ? parseVerificationResult(rawVerification)
       : {

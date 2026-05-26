@@ -64,7 +64,7 @@ export async function runChatPhase(
     recordText: false,
   });
 
-  const rawOutput = collected.phaseOutput ?? collected.structured;
+  const rawOutput = collected.structured;
   if (!rawOutput) {
     throw new Error("Chat phase did not produce a structured phase output.");
   }
