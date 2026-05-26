@@ -3,54 +3,43 @@ import {
   definePhasePlugin,
   type AgentPhaseConfig,
   type AgentPhasePlugin,
-  type PhaseConfigTemplate,
-  type PhaseConfigTemplatePhase,
-  type PhaseDefinition,
 } from "../config";
-import type { BuiltinPhaseExtension } from "./types";
-import { chatExtension } from "./chat";
-import { planExtension } from "./plan";
-import { executeExtension } from "./execute";
-import { verifyExtension } from "./verify";
+import type { PhaseHandler } from "./types";
+import { chatHandler } from "./chat";
+import { planHandler } from "./plan";
+import { executeHandler } from "./execute";
+import { verifyHandler } from "./verify";
 
 // ============================================================================
-// Extension Registry
+// Handler Registry
 // ============================================================================
 
-const extensions: Record<string, BuiltinPhaseExtension<any, any>> = {
-  chat: chatExtension,
-  plan: planExtension,
-  execute: executeExtension,
-  verify: verifyExtension,
+const handlers: Record<string, PhaseHandler<any, any>> = {
+  chat: chatHandler,
+  plan: planHandler,
+  execute: executeHandler,
+  verify: verifyHandler,
 };
 
 // ============================================================================
-// Config Template (backward compat)
+// Phase Definitions
 // ============================================================================
 
-export const builtinPhaseConfigTemplate: PhaseConfigTemplate = {
-  id: "builtin",
-  entryPhaseId: "chat",
-  phases: Object.values(extensions).map((ext) => ext.manifest),
-};
-
-export const configTemplate = builtinPhaseConfigTemplate;
+export const chatPhaseDefinition = chatHandler.definition;
+export const planPhaseDefinition = planHandler.definition;
+export const executePhaseDefinition = executeHandler.definition;
+export const verifyPhaseDefinition = verifyHandler.definition;
 
 // ============================================================================
-// Phase Definitions (backward compat)
+// Handler Access
 // ============================================================================
 
-export const chatPhaseDefinition = chatExtension.definition;
-export const planPhaseDefinition = planExtension.definition;
-export const executePhaseDefinition = executeExtension.definition;
-export const verifyPhaseDefinition = verifyExtension.definition;
+export function getPhaseHandler(phaseId: string): PhaseHandler<any, any> | undefined {
+  return handlers[phaseId];
+}
 
-// ============================================================================
-// Extension Access
-// ============================================================================
-
-export function getBuiltinExtension(phaseId: string): BuiltinPhaseExtension<any, any> | undefined {
-  return extensions[phaseId];
+export function getBuiltinHandlers(): PhaseHandler<any, any>[] {
+  return Object.values(handlers);
 }
 
 // ============================================================================
@@ -58,7 +47,7 @@ export function getBuiltinExtension(phaseId: string): BuiltinPhaseExtension<any,
 // ============================================================================
 
 export function createBuiltinPhasePlugin(): AgentPhasePlugin {
-  const phases = Object.values(extensions).map((ext) => ext.definition);
+  const phases = Object.values(handlers).map((h) => h.definition);
   return definePhasePlugin({
     id: "builtin",
     entryPhaseId: "chat",
@@ -72,42 +61,4 @@ export function createBuiltinPhaseConfig(): AgentPhaseConfig {
   });
 }
 
-// ============================================================================
-// Template Helpers (backward compat)
-// ============================================================================
-
-export function createPhaseDefinitionsFromTemplate(
-  template: PhaseConfigTemplate = builtinPhaseConfigTemplate,
-  implementationOverrides?: Record<string, BuiltinPhaseExtension<any, any>>,
-): PhaseDefinition<any, any>[] {
-  const exts = implementationOverrides ?? extensions;
-  return template.phases.map((phase) => {
-    const ext = exts[phase.implementationId];
-    if (!ext) {
-      throw new Error(`No phase extension registered for "${phase.implementationId}".`);
-    }
-    return ext.definition;
-  });
-}
-
-export function createPhasePluginFromTemplate(
-  template: PhaseConfigTemplate = builtinPhaseConfigTemplate,
-  implementationOverrides?: Record<string, BuiltinPhaseExtension<any, any>>,
-): AgentPhasePlugin {
-  return definePhasePlugin({
-    id: template.id,
-    entryPhaseId: template.entryPhaseId,
-    phases: createPhaseDefinitionsFromTemplate(template, implementationOverrides),
-  });
-}
-
-export function createPhaseConfigFromTemplate(
-  template: PhaseConfigTemplate = builtinPhaseConfigTemplate,
-  implementationOverrides?: Record<string, BuiltinPhaseExtension<any, any>>,
-): AgentPhaseConfig {
-  return createAgentPhaseConfig({
-    plugins: [createPhasePluginFromTemplate(template, implementationOverrides)],
-  });
-}
-
-export { chatExtension, planExtension, executeExtension, verifyExtension };
+export { chatHandler, planHandler, executeHandler, verifyHandler };

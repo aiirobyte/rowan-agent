@@ -1,18 +1,35 @@
-import type { AgentLoopRuntime } from "../../../agent-loop";
-import type {
-  PhaseConfigTemplatePhase,
-  PhaseDefinition,
-  PhaseTransition,
-} from "../config";
+import type { LlmContext } from "../../../protocol";
+import type { PromptTool } from "../../../harness/context/prompt-builder";
+import type { PhaseContext, PhaseDefinition, PhaseTransition } from "../config";
 
-export type BuiltinPhaseExtension<TInput = unknown, TOutput = unknown> = {
-  manifest: PhaseConfigTemplatePhase;
+export type PhaseManifest = {
+  id: string;
+  name: string;
+  description: string;
+};
+
+export function createPhaseDefinition<TInput, TOutput>(
+  manifest: PhaseManifest,
+  run: PhaseDefinition<TInput, TOutput>["run"],
+): PhaseDefinition<TInput, TOutput> {
+  return {
+    id: manifest.id,
+    name: manifest.name,
+    description: manifest.description,
+    run,
+  };
+}
+
+export type PhaseHandler<TInput = unknown, TOutput = unknown> = {
   definition: PhaseDefinition<TInput, TOutput>;
-  buildInput(runtime: AgentLoopRuntime, definition: PhaseDefinition): TInput | Promise<TInput>;
-  applyOutput(input: {
-    runtime: AgentLoopRuntime;
-    definition: PhaseDefinition<TInput, TOutput>;
-    phaseInput: TInput;
-    phaseOutput: TOutput;
-  }): Promise<PhaseTransition>;
+  conversationLimit?: number;
+  prepare?(context: PhaseContext): void;
+  buildInput(context: PhaseContext): TInput | Promise<TInput>;
+  buildPrompt?(context: LlmContext, tools: PromptTool[]): string;
+  finalize?(context: PhaseContext, output: TOutput): void;
+  applyOutput(
+    context: PhaseContext,
+    input: TInput,
+    output: TOutput,
+  ): PhaseTransition | Promise<PhaseTransition>;
 };

@@ -22,7 +22,6 @@ export type PhaseDefinition<TInput = unknown, TOutput = unknown> = {
   id: string;
   name: string;
   description: string;
-  modelPhase?: LoopPhase;
   run(context: PhaseContext, input: TInput): Promise<TOutput>;
 };
 
@@ -46,7 +45,7 @@ export type CollectedModelOutput<TPhase extends LoopPhase> = {
 
 export type PhaseContext = {
   phaseId: string;
-  state: Readonly<AgentRunState>;
+  state: AgentRunState;
   messages: {
     visible(): AgentMessage[];
     append(message: AgentMessage): Promise<void>;
@@ -68,7 +67,12 @@ export type PhaseContext = {
   skills: AgentState["skills"];
   emit(event: AgentEvent): Promise<void>;
   consumeLimit(resource: keyof AgentLimitUsage): void;
+  maxAttempts?: number;
   signal?: AbortSignal;
+  incrementAttempt(): void;
+  setTask(task: Task | undefined): void;
+  setLastExecuteText(text: string): void;
+  availablePhases: Array<{ id: string; name: string; description: string }>;
 };
 
 export type AgentPhaseConfig = {
@@ -80,26 +84,6 @@ export type AgentPhaseConfigInput = {
   entryPhaseId?: string;
   phases?: PhaseDefinition<any, any>[];
   plugins?: AgentPhasePlugin[];
-};
-
-export type PhasePromptTemplate = {
-  conversationLimit?: number;
-  lines: string[];
-};
-
-export type PhaseConfigTemplatePhase = {
-  id: string;
-  name: string;
-  description: string;
-  implementationId: string;
-  modelPhase?: LoopPhase;
-  prompt?: PhasePromptTemplate;
-};
-
-export type PhaseConfigTemplate = {
-  id: string;
-  entryPhaseId: string;
-  phases: PhaseConfigTemplatePhase[];
 };
 
 export function definePhase<TInput = unknown, TOutput = unknown>(

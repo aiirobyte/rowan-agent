@@ -1,12 +1,12 @@
-import { appendAssistantMessage } from "../../../../agent-loop";
 import { createId, createMessage, Validators } from "../../../../types";
 import type { Outcome, PhaseOutput } from "../../../../types";
-import { runtimeDepth } from "../../../state";
+import type { LlmContext } from "../../../../protocol";
 import type { ChatInput } from "../../../types";
 import type { PhaseContext } from "../../config";
-import type { BuiltinPhaseExtension } from "../types";
+import { createPhaseDefinition, type PhaseHandler } from "../types";
+import type { PromptTool } from "../../../../harness/context/prompt-builder";
+import { toJson, latestUserInput, serializeSkills, serializeTools } from "../../../../harness/context/prompt-builder";
 import manifestJson from "./manifest.json";
-import type { PhaseConfigTemplatePhase } from "../../config";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,48 +82,82 @@ export async function runChatPhase(
   return output;
 }
 
-const manifest = manifestJson as PhaseConfigTemplatePhase;
+function requireChatContext(context: LlmContext): Extract<LlmContext, { phase: "chat" }> {
+  if (context.phase !== "chat") {
+    throw new Error(`Expected chat context, received ${context.phase}.`);
+  }
+  return context as Extract<LlmContext, { phase: "chat" }>;
+}
 
-export const chatExtension: BuiltinPhaseExtension<ChatInput, PhaseOutput> = {
-  manifest,
+export const chatHandler: PhaseHandler<ChatInput, PhaseOutput> = {
+  definition: createPhaseDefinition(manifestJson, async (context, input) => {
+    return runChatPhase(context, input);
+  }),
 
-  definition: {
-    id: manifest.id,
-    name: manifest.name,
-    description: manifest.description,
-    modelPhase: manifest.modelPhase,
-    async run(context, input) {
-      return runChatPhase(context, input);
-    },
-  },
+  conversationLimit: 12,
 
-  buildInput(runtime) {
-    const phaseConfig = runtime.phaseConfig;
-    const availablePhases = (phaseConfig?.phases ?? [])
-      .filter((phase) => phase.id !== "chat")
-      .map((phase) => ({
-        id: phase.id,
-        name: phase.name,
-        description: phase.description,
-      }));
-
+  buildInput(context) {
     return {
-      state: runtime.agentState,
-      runtime: runtimeDepth(runtime),
-      tools: runtime.tools,
-      availablePhases,
-      workerTask: runtime.threadDepth > 0 ? runtime.agentState.task : undefined,
-      workerGoal: runtime.threadDepth > 0 ? runtime.agentState.goal : undefined,
+      state: context.state.agentState,
+      runtime: context.state.depth,
+      tools: [],
+      availablePhases: context.availablePhases.filter((p) => p.id !== "chat"),
+      workerTask: context.state.depth.threadDepth > 0 ? context.state.agentState.task : undefined,
+      workerGoal: context.state.depth.threadDepth > 0 ? context.state.agentState.goal : undefined,
     };
   },
 
-  async applyOutput({ runtime, phaseOutput: output }) {
+  buildPrompt(context, tools) {
+    const ctx = requireChatContext(context);
+    const availablePhases = ctx.availablePhases ?? [];
+    return [
+      "Phase: chat",
+      "",
+      'JSON-only contract: output exactly an object shaped like `{ "message": string, "route": "direct" | string }`.',
+      'Use route="direct" when you can fully answer the user without another loop phase.',
+      "Use another route only when it matches one of the available phase ids below.",
+      'When route="direct", message must be the complete final user-visible answer in the user\'s language.',
+      "When route is another phase id, message is only a concise routing status.",
+      "Do not call tools in this phase; only answer directly or choose the next phase.",
+      "If the user asks about the current workspace, repository, files, tools, or commands, route to an available tool-backed phase instead of guessing.",
+      "If Agent state task or Agent state goal is present, this is a worker thread; prioritize that task/goal over broad delegation.",
+      "Route only the current user request below. Use prior conversation only as context.",
+      "",
+      "Current user request:",
+      toJson(latestUserInput(ctx)),
+      "",
+      "Agent state initial input:",
+      toJson(ctx.state.input),
+      "",
+      "Agent state task:",
+      toJson(ctx.state.task ?? null),
+      "",
+      "Agent state goal:",
+      toJson(ctx.state.goal ?? null),
+      "",
+      "Runtime thread depth:",
+      toJson(ctx.runtime ?? null),
+      "",
+      "Available phases:",
+      toJson(availablePhases),
+      "",
+      "Loaded skills summary:",
+      toJson(serializeSkills(ctx)),
+      "",
+      "Available tools with name, description, and parameters:",
+      toJson(serializeTools(tools)),
+    ].join("\n");
+  },
+
+  async applyOutput(context, _input, output) {
     if (output.route === "direct") {
       const outcome = createDirectOutcome(output.message);
-      await appendAssistantMessage(runtime, outcome.message, {
-        kind: "direct_answer",
-        scope: "conversation",
-      });
+      await context.messages.appendState(
+        createMessage("assistant", outcome.message, {
+          kind: "direct_answer",
+          scope: "conversation",
+        }),
+      );
       return { type: "stop", outcome };
     }
 

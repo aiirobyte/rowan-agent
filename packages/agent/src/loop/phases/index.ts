@@ -1,20 +1,16 @@
 export {
-  builtinPhaseConfigTemplate,
   chatPhaseDefinition,
-  configTemplate,
   createBuiltinPhaseConfig,
   createBuiltinPhasePlugin,
   executePhaseDefinition,
-  getBuiltinExtension,
+  getPhaseHandler,
+  getBuiltinHandlers,
   planPhaseDefinition,
   verifyPhaseDefinition,
-  chatExtension,
-  planExtension,
-  executeExtension,
-  verifyExtension,
-  createPhaseConfigFromTemplate,
-  createPhaseDefinitionsFromTemplate,
-  createPhasePluginFromTemplate,
+  chatHandler,
+  planHandler,
+  executeHandler,
+  verifyHandler,
 } from "./built-in";
 export {
   buildMessages,
@@ -24,7 +20,7 @@ export {
   createPhasePromptBuilder,
   createPhasePromptBuilders,
 } from "./built-in/prompt-builder";
-export type { BuiltinPhaseExtension } from "./built-in/types";
+export type { PhaseHandler, PhaseManifest } from "./built-in/types";
 export {
   createAgentPhaseConfig,
   createDefaultAgentPhaseConfig,
@@ -36,8 +32,6 @@ export {
   type AgentPhaseConfig,
   type AgentPhaseConfigInput,
   type AgentPhasePlugin,
-  type PhaseConfigTemplate,
-  type PhaseConfigTemplatePhase,
   type PhaseContext,
   type PhaseDefinition,
   type PhaseTransition,
@@ -45,7 +39,6 @@ export {
 } from "./config";
 export type { ChatInput } from "./built-in/chat";
 export type { ExecuteInput } from "./built-in/execute";
-export { runPhase } from "./phase";
 export type { PlanInput } from "./built-in/plan";
 export type { PhaseOutput } from "./types";
 export { createFailedOutcome } from "./built-in/verify";

@@ -1,9 +1,7 @@
 import { expect, test } from "bun:test";
 import {
-  builtinPhaseConfigTemplate,
   createAgentPhaseConfig,
   createDefaultAgentPhaseConfig,
-  createPhaseConfigFromTemplate,
   definePhasePlugin,
   resolvePhase,
   validatePhaseConfig,
@@ -156,25 +154,6 @@ test("createAgentPhaseConfig rejects duplicate plugin ids", () => {
       ],
     }),
   ).toThrow("Duplicate phase plugin id: duplicate");
-});
-
-test("builtin phase config is created from a persistent template", () => {
-  const config = createPhaseConfigFromTemplate(builtinPhaseConfigTemplate);
-
-  expect(builtinPhaseConfigTemplate.entryPhaseId).toBe("chat");
-  expect(builtinPhaseConfigTemplate.phases.map((phase) => phase.id)).toEqual([
-    "chat",
-    "plan",
-    "execute",
-    "verify",
-  ]);
-  expect(config.entryPhaseId).toBe("chat");
-  expect(config.phases.map((phase) => phase.id)).toEqual([
-    "chat",
-    "plan",
-    "execute",
-    "verify",
-  ]);
 });
 
 test("custom three-phase config runs validation correctly", () => {

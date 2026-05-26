@@ -1,43 +1,5 @@
 {
   "id": "plan",
   "name": "Plan",
-  "description": "Create a concrete task from the current user request and available tools.",
-  "implementationId": "plan",
-  "modelPhase": "plan",
-  "prompt": {
-    "conversationLimit": 20,
-    "lines": [
-      "Phase: plan",
-      "",
-      "JSON-only contract: output exactly an object shaped like `{ \"message\": string, \"task\": Task }`.",
-      "The top-level message is the user-visible planning message and is preserved as plain string message content before the task object is recorded.",
-      "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
-      "Rowan can fill missing id, status, attempts, skillIds, toolNames, and simple acceptance criteria.",
-      "Prefer setting task.status to \"pending\" and task.attempts to 0.",
-      "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
-      "Create the task for the current user request below. Use prior conversation only as context.",
-      "If Agent state task or Agent state goal is present, this is a worker thread; prioritize that task/goal over broad delegation.",
-      "",
-      "Current user request:",
-      "{{currentUserInputJson}}",
-      "",
-      "Agent state initial input:",
-      "{{stateInputJson}}",
-      "",
-      "Agent state task:",
-      "{{stateTaskJson}}",
-      "",
-      "Agent state goal:",
-      "{{stateGoalJson}}",
-      "",
-      "Runtime thread depth:",
-      "{{runtimeDepthJson}}",
-      "",
-      "Loaded skills summary:",
-      "{{loadedSkillsJson}}",
-      "",
-      "Available tools with name, description, and parameters:",
-      "{{availableToolsJson}}"
-    ]
-  }
+  "description": "Create a concrete task from the current user request and available tools."
 }

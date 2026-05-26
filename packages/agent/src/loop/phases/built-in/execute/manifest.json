@@ -1,35 +1,5 @@
 {
   "id": "execute",
   "name": "Execute",
-  "description": "Call allowed tools for the current task and collect tool results.",
-  "implementationId": "execute",
-  "modelPhase": "execute",
-  "prompt": {
-    "conversationLimit": 8,
-    "lines": [
-      "Phase: execute",
-      "",
-      "JSON-only contract: output exactly an object shaped like `{ \"message\": string, \"toolCalls\": ToolCall[] }`.",
-      "The message is a concise user-visible execution status and must be preserved before tool calls are recorded.",
-      "ToolCall fields: id, name, args.",
-      "If no tool is needed, return `\"toolCalls\": []`.",
-      "Do not return a task, plan, verificationResult, or passed in this phase.",
-      "If more information is needed, call one or more allowed tools now instead of describing a plan.",
-      "Call only tools listed in the task toolNames and allowed tools below.",
-      "File and command tool paths are relative to the workspace; use `.` or an empty string for the workspace root, not filesystem `/`.",
-      "For bash commands, avoid unescaped backticks inside double-quoted command strings because bash treats them as command substitution; prefer simple commands, single quotes, or here-docs for multi-line scripts.",
-      "",
-      "Task:",
-      "{{taskJson}}",
-      "",
-      "Allowed tool names:",
-      "{{allowedToolNamesJson}}",
-      "",
-      "Allowed tools with name, description, and parameters:",
-      "{{allowedToolsJson}}",
-      "",
-      "Existing toolResults:",
-      "{{toolResultsJson}}"
-    ]
-  }
+  "description": "Call allowed tools for the current task and collect tool results."
 }

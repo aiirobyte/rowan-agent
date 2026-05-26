@@ -59,7 +59,7 @@ export type AgentLoopContext = {
   /** Skills available for this run. */
   skills: AgentState["skills"];
   config: AgentLoopConfig;
-  state: Readonly<AgentRunState>;
+  state: AgentRunState;
   signal?: AbortSignal;
   emit(event: AgentEvent): Promise<void>;
   appendMessage(message: AgentMessageSnapshot): Promise<void>;

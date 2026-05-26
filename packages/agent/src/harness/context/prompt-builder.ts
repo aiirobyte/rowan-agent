@@ -55,7 +55,7 @@ export function serializeSkills(context: LlmContext): unknown[] {
 }
 
 function buildSystemMessage(context: LlmContext): PromptMessage {
-  return { role: "system", content: buildSystemPrompt(context.state.systemPrompt) };
+  return { role: "system", content: buildSystemPrompt({ systemPrompt: context.state.systemPrompt }) };
 }
 
 function isConversationMessage(message: AgentContextMessage): boolean {

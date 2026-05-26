@@ -1,5 +1,4 @@
 import { expect, test, describe } from "bun:test";
-import { runPhase } from "../src/loop/phases";
 import type { PhaseContext, PhaseDefinition } from "../src/loop/phases";
 import type { AgentLoopRuntime } from "../src/agent-loop";
 import { createLoopRuntime } from "../src/agent-loop";
@@ -59,6 +58,10 @@ function createTestContext(runtime: AgentLoopRuntime): PhaseContext {
     skills: [],
     emit: async () => {},
     consumeLimit: () => {},
+    incrementAttempt: () => {},
+    setTask: () => {},
+    setLastExecuteText: () => {},
+    availablePhases: [],
   };
 }
 
@@ -90,7 +93,7 @@ describe("runPhase contract", () => {
       },
     });
 
-    const output = await runPhase(context, definition, builtInput);
+    const output = await definition.run(context, builtInput);
 
     expect(output).toEqual({ result: "output" });
   });
@@ -104,7 +107,7 @@ describe("runPhase contract", () => {
       run: async () => ({ answer: 42 }),
     });
 
-    const output = await runPhase(context, definition, "input");
+    const output = await definition.run(context, "input");
 
     expect(output).toEqual({ answer: 42 });
     expect(output).not.toHaveProperty("type");
@@ -124,7 +127,7 @@ describe("runPhase contract", () => {
       },
     });
 
-    await runPhase(context, definition, "input");
+    await definition.run(context, "input");
 
     expect(receivedContext).toBeDefined();
     expect(receivedContext).toHaveProperty("phaseId");
@@ -146,7 +149,7 @@ describe("runPhase contract", () => {
       run: async () => {},
     });
 
-    const output = await runPhase(context, definition, "input");
+    const output = await definition.run(context, "input");
 
     expect(output).toBeUndefined();
   });
@@ -180,7 +183,7 @@ describe("runPhase contract", () => {
       },
     });
 
-    await runPhase(context, definition, "input");
+    await definition.run(context, "input");
 
     expect(receivedCreateRun).toBe(customCreateRun);
   });
