@@ -1,0 +1,143 @@
+import type { Api, ApiStreamFn, Model, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
+import { getModel, resolveModel } from "./models";
+import { streamOpenAICompletions } from "./providers/openai-completions";
+import { streamOpenAIResponses } from "./providers/openai-responses";
+import { streamAnthropic } from "./providers/anthropic";
+
+// ---------------------------------------------------------------------------
+// API Provider Registry (dispatches by model.api, not model.provider)
+// ---------------------------------------------------------------------------
+
+export interface ApiProvider {
+  api: Api;
+  stream: ApiStreamFn;
+}
+
+const apiProviderRegistry = new Map<string, ApiProvider>();
+
+/**
+ * Register a provider for a given API protocol.
+ * When a model with `api === provider.api` is used, this provider handles it.
+ */
+export function registerApiProvider(provider: ApiProvider): void {
+  apiProviderRegistry.set(provider.api, provider);
+}
+
+/**
+ * Look up a registered API provider by protocol name.
+ */
+export function getApiProvider(api: Api): ApiProvider | undefined {
+  return apiProviderRegistry.get(api);
+}
+
+/**
+ * List all registered API protocol names.
+ */
+export function listApiProviders(): Api[] {
+  return [...apiProviderRegistry.keys()];
+}
+
+/**
+ * Clear all registered API providers.
+ */
+export function clearApiProviders(): void {
+  apiProviderRegistry.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Built-in provider registration
+// ---------------------------------------------------------------------------
+
+/**
+ * Register all built-in API providers.
+ * Each provider resolves its config from the Model descriptor and environment.
+ */
+export function registerBuiltInApiProviders(): void {
+  registerApiProvider({ api: "openai-completions", stream: streamOpenAICompletions });
+  registerApiProvider({ api: "openai-responses", stream: streamOpenAIResponses });
+  registerApiProvider({ api: "anthropic-messages", stream: streamAnthropic });
+}
+
+// ---------------------------------------------------------------------------
+// Top-level dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the API provider for a model and stream the request.
+ * This is the main entry point for model-based dispatch.
+ */
+export function stream(model: Model, request: LlmRequest, options: LlmStreamOptions): AsyncIterable<LlmStreamEvent> {
+  const provider = apiProviderRegistry.get(model.api);
+  if (!provider) {
+    throw new Error(
+      `No API provider registered for api "${model.api}". ` +
+      `Registered: ${[...apiProviderRegistry.keys()].join(", ") || "(none)"}. ` +
+      `Call registerBuiltInApiProviders() or registerApiProvider() first.`,
+    );
+  }
+  return provider.stream(model, request, options);
+}
+
+/**
+ * Convenience: resolve model from a "provider/model" string or LlmModelRef,
+ * then stream.
+ */
+export function streamByRef(
+  ref: string | { provider: string; name: string },
+  request: Omit<LlmRequest, "model">,
+  options: LlmStreamOptions = {},
+): AsyncIterable<LlmStreamEvent> {
+  const model = typeof ref === "string"
+    ? resolveModel(ref)
+    : getModel(ref.provider, ref.name);
+
+  if (!model) {
+    const key = typeof ref === "string" ? ref : `${ref.provider}/${ref.name}`;
+    throw new Error(`Model not found: "${key}". Register it with registerModel() first.`);
+  }
+
+  return stream(model, { ...request, model: { provider: model.provider, name: model.id } }, options);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy provider factory (backward compat with CLI)
+// ---------------------------------------------------------------------------
+
+export type ProviderFactory = (model: { provider: string; name: string }) => StreamFn;
+
+const legacyProviders = new Map<string, ProviderFactory>();
+
+export function registerProvider(name: string, factory: ProviderFactory): void {
+  legacyProviders.set(name, factory);
+}
+
+export function createDispatchStream(): StreamFn {
+  // Auto-register built-in providers if none registered
+  if (apiProviderRegistry.size === 0) {
+    registerBuiltInApiProviders();
+  }
+
+  return async function* dispatchStream(request, options) {
+    // Try to resolve a full Model from the registry
+    const model = getModel(request.model.provider, request.model.name)
+      ?? resolveModel(request.model.name);
+
+    if (model) {
+      yield* stream(model, request, options);
+      return;
+    }
+
+    // Fallback: try legacy provider factory
+    const factory = legacyProviders.get(request.model.provider);
+    if (factory) {
+      const streamFn = factory(request.model);
+      yield* streamFn(request, options);
+      return;
+    }
+
+    throw new Error(
+      `No provider for "${request.model.provider}/${request.model.name}". ` +
+      `Register a model with registerModel() or a provider with registerProvider().`,
+    );
+  };
+}

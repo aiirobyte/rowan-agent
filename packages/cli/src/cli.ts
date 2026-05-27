@@ -3,8 +3,8 @@
 import { createInterface } from "node:readline";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
-  createOpenAICompatibleStream,
-  resolveOpenAICompatibleConfig,
+  createOpenAICompletionsStream,
+  resolveOpenAICompletionsConfig,
 } from "@rowan-agent/engine";
 import {
   Agent,
@@ -467,7 +467,7 @@ async function createConfiguredAgent(
   if (args.sessionId && !sessionManager) {
     throw new Error(`Session not found: ${args.sessionId}`);
   }
-  const config = resolveOpenAICompatibleConfig({
+  const config = resolveOpenAICompletionsConfig({
     baseUrl: args.baseUrl,
     apiKey: args.apiKey,
     model: args.model,
@@ -475,7 +475,6 @@ async function createConfiguredAgent(
       args.timeoutMs ??
       parseOptionalTimeoutMs(process.env.ROWAN_OPENAI_TIMEOUT_MS) ??
       DEFAULT_OPENAI_TIMEOUT_MS,
-    tools,
   });
   const context = sessionManager
     ? await sessionManager.buildAgentContext({
@@ -491,7 +490,7 @@ async function createConfiguredAgent(
   const agent = new Agent({
     context,
     model: { provider: "openai-compatible", name: config.model },
-    stream: createOpenAICompatibleStream(config),
+    stream: createOpenAICompletionsStream(config),
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
     limits: {
       maxThreadDepth:

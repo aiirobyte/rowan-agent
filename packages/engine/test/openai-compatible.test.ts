@@ -1,12 +1,16 @@
 import { expect, test } from "bun:test";
 import {
-  callOpenAICompatibleChatCompletion,
-  createOpenAICompatibleStream,
-  OpenAICompatibleError,
-  type OpenAICompatibleFetch,
-  resolveOpenAICompatibleConfig,
-} from "../src/openai-compatible";
+  callOpenAICompletions,
+  createOpenAICompletionsStream,
+  resolveOpenAICompletionsConfig,
+} from "../src/providers/openai-completions";
+import { ProviderError } from "../src/providers/shared";
+import type { ProviderFetch } from "../src/providers/shared";
 import type { LlmRequest, LlmStreamEvent } from "../src/protocol";
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
 
 function jsonResponse(content: string, usage?: Record<string, number>): Response {
   return new Response(
@@ -19,6 +23,47 @@ function jsonResponse(content: string, usage?: Record<string, number>): Response
       headers: { "content-type": "application/json" },
     },
   );
+}
+
+function sseResponse(events: Array<{ data: string | object; event?: string }>): Response {
+  const encoder = new TextEncoder();
+  const chunks = events.map((e) => {
+    const data = typeof e.data === "string" ? e.data : JSON.stringify(e.data);
+    const eventLine = e.event ? `event: ${e.event}\n` : "";
+    return `${eventLine}data: ${data}\n\n`;
+  });
+  // Add [DONE] terminator
+  chunks.push("data: [DONE]\n\n");
+
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function sseChunkResponse(content: string, usage?: Record<string, number>): Response {
+  const events: Array<{ data: string | object }> = [
+    {
+      data: {
+        choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }],
+      },
+    },
+  ];
+  if (usage) {
+    events.push({
+      data: { choices: [], usage },
+    });
+  }
+  return sseResponse(events);
 }
 
 async function collect(events: AsyncIterable<LlmStreamEvent>): Promise<LlmStreamEvent[]> {
@@ -40,8 +85,12 @@ const echoToolDefinition = {
   parameters: {},
 };
 
-test("resolveOpenAICompatibleConfig uses flags over env and defaults base URL", () => {
-  const config = resolveOpenAICompatibleConfig({
+// ---------------------------------------------------------------------------
+// Config resolution tests
+// ---------------------------------------------------------------------------
+
+test("resolveOpenAICompletionsConfig uses flags over env and defaults base URL", () => {
+  const config = resolveOpenAICompletionsConfig({
     apiKey: "flag-key",
     model: "flag-model",
     env: {
@@ -56,28 +105,31 @@ test("resolveOpenAICompatibleConfig uses flags over env and defaults base URL", 
   expect(config.model).toBe("flag-model");
 });
 
-test("resolveOpenAICompatibleConfig reports missing API key", () => {
+test("resolveOpenAICompletionsConfig reports missing API key", () => {
   expect(() =>
-    resolveOpenAICompatibleConfig({
+    resolveOpenAICompletionsConfig({
       model: "test-model",
       env: {},
     }),
   ).toThrow("Missing API key");
 });
 
-test("callOpenAICompatibleChatCompletion posts chat completions request", async () => {
-  const fetchMock: OpenAICompatibleFetch = async (url, init) => {
+// ---------------------------------------------------------------------------
+// Non-streaming API tests
+// ---------------------------------------------------------------------------
+
+test("callOpenAICompletions posts chat completions request", async () => {
+  const fetchMock: ProviderFetch = async (url, init) => {
     expect(String(url)).toBe("https://api.example/v1/chat/completions");
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>).authorization).toBe("Bearer test-key");
     const body = JSON.parse(String(init?.body));
     expect(body.model).toBe("test-model");
-    expect(body.temperature).toBe(0);
-    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(body.stream).toBe(false);
     return jsonResponse("{\"ok\":true}");
   };
 
-  const result = await callOpenAICompatibleChatCompletion(
+  const result = await callOpenAICompletions(
     {
       baseUrl: "https://api.example/v1/",
       apiKey: "test-key",
@@ -90,15 +142,15 @@ test("callOpenAICompatibleChatCompletion posts chat completions request", async 
   expect(result.content).toBe("{\"ok\":true}");
 });
 
-test("callOpenAICompatibleChatCompletion returns provider token usage", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
+test("callOpenAICompletions returns provider token usage", async () => {
+  const fetchMock: ProviderFetch = async () =>
     jsonResponse("{\"ok\":true}", {
       prompt_tokens: 12,
       completion_tokens: 5,
       total_tokens: 17,
     });
 
-  const result = await callOpenAICompatibleChatCompletion(
+  const result = await callOpenAICompletions(
     {
       baseUrl: "https://api.example/v1/",
       apiKey: "test-key",
@@ -115,8 +167,8 @@ test("callOpenAICompatibleChatCompletion returns provider token usage", async ()
   });
 });
 
-test("callOpenAICompatibleChatCompletion normalizes HTTP errors", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
+test("callOpenAICompletions normalizes HTTP errors", async () => {
+  const fetchMock: ProviderFetch = async () =>
     new Response(JSON.stringify({ error: "rate limited" }), {
       status: 429,
       statusText: "Too Many Requests",
@@ -124,7 +176,7 @@ test("callOpenAICompatibleChatCompletion normalizes HTTP errors", async () => {
     });
 
   try {
-    await callOpenAICompatibleChatCompletion(
+    await callOpenAICompletions(
       {
         baseUrl: "https://api.example/v1",
         apiKey: "test-key",
@@ -135,27 +187,17 @@ test("callOpenAICompatibleChatCompletion normalizes HTTP errors", async () => {
     );
     throw new Error("Expected request to fail.");
   } catch (error) {
-    expect(error).toBeInstanceOf(OpenAICompatibleError);
-    expect((error as OpenAICompatibleError).code).toBe("http_error");
-    expect((error as OpenAICompatibleError).message).toBe(
-      "OpenAI-compatible request failed with status 429 Too Many Requests: rate limited",
-    );
-    expect((error as OpenAICompatibleError).status).toBe(429);
-    expect((error as OpenAICompatibleError).retryable).toBe(true);
-    expect((error as OpenAICompatibleError).details).toMatchObject({
-      endpoint: "https://api.example/v1/chat/completions",
-      model: "test-model",
-      status: 429,
-      statusText: "Too Many Requests",
-      providerError: { message: "rate limited" },
-      body: { error: "rate limited" },
-    });
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).code).toBe("http_error");
+    expect((error as ProviderError).status).toBe(429);
+    expect((error as ProviderError).retryable).toBe(true);
+    expect((error as ProviderError).message).toContain("rate limited");
   }
 });
 
-test("callOpenAICompatibleChatCompletion retries retryable request failures", async () => {
+test("callOpenAICompletions retries retryable request failures", async () => {
   let attempts = 0;
-  const fetchMock: OpenAICompatibleFetch = async () => {
+  const fetchMock: ProviderFetch = async () => {
     attempts += 1;
     if (attempts === 1) {
       throw new Error("Unable to connect. Is the computer able to access the url?");
@@ -163,7 +205,7 @@ test("callOpenAICompatibleChatCompletion retries retryable request failures", as
     return jsonResponse("{\"ok\":true}");
   };
 
-  const result = await callOpenAICompatibleChatCompletion(
+  const result = await callOpenAICompletions(
     {
       baseUrl: "https://api.example/v1",
       apiKey: "test-key",
@@ -178,15 +220,15 @@ test("callOpenAICompatibleChatCompletion retries retryable request failures", as
   expect(attempts).toBe(2);
 });
 
-test("callOpenAICompatibleChatCompletion can disable retries", async () => {
+test("callOpenAICompletions can disable retries", async () => {
   let attempts = 0;
-  const fetchMock: OpenAICompatibleFetch = async () => {
+  const fetchMock: ProviderFetch = async () => {
     attempts += 1;
     throw new Error("Unable to connect. Is the computer able to access the url?");
   };
 
   await expect(
-    callOpenAICompatibleChatCompletion(
+    callOpenAICompletions(
       {
         baseUrl: "https://api.example/v1",
         apiKey: "test-key",
@@ -200,60 +242,16 @@ test("callOpenAICompatibleChatCompletion can disable retries", async () => {
   expect(attempts).toBe(1);
 });
 
-test("callOpenAICompatibleChatCompletion exposes nested provider error details", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
-    new Response(
-      JSON.stringify({
-        error: {
-          message: "Invalid value for response_format.",
-          type: "invalid_request_error",
-          code: "invalid_response_format",
-          param: "response_format",
-        },
-      }),
-      {
-        status: 400,
-        statusText: "Bad Request",
-        headers: { "content-type": "application/json" },
-      },
-    );
-
-  try {
-    await callOpenAICompatibleChatCompletion(
-      {
-        baseUrl: "https://api.example/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        fetch: fetchMock,
-      },
-      { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hello" }] },
-    );
-    throw new Error("Expected request to fail.");
-  } catch (error) {
-    expect(error).toBeInstanceOf(OpenAICompatibleError);
-    expect((error as OpenAICompatibleError).message).toBe(
-      "OpenAI-compatible request failed with status 400 Bad Request: Invalid value for response_format.",
-    );
-    expect((error as OpenAICompatibleError).retryable).toBe(false);
-    expect((error as OpenAICompatibleError).details?.providerError).toEqual({
-      message: "Invalid value for response_format.",
-      type: "invalid_request_error",
-      code: "invalid_response_format",
-      param: "response_format",
-    });
-  }
-});
-
-test("callOpenAICompatibleChatCompletion supports abort signal", async () => {
+test("callOpenAICompletions supports abort signal", async () => {
   const controller = new AbortController();
-  const fetchMock: OpenAICompatibleFetch = async (_url, init) =>
+  const fetchMock: ProviderFetch = async (_url, init) =>
     new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new Error("fetch aborted")), {
         once: true,
       });
     });
 
-  const promise = callOpenAICompatibleChatCompletion(
+  const promise = callOpenAICompletions(
     {
       baseUrl: "https://api.example/v1",
       apiKey: "test-key",
@@ -268,28 +266,28 @@ test("callOpenAICompatibleChatCompletion supports abort signal", async () => {
   await expect(promise).rejects.toThrow("test abort");
 });
 
-test("createOpenAICompatibleStream yields raw events for JSON response", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
-    jsonResponse(
-      JSON.stringify({
-        message: "Hello directly.",
-        route: "direct",
-      }),
+// ---------------------------------------------------------------------------
+// Streaming API tests
+// ---------------------------------------------------------------------------
+
+test("createOpenAICompletionsStream yields SSE streaming events", async () => {
+  const fetchMock: ProviderFetch = async () =>
+    sseChunkResponse(
+      '{"message":"Hello directly.","route":"direct"}',
       { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
     );
-  const stream = createOpenAICompatibleStream({
+  const stream = createOpenAICompletionsStream({
     baseUrl: "https://api.example/v1",
     apiKey: "test-key",
     model: "test-model",
     fetch: fetchMock,
-    tools: [echoToolDefinition],
   });
 
   const request: LlmRequest = {
     model: { provider: "openai-compatible", name: "test-model" },
     system: "Test system",
     messages: [
-      { role: "user", content: "Phase: chat\n\nCurrent user request:\n\"hello\"" },
+      { role: "user", content: "hello" },
     ],
   };
   const events = await collect(stream(request, {}));
@@ -298,203 +296,181 @@ test("createOpenAICompatibleStream yields raw events for JSON response", async (
   expect(modelRequested?.type).toBe("model_requested");
   if (modelRequested?.type === "model_requested") {
     expect(modelRequested.usage.inputMessages).toBe(2);
-    expect(modelRequested.usage.inputTokens).toBe(10);
-    expect(modelRequested.usage.outputTokens).toBe(5);
-    expect(modelRequested.usage.totalTokens).toBe(15);
   }
 
   const text = textDelta(events);
-  expect(text).toBe("{\"message\":\"Hello directly.\",\"route\":\"direct\"}");
+  expect(text).toBe('{"message":"Hello directly.","route":"direct"}');
 
-  expect(events[events.length - 1]).toMatchObject({ type: "done" });
+  const done = events.find((e) => e.type === "done");
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.response?.usage?.inputTokens).toBe(10);
+    expect(done.response?.usage?.outputTokens).toBe(5);
+    expect(done.response?.usage?.totalTokens).toBe(15);
+    expect(done.response?.stopReason).toBe("end_turn");
+  }
 });
 
-test("createOpenAICompatibleStream accepts provider-neutral llm request input", async () => {
+test("createOpenAICompletionsStream sends tools in request body", async () => {
   let requestBody: Record<string, unknown> | undefined;
-  const fetchMock: OpenAICompatibleFetch = async (_url, init) => {
+  const fetchMock: ProviderFetch = async (_url, init) => {
     requestBody = JSON.parse(String(init?.body));
-    return jsonResponse(
-      JSON.stringify({
-        message: "Hello directly.",
-        route: "direct",
-      }),
-    );
+    return sseChunkResponse("ok");
   };
-  const stream = createOpenAICompatibleStream({
+  const stream = createOpenAICompletionsStream({
     baseUrl: "https://api.example/v1",
     apiKey: "test-key",
-    model: "configured-model",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+
+  await collect(
+    stream(
+      {
+        model: { provider: "test", name: "test-model" },
+        system: "Test system",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [{ name: "echo", description: "Echoes input.", parameters: { type: "object", properties: {} } }],
+      },
+      {},
+    ),
+  );
+
+  expect(requestBody?.tools).toBeDefined();
+  expect((requestBody?.tools as unknown[]).length).toBe(1);
+  expect((requestBody?.tools as Array<{ function: { name: string } }>[0]).function.name).toBe("echo");
+  expect(requestBody?.stream).toBe(true);
+});
+
+test("createOpenAICompletionsStream handles tool calls from SSE stream", async () => {
+  const fetchMock: ProviderFetch = async () =>
+    sseResponse([
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                index: 0,
+                id: "call_abc123",
+                type: "function",
+                function: { name: "echo", arguments: '{"msg' },
+              }],
+            },
+            finish_reason: null,
+          }],
+        },
+      },
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: {
+              tool_calls: [{
+                index: 0,
+                function: { arguments: '":"hello"}' },
+              }],
+            },
+            finish_reason: null,
+          }],
+        },
+      },
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: {},
+            finish_reason: "tool_calls",
+          }],
+        },
+      },
+    ]);
+
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
     fetch: fetchMock,
   });
 
   const events = await collect(
     stream(
       {
-        model: { provider: "test-provider", name: "requested-model" },
-        system: "Test system",
-        messages: [
-          { role: "user", content: "hello" },
-        ],
+        model: { provider: "test", name: "test-model" },
+        messages: [{ role: "user", content: "hello" }],
         tools: [{ name: "echo", description: "Echoes input.", parameters: {} }],
       },
       {},
     ),
   );
 
-  expect(requestBody?.messages).toEqual([
-    { role: "system", content: "Test system" },
-    { role: "user", content: "hello" },
-  ]);
-  const modelRequested = events.find((event) => event.type === "model_requested");
-  expect(modelRequested).toMatchObject({
-    type: "model_requested",
-    model: { provider: "test-provider", name: "requested-model" },
-    usage: { inputMessages: 2 },
-  });
-});
+  const starts = events.filter((e) => e.type === "tool_call_start");
+  expect(starts.length).toBe(1);
+  expect(starts[0]).toMatchObject({ type: "tool_call_start", id: "call_abc123", name: "echo" });
 
-test("createOpenAICompatibleStream yields text_delta with raw content for task response", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
-    jsonResponse(
-      JSON.stringify({
-        message: "Planning echo.",
-        task: {
-          title: "Use echo",
-          instruction: "use echo tool",
-          acceptanceCriteria: ["Echo evidence is present."],
-          toolNames: ["echo"],
-          skillIds: [],
-        },
-      }),
-      { prompt_tokens: 30, completion_tokens: 20, total_tokens: 50 },
-    );
-  const stream = createOpenAICompatibleStream({
-    baseUrl: "https://api.example/v1",
-    apiKey: "test-key",
-    model: "test-model",
-    fetch: fetchMock,
-    tools: [echoToolDefinition],
+  const deltas = events.filter((e) => e.type === "tool_call_delta");
+  expect(deltas.length).toBe(2);
+
+  const ends = events.filter((e) => e.type === "tool_call_end");
+  expect(ends.length).toBe(1);
+  expect(ends[0]).toMatchObject({
+    type: "tool_call_end",
+    id: "call_abc123",
+    name: "echo",
+    arguments: '{"msg":"hello"}',
   });
 
-  const request: LlmRequest = {
-    model: { provider: "openai-compatible", name: "test-model" },
-    system: "Test system",
-    messages: [
-      { role: "user", content: "Phase: plan\n\nCurrent user request:\n\"use echo tool\"" },
-    ],
-  };
-  const events = await collect(stream(request, {}));
-
-  const modelRequested = events.find((e) => e.type === "model_requested");
-  expect(modelRequested?.type).toBe("model_requested");
-  if (modelRequested?.type === "model_requested") {
-    expect(modelRequested.usage).toMatchObject({
-      inputMessages: 2,
-      inputTokens: 30,
-      outputTokens: 20,
-      totalTokens: 50,
+  const done = events.find((e) => e.type === "done");
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.response?.stopReason).toBe("tool_use");
+    expect(done.response?.toolCalls?.length).toBe(1);
+    expect(done.response?.toolCalls?.[0]).toMatchObject({
+      id: "call_abc123",
+      name: "echo",
+      arguments: { msg: "hello" },
     });
   }
-
-  const text = textDelta(events);
-  expect(text).toContain("Planning echo.");
-  expect(text).toContain('"task"');
 });
 
-test("createOpenAICompatibleStream yields text_delta with raw content for tool calls", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
-    jsonResponse(
-      JSON.stringify({
-        message: "Calling echo.",
-        toolCalls: [{ name: "echo", args: { message: "hello" } }],
-      }),
-    );
-  const stream = createOpenAICompatibleStream({
+test("createOpenAICompletionsStream yields error event on HTTP failure", async () => {
+  const fetchMock: ProviderFetch = async () =>
+    new Response(JSON.stringify({ error: { message: "bad request" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+
+  const stream = createOpenAICompletionsStream({
     baseUrl: "https://api.example/v1",
     apiKey: "test-key",
     model: "test-model",
-    fetch: fetchMock,
-    tools: [echoToolDefinition],
-  });
-
-  const request: LlmRequest = {
-    model: { provider: "openai-compatible", name: "test-model" },
-    system: "Test system",
-    messages: [
-      { role: "user", content: "Phase: execute\n\nTask:\n{\"instruction\":\"use echo tool\"}" },
-    ],
-  };
-  const events = await collect(stream(request, {}));
-
-  const text = textDelta(events);
-  expect(text).toContain('"toolCalls"');
-  expect(text).toContain('"echo"');
-});
-
-test("createOpenAICompatibleStream yields text_delta with raw content for verification result", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
-    jsonResponse(
-      JSON.stringify({
-        passed: true,
-        message: "Looks good.",
-      }),
-    );
-  const stream = createOpenAICompatibleStream({
-    baseUrl: "https://api.example/v1",
-    apiKey: "test-key",
-    model: "test-model",
+    maxRetries: 0,
     fetch: fetchMock,
   });
 
-  const request: LlmRequest = {
-    model: { provider: "openai-compatible", name: "test-model" },
-    system: "Test system",
-    messages: [
-      { role: "user", content: "Phase: verify\n\nTask:\n{\"instruction\":\"use echo tool\"}" },
-    ],
-  };
-  const events = await collect(stream(request, {}));
+  const events = await collect(
+    stream(
+      { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hi" }] },
+      {},
+    ),
+  );
 
-  const text = textDelta(events);
-  expect(text).toContain('"passed"');
-  expect(text).toContain('"message"');
+  const error = events.find((e) => e.type === "error");
+  expect(error?.type).toBe("error");
+
+  const done = events.find((e) => e.type === "done");
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.response?.stopReason).toBe("error");
+  }
 });
 
-test("createOpenAICompatibleStream yields raw JSON without normalization", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
-    jsonResponse(
-      JSON.stringify({
-        RoutingDecision: {
-          Message: "Hello directly.",
-          Route: "direct",
-        },
-      }),
-    );
-  const stream = createOpenAICompatibleStream({
-    baseUrl: "https://api.example/v1",
-    apiKey: "test-key",
-    model: "test-model",
-    fetch: fetchMock,
-  });
-
-  const request: LlmRequest = {
-    model: { provider: "openai-compatible", name: "test-model" },
-    system: "Test system",
-    messages: [
-      { role: "user", content: "Phase: chat\n\nCurrent user request:\n\"hello\"" },
-    ],
-  };
-  const events = await collect(stream(request, {}));
-
-  // Engine yields raw text without extracting or normalizing JSON
-  const text = textDelta(events);
-  expect(text).toContain("RoutingDecision");
-});
-
-test("createOpenAICompatibleStream yields text_delta for non-JSON text", async () => {
-  const fetchMock: OpenAICompatibleFetch = async () =>
-    jsonResponse("Just plain text without JSON.");
-  const stream = createOpenAICompatibleStream({
+test("createOpenAICompletionsStream yields text_delta for non-JSON text", async () => {
+  const fetchMock: ProviderFetch = async () =>
+    sseChunkResponse("Just plain text without JSON.");
+  const stream = createOpenAICompletionsStream({
     baseUrl: "https://api.example/v1",
     apiKey: "test-key",
     model: "test-model",

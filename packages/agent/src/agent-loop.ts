@@ -1,4 +1,4 @@
-import { extractJsonObject } from "@rowan-agent/engine";
+import { extractJsonObject } from "./json-extract";
 import type {
   AgentContext as AgentRunContext,
   AgentEvent,
