@@ -513,7 +513,7 @@ async function promptWithLog(input: {
   logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
-}): Promise<{ outcome: Outcome; sessionManager: LocalJsonlSessionManager }> {
+}): Promise<{ outcome: Outcome; sessionManager: LocalJsonlSessionManager; streamedContent: boolean }> {
   let sessionManager = input.sessionManager;
   let unsubscribe: (() => void) | undefined;
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
@@ -531,6 +531,7 @@ async function promptWithLog(input: {
     eventLogger = runEventLogger;
     const consoleLogger = consoleAgentEventLogger({ level: input.logLevel });
     let messageId: string | undefined;
+    let streamedContent = false;
     const listener: AgentEventListener = ((event: AgentEvent) => {
       runEventLogger(event);
       consoleLogger(event);
@@ -540,6 +541,15 @@ async function promptWithLog(input: {
         if (messageId) {
           input.onMessageId?.(messageId);
         }
+      }
+
+      if (event.type === "message_update" && event.delta) {
+        process.stdout.write(event.delta);
+        streamedContent = true;
+      }
+
+      if (event.type === "message_end" && streamedContent) {
+        process.stdout.write("\n");
       }
     }) as AgentEventListener;
     listener.flush = async () => {
@@ -566,7 +576,7 @@ async function promptWithLog(input: {
       }
     }
     await sessionManager.appendOutcome(result.outcome);
-    return { outcome: result.outcome, sessionManager };
+    return { outcome: result.outcome, sessionManager, streamedContent };
   } catch (error) {
     throw error;
   } finally {
@@ -644,7 +654,9 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       });
       sessionManager = run.sessionManager;
       printRunHeader();
-      console.log(formatOutcomeOutput(run.outcome));
+      if (!run.streamedContent) {
+        console.log(formatOutcomeOutput(run.outcome));
+      }
     } catch (error) {
       printRunHeader();
       throw error;
