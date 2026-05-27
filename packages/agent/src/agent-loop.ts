@@ -344,6 +344,16 @@ async function collectTextAndStructured(input: {
 
     if (event.type === "text_delta") {
       text += event.text;
+      await input.context.emit({
+        type: "message_update",
+        message: createMessage("assistant", text, {
+          kind: "model_message",
+          phase: input.metadataPhase,
+          scope: "execution",
+        }),
+        delta: event.text,
+        ts: nowIso(),
+      });
     }
 
     if (event.type === "done") {
