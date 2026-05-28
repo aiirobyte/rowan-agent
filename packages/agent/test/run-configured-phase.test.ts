@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import type { PhaseContext, PhaseDefinition } from "../src/loop/phases";
-import type { AgentLoopRuntime } from "../src/agent-loop";
-import { createLoopRuntime } from "../src/agent-loop";
+import type { AgentLoopConfig, AgentRunState } from "../src/loop/types";
+import { createLoopLifecycle } from "../src/agent-loop";
 import { createMessage } from "../src/types";
 import {
   chatPhaseDefinition,
@@ -14,8 +14,8 @@ import {
 // Test Helpers
 // ============================================================================
 
-function createTestRuntime(overrides: Record<string, unknown> = {}): AgentLoopRuntime {
-  return createLoopRuntime({
+function createTestLifecycle(overrides: Record<string, unknown> = {}): { config: AgentLoopConfig; state: AgentRunState } {
+  return createLoopLifecycle({
     kind: "run",
     context: {
       systemPrompt: "test",
@@ -28,20 +28,21 @@ function createTestRuntime(overrides: Record<string, unknown> = {}): AgentLoopRu
   } as any);
 }
 
-function createTestContext(runtime: AgentLoopRuntime): PhaseContext {
+function createTestContext(state: AgentRunState): PhaseContext {
   return {
     phaseId: "test",
     state: {
-      agentState: runtime.agentState,
+      agentState: state.agentState,
       currentPhase: "test",
       attempt: 0,
       limitUsage: { modelCalls: 0, toolCalls: 0 },
       depth: { threadDepth: 0, maxThreadDepth: 4 },
+      transcript: [],
     },
     messages: {
       visible: () => [],
-      append: async () => {},
-      appendState: async () => {},
+      append: () => {},
+      appendState: () => {},
     },
     message: {
       start: () => "msg_1",
@@ -65,8 +66,9 @@ function createTestContext(runtime: AgentLoopRuntime): PhaseContext {
       },
     },
     skills: [],
-    emit: async () => {},
+    emit: () => {},
     consumeLimit: () => {},
+    turn: async (fn) => fn(),
     incrementAttempt: () => {},
     setLastExecuteText: () => {},
     availablePhases: [],
@@ -89,8 +91,8 @@ function testPhase(
 
 describe("runPhase contract", () => {
   test("runPhase accepts already-built input and returns output directly", async () => {
-    const runtime = createTestRuntime();
-    const context = createTestContext(runtime);
+    const { state } = createTestLifecycle();
+    const context = createTestContext(state);
     const builtInput = {
       phase: "test",
       systemPrompt: "test",
@@ -113,8 +115,8 @@ describe("runPhase contract", () => {
   });
 
   test("runPhase returns output with route for transitions", async () => {
-    const runtime = createTestRuntime();
-    const context = createTestContext(runtime);
+    const { state } = createTestLifecycle();
+    const context = createTestContext(state);
 
     const definition = testPhase({
       id: "test",
@@ -136,8 +138,8 @@ describe("runPhase contract", () => {
   });
 
   test("runPhase calls definition.run with PhaseContext, not AgentLoopRuntime", async () => {
-    const runtime = createTestRuntime();
-    const context = createTestContext(runtime);
+    const { state } = createTestLifecycle();
+    const context = createTestContext(state);
     let receivedContext: unknown;
 
     const definition = testPhase({
@@ -170,7 +172,7 @@ describe("runPhase contract", () => {
   });
 
   test("runPhase provides runs.create through PhaseContext", async () => {
-    const runtime = createTestRuntime();
+    const { state } = createTestLifecycle();
     const customCreateRun = async () => {
       return {
         kind: "thread" as const,
@@ -185,7 +187,7 @@ describe("runPhase contract", () => {
     };
 
     const context: PhaseContext = {
-      ...createTestContext(runtime),
+      ...createTestContext(state),
       runs: { create: customCreateRun },
     };
 

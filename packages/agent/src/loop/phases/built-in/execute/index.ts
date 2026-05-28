@@ -26,10 +26,11 @@ export const executeHandler: PhaseHandler = {
 
     let collected;
     try {
-      collected = await context.model.collect({
+      collected = await context.turn(() => context.model.collect({
         phase: "execute",
         input,
-      });
+        toolResults: toolResults.length > 0 ? toolResults : undefined,
+      }));
     } catch (error) {
       if (error instanceof LimitExceededError) {
         return { message: error.message, route: "stop", yield: { ...inputYield, toolResults } };

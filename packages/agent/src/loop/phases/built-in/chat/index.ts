@@ -1,4 +1,4 @@
-import { createId, createMessage } from "../../../../types";
+import { createId } from "../../../../types";
 import type { PhaseInput, PhaseOutput, PhaseContext } from "../../config";
 import { createPhaseDefinition, type PhaseHandler } from "../types";
 import { toJson, serializeTools } from "../../../../harness/context/prompt-builder";
@@ -35,11 +35,11 @@ export async function runChatPhase(
   context: PhaseContext,
   input: PhaseInput,
 ): Promise<PhaseOutput> {
-  const collected = await context.model.collect({
+  const collected = await context.turn(() => context.model.collect({
     phase: "chat",
     input,
     recordText: false,
-  });
+  }));
 
   const rawOutput = collected.structured;
   if (!rawOutput) {
@@ -98,26 +98,6 @@ export const chatHandler: PhaseHandler = {
       "Available tools with name, description, and parameters:",
       toJson(serializeTools(input.tools)),
     ].join("\n");
-  },
-
-  async finalize(context, output) {
-    if (output.route === "stop") {
-      // Direct answer — emit through message lifecycle
-      const msgId = context.message.start("assistant", output.message, {
-        kind: "direct_answer",
-        scope: "conversation",
-      });
-      await context.message.end(msgId);
-    } else {
-      // Routing decision — append as execution message (no lifecycle events)
-      context.messages.appendState(
-        createMessage("assistant", JSON.stringify(output), {
-          kind: "phase_output",
-          phase: "chat",
-          scope: "execution",
-        }),
-      );
-    }
   },
 
   createOutcome(output) {

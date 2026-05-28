@@ -3,7 +3,6 @@ import type {
   AgentLimitUsage,
   AgentMessage,
   AgentState,
-  Outcome,
   RunThread,
   Skill,
   Tool,
@@ -47,6 +46,7 @@ export type CollectedModelOutput = {
 export type ModelCollectInput = {
   phase: string;
   input: PhaseInput;
+  toolResults?: ToolResult[];
   recordText?: boolean;
 };
 
@@ -75,8 +75,8 @@ export type PhaseContext = {
   state: AgentRunState;
   messages: {
     visible(): AgentMessage[];
-    append(message: AgentMessage): Promise<void>;
-    appendState(message: AgentMessage): Promise<void>;
+    append(message: AgentMessage): void;
+    appendState(message: AgentMessage): void;
   };
   message: PhaseMessageManager;
   toolExecution: PhaseToolExecutionManager;
@@ -90,8 +90,9 @@ export type PhaseContext = {
     create: RunThread;
   };
   skills: AgentState["skills"];
-  emit(event: AgentEvent): Promise<void>;
+  emit(event: AgentEvent): void;
   consumeLimit(resource: keyof AgentLimitUsage): void;
+  turn<T>(fn: () => Promise<T>): Promise<T>;
   maxAttempts?: number;
   signal?: AbortSignal;
   incrementAttempt(): void;

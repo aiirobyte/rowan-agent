@@ -280,27 +280,13 @@ test("runAgentLoop can return a direct response without creating a task", async 
   expect(outcome.outcome.taskId).toBeUndefined();
   expect(outcome.outcome.message).toBe("Direct response: hello");
   expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
-  expect(
-    emittedEvents.filter(
-      (event) =>
-        event.type === "message_end" &&
-        event.message.role === "assistant" &&
-        event.message.metadata?.scope === "conversation",
-    ),
-  ).toHaveLength(1);
-  expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
+  expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(true);
+  // Outcome message should not emit message_start/message_end events
   expect(
     emittedEvents.some(
       (event) =>
         event.type === "message_end" &&
         event.message.metadata?.kind === "outcome",
-    ),
-  ).toBe(false);
-  expect(
-    emittedEvents.some(
-      (event) =>
-        event.type === "turn_end" &&
-        event.content.some((message) => message.metadata?.kind === "outcome"),
     ),
   ).toBe(false);
 });

@@ -193,7 +193,10 @@ export type RunThread = (
 ) => Promise<Extract<AgentRunResult, { kind: "thread" }>>;
 
 export type AgentEvent =
-  // Turn lifecycle (aligned with pi's turn model)
+  // Agent lifecycle
+  | { type: "agent_start"; ts: string }
+  | { type: "agent_end"; messages: AgentMessage[]; ts: string }
+  // Turn lifecycle
   | {
       type: "turn_start";
       sessionId: string;

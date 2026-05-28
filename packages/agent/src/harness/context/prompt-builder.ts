@@ -1,4 +1,4 @@
-import type { AgentContextMessage, AgentContextSkill } from "../../protocol";
+import type { AgentContextMessage, AgentContextSkill, ToolResult } from "../../protocol";
 import type { PhaseInput } from "../../loop/phases/config";
 import {
   buildSystemPrompt,
@@ -21,6 +21,7 @@ export type SerializableTool = {
 export type PhasePromptBuildInput = {
   input: PhaseInput;
   tools: PromptTool[];
+  toolResults?: ToolResult[];
 };
 
 export type PhasePromptBuilder = {
@@ -105,6 +106,7 @@ function buildConversationMessages(input: PhaseInput, conversationLimit: number)
 export function buildPrompt(input: {
   context: PhaseInput;
   tools?: PromptTool[];
+  toolResults?: ToolResult[];
   phasePromptBuilder: PhasePromptBuilder;
 }): Prompt {
   const tools = input.tools ?? [];
@@ -113,23 +115,35 @@ export function buildPrompt(input: {
     content: input.phasePromptBuilder.build({
       input: input.context,
       tools,
+      toolResults: input.toolResults,
     }),
   };
   const conversationLimit = input.phasePromptBuilder.conversationLimit ?? 8;
 
+  const messages: PromptMessage[] = [
+    buildSystemMessage(input.context.systemPrompt),
+    ...buildConversationMessages(input.context, conversationLimit),
+  ];
+
+  if (input.toolResults && input.toolResults.length > 0) {
+    messages.push({
+      role: "user",
+      content: `Previous tool results:\n${JSON.stringify(input.toolResults, null, 2)}`,
+    });
+  }
+
+  messages.push(phasePromptMessage);
+
   return {
     phasePromptMessage,
-    messages: [
-      buildSystemMessage(input.context.systemPrompt),
-      ...buildConversationMessages(input.context, conversationLimit),
-      phasePromptMessage,
-    ],
+    messages,
   };
 }
 
 export function buildMessages(input: {
   context: PhaseInput;
   tools?: PromptTool[];
+  toolResults?: ToolResult[];
   phasePromptBuilder: PhasePromptBuilder;
 }): PromptMessage[] {
   return buildPrompt(input).messages;
@@ -139,10 +153,12 @@ export function createPromptBuilder(phasePromptBuilders: PhasePromptBuilder[]): 
   buildPrompt(input: {
     context: PhaseInput;
     tools?: PromptTool[];
+    toolResults?: ToolResult[];
   }): Prompt;
   buildMessages(input: {
     context: PhaseInput;
     tools?: PromptTool[];
+    toolResults?: ToolResult[];
   }): PromptMessage[];
 } {
   const buildersByPhase = new Map<string, PhasePromptBuilder>();

@@ -531,6 +531,7 @@ async function promptWithLog(input: {
     eventLogger = runEventLogger;
     let messageId: string | undefined;
     let streamedContent = false;
+    let currentStreamableMessage = false;
     const pendingConsoleEvents: AgentEvent[] = [];
     const listener: AgentEventListener = ((event: AgentEvent) => {
       runEventLogger(event);
@@ -543,13 +544,22 @@ async function promptWithLog(input: {
         }
       }
 
-      if (event.type === "message_update" && event.delta) {
+      if (event.type === "message_start" && event.message.role === "assistant" && event.message.content) {
+        currentStreamableMessage = event.message.metadata?.scope === "conversation";
+        if (currentStreamableMessage) {
+          process.stdout.write(event.message.content);
+          streamedContent = true;
+        }
+      }
+
+      if (event.type === "message_update" && event.delta && currentStreamableMessage) {
         process.stdout.write(event.delta);
         streamedContent = true;
       }
 
-      if (event.type === "message_end" && streamedContent) {
+      if (event.type === "message_end" && currentStreamableMessage && streamedContent) {
         process.stdout.write("\n");
+        currentStreamableMessage = false;
       }
     }) as AgentEventListener;
     listener.flush = async () => {
@@ -576,8 +586,6 @@ async function promptWithLog(input: {
     }
     await sessionManager.appendOutcome(result.outcome);
     return { outcome: result.outcome, sessionManager, streamedContent, pendingConsoleEvents };
-  } catch (error) {
-    throw error;
   } finally {
     try {
       await input.agent.flushEvents();

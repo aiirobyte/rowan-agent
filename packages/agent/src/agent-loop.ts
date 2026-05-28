@@ -27,7 +27,6 @@ import {
   getPhaseHandler,
   resolvePhase,
   validatePhaseConfig,
-  type AgentPhaseConfig,
   type PhaseContext,
   type PhaseDefinition,
   type PhaseInput,
@@ -49,6 +48,7 @@ import {
   snapshotMessage,
   snapshotMessages,
 } from "./loop/state";
+import type { AgentLoopConfig, AgentRunState } from "./loop/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -75,42 +75,12 @@ function hasRetry(value: unknown): value is { retry: unknown } {
 }
 
 // ============================================================================
-// Types
+// Lifecycle Factory
 // ============================================================================
 
-export type LoopRunInput = {
-  kind: AgentRunResult["kind"];
-  agentState: AgentState;
-  model: AgentLoopInput["model"];
-  stream: AgentLoopInput["stream"];
-  tools: Tool[];
-  maxAttempts?: AgentLoopInput["maxAttempts"];
-  limits?: AgentLoopInput["limits"];
-  threadDepth?: AgentLoopInput["threadDepth"];
-  signal?: AgentLoopInput["signal"];
-  runtime?: AgentLoopInput["runtime"];
-  beforeToolCall?: AgentLoopInput["beforeToolCall"];
-  afterToolCall?: AgentLoopInput["afterToolCall"];
-  runThread?: RunThread;
-  emit?: AgentLoopInput["emit"];
-  phaseConfig?: AgentPhaseConfig;
-};
-
-export type AgentLoopRuntime = LoopRunInput & {
-  transcript: AgentMessage[];
-  limitUsage: AgentLimitUsage;
-  threadDepth: number;
-  maxThreadDepth: number;
-  currentPhase: string;
-  attempt: number;
-  lastExecuteText?: string;
-};
-
-// ============================================================================
-// Runtime Factory
-// ============================================================================
-
-export function createLoopRuntime(input: AgentLoopInput): AgentLoopRuntime {
+export function createLoopLifecycle(
+  input: AgentLoopInput,
+): { config: AgentLoopConfig; state: AgentRunState } {
   const context = input.kind === "run"
     ? contextFromLoopInput(input)
     : contextFromLoopThreadInput(input);
@@ -126,15 +96,13 @@ export function createLoopRuntime(input: AgentLoopInput): AgentLoopRuntime {
         parentSessionId: input.parentSessionId,
       } : { id: "sessionId" in input ? input.sessionId : undefined });
 
-  return {
+  const config: AgentLoopConfig = {
     kind: input.kind,
-    agentState,
     model: input.model,
     stream: input.stream,
     tools: input.tools ?? context.tools ?? [],
-    maxAttempts: input.maxAttempts,
+    maxAttempts: input.maxAttempts ?? 2,
     limits: input.limits,
-    threadDepth: input.threadDepth ?? (input.kind === "thread" ? 1 : 0),
     signal: input.signal,
     runtime: input.runtime,
     beforeToolCall: input.beforeToolCall,
@@ -142,83 +110,117 @@ export function createLoopRuntime(input: AgentLoopInput): AgentLoopRuntime {
     runThread: "runThread" in input ? input.runThread : undefined,
     emit: input.emit,
     phaseConfig: "phaseConfig" in input ? input.phaseConfig : undefined,
-    transcript: snapshotMessages(agentState.messages),
-    limitUsage: { modelCalls: 0, toolCalls: 0 },
-    maxThreadDepth: resolveMaxThreadDepth(input.limits),
+  };
+
+  const state: AgentRunState = {
+    agentState,
     currentPhase: "",
     attempt: 0,
+    limitUsage: { modelCalls: 0, toolCalls: 0 },
+    depth: {
+      threadDepth: input.threadDepth ?? (input.kind === "thread" ? 1 : 0),
+      maxThreadDepth: resolveMaxThreadDepth(input.limits),
+    },
+    transcript: snapshotMessages(agentState.messages),
   };
+
+  return { config, state };
 }
 
 // ============================================================================
 // Event Emission
 // ============================================================================
 
-export async function emit(runtime: AgentLoopRuntime, event: AgentEvent): Promise<void> {
-  runtime.agentState.updatedAt = event.ts;
-  await runtime.emit?.(event);
+function emit(
+  state: AgentRunState,
+  emitFn: ((event: AgentEvent) => void) | undefined,
+  event: AgentEvent,
+): void {
+  state.agentState.updatedAt = event.ts;
+  emitFn?.(event);
 }
 
-export async function emitTurn(
-  runtime: AgentLoopRuntime,
+function emitTurn(
+  config: Pick<AgentLoopConfig, "kind">,
+  state: AgentRunState,
+  emitFn: ((event: AgentEvent) => void) | undefined,
   type: "turn_start" | "turn_end",
   extra?: { outcome?: Outcome; limitUsage?: AgentLimitUsage },
-): Promise<void> {
-  const threadMeta = runtime.kind === "thread" ? {
-    parentSessionId: runtime.agentState.parentSessionId,
-    prompt: runtime.agentState.input,
-    threadDepth: runtime.threadDepth,
-    maxThreadDepth: runtime.maxThreadDepth,
+): void {
+  const threadMeta = config.kind === "thread" ? {
+    parentSessionId: state.agentState.parentSessionId,
+    prompt: state.agentState.input,
+    threadDepth: state.depth.threadDepth,
+    maxThreadDepth: state.depth.maxThreadDepth,
   } : {};
 
-  await emit(runtime, { type, sessionId: runtime.agentState.id, content: snapshotMessages(runtime.transcript), ...threadMeta, ...extra, ts: nowIso() });
+  emit(state, emitFn, {
+    type,
+    sessionId: state.agentState.id,
+    content: snapshotMessages(state.transcript),
+    ...threadMeta,
+    ...extra,
+    ts: nowIso(),
+  });
 }
 
 // ============================================================================
 // Message Management
 // ============================================================================
 
-export async function appendMessage(
-  runtime: AgentLoopRuntime,
+function appendMessage(
+  state: AgentRunState,
   message: AgentMessage,
   toState = false,
-): Promise<void> {
+): void {
   if (toState) {
-    runtime.agentState.messages.push(message);
+    state.agentState.messages.push(message);
   }
-  runtime.transcript.push(message);
-  // No auto event emission — use PhaseContext.message for lifecycle events
+  state.transcript.push(message);
 }
 
-export async function appendAssistantMessage(
-  runtime: AgentLoopRuntime,
-  content: string,
-  metadata?: Record<string, unknown>,
-): Promise<void> {
-  await appendMessage(runtime, createMessage("assistant", content, metadata), true);
+// ============================================================================
+// Limit Management
+// ============================================================================
+
+function consumeLimit(
+  state: AgentRunState,
+  limits: AgentLoopConfig["limits"],
+  resource: keyof AgentLimitUsage,
+): LimitExceededError | undefined {
+  state.limitUsage[resource] += 1;
+  const limit = resource === "modelCalls" ? limits?.maxModelCalls : limits?.maxToolCalls;
+  if (limit !== undefined && state.limitUsage[resource] > limit) {
+    return new LimitExceededError({ resource, limit, usage: cloneLimitUsage(state.limitUsage) });
+  }
+  return undefined;
 }
 
 // ============================================================================
 // Result Creation
 // ============================================================================
 
-export function createRunResult(runtime: AgentLoopRuntime, outcome: Outcome): AgentRunResult {
+function createRunResult(
+  config: Pick<AgentLoopConfig, "kind">,
+  state: AgentRunState,
+  outcome: Outcome,
+): AgentRunResult {
   const base = {
-    sessionId: runtime.agentState.id,
-    messages: snapshotMessages(runtime.agentState.messages),
+    sessionId: state.agentState.id,
+    messages: snapshotMessages(state.agentState.messages),
     outcome,
-    limitUsage: cloneLimitUsage(runtime.limitUsage),
-    depth: runtimeDepth(runtime),
+    limitUsage: cloneLimitUsage(state.limitUsage),
+    depth: runtimeDepth(state.depth),
   };
 
-  if (runtime.kind === "thread") {
-    if (!runtime.agentState.parentSessionId || !runtime.agentState.input) {
+  if (config.kind === "thread") {
+    if (!state.agentState.parentSessionId || !state.agentState.input) {
       throw new Error("Thread run is missing parent state or prompt metadata.");
     }
     return {
       kind: "thread",
-      parentSessionId: runtime.agentState.parentSessionId,
-      prompt: runtime.agentState.input,
+      parentSessionId: state.agentState.parentSessionId,
+      prompt: state.agentState.input,
       ...base,
     };
   }
@@ -226,71 +228,333 @@ export function createRunResult(runtime: AgentLoopRuntime, outcome: Outcome): Ag
   return { kind: "run", ...base };
 }
 
-export function createAgentLoopContext(runtime: AgentLoopRuntime): AgentLoopContext {
-  return {
-    systemPrompt: runtime.agentState.systemPrompt,
-    messages: snapshotMessages(runtime.agentState.messages),
-    tools: runtime.tools,
-    skills: runtime.agentState.skills.slice(),
-    config: {
-      model: runtime.model,
-      stream: runtime.stream,
-      tools: runtime.tools,
-      maxAttempts: runtime.maxAttempts ?? 2,
-      ...(runtime.limits ? { limits: runtime.limits } : {}),
-      ...(runtime.signal ? { signal: runtime.signal } : {}),
-      ...(runtime.runtime ? { runtime: runtime.runtime } : {}),
-      ...(runtime.beforeToolCall ? { beforeToolCall: runtime.beforeToolCall } : {}),
-      ...(runtime.afterToolCall ? { afterToolCall: runtime.afterToolCall } : {}),
-      ...(runtime.runThread ? { runThread: runtime.runThread } : {}),
-    },
-    state: {
-      agentState: runtime.agentState,
-      currentPhase: runtime.currentPhase,
-      attempt: runtime.attempt,
-      limitUsage: runtime.limitUsage,
-      depth: runtimeDepth(runtime),
-      ...(runtime.lastExecuteText ? { lastExecuteText: runtime.lastExecuteText } : {}),
-    },
-    ...(runtime.signal ? { signal: runtime.signal } : {}),
-    emit: (event) => emit(runtime, event),
-    appendMessage: (message) => appendMessage(runtime, message),
-    appendStateMessage: (message) => appendMessage(runtime, message, true),
-    consumeLimit: (resource) => {
-      const error = consumeLimit(runtime, resource);
-      if (error) throw error;
-    },
-    ...(runtime.runThread ? { runThread: runtime.runThread } : {}),
-  };
-}
-
-// ============================================================================
-// Limit Management
-// ============================================================================
-
-export function consumeLimit(
-  runtime: AgentLoopRuntime,
-  resource: keyof AgentLimitUsage,
-): LimitExceededError | undefined {
-  runtime.limitUsage[resource] += 1;
-  const limit = resource === "modelCalls" ? runtime.limits?.maxModelCalls : runtime.limits?.maxToolCalls;
-  if (limit !== undefined && runtime.limitUsage[resource] > limit) {
-    return new LimitExceededError({ resource, limit, usage: cloneLimitUsage(runtime.limitUsage) });
-  }
-  return undefined;
-}
-
 // ============================================================================
 // Run Completion
 // ============================================================================
 
-export async function completeRun(runtime: AgentLoopRuntime, outcome: Outcome): Promise<AgentRunResult> {
-  const result = createRunResult(runtime, outcome);
-  await emitTurn(runtime, "turn_end", {
-    outcome: result.outcome,
-    limitUsage: result.limitUsage,
+function completeRun(
+  config: AgentLoopConfig,
+  state: AgentRunState,
+  outcome: Outcome,
+): AgentRunResult {
+  return createRunResult(config, state, outcome);
+}
+
+// ============================================================================
+// Context Factory
+// ============================================================================
+
+function createAgentLoopContext(
+  config: AgentLoopConfig,
+  state: AgentRunState,
+): AgentLoopContext {
+  return {
+    systemPrompt: state.agentState.systemPrompt,
+    messages: snapshotMessages(state.agentState.messages),
+    tools: config.tools,
+    skills: state.agentState.skills.slice(),
+    config,
+    state,
+    ...(config.signal ? { signal: config.signal } : {}),
+    emit: (event) => emit(state, config.emit, event),
+    appendMessage: (message) => appendMessage(state, message),
+    appendStateMessage: (message) => appendMessage(state, message, true),
+    consumeLimit: (resource) => {
+      const error = consumeLimit(state, config.limits, resource);
+      if (error) throw error;
+    },
+    ...(config.runThread ? { runThread: config.runThread } : {}),
+  };
+}
+
+// ============================================================================
+// Thread Creation
+// ============================================================================
+
+function createLoopThread(
+  parentConfig: AgentLoopConfig,
+  parentState: AgentRunState,
+): RunThread {
+  return async (input) => {
+    const result = await runAgentLoop({
+      kind: "thread",
+      ...input,
+      parentSessionId: input.parentSessionId ?? parentState.agentState.id,
+      systemPrompt: parentState.agentState.systemPrompt,
+      model: parentConfig.model,
+      stream: parentConfig.stream,
+      signal: parentConfig.signal,
+      limits: input.limits ?? parentConfig.limits,
+      threadDepth: input.threadDepth ?? parentState.depth.threadDepth + 1,
+      runtime: parentConfig.runtime,
+      beforeToolCall: parentConfig.beforeToolCall,
+      afterToolCall: parentConfig.afterToolCall,
+      emit: parentConfig.emit,
+    });
+    if (result.kind !== "thread") {
+      throw new Error("Nested thread runner returned a non-thread result.");
+    }
+    return result;
+  };
+}
+
+// ============================================================================
+// Context Helpers
+// ============================================================================
+
+function cloneContext(context: AgentRunContext): AgentRunContext {
+  return {
+    systemPrompt: context.systemPrompt,
+    messages: snapshotMessages(context.messages),
+    ...(context.tools ? { tools: context.tools.slice() } : {}),
+    ...(context.skills ? { skills: context.skills.slice() } : {}),
+  };
+}
+
+function contextFromState(state: AgentState, tools?: Tool[]): AgentRunContext {
+  return {
+    systemPrompt: state.systemPrompt,
+    messages: snapshotMessages(state.messages),
+    tools: tools?.slice() ?? [],
+    skills: state.skills.slice(),
+  };
+}
+
+function contextFromLoopInput(input: Extract<AgentLoopInput, { kind: "run" }>): AgentRunContext | undefined {
+  if (input.context) return cloneContext(input.context);
+  if (input.state) return contextFromState(input.state, input.tools);
+  return undefined;
+}
+
+function contextFromLoopThreadInput(input: Extract<AgentLoopInput, { kind: "thread" }>): AgentRunContext {
+  if (input.context) return cloneContext(input.context);
+  return {
+    systemPrompt: input.systemPrompt,
+    messages: [createMessage("user", input.prompt, { scope: "conversation" })],
+    tools: input.tools?.slice() ?? [],
+    skills: input.skills?.slice() ?? [],
+  };
+}
+
+function createStateFromContext(
+  context: AgentRunContext,
+  meta: { id?: string; input?: string; parentSessionId?: string } = {},
+): AgentState {
+  const firstUser = context.messages.find((m) => m.role === "user");
+  if (!firstUser) throw new Error("Agent context must include at least one user message.");
+
+  const state = createAgentState({
+    ...(meta.id ? { id: meta.id } : {}),
+    systemPrompt: context.systemPrompt,
+    input: meta.input ?? firstUser.content,
+    skills: context.skills ?? [],
+    ...(meta.parentSessionId ? { parentSessionId: meta.parentSessionId } : {}),
   });
-  return result;
+
+  if (context.messages.length > 0) {
+    state.messages = snapshotMessages(context.messages);
+  }
+  state.skills = context.skills?.slice() ?? [];
+  state.updatedAt = nowIso();
+  return state;
+}
+
+function syncStateFromContext(state: AgentState, context: AgentRunContext): AgentState {
+  state.systemPrompt = context.systemPrompt;
+  if (context.messages.length > 0) {
+    state.messages = snapshotMessages(context.messages);
+  }
+  state.skills = context.skills?.slice() ?? state.skills;
+  state.updatedAt = nowIso();
+  return state;
+}
+
+// ============================================================================
+// Main Loop
+// ============================================================================
+
+export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResult> {
+  const { config: initialConfig, state } = createLoopLifecycle(input);
+  const config = { ...initialConfig };
+  config.runThread ??= createLoopThread(config, state);
+  const emitFn = config.emit;
+
+  emit(state, emitFn, { type: "agent_start", ts: nowIso() });
+
+  try {
+    if (config.kind === "thread" && state.depth.threadDepth > state.depth.maxThreadDepth) {
+      const outcome = createThreadDepthLimitOutcome({
+        threadDepth: state.depth.threadDepth,
+        maxThreadDepth: state.depth.maxThreadDepth,
+      });
+      return completeRun(config, state, outcome);
+    }
+
+    assertNotAborted(config.signal);
+
+    const result = await runLoop(config, state);
+    return result;
+  } catch (error) {
+    if (error instanceof LimitExceededError) {
+      const outcome = createLimitExceededOutcome(error);
+      return completeRun(config, state, outcome);
+    }
+    throw error;
+  } finally {
+    emit(state, emitFn, {
+      type: "agent_end",
+      messages: snapshotMessages(state.agentState.messages),
+      ts: nowIso(),
+    });
+  }
+}
+
+async function runLoop(
+  config: AgentLoopConfig,
+  state: AgentRunState,
+): Promise<AgentRunResult> {
+  const phaseConfig = config.phaseConfig ?? createBuiltinPhaseConfig();
+  if (config.phaseConfig) validatePhaseConfig(phaseConfig);
+  config.phaseConfig = phaseConfig;
+
+  const availablePhases = phaseConfig.phases.map((p) => ({ id: p.id, name: p.name, description: p.description }));
+
+  let currentPhaseId = phaseConfig.entryPhaseId;
+  let lastYield: unknown;
+  const phaseVisits = new Map<string, number>();
+
+  while (currentPhaseId) {
+    assertNotAborted(config.signal);
+
+    const phase = resolvePhase(phaseConfig, currentPhaseId);
+    if (!phase) {
+      throw new Error(`Phase "${currentPhaseId}" is not defined in the phase config.`);
+    }
+
+    const handler = getPhaseHandler(currentPhaseId);
+    state.currentPhase = currentPhaseId;
+
+    // Generic visit limit
+    const visits = (phaseVisits.get(currentPhaseId) ?? 0) + 1;
+    phaseVisits.set(currentPhaseId, visits);
+    if (visits > (handler?.conversationLimit ?? 20)) {
+      return completeRun(config, state, createMaxVisitsOutcome(currentPhaseId));
+    }
+
+    const loopContext = createAgentLoopContext(config, state);
+    const context = createPhaseContext(config, state, phase, loopContext, availablePhases);
+
+    if (handler?.prepare) handler.prepare(context);
+
+    // Build unified input with yield from previous phase
+    let phaseInput = handler
+      ? await handler.buildInput(context, lastYield)
+      : undefined;
+
+    // Emit phase_start
+    emit(state, config.emit, { type: "phase_start", phase: currentPhaseId, ts: nowIso() });
+
+    // beforePhase hook
+    if (config.runtime?.beforePhase) {
+      const before = await config.runtime.beforePhase(
+        loopContext,
+        phase.id as LoopPhase,
+        phaseInput as never,
+      );
+      if (hasAbort(before)) {
+        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
+        return completeRun(config, state, before.abort);
+      }
+      if (hasSkip(before)) {
+        // Skip: use the skip output's route
+        const skipOutput = before.skip as { route: string; message: string };
+        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
+        if (skipOutput.route === "stop") {
+          return completeRun(config, state, {
+            id: "skip",
+            passed: true,
+            message: skipOutput.message || "Skipped.",
+          });
+        }
+        currentPhaseId = skipOutput.route;
+        continue;
+      }
+      if (hasInput(before) && before.input) {
+        phaseInput = before.input as PhaseInput;
+      }
+    }
+
+    // Run phase
+    let output = await phase.run(context, phaseInput!);
+
+    // afterPhase hook
+    if (config.runtime?.afterPhase) {
+      let retries = 0;
+
+      while (true) {
+        const after = await config.runtime.afterPhase(
+          loopContext,
+          phase.id as LoopPhase,
+          output as never,
+        );
+        if (hasAbort(after)) {
+          emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
+          return completeRun(config, state, after.abort);
+        }
+        if (hasRetry(after) && after.retry) {
+          retries += 1;
+          if (retries > 3) {
+            throw new Error(`Runtime requested too many ${currentPhaseId} phase retries.`);
+          }
+          output = await phase.run(context, after.retry as PhaseInput);
+          continue;
+        }
+        if (hasOutput(after) && after.output) {
+          output = after.output as PhaseOutput;
+        }
+        break;
+      }
+    }
+
+    // Finalize (side effects)
+    await handler?.finalize?.(context, output);
+
+    // Emit phase_end
+    emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
+
+    // Read route — main loop contains no phase-specific routing logic
+    if (output.route === "stop") {
+      // Persist outcome message to session without emitting message events
+      if (output.message?.trim()) {
+        const outcomeMsg = createMessage("assistant", output.message, {
+          kind: "outcome",
+          phase: currentPhaseId,
+          scope: "conversation",
+        });
+        state.agentState.messages.push(outcomeMsg);
+        state.transcript.push(outcomeMsg);
+      }
+
+      const outcome = handler?.createOutcome?.(output)
+        ?? createDefaultOutcome(output);
+      const yieldTask = (output.yield as Record<string, unknown> | undefined)?.task;
+      if (yieldTask && typeof yieldTask === "object" && "status" in yieldTask) {
+        (yieldTask as { status: string }).status = outcome.passed ? "passed" : "failed";
+      }
+      return completeRun(config, state, outcome);
+    }
+
+    // Validate route target exists
+    if (!phaseConfig.phases.some((p) => p.id === output.route)) {
+      return completeRun(config, state, createDefaultPhaseOutcome());
+    }
+
+    // Pass yield to next phase
+    lastYield = output.yield;
+    currentPhaseId = output.route;
+  }
+
+  throw new Error("Phase machine exited without a stop or abort transition.");
 }
 
 // ============================================================================
@@ -383,8 +647,9 @@ async function executeToolCall(input: {
 }
 
 function createPhaseContext(
-  runtime: AgentLoopRuntime,
-  definition: PhaseDefinition,
+  config: AgentLoopConfig,
+  state: AgentRunState,
+  phase: PhaseDefinition,
   loopContext: AgentLoopContext,
   availablePhases: PhaseContext["availablePhases"],
 ): PhaseContext {
@@ -395,14 +660,14 @@ function createPhaseContext(
     start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>) {
       const msg = createMessage(role, content, metadata);
       activeMessages.set(msg.id, msg);
-      emit(runtime, { type: "message_start", message: snapshotMessage(msg), ts: nowIso() });
+      emit(state, config.emit, { type: "message_start", message: snapshotMessage(msg), ts: nowIso() });
       return msg.id;
     },
     async update(messageId: string, delta: string) {
       const msg = activeMessages.get(messageId);
       if (!msg) return;
       msg.content += delta;
-      await emit(runtime, {
+      emit(state, config.emit, {
         type: "message_update",
         message: snapshotMessage(msg),
         delta,
@@ -413,27 +678,27 @@ function createPhaseContext(
       const msg = activeMessages.get(messageId);
       if (!msg) return;
       activeMessages.delete(messageId);
-      runtime.transcript.push(msg);
+      state.transcript.push(msg);
       // Only persist conversation-scoped messages to agent state
       if (msg.metadata?.scope === "conversation") {
-        runtime.agentState.messages.push(msg);
+        state.agentState.messages.push(msg);
       }
-      await emit(runtime, { type: "message_end", message: snapshotMessage(msg), ts: nowIso() });
+      emit(state, config.emit, { type: "message_end", message: snapshotMessage(msg), ts: nowIso() });
     },
   };
 
   return {
-    phaseId: definition.id,
+    phaseId: phase.id,
     state: loopContext.state,
     messages: {
-      visible: () => [...runtime.transcript],
-      append: (message) => appendMessage(runtime, message),
-      appendState: (message) => appendMessage(runtime, message, true),
+      visible: () => [...state.transcript],
+      append: (message) => appendMessage(state, message),
+      appendState: (message) => appendMessage(state, message, true),
     },
     message: messageManager,
     toolExecution: {
       async start(toolCallId, toolName, args) {
-        await emit(runtime, {
+        emit(state, config.emit, {
           type: "tool_execution_start",
           toolCallId,
           toolName,
@@ -445,7 +710,7 @@ function createPhaseContext(
         // tool_execution_update — reserved for future use
       },
       async end(toolCallId, toolName, result, isError) {
-        await emit(runtime, {
+        emit(state, config.emit, {
           type: "tool_execution_end",
           toolCallId,
           toolName,
@@ -460,6 +725,7 @@ function createPhaseContext(
         const prompt = buildPrompt({
           context: input.input,
           tools: loopContext.tools,
+          toolResults: input.toolResults,
         });
         const [systemMsg, ...rest] = prompt.messages;
         return collectTextAndStructured({
@@ -489,298 +755,31 @@ function createPhaseContext(
       },
     },
     runs: {
-      create: async (input) => runtime.runThread!(input),
+      create: async (input) => config.runThread!(input),
     },
-    skills: runtime.agentState.skills.slice(),
-    emit: (event) => emit(runtime, event),
+    skills: state.agentState.skills.slice(),
+    emit: (event) => emit(state, config.emit, event),
     consumeLimit: (resource) => {
-      const error = consumeLimit(runtime, resource);
+      const error = consumeLimit(state, config.limits, resource);
       if (error) throw error;
     },
-    maxAttempts: runtime.maxAttempts,
+    turn: async (fn) => {
+      emitTurn(config, state, config.emit, "turn_start");
+      try {
+        return await fn();
+      } finally {
+        emitTurn(config, state, config.emit, "turn_end");
+      }
+    },
+    maxAttempts: config.maxAttempts,
     incrementAttempt() {
-      runtime.attempt += 1;
-      loopContext.state.attempt = runtime.attempt;
+      state.attempt += 1;
+      loopContext.state.attempt = state.attempt;
     },
     setLastExecuteText(text) {
-      runtime.lastExecuteText = text;
+      state.lastExecuteText = text;
     },
     availablePhases,
-    ...(runtime.signal ? { signal: runtime.signal } : {}),
+    ...(config.signal ? { signal: config.signal } : {}),
   };
-}
-
-// ============================================================================
-// Context Helpers
-// ============================================================================
-
-function cloneContext(context: AgentRunContext): AgentRunContext {
-  return {
-    systemPrompt: context.systemPrompt,
-    messages: snapshotMessages(context.messages),
-    ...(context.tools ? { tools: context.tools.slice() } : {}),
-    ...(context.skills ? { skills: context.skills.slice() } : {}),
-  };
-}
-
-function contextFromState(state: AgentState, tools?: Tool[]): AgentRunContext {
-  return {
-    systemPrompt: state.systemPrompt,
-    messages: snapshotMessages(state.messages),
-    tools: tools?.slice() ?? [],
-    skills: state.skills.slice(),
-  };
-}
-
-function contextFromLoopInput(input: Extract<AgentLoopInput, { kind: "run" }>): AgentRunContext | undefined {
-  if (input.context) return cloneContext(input.context);
-  if (input.state) return contextFromState(input.state, input.tools);
-  return undefined;
-}
-
-function contextFromLoopThreadInput(input: Extract<AgentLoopInput, { kind: "thread" }>): AgentRunContext {
-  if (input.context) return cloneContext(input.context);
-  return {
-    systemPrompt: input.systemPrompt,
-    messages: [createMessage("user", input.prompt, { scope: "conversation" })],
-    tools: input.tools?.slice() ?? [],
-    skills: input.skills?.slice() ?? [],
-  };
-}
-
-function createStateFromContext(
-  context: AgentRunContext,
-  meta: { id?: string; input?: string; parentSessionId?: string } = {},
-): AgentState {
-  const firstUser = context.messages.find((m) => m.role === "user");
-  if (!firstUser) throw new Error("Agent context must include at least one user message.");
-
-  const state = createAgentState({
-    ...(meta.id ? { id: meta.id } : {}),
-    systemPrompt: context.systemPrompt,
-    input: meta.input ?? firstUser.content,
-    skills: context.skills ?? [],
-    ...(meta.parentSessionId ? { parentSessionId: meta.parentSessionId } : {}),
-  });
-
-  if (context.messages.length > 0) {
-    state.messages = snapshotMessages(context.messages);
-  }
-  state.skills = context.skills?.slice() ?? [];
-  state.updatedAt = nowIso();
-  return state;
-}
-
-function syncStateFromContext(state: AgentState, context: AgentRunContext): AgentState {
-  state.systemPrompt = context.systemPrompt;
-  if (context.messages.length > 0) {
-    state.messages = snapshotMessages(context.messages);
-  }
-  state.skills = context.skills?.slice() ?? state.skills;
-  state.updatedAt = nowIso();
-  return state;
-}
-
-// ============================================================================
-// Thread Creation
-// ============================================================================
-
-function createLoopThread(parent: AgentLoopRuntime): RunThread {
-  return async (input) => {
-    const result = await runAgentLoop({
-      kind: "thread",
-      ...input,
-      parentSessionId: input.parentSessionId ?? parent.agentState.id,
-      systemPrompt: parent.agentState.systemPrompt,
-      model: parent.model,
-      stream: parent.stream,
-      signal: parent.signal,
-      limits: input.limits ?? parent.limits,
-      threadDepth: input.threadDepth ?? parent.threadDepth + 1,
-      runtime: parent.runtime,
-      beforeToolCall: parent.beforeToolCall,
-      afterToolCall: parent.afterToolCall,
-      emit: parent.emit,
-    });
-    if (result.kind !== "thread") {
-      throw new Error("Nested thread runner returned a non-thread result.");
-    }
-    return result;
-  };
-}
-
-// ============================================================================
-// Main Loop
-// ============================================================================
-
-export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResult> {
-  const runtime = createLoopRuntime(input);
-  runtime.runThread ??= createLoopThread(runtime);
-  return runWithLifecycle(runtime, runLoop);
-}
-
-async function runWithLifecycle(
-  runtime: AgentLoopRuntime,
-  loop: (runtime: AgentLoopRuntime) => Promise<AgentRunResult>,
-): Promise<AgentRunResult> {
-  try {
-    if (runtime.kind === "thread" && runtime.threadDepth > runtime.maxThreadDepth) {
-      const outcome = createThreadDepthLimitOutcome({
-        threadDepth: runtime.threadDepth,
-        maxThreadDepth: runtime.maxThreadDepth,
-      });
-      return completeRun(runtime, outcome);
-    }
-
-    assertNotAborted(runtime.signal);
-    await emitTurn(runtime, "turn_start");
-
-    return await loop(runtime);
-  } catch (error) {
-    return handleLoopError(runtime, error);
-  }
-}
-
-async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
-  const config = runtime.phaseConfig ?? createBuiltinPhaseConfig();
-  if (runtime.phaseConfig) validatePhaseConfig(config);
-  runtime.phaseConfig = config;
-
-  const availablePhases = config.phases.map((p) => ({ id: p.id, name: p.name, description: p.description }));
-
-  let currentPhaseId = config.entryPhaseId;
-  let lastYield: unknown;
-  const phaseVisits = new Map<string, number>();
-
-  while (currentPhaseId) {
-    assertNotAborted(runtime.signal);
-
-    const definition = resolvePhase(config, currentPhaseId);
-    if (!definition) {
-      throw new Error(`Phase "${currentPhaseId}" is not defined in the phase config.`);
-    }
-
-    const handler = getPhaseHandler(currentPhaseId);
-    runtime.currentPhase = currentPhaseId;
-
-    // Generic visit limit
-    const visits = (phaseVisits.get(currentPhaseId) ?? 0) + 1;
-    phaseVisits.set(currentPhaseId, visits);
-    if (visits > (handler?.conversationLimit ?? 20)) {
-      return completeRun(runtime, createMaxVisitsOutcome(currentPhaseId));
-    }
-
-    const loopContext = createAgentLoopContext(runtime);
-    const context = createPhaseContext(runtime, definition, loopContext, availablePhases);
-
-    if (handler?.prepare) handler.prepare(context);
-
-    // Build unified input with yield from previous phase
-    let phaseInput = handler
-      ? await handler.buildInput(context, lastYield)
-      : undefined;
-
-    // Emit phase_start
-    await emit(runtime, { type: "phase_start", phase: currentPhaseId, ts: nowIso() });
-
-    // beforePhase hook
-    if (runtime.runtime?.beforePhase) {
-      const before = await runtime.runtime.beforePhase(
-        loopContext,
-        definition.id as LoopPhase,
-        phaseInput as never,
-      );
-      if (hasAbort(before)) {
-        await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
-        return completeRun(runtime, before.abort);
-      }
-      if (hasSkip(before)) {
-        // Skip: use the skip output's route
-        const skipOutput = before.skip as { route: string; message: string };
-        await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
-        if (skipOutput.route === "stop") {
-          return completeRun(runtime, {
-            id: "skip",
-            passed: true,
-            message: skipOutput.message || "Skipped.",
-          });
-        }
-        currentPhaseId = skipOutput.route;
-        continue;
-      }
-      if (hasInput(before) && before.input) {
-        phaseInput = before.input as PhaseInput;
-      }
-    }
-
-    // Run phase
-    let output = await definition.run(context, phaseInput!);
-
-    // afterPhase hook
-    if (runtime.runtime?.afterPhase) {
-      let retries = 0;
-
-      while (true) {
-        const after = await runtime.runtime.afterPhase(
-          loopContext,
-          definition.id as LoopPhase,
-          output as never,
-        );
-        if (hasAbort(after)) {
-          await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
-          return completeRun(runtime, after.abort);
-        }
-        if (hasRetry(after) && after.retry) {
-          retries += 1;
-          if (retries > 3) {
-            throw new Error(`Runtime requested too many ${currentPhaseId} phase retries.`);
-          }
-          output = await definition.run(context, after.retry as PhaseInput);
-          continue;
-        }
-        if (hasOutput(after) && after.output) {
-          output = after.output as PhaseOutput;
-        }
-        break;
-      }
-    }
-
-    // Finalize (side effects)
-    await handler?.finalize?.(context, output);
-
-    // Emit phase_end
-    await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
-
-    // ★ Read route — main loop contains no phase-specific routing logic
-    if (output.route === "stop") {
-      // Create AgentRunState from runtime for createOutcome
-      const outcome = handler?.createOutcome?.(output)
-        ?? createDefaultOutcome(output);
-      const yieldTask = (output.yield as Record<string, unknown> | undefined)?.task;
-      if (yieldTask && typeof yieldTask === "object" && "status" in yieldTask) {
-        (yieldTask as { status: string }).status = outcome.passed ? "passed" : "failed";
-      }
-      return completeRun(runtime, outcome);
-    }
-
-    // Validate route target exists
-    if (!config.phases.some((p) => p.id === output.route)) {
-      return completeRun(runtime, createDefaultPhaseOutcome());
-    }
-
-    // Pass yield to next phase
-    lastYield = output.yield;
-    currentPhaseId = output.route;
-  }
-
-  throw new Error("Phase machine exited without a stop or abort transition.");
-}
-
-async function handleLoopError(runtime: AgentLoopRuntime, error: unknown): Promise<AgentRunResult> {
-  if (error instanceof LimitExceededError) {
-    const outcome = createLimitExceededOutcome(error);
-    return completeRun(runtime, outcome);
-  }
-
-  throw error;
 }

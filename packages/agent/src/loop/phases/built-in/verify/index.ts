@@ -1,4 +1,4 @@
-import { createId, createMessage } from "../../../../types";
+import { createId } from "../../../../types";
 import type { Outcome } from "../../../../types";
 import type { PhaseInput, PhaseOutput, PhaseContext } from "../../config";
 import { createPhaseDefinition, type PhaseHandler } from "../types";
@@ -25,10 +25,10 @@ export const verifyHandler: PhaseHandler = {
 
     let collected;
     try {
-      collected = await context.model.collect({
+      collected = await context.turn(() => context.model.collect({
         phase: "verify",
         input,
-      });
+      }));
     } catch (error) {
       // On error, route to execute for retry (if attempts remain)
       if (context.state.attempt >= maxAttempts) {
@@ -89,18 +89,6 @@ export const verifyHandler: PhaseHandler = {
       "Task output:",
       toJson({ kind: "tools", toolResults }),
     ].join("\n");
-  },
-
-  finalize(context, output) {
-    const passed = (output.yield as any)?.passed ?? true;
-    if (passed && output.message.trim().length > 0) {
-      context.messages.appendState(
-        createMessage("assistant", output.message, {
-          kind: "direct_answer",
-          scope: "conversation",
-        }),
-      );
-    }
   },
 
   createOutcome(output) {

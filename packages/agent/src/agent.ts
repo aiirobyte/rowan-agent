@@ -45,8 +45,7 @@ export class Agent {
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
-  private currentRun?: Promise<AgentRunResult>;
-  private abortController?: AbortController;
+  private activeRun?: { promise: Promise<AgentRunResult>; resolve: (result: AgentRunResult) => void; abortController: AbortController };
 
   constructor(options: AgentRunConfig) {
     this.options = {
@@ -108,11 +107,62 @@ export class Agent {
     }
   }
 
-  async run(config?: AgentRunOverride): Promise<AgentRunResult> {
-    if (this.state.isRunning) {
+  private processEvents(event: AgentEvent): void {
+    // State reducer
+    switch (event.type) {
+      case "message_start":
+        this.state.currentResult = undefined;
+        break;
+      case "message_end":
+        break;
+      case "agent_end":
+        break;
+    }
+
+    // Notify listeners
+    this.emitToListeners(event);
+  }
+
+  private handleRunFailure(error: unknown, aborted: boolean): void {
+    const message = error instanceof Error ? error.message : "Agent run failed.";
+    this.state.error = message;
+    // turn_end and agent_end are handled by runAgentLoop's phase turn() and finally block.
+  }
+
+  private async runWithLifecycle(
+    executor: (signal: AbortSignal) => Promise<AgentRunResult>,
+  ): Promise<AgentRunResult> {
+    if (this.activeRun) {
       throw new Error("Agent is already running.");
     }
 
+    let resolvePromise!: (result: AgentRunResult) => void;
+    const abortController = new AbortController();
+    const promise = new Promise<AgentRunResult>((resolve) => {
+      resolvePromise = resolve;
+    });
+    this.activeRun = { promise, resolve: resolvePromise, abortController };
+    this.state.isRunning = true;
+
+    try {
+      const result = await executor(abortController.signal);
+      resolvePromise(result);
+      return result;
+    } catch (error) {
+      this.handleRunFailure(error, abortController.signal.aborted);
+      resolvePromise(undefined as unknown as AgentRunResult);
+      throw error;
+    } finally {
+      this.finishRun();
+    }
+  }
+
+  private finishRun(): void {
+    this.state.isRunning = false;
+    this.activeRun = undefined;
+  }
+
+  async run(config?: AgentRunOverride): Promise<AgentRunResult> {
     const resolved = this.resolveRunConfig(config);
     const previousSessionId = this.state.sessionId ?? this.options.sessionId;
     const sessionId = resolved.sessionId ?? this.state.sessionId;
@@ -126,30 +176,27 @@ export class Agent {
     this.state.tools = resolved.context.tools ?? [];
     this.state.currentResult = undefined;
     this.state.error = undefined;
-    this.state.isRunning = true;
-    this.abortController = new AbortController();
 
-    const emit = (event: AgentEvent) => {
-      this.emitToListeners(event);
-    };
+    return this.runWithLifecycle(async (signal) => {
+      const emit = (event: AgentEvent) => {
+        this.processEvents(event);
+      };
 
-    this.currentRun = runAgentLoop({
-      kind: "run",
-      context: resolved.context,
-      ...(sessionId ? { sessionId } : {}),
-      model: resolved.model,
-      stream: resolved.stream,
-      maxAttempts: resolved.maxAttempts,
-      limits: resolved.limits,
-      threadDepth: 0,
-      signal: this.abortController.signal,
-      beforeToolCall: resolved.beforeToolCall,
-      afterToolCall: resolved.afterToolCall,
-      emit,
-    });
+      const result = await runAgentLoop({
+        kind: "run",
+        context: resolved.context,
+        ...(sessionId ? { sessionId } : {}),
+        model: resolved.model,
+        stream: resolved.stream,
+        maxAttempts: resolved.maxAttempts,
+        limits: resolved.limits,
+        threadDepth: 0,
+        signal,
+        beforeToolCall: resolved.beforeToolCall,
+        afterToolCall: resolved.afterToolCall,
+        emit,
+      });
 
-    try {
-      const result = await this.currentRun;
       this.state.sessionId = result.sessionId;
       this.state.context = {
         ...cloneAgentContext(resolved.context),
@@ -162,24 +209,18 @@ export class Agent {
         context: cloneAgentContext(this.state.context),
       };
       return result;
-    } catch (error) {
-      this.state.error = error instanceof Error ? error.message : "Agent run failed.";
-      throw error;
-    } finally {
-      this.state.isRunning = false;
-      this.abortController = undefined;
-    }
+    });
   }
 
   abort(reason = "Aborted by caller."): void {
-    this.abortController?.abort(reason);
+    this.activeRun?.abortController.abort(reason);
   }
 
   async waitForIdle(): Promise<void> {
-    if (!this.currentRun) {
+    if (!this.activeRun) {
       return;
     }
-    await this.currentRun.catch(() => undefined);
+    await this.activeRun.promise.catch(() => undefined);
     await this.flushEvents().catch(() => undefined);
   }
 

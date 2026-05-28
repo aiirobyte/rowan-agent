@@ -33,10 +33,10 @@ function normalizeTask(value: unknown): Record<string, unknown> {
 
 export const planHandler: PhaseHandler = {
   definition: createPhaseDefinition(manifestJson, async (context, input) => {
-    const collected = await context.model.collect({
+    const collected = await context.turn(() => context.model.collect({
       phase: "plan",
       input,
-    });
+    }));
 
     const raw = collected.structured as Record<string, unknown> | undefined;
     const rawTask = raw?.task ?? raw;

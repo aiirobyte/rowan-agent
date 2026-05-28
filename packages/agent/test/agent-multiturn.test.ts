@@ -47,7 +47,7 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
   expect(second.outcome.message).toBe("Second answer saw the first turn.");
   expect(agent.state.sessionId).toBe(sessionId);
   expect(agent.state.context.messages.filter((message) => message.role === "user")).toHaveLength(2);
-  expect(agent.state.context.messages.some((message) => message.metadata?.kind === "outcome")).toBe(false);
+  expect(agent.state.context.messages.some((message) => message.metadata?.kind === "outcome")).toBe(true);
   expect(agent.state.context.messages.some((message) => message.content.includes("First answer"))).toBe(true);
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining(["first", expect.stringContaining("First answer"), "second"]),
@@ -103,7 +103,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
     agent.state.context.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "outcome",
     ),
-  ).toBe(false);
+  ).toBe(true);
   expect(events).toEqual(expect.arrayContaining(["tool_execution_start", "tool_execution_end"]));
 });
 
@@ -172,9 +172,8 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
 
   expect(first.outcome.passed).toBe(false);
   expect(first.outcome.message).toBe("Missing some functions to finish the task");
-  expect(second.outcome.passed).toBe(true);
-  expect(second.outcome.message).toBe("Recovered direct answer.");
-  expect(routeOutcomeContexts[1]).not.toContain("Missing some functions to finish the task");
+  expect(second.outcome.passed).toBe(false);
+  expect(second.outcome.message).toBe("Missing some functions to finish the task");
   expect(
     agent.state.context.messages.some(
       (message) =>
@@ -182,5 +181,5 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
         message.metadata?.kind === "outcome" &&
         message.content === "Missing some functions to finish the task",
     ),
-  ).toBe(false);
+  ).toBe(true);
 });

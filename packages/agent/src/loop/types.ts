@@ -1,6 +1,7 @@
 import type {
   AgentMessage,
   AgentEvent,
+  AgentEventListener,
   AgentState,
   AfterToolCall,
   BeforeToolCall,
@@ -13,6 +14,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
+import type { AgentPhaseConfig } from "./phases/config";
 
 export type AgentRunLimits = {
   maxToolCalls?: number;
@@ -31,6 +33,7 @@ export type RuntimeDepth = {
 };
 
 export type AgentLoopConfig = {
+  kind?: "run" | "thread";
   model: LlmModelRef;
   stream: StreamFn;
   tools: Tool[];
@@ -41,6 +44,8 @@ export type AgentLoopConfig = {
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   runThread?: RunThread;
+  emit?: AgentEventListener;
+  phaseConfig?: AgentPhaseConfig;
 };
 
 export type AgentRunState = {
@@ -53,6 +58,7 @@ export type AgentRunState = {
     maxThreadDepth: number;
   };
   lastExecuteText?: string;
+  transcript: AgentMessage[];
 };
 
 export type AgentMessageSnapshot = AgentMessage;
@@ -69,9 +75,9 @@ export type AgentLoopContext = {
   config: AgentLoopConfig;
   state: AgentRunState;
   signal?: AbortSignal;
-  emit(event: AgentEvent): Promise<void>;
-  appendMessage(message: AgentMessageSnapshot): Promise<void>;
-  appendStateMessage(message: AgentMessageSnapshot): Promise<void>;
+  emit(event: AgentEvent): void;
+  appendMessage(message: AgentMessageSnapshot): void;
+  appendStateMessage(message: AgentMessageSnapshot): void;
   consumeLimit(resource: keyof AgentLimitUsage): void;
   runThread?: RunThread;
 };
