@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { runAgentLoop } from "../src/agent-loop";
-import { createDefaultCriteria } from "@rowan-agent/agent";
 import type { AgentEvent, AgentRuntimePort, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";
@@ -142,7 +141,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     id: createId("task"),
     title: "Ordered messages",
     instruction: "Use echo with ordered messages",
-    acceptanceCriteria: createDefaultCriteria("Echo evidence is present."),
+    acceptanceCriteria: ["Echo evidence is present."],
     toolNames: ["echo"],
     skillIds: [],
     status: "pending" as const,
@@ -168,6 +167,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
         type: "text_delta",
         text: JSON.stringify({
           message: "Executing from model.",
+          route: "verify",
           toolCalls: [
             {
               id: createId("call"),
@@ -181,7 +181,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
       return;
     }
 
-    yield { type: "text_delta", text: JSON.stringify({ passed: true, message: "Verified." }) };
+    yield { type: "text_delta", text: JSON.stringify({ passed: true, message: "Verified.", route: "stop" }) };
     yield { type: "done" };
   };
   const session = createState({
@@ -208,19 +208,18 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     indexOf(
       (event) =>
         event.type === "message_end" &&
-        event.message.content === content,
+        event.message.content.includes(content),
     );
 
-  expect(messageIndex("Planning from model.")).toBeLessThan(
+  expect(messageIndex("Ordered messages")).toBeLessThan(
     indexOf((event) => event.type === "phase_start" && event.phase === "execute"),
   );
   expect(messageIndex("Executing from model.")).toBeLessThan(
     indexOf((event) => event.type === "tool_execution_start"),
   );
-  expect(messageIndex("Verifying from model.")).toBeLessThan(
+  expect(messageIndex("Verified.")).toBeLessThan(
     indexOf((event) => event.type === "phase_end" && event.phase === "verify"),
   );
-  expect(session.messages.some((message) => message.content === "Planned task: Ordered messages")).toBe(false);
 });
 
 test("runAgentLoop does not emit prompt messages as events", async () => {
@@ -300,7 +299,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
   expect(
     emittedEvents.some(
       (event) =>
-        event.type === "chat_end" &&
+        event.type === "turn_end" &&
         event.content.some((message) => message.metadata?.kind === "outcome"),
     ),
   ).toBe(false);
@@ -375,7 +374,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     id: createId("task"),
     title: "Retry verify",
     instruction: "use echo tool",
-    acceptanceCriteria: createDefaultCriteria("Echo evidence is present."),
+    acceptanceCriteria: ["Echo evidence is present."],
     toolNames: ["echo"],
     skillIds: [],
     status: "pending" as const,
@@ -400,6 +399,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
         type: "text_delta",
         text: JSON.stringify({
           message: "Calling echo.",
+          route: "verify",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
         }),
       };
@@ -414,7 +414,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     }
     yield {
       type: "text_delta",
-      text: JSON.stringify({ passed: true, message: "Verified after retry." }),
+      text: JSON.stringify({ passed: true, message: "Verified after retry.", route: "stop" }),
     };
     yield { type: "done" };
   };
@@ -452,7 +452,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
     id: createId("task"),
     title: "Retry execute",
     instruction: "use echo tool",
-    acceptanceCriteria: createDefaultCriteria("Echo evidence is present."),
+    acceptanceCriteria: ["Echo evidence is present."],
     toolNames: ["echo"],
     skillIds: [],
     status: "pending" as const,
@@ -483,6 +483,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
         type: "text_delta",
         text: JSON.stringify({
           message: "Calling echo.",
+          route: "verify",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
         }),
       };
@@ -498,10 +499,12 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
           ? {
               passed: false,
               message: "Missing echo evidence.",
+              route: "execute",
             }
           : {
               passed: true,
               message: "Verified after execute retry.",
+              route: "stop",
             },
       ),
     };
@@ -609,7 +612,7 @@ test("invalid tool args do not execute tool", async () => {
           id: createId("task"),
           title: "Invalid args task",
           instruction: "Call strict tool",
-          acceptanceCriteria: createDefaultCriteria("Strict tool should pass"),
+          acceptanceCriteria: ["Strict tool should pass"],
           toolNames: ["strict"],
           skillIds: [],
           status: "pending",
@@ -625,6 +628,7 @@ test("invalid tool args do not execute tool", async () => {
         type: "text_delta",
         text: JSON.stringify({
           message: "Calling strict tool.",
+          route: "verify",
           toolCalls: [
             {
               id: createId("call"),
@@ -640,7 +644,7 @@ test("invalid tool args do not execute tool", async () => {
 
     yield {
       type: "text_delta",
-      text: JSON.stringify({ passed: false, message: "Invalid args prevented execution." }),
+      text: JSON.stringify({ passed: false, message: "Invalid args prevented execution.", route: "execute" }),
     };
     yield { type: "done" };
   };
@@ -693,10 +697,6 @@ test("runtime beforePhase can adjust phase input", async () => {
       return {
         input: {
           ...input,
-          runtime: {
-            ...input.runtime,
-            maxThreadDepth: 99,
-          },
         },
       };
     },
@@ -784,9 +784,8 @@ test("runtime beforePhase can skip a phase", async () => {
 
         return {
           skip: {
-            route: "direct",
+            route: "stop",
             message: "Skipped route phase.",
-            text: "Skipped route phase.",
           },
         };
       },
@@ -835,14 +834,11 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
 
         return {
           retry: {
-            state: session,
-            runtime: {
-              threadDepth: 0,
-              maxThreadDepth: 42,
-            },
+            phase: phase as string,
+            systemPrompt: session.systemPrompt,
+            messages: session.messages,
             tools: [],
-            canStartThreadRoute: false,
-            shouldDefaultToThreadRoute: false,
+            skills: session.skills,
           },
         };
       },

@@ -34,12 +34,8 @@ export {
   type AgentPhasePlugin,
   type PhaseContext,
   type PhaseDefinition,
-  type PhaseTransition,
+  type PhaseInput,
+  type PhaseOutput,
   type CollectedModelOutput,
 } from "./config";
-export type { ChatInput } from "./built-in/chat";
-export type { ExecuteInput } from "./built-in/execute";
-export type { PlanInput } from "./built-in/plan";
-export type { PhaseOutput } from "./types";
-export { createFailedOutcome } from "./built-in/verify";
-export type { VerifyInput } from "./built-in/verify";
+export { createFailedPhaseOutcome, createPhaseOutcome } from "./built-in/verify";

@@ -1,34 +1,25 @@
 import Type from "typebox";
-import { createId, Validators } from "./protocol";
-import type { AgentRuntimePort } from "./loop/types";
-import type { AgentPhaseConfig } from "./loop/phases";
+import type { AgentRuntimePort, AgentLimitUsage, AgentRunLimits, RuntimeDepth } from "./loop/types";
+import type { AgentPhaseConfig, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
   AgentContextSkill,
-  AgentLimitUsage,
-  AgentRunLimits,
   ContextScope,
   LlmModelRef,
   LlmModelUsage,
   LlmRequest,
   LlmStreamEvent,
   LlmStreamOptions,
-  LlmContext,
   LoopPhase,
-  LoopPhaseOutput,
-  LoopPhaseOutputMap,
   Outcome,
-  PhaseOutput,
-  RuntimeDepth,
   StreamFn,
-  Task,
-  TaskOutput,
-  ToolCall,
   ToolResult,
-  ToolTaskOutput,
-  VerificationResult,
 } from "./protocol";
-export { createId, Validators };
+
+export function createId(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
+}
+
 export type {
   AgentEffect,
   AgentLoopContext,
@@ -37,40 +28,29 @@ export type {
   AgentRuntimePort,
   AfterPhaseResult,
   BeforePhaseResult,
-  ChatInput,
-  ExecuteInput,
-  ExecuteOutput,
-  PhaseInputMap,
-  PhaseOutputMap,
   PhaseResult,
-  PlanInput,
   ToolRunner,
   ToolRunnerInput,
-  VerifyInput,
 } from "./loop/types";
+export type { PhaseInput, PhaseOutput } from "./loop/phases";
 
 export type {
   AgentLimitUsage,
   AgentRunLimits,
+  RuntimeDepth,
+} from "./loop/types";
+
+export type {
   LlmModelRef,
   LlmModelUsage,
   LlmRequest,
   LlmStreamEvent,
   LlmStreamOptions,
-  LlmContext,
   LoopPhase,
-  LoopPhaseOutput,
-  LoopPhaseOutputMap,
   Outcome,
-  PhaseOutput,
-  RuntimeDepth,
   StreamFn,
-  Task,
-  TaskOutput,
   ToolCall,
   ToolResult,
-  ToolTaskOutput,
-  VerificationResult,
 } from "./protocol";
 
 export const DEFAULT_MAX_THREAD_DEPTH = 4;
@@ -87,8 +67,6 @@ export type AgentState = {
   parentSessionId?: string;
   systemPrompt: string;
   input: string;
-  task?: string;
-  goal?: string;
   messages: AgentMessage[];
   skills: Skill[];
   createdAt: string;
@@ -100,8 +78,6 @@ export type CreateAgentStateInput = {
   id?: string;
   systemPrompt: string;
   input: string;
-  task?: string;
-  goal?: string;
   skills?: Skill[];
   parentSessionId?: string;
   title?: string;
@@ -110,7 +86,6 @@ export type CreateAgentStateInput = {
 
 export type ToolContext = {
   state: AgentState;
-  task: Task;
   toolCallId: string;
   runThread?: RunThread;
 };
@@ -135,13 +110,11 @@ export type AgentContext = {
 };
 
 export type BeforeToolCall = (input: {
-  task: Task;
   tool: Tool;
   args: unknown;
 }) => Promise<{ allow: true } | { allow: false; reason: string }>;
 
 export type AfterToolCall = (input: {
-  task: Task;
   tool: Tool;
   result: ToolResult;
 }) => Promise<ToolResult>;
@@ -174,8 +147,6 @@ export type AgentThreadRunConfig = AgentRunCommonConfig & {
   parentSessionId: string;
   systemPrompt: string;
   prompt: string;
-  task?: string;
-  goal?: string;
   skills?: Skill[];
   threadDepth?: number;
 };
@@ -198,8 +169,6 @@ export type AgentRunResult =
       limitUsage: AgentLimitUsage;
       depth: RuntimeDepth;
       prompt: string;
-      task?: string;
-      goal?: string;
     };
 
 type AgentThreadStartConfig =
@@ -224,21 +193,19 @@ export type RunThread = (
 ) => Promise<Extract<AgentRunResult, { kind: "thread" }>>;
 
 export type AgentEvent =
-  // Agent lifecycle
+  // Turn lifecycle (aligned with pi's turn model)
   | {
-      type: "chat_start";
+      type: "turn_start";
       sessionId: string;
       content: AgentMessage[];
       parentSessionId?: string;
       prompt?: string;
-      task?: string;
-      goal?: string;
       threadDepth?: number;
       maxThreadDepth?: number;
       ts: string;
     }
   | {
-      type: "chat_end";
+      type: "turn_end";
       sessionId: string;
       content: AgentMessage[];
       outcome?: Outcome;
@@ -378,8 +345,6 @@ export function createAgentState(input: CreateAgentStateInput): AgentState {
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
     systemPrompt: input.systemPrompt,
     input: input.input,
-    ...(input.task ? { task: input.task } : {}),
-    ...(input.goal ? { goal: input.goal } : {}),
     messages,
     skills: input.skills?.map(clone) ?? [],
     createdAt,

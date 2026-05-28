@@ -1,6 +1,6 @@
 # Rowan Todo
 
-Last updated: 2026-05-26
+Last updated: 2026-05-28
 
 Use this file as the cross-session checklist. In a new AI window, start with:
 
@@ -10,66 +10,51 @@ Read AGENT.md and docs/todo.md, then continue with the active version's next unc
 
 ## Active Version
 
-Active version: `0.4.7` complete
+Active version: `0.4.8` complete
 
-- Previous implemented baseline: `0.4.5`
-- Planning baseline: current v0.4.6 phase module shape
-- Active version docs: `docs/version/0.4.7/`
-- Planning source: user correction that phase definitions should be `input + context capabilities -> output`, while `runLoop` owns runtime execution
-- Next version: `0.5.0` Context Projection And Provider IR planning after v0.4.7
+- Previous implemented baseline: `0.4.8`
+- Planning baseline: v0.4.8 lifecycle unification
+- Active version docs: `docs/version/0.4.8/`
+- Planning source: lifecycle unification — unified phase input/output with yield, model-driven routing, streaming lifecycles, event renaming
+- Next version: `0.5.0` Context Projection And Provider IR
 
 ## Current Target
 
-Target: v0.4.7 Phase Definition Runtime Boundary. Complete.
+Target: v0.4.8 Lifecycle Unification. Complete.
 
 Definition of done:
 
-- [x] Create `docs/version/0.4.7/spec.md`.
-- [x] Create `docs/version/0.4.7/prompt_plan.md`.
-- [x] Create `docs/version/0.4.7/todo.md`.
+- [x] Create `docs/version/0.4.8/spec.md`.
+- [x] Create `docs/version/0.4.8/prompt_plan.md`.
+- [x] Create `docs/version/0.4.8/todo.md`.
 - [x] Update `docs/spec.md`.
 - [x] Update `docs/prompt_plan.md`.
 - [x] Update `docs/todo.md`.
 - [x] Update `docs/version/README.md`.
 - [x] Update `docs/README.md`.
-- [x] Add failing tests for the new phase/runtime boundary.
-- [x] Remove `buildInput(runtime)` from `PhaseDefinition`.
-- [x] Remove `apply(runtime, output, input)` from `PhaseDefinition`.
-- [x] Remove `AgentLoopRuntime` references from phase definition types.
-- [x] Add `PhaseContext` as a constrained capability surface.
-- [x] Keep built-in phases as extension-style modules under `built-in/<phase>/`.
-- [x] Add built-in phase extension input builders.
-- [x] Add built-in phase extension output appliers.
-- [x] Move built-in phase aggregation from `builtin-config.ts` to `built-in/index.ts`.
-- [x] Delete `builtin-config.ts`.
-- [x] Keep `config.ts` as generic phase config only.
-- [x] Move built-in phase prompt Rendering to `harness/context/phase-rendering.ts` while preserving package-root `buildPrompt` and `buildMessages`.
-- [x] Split loop helper code into `errors.ts`, `state.ts`, and `outcomes.ts`.
-- [x] Remove the shallow `capabilities.ts` forwarding module.
-- [x] Move model collection and tool execution behind `PhaseContext` capabilities.
-- [x] Replace `runConfiguredPhase()` with `runPhase(context, definition, input)`.
-- [x] Move runtime hooks, phase events, retry handling, and transition application into `runLoop()`.
-- [x] Refactor built-in `chat` phase to pure definition + extension.
-- [x] Refactor built-in `plan` phase to pure definition + extension.
-- [x] Refactor built-in `execute` phase to pure definition + extension.
-- [x] Refactor built-in `verify` phase to pure definition + extension.
-- [x] Built-in phase `run` functions do not import from `../../../../loop`.
-- [x] Remove old phase API and runner-name compatibility shims.
-- [x] Update phase config, runner, and built-in phase tests.
-- [x] Run `bun test packages/agent/test/phase-config.test.ts`.
-- [x] Run `bun test packages/agent/test/run-configured-phase.test.ts`.
-- [x] Run `bun test packages/agent/test/built-in-phases.test.ts`.
-- [x] Run `bun test packages/agent/test/`.
-- [x] Run `bun run build`.
-- [x] Run `git diff --check`.
+- [x] Unified PhaseInput/PhaseOutput types with yield.
+- [x] Remove LoopPhaseOutputMap, PhaseOutputMap, PhaseInputMap, ExecuteOutput.
+- [x] Remove applyOutput from PhaseHandler.
+- [x] Add createOutcome to PhaseHandler.
+- [x] Main loop reads output.route for transitions.
+- [x] PhaseContext message lifecycle manager.
+- [x] PhaseContext toolExecution lifecycle manager.
+- [x] appendMessage removes auto event emission.
+- [x] collectTextAndStructured uses PhaseContext.message.
+- [x] executeToolCall removes observe callback.
+- [x] Rename chat_start/chat_end to turn_start/turn_end.
+- [x] Remove task/goal from AgentState — pure yield flow.
+- [x] Remove LlmContext union type.
+- [x] Build passes.
+- [x] All tests pass (96 tests, 0 failures in agent package).
 
 ## Next Prompt
 
-Start v0.5.0 planning.
+Plan v0.5.0 Context Projection And Provider IR on top of the completed v0.4.8 lifecycle unification.
 
 Expected next change:
 
-- Plan Context Projection And Provider IR on top of the completed v0.4.7 phase boundary.
+- Plan Context Projection And Provider IR on top of the completed v0.4.8 lifecycle unification.
 
 ## Version Roadmap
 
@@ -90,6 +75,7 @@ Expected next change:
 - [x] v0.4.5 Phase-Configured Agent Loop.
 - [ ] v0.4.6 Loop Phase Refactoring.
 - [x] v0.4.7 Phase Definition Runtime Boundary.
+- [x] v0.4.8 Lifecycle Unification.
 - [ ] v0.5.0 Context Projection And Provider IR.
 - [ ] v0.6.0 Tool Runtime Policy Ports.
 - [ ] v0.7.0 Replay, Fork, And Compaction.
@@ -130,4 +116,6 @@ Expected next change:
 - v0.4.7 was inserted before v0.5.0 on 2026-05-25 for the phase definition runtime boundary refactor.
 - v0.4.7 planning was corrected to keep built-in phases extension-style under `built-in/`, remove phase runtime definitions, rename `runConfiguredPhase()` to `runPhase()`, and drop old compatibility.
 - v0.4.7 planning now treats `builtin-config.ts` removal as necessary, keeps `config.ts` generic, and moves phase-specific Rendering into each built-in phase extension.
+- v0.4.8 was inserted before v0.5.0 on 2026-05-28 for lifecycle unification.
+- v0.4.8 design: unified phase input/output with yield, model-driven routing via route, streaming message/tool lifecycles, event renaming to align with pi.
 - Update this file and the active version todo after every meaningful coding session.

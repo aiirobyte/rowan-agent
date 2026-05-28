@@ -2,7 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import Type from "typebox";
 import Schema from "typebox/schema";
-import { Validators, type Task, type ToolCall, type ToolResult } from "../protocol";
+import type { ToolCall, ToolResult } from "../protocol";
 import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "./types";
 
 const DEFAULT_MAX_READ_BYTES = 64_000;
@@ -84,23 +84,21 @@ function validatorFor(schema: Type.TSchema): ToolArgsValidator {
 }
 
 export type RuntimeToolExecutionEvent =
-  | { type: "approval_requested"; task: Task; tool: Tool; args: unknown }
+  | { type: "approval_requested"; tool: Tool; args: unknown }
   | {
       type: "approval_result";
-      task: Task;
       tool: Tool;
       args: unknown;
       decision: { allow: true } | { allow: false; reason: string };
     }
   | { type: "tool_start"; tool: Tool; args: unknown }
   | { type: "tool_blocked"; tool: Tool; reason: string }
-  | { type: "result_review_requested"; task: Task; tool: Tool; result: ToolResult }
-  | { type: "result_review_result"; task: Task; tool: Tool; result: ToolResult }
+  | { type: "result_review_requested"; tool: Tool; result: ToolResult }
+  | { type: "result_review_result"; tool: Tool; result: ToolResult }
   | { type: "tool_end"; toolName: string; result: ToolResult };
 
 export type RuntimeToolExecutionInput = {
   tools: Tool[];
-  task: Task;
   toolCall: ToolCall;
   toolContext: ToolContext;
   beforeToolCall?: BeforeToolCall;
@@ -196,11 +194,10 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
 
   let decision: { allow: true } | { allow: false; reason: string } | undefined;
   if (input.beforeToolCall) {
-    await input.observe?.({ type: "approval_requested", task: input.task, tool, args });
-    decision = await input.beforeToolCall({ task: input.task, tool, args });
+    await input.observe?.({ type: "approval_requested", tool, args });
+    decision = await input.beforeToolCall({ tool, args });
     await input.observe?.({
       type: "approval_result",
-      task: input.task,
       tool,
       args,
       decision: decision ?? { allow: true },
@@ -223,23 +220,20 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
 
   try {
     const rawResult = await tool.execute(args, input.toolContext, input.signal);
-    const normalized = Validators.toolResult.Parse({
+    let result: ToolResult = {
       ...rawResult,
       toolCallId: input.toolCall.id,
       toolName: tool.name,
-    });
-    let result = normalized;
+    };
     if (input.afterToolCall) {
       await input.observe?.({
         type: "result_review_requested",
-        task: input.task,
         tool,
-        result: normalized,
+        result,
       });
-      result = await input.afterToolCall({ task: input.task, tool, result: normalized });
+      result = await input.afterToolCall({ tool, result });
       await input.observe?.({
         type: "result_review_result",
-        task: input.task,
         tool,
         result,
       });

@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { Agent, type StreamFn } from "../src";
-import { createDefaultCriteria } from "@rowan-agent/agent";
 import type { LlmRequest } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
@@ -53,7 +52,7 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining(["first", expect.stringContaining("First answer"), "second"]),
   );
-  expect(events).toEqual(expect.arrayContaining(["chat_start"]));
+  expect(events).toEqual(expect.arrayContaining(["turn_start"]));
 });
 
 test("Agent keeps conversation messages separate from execution steps", async () => {
@@ -138,7 +137,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
           id: createId("task"),
           title: "Fail once",
           instruction: "Return a failed verification result.",
-          acceptanceCriteria: createDefaultCriteria("The task should fail."),
+          acceptanceCriteria: ["The task should fail."],
           toolNames: [],
           skillIds: [],
           status: "pending",
@@ -150,14 +149,14 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
     }
 
     if (phase === "execute") {
-      yield { type: "text_delta", text: "No tool output." };
+      yield { type: "text_delta", text: JSON.stringify({ message: "No tool output.", route: "verify" }) };
       yield { type: "done" };
       return;
     }
 
     yield {
       type: "text_delta",
-      text: JSON.stringify({ passed: false, message: "Missing some functions to finish the task" }),
+      text: JSON.stringify({ passed: false, message: "Missing some functions to finish the task", route: "execute" }),
     };
     yield { type: "done" };
   };

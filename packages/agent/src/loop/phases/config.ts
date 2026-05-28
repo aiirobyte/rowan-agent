@@ -5,38 +5,69 @@ import type {
   AgentState,
   Outcome,
   RunThread,
-  Task,
+  Skill,
+  Tool,
   ToolCall,
   ToolResult,
 } from "../../types";
+import type { PhaseOutput } from "../../protocol/context";
 import type { AgentRunState } from "../types";
 
-export type PhaseTransition =
-  | { type: "next"; phaseId: string }
-  | { type: "stop"; outcome: Outcome }
-  | { type: "abort"; outcome: Outcome };
+export type { PhaseOutput };
 
-export type PhaseDefinition<TInput = unknown, TOutput = unknown> = {
+/** Unified phase input — contains everything the model needs. */
+export type PhaseInput = {
+  phase: string;
+  systemPrompt: string;
+  messages: AgentMessage[];
+  tools: Tool[];
+  skills: Skill[];
+  /** Data from the previous phase's output.yield */
+  yield?: unknown;
+};
+
+export type PhaseDefinition = {
   id: string;
   name: string;
   description: string;
-  run(context: PhaseContext, input: TInput): Promise<TOutput>;
+  run(context: PhaseContext, input: PhaseInput): Promise<PhaseOutput>;
 };
-
-export type PhaseImplementation<TInput = unknown, TOutput = unknown> = Pick<
-  PhaseDefinition<TInput, TOutput>,
-  "run"
->;
 
 export type AgentPhasePlugin = {
   id: string;
   entryPhaseId?: string;
-  phases: PhaseDefinition<any, any>[];
+  phases: PhaseDefinition[];
 };
 
 export type CollectedModelOutput = {
   text: string;
   structured?: unknown;
+};
+
+export type ModelCollectInput = {
+  phase: string;
+  input: PhaseInput;
+  recordText?: boolean;
+};
+
+/** Message lifecycle manager for streaming updates */
+export type PhaseMessageManager = {
+  /** Start a new message stream, returns message id */
+  start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>): string;
+  /** Stream a text delta */
+  update(messageId: string, delta: string): Promise<void>;
+  /** End the message stream, appends to transcript */
+  end(messageId: string): Promise<void>;
+};
+
+/** Tool execution lifecycle manager */
+export type PhaseToolExecutionManager = {
+  /** Start tool execution */
+  start(toolCallId: string, toolName: string, args: unknown): Promise<void>;
+  /** Update tool execution progress */
+  update(toolCallId: string, partialResult: unknown): Promise<void>;
+  /** End tool execution */
+  end(toolCallId: string, toolName: string, result: ToolResult, isError: boolean): Promise<void>;
 };
 
 export type PhaseContext = {
@@ -47,15 +78,13 @@ export type PhaseContext = {
     append(message: AgentMessage): Promise<void>;
     appendState(message: AgentMessage): Promise<void>;
   };
+  message: PhaseMessageManager;
+  toolExecution: PhaseToolExecutionManager;
   model: {
-    collect(input: {
-      phase: string;
-      payload: any;
-      recordText?: boolean;
-    }): Promise<CollectedModelOutput>;
+    collect(input: ModelCollectInput): Promise<CollectedModelOutput>;
   };
   tools: {
-    execute(input: { task: Task; toolCall: ToolCall }): Promise<ToolResult>;
+    execute(input: { toolCall: ToolCall }): Promise<ToolResult>;
   };
   runs: {
     create: RunThread;
@@ -66,25 +95,24 @@ export type PhaseContext = {
   maxAttempts?: number;
   signal?: AbortSignal;
   incrementAttempt(): void;
-  setTask(task: Task | undefined): void;
   setLastExecuteText(text: string): void;
   availablePhases: Array<{ id: string; name: string; description: string }>;
 };
 
 export type AgentPhaseConfig = {
   entryPhaseId: string;
-  phases: PhaseDefinition<any, any>[];
+  phases: PhaseDefinition[];
 };
 
 export type AgentPhaseConfigInput = {
   entryPhaseId?: string;
-  phases?: PhaseDefinition<any, any>[];
+  phases?: PhaseDefinition[];
   plugins?: AgentPhasePlugin[];
 };
 
-export function definePhase<TInput = unknown, TOutput = unknown>(
-  definition: PhaseDefinition<TInput, TOutput>,
-): PhaseDefinition<TInput, TOutput> {
+export function definePhase(
+  definition: PhaseDefinition,
+): PhaseDefinition {
   return definition;
 }
 
@@ -118,7 +146,7 @@ export function validatePhaseConfig(config: AgentPhaseConfig): void {
 }
 
 export function createAgentPhaseConfig(input: AgentPhaseConfigInput): AgentPhaseConfig {
-  const phases: PhaseDefinition<any, any>[] = [];
+  const phases: PhaseDefinition[] = [];
   const pluginIds = new Set<string>();
 
   for (const plugin of input.plugins ?? []) {
@@ -156,7 +184,7 @@ export function createDefaultAgentPhaseConfig(): AgentPhaseConfig {
       id: DEFAULT_PHASE_ID,
       name: "Chat",
       description: "Decide whether to answer directly or transition to another available phase.",
-      run: async () => undefined,
+      run: async () => ({ message: "", route: "stop" }),
     }],
   };
 }

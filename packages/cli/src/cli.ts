@@ -536,7 +536,7 @@ async function promptWithLog(input: {
       runEventLogger(event);
       pendingConsoleEvents.push(event);
 
-      if (event.type === "chat_start" && !messageId) {
+      if (event.type === "turn_start" && !messageId) {
         messageId = currentTurnMessageId(event.content);
         if (messageId) {
           input.onMessageId?.(messageId);

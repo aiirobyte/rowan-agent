@@ -1,10 +1,11 @@
-import type { AgentContextMessage, LlmContext, ToolDefinition } from "../../protocol";
+import type { AgentContextMessage, AgentContextSkill } from "../../protocol";
+import type { PhaseInput } from "../../loop/phases/config";
 import {
   buildSystemPrompt,
 } from "./prompt";
 
 export type PromptMessage = { role: "system" | "user" | "assistant"; content: string };
-export type PromptTool = ToolDefinition;
+export type PromptTool = { name: string; description: string; parameters: unknown };
 
 export type Prompt = {
   messages: PromptMessage[];
@@ -18,12 +19,12 @@ export type SerializableTool = {
 };
 
 export type PhasePromptBuildInput = {
-  context: LlmContext;
+  input: PhaseInput;
   tools: PromptTool[];
 };
 
 export type PhasePromptBuilder = {
-  phase: LlmContext["phase"];
+  phase: string;
   conversationLimit?: number;
   build(input: PhasePromptBuildInput): string;
 };
@@ -45,8 +46,8 @@ export function serializeTools(tools: PromptTool[] = []): SerializableTool[] {
   }));
 }
 
-export function serializeSkills(context: LlmContext): unknown[] {
-  return context.state.skills.map((skill) => ({
+export function serializeSkills(skills: AgentContextSkill[]): unknown[] {
+  return skills.map((skill) => ({
     id: skill.id,
     path: skill.path,
     toolNames: skill.toolNames ?? [],
@@ -54,23 +55,23 @@ export function serializeSkills(context: LlmContext): unknown[] {
   }));
 }
 
-function buildSystemMessage(context: LlmContext): PromptMessage {
-  return { role: "system", content: buildSystemPrompt({ systemPrompt: context.state.systemPrompt }) };
+function buildSystemMessage(systemPrompt: string): PromptMessage {
+  return { role: "system", content: buildSystemPrompt({ systemPrompt }) };
 }
 
 function isConversationMessage(message: AgentContextMessage): boolean {
   return message.metadata?.scope === "conversation";
 }
 
-export function latestUserInput(context: LlmContext): string {
-  for (let index = context.state.messages.length - 1; index >= 0; index -= 1) {
-    const message = context.state.messages[index];
+export function latestUserInput(input: PhaseInput): string {
+  for (let index = input.messages.length - 1; index >= 0; index -= 1) {
+    const message = input.messages[index];
     if (message.role === "user" && isConversationMessage(message)) {
       return message.content;
     }
   }
 
-  return context.state.input;
+  return "";
 }
 
 function toConversationMessage(message: AgentContextMessage): PromptMessage | undefined {
@@ -88,21 +89,21 @@ function toConversationMessage(message: AgentContextMessage): PromptMessage | un
   };
 }
 
-function conversationForPhase(context: LlmContext, conversationLimit: number): AgentContextMessage[] {
-  const conversation = context.state.messages.filter(isConversationMessage);
+function conversationForPhase(messages: AgentContextMessage[], conversationLimit: number): AgentContextMessage[] {
+  const conversation = messages.filter(isConversationMessage);
   const limit = Math.max(0, Math.floor(conversationLimit));
   return limit === 0 ? [] : conversation.slice(-limit);
 }
 
-function buildConversationMessages(context: LlmContext, conversationLimit: number): PromptMessage[] {
-  return conversationForPhase(context, conversationLimit).flatMap((message) => {
+function buildConversationMessages(input: PhaseInput, conversationLimit: number): PromptMessage[] {
+  return conversationForPhase(input.messages, conversationLimit).flatMap((message) => {
     const chatMessage = toConversationMessage(message);
     return chatMessage ? [chatMessage] : [];
   });
 }
 
 export function buildPrompt(input: {
-  context: LlmContext;
+  context: PhaseInput;
   tools?: PromptTool[];
   phasePromptBuilder: PhasePromptBuilder;
 }): Prompt {
@@ -110,7 +111,7 @@ export function buildPrompt(input: {
   const phasePromptMessage: PromptMessage = {
     role: "user",
     content: input.phasePromptBuilder.build({
-      context: input.context,
+      input: input.context,
       tools,
     }),
   };
@@ -119,7 +120,7 @@ export function buildPrompt(input: {
   return {
     phasePromptMessage,
     messages: [
-      buildSystemMessage(input.context),
+      buildSystemMessage(input.context.systemPrompt),
       ...buildConversationMessages(input.context, conversationLimit),
       phasePromptMessage,
     ],
@@ -127,7 +128,7 @@ export function buildPrompt(input: {
 }
 
 export function buildMessages(input: {
-  context: LlmContext;
+  context: PhaseInput;
   tools?: PromptTool[];
   phasePromptBuilder: PhasePromptBuilder;
 }): PromptMessage[] {
@@ -136,15 +137,15 @@ export function buildMessages(input: {
 
 export function createPromptBuilder(phasePromptBuilders: PhasePromptBuilder[]): {
   buildPrompt(input: {
-    context: LlmContext;
+    context: PhaseInput;
     tools?: PromptTool[];
   }): Prompt;
   buildMessages(input: {
-    context: LlmContext;
+    context: PhaseInput;
     tools?: PromptTool[];
   }): PromptMessage[];
 } {
-  const buildersByPhase = new Map<LlmContext["phase"], PhasePromptBuilder>();
+  const buildersByPhase = new Map<string, PhasePromptBuilder>();
   for (const builder of phasePromptBuilders) {
     if (buildersByPhase.has(builder.phase)) {
       throw new Error(`Duplicate prompt builder registered for phase "${builder.phase}".`);
@@ -152,10 +153,10 @@ export function createPromptBuilder(phasePromptBuilders: PhasePromptBuilder[]): 
     buildersByPhase.set(builder.phase, builder);
   }
 
-  function resolvePhasePromptBuilder(context: LlmContext): PhasePromptBuilder {
-    const builder = buildersByPhase.get(context.phase);
+  function resolvePhasePromptBuilder(phase: string): PhasePromptBuilder {
+    const builder = buildersByPhase.get(phase);
     if (!builder) {
-      throw new Error(`No prompt builder registered for phase "${context.phase}".`);
+      throw new Error(`No prompt builder registered for phase "${phase}".`);
     }
 
     return builder;
@@ -165,14 +166,14 @@ export function createPromptBuilder(phasePromptBuilders: PhasePromptBuilder[]): 
     buildPrompt(input) {
       return buildPrompt({
         ...input,
-        phasePromptBuilder: resolvePhasePromptBuilder(input.context),
+        phasePromptBuilder: resolvePhasePromptBuilder(input.context.phase),
       });
     },
 
     buildMessages(input) {
       return buildMessages({
         ...input,
-        phasePromptBuilder: resolvePhasePromptBuilder(input.context),
+        phasePromptBuilder: resolvePhasePromptBuilder(input.context.phase),
       });
     },
   };

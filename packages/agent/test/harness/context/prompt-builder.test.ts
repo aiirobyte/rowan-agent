@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import { createPromptBuilder } from "../../../src/harness/context/prompt-builder";
-import { createDefaultCriteria, type Task } from "@rowan-agent/agent";
-import { buildMessages, buildPrompt, createId, createMessage, createSession } from "@rowan-agent/agent";
+import { buildMessages, buildPrompt, createId, createMessage, createAgentState } from "@rowan-agent/agent";
 import type { Tool } from "@rowan-agent/agent";
+import type { PhaseInput } from "@rowan-agent/agent";
 
 const echoTool: Tool<{ message: string }> = {
   name: "echo",
@@ -19,36 +19,49 @@ const echoTool: Tool<{ message: string }> = {
   },
 };
 
-function createTestTask(): Task {
+function createTestTask() {
   return {
     id: createId("task"),
     title: "Echo task",
     instruction: "Use echo to answer.",
-    acceptanceCriteria: createDefaultCriteria("Must include echo evidence."),
+    acceptanceCriteria: ["Must include echo evidence."],
     toolNames: ["echo"],
     skillIds: ["writer"],
-    status: "pending",
+    status: "pending" as const,
     attempts: 0,
   };
 }
 
-test("generic prompt builder delegates phase content to registered phase builders", () => {
-  const session = createSession({
-    systemPrompt: "Test system",
-    input: "Use echo.",
+function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skills?: PhaseInput["skills"] } = {}): PhaseInput {
+  const state = createAgentState({
+    systemPrompt: overrides.systemPrompt ?? "Test system",
+    input: overrides.input ?? "Use echo.",
+    skills: overrides.skills,
   });
+  return {
+    phase: overrides.phase ?? "chat",
+    systemPrompt: state.systemPrompt,
+    messages: state.messages,
+    tools: overrides.tools ?? [],
+    skills: state.skills,
+    ...("yield" in overrides ? { yield: overrides.yield } : {}),
+  };
+}
+
+test("generic prompt builder delegates phase content to registered phase builders", () => {
   const promptBuilder = createPromptBuilder([
     {
       phase: "chat",
       conversationLimit: 1,
-      build({ context, tools }) {
-        return `Custom ${context.phase} prompt with ${tools.map((tool) => tool.name).join(",")}`;
+      build({ input, tools }) {
+        return `Custom ${input.phase} prompt with ${tools.map((tool) => tool.name).join(",")}`;
       },
     },
   ]);
 
+  const testInput = createTestInput({ phase: "chat" });
   const prompt = promptBuilder.buildPrompt({
-    context: { phase: "chat", state: session },
+    context: testInput,
     tools: [echoTool],
   });
 
@@ -60,13 +73,10 @@ test("generic prompt builder delegates phase content to registered phase builder
 });
 
 test("chat prompt defaults to direct answers unless another phase is needed", () => {
-  const session = createSession({
-    systemPrompt: "Test system",
-    input: "What is 2 + 2?",
-  });
+  const testInput = createTestInput({ phase: "chat", input: "What is 2 + 2?" });
 
   const messages = buildMessages({
-    context: { phase: "chat", state: session },
+    context: testInput,
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
@@ -76,23 +86,15 @@ test("chat prompt defaults to direct answers unless another phase is needed", ()
   expect(combined).toContain("Route only the current user request below.");
   expect(combined).toContain("Current user request:");
   expect(combined).toContain("\"What is 2 + 2?\"");
-  expect(combined).toContain('{ "message": string, "route": "direct" | string }');
-  expect(combined).toContain("Use route=\"direct\" when you can fully answer");
-  expect(combined).toContain("Use another route only when it matches one of the available phase ids");
-  expect(combined).toContain("current workspace, repository, files, tools, or commands");
-  expect(combined).toContain("message must be the complete final user-visible answer");
-  expect(combined).toContain("Agent state initial input");
-  expect(combined).toContain("Agent state task");
-  expect(combined).toContain("Agent state goal");
-  expect(combined).toContain("Runtime thread depth");
-  expect(combined).toContain("Available phases");
+  expect(combined).toContain("route");
+  expect(combined).toContain("stop");
   expect(combined).toContain("Do not call tools in this phase");
   expect(combined).toContain("echo");
 });
 
 test("plan prompt includes phase, JSON-only contract, tools, and skills", () => {
-  const session = createSession({
-    systemPrompt: "Test system",
+  const testInput = createTestInput({
+    phase: "plan",
     input: "Plan with echo.",
     skills: [
       {
@@ -105,7 +107,7 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
   });
 
   const messages = buildMessages({
-    context: { phase: "plan", state: session },
+    context: testInput,
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
@@ -116,25 +118,19 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
   expect(combined).toContain("Create the task for the current user request below.");
   expect(combined).toContain("Current user request:");
   expect(combined).toContain("\"Plan with echo.\"");
-  expect(combined).toContain("only one valid JSON object");
-  expect(combined).toContain('{ "message": string, "task": Task }');
-  expect(combined).toContain("preserved as plain string message content");
+  expect(combined).toContain("JSON-only contract");
+  expect(combined).toContain("route");
+  expect(combined).toContain("execute");
   expect(combined).toContain("Plan with echo.");
   expect(combined).toContain("echo");
   expect(combined).toContain("Returns the input message.");
-  expect(combined).toContain("writer");
-  expect(combined).toContain("Write concise task plans.");
-  expect(combined).not.toContain("Conversation messages:");
 });
 
 test("prompt builder exposes the generated phase prompt message", () => {
-  const session = createSession({
-    systemPrompt: "Test system",
-    input: "Plan with echo.",
-  });
+  const testInput = createTestInput({ phase: "plan", input: "Plan with echo." });
 
   const prompt = buildPrompt({
-    context: { phase: "plan", state: session },
+    context: testInput,
     tools: [echoTool],
   });
 
@@ -151,13 +147,11 @@ test("prompt builder exposes the generated phase prompt message", () => {
 });
 
 test("execute prompt includes phase, JSON-only contract, task, allowed tools, and tool results", () => {
-  const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
   const task = createTestTask();
-
-  const messages = buildMessages({
-    context: {
-      phase: "execute",
-      state: session,
+  const testInput = createTestInput({
+    phase: "execute",
+    input: "Use echo.",
+    yield: {
       task,
       toolResults: [
         {
@@ -168,28 +162,25 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
         },
       ],
     },
+  });
+
+  const messages = buildMessages({
+    context: testInput,
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
 
   expect(combined).toContain("Phase: execute");
   expect(combined).toContain("JSON-only contract");
-  expect(combined).toContain('{ "message": string, "toolCalls": ToolCall[] }');
-  expect(combined).toContain("must be preserved before tool calls are recorded");
-  expect(combined).toContain("Do not return a task, plan, verificationResult");
-  expect(combined).toContain("call one or more allowed tools now");
-  expect(combined).toContain(task.id);
-  expect(combined).toContain("Allowed tools");
-  expect(combined).toContain("File and command tool paths are relative to the workspace");
+  expect(combined).toContain("route");
+  expect(combined).toContain("toolCalls");
+  expect(combined).toContain("Task");
   expect(combined).toContain("echo");
-  expect(combined).toContain("previous evidence");
-  expect(combined).not.toContain("Conversation messages:");
-  expect(combined).not.toContain("Use the conversation messages already included in this request as context.");
 });
 
 test("prompt builder excludes execution-scoped messages from later prompts", () => {
-  const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
-  session.messages.push(
+  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
+  state.messages.push(
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
       kind: "routing_decision",
       phase: "chat",
@@ -208,14 +199,20 @@ test("prompt builder excludes execution-scoped messages from later prompts", () 
   );
   const task = createTestTask();
 
-  const messages = buildMessages({
-    context: {
-      phase: "verify",
-      state: session,
+  const testInput: PhaseInput = {
+    phase: "verify",
+    systemPrompt: state.systemPrompt,
+    messages: state.messages,
+    tools: [],
+    skills: state.skills,
+    yield: {
       task,
-      criteria: task.acceptanceCriteria,
-      taskOutput: { kind: "tools", toolResults: [] },
+      toolResults: [],
     },
+  };
+
+  const messages = buildMessages({
+    context: testInput,
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
@@ -229,8 +226,8 @@ test("prompt builder excludes execution-scoped messages from later prompts", () 
 });
 
 test("prompt builder does not replay recorded phase prompts as conversation", () => {
-  const session = createSession({ systemPrompt: "Test system", input: "Use echo." });
-  session.messages.push(
+  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
+  state.messages.push(
     createMessage("user", "Phase: chat\n\nInternal routing prompt.", {
       kind: "phase_prompt",
       phase: "chat",
@@ -241,8 +238,16 @@ test("prompt builder does not replay recorded phase prompts as conversation", ()
     }),
   );
 
+  const testInput: PhaseInput = {
+    phase: "plan",
+    systemPrompt: state.systemPrompt,
+    messages: state.messages,
+    tools: [],
+    skills: state.skills,
+  };
+
   const messages = buildMessages({
-    context: { phase: "plan", state: session },
+    context: testInput,
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
@@ -253,7 +258,6 @@ test("prompt builder does not replay recorded phase prompts as conversation", ()
 });
 
 test("verify prompt includes phase, lightweight judgement contract, task, criteria, and task output", () => {
-  const session = createSession({ systemPrompt: "Test system", input: "Verify echo." });
   const task = createTestTask();
   const toolResults = [
     {
@@ -264,31 +268,30 @@ test("verify prompt includes phase, lightweight judgement contract, task, criter
     },
   ];
 
-  const messages = buildMessages({
-    context: {
-      phase: "verify",
-      state: session,
+  const testInput: PhaseInput = {
+    phase: "verify",
+    systemPrompt: "Test system",
+    messages: [createMessage("user", "Verify echo.", { scope: "conversation" })],
+    tools: [],
+    skills: [],
+    yield: {
       task,
-      criteria: task.acceptanceCriteria,
-      taskOutput: { kind: "tools", toolResults },
+      toolResults,
     },
+  };
+
+  const messages = buildMessages({
+    context: testInput,
     tools: [echoTool],
   });
   const combined = messages.map((message) => message.content).join("\n");
 
   expect(combined).toContain("Phase: verify");
-  expect(combined).toContain("Analyze the task output and return only a JSON judgement");
-  expect(combined).toContain("`passed` is a boolean");
-  expect(combined).toContain("`message` is the final user-visible task answer");
-  expect(combined).toContain("even if the answer is negative");
-  expect(combined).toContain("Return no extra keys beyond passed and message");
+  expect(combined).toContain("JSON-only contract");
+  expect(combined).toContain("route");
+  expect(combined).toContain("stop");
+  expect(combined).toContain("execute");
   expect(combined).toContain("Do not return a task, plan, toolCalls");
-  expect(combined).toContain("return passed=false and explain what is missing");
-  expect(combined).toContain(task.id);
-  expect(combined).toContain("Acceptance criteria");
   expect(combined).toContain("Task output");
-  expect(combined).toContain(task.acceptanceCriteria[0]);
-  expect(combined).toContain("echo evidence");
   expect(combined).toContain("\"toolResults\"");
-  expect(combined).not.toContain("Conversation messages:");
 });

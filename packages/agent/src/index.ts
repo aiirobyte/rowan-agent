@@ -28,7 +28,6 @@ export {
   type AgentPhasePlugin,
   type PhaseContext,
   type PhaseDefinition,
-  type PhaseTransition,
 } from "./loop/phases";
 
 export {
@@ -39,7 +38,6 @@ export {
 
 export {
   type ToolDefinition,
-  createDefaultCriteria,
   type ExecutionTurn,
 } from "./protocol";
 

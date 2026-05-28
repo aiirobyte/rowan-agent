@@ -35,7 +35,6 @@ function createTestContext(runtime: AgentLoopRuntime): PhaseContext {
       agentState: runtime.agentState,
       currentPhase: "test",
       attempt: 0,
-      toolResults: [],
       limitUsage: { modelCalls: 0, toolCalls: 0 },
       depth: { threadDepth: 0, maxThreadDepth: 4 },
     },
@@ -44,8 +43,18 @@ function createTestContext(runtime: AgentLoopRuntime): PhaseContext {
       append: async () => {},
       appendState: async () => {},
     },
+    message: {
+      start: () => "msg_1",
+      update: async () => {},
+      end: async () => {},
+    },
+    toolExecution: {
+      start: async () => {},
+      update: async () => {},
+      end: async () => {},
+    },
     model: {
-      collect: async () => ({ text: "", toolCalls: [] }),
+      collect: async () => ({ text: "", structured: undefined }),
     },
     tools: {
       execute: async () => ({ toolCallId: "tc", toolName: "t", ok: true, content: null }),
@@ -59,15 +68,14 @@ function createTestContext(runtime: AgentLoopRuntime): PhaseContext {
     emit: async () => {},
     consumeLimit: () => {},
     incrementAttempt: () => {},
-    setTask: () => {},
     setLastExecuteText: () => {},
     availablePhases: [],
   };
 }
 
-function testPhase<TInput = unknown, TOutput = unknown>(
-  definition: Omit<PhaseDefinition<TInput, TOutput>, "name" | "description">,
-): PhaseDefinition<TInput, TOutput> {
+function testPhase(
+  definition: Omit<PhaseDefinition, "name" | "description">,
+): PhaseDefinition {
   return {
     name: "Test",
     description: "Test phase",
@@ -83,33 +91,45 @@ describe("runPhase contract", () => {
   test("runPhase accepts already-built input and returns output directly", async () => {
     const runtime = createTestRuntime();
     const context = createTestContext(runtime);
-    const builtInput = { value: "pre-built" };
+    const builtInput = {
+      phase: "test",
+      systemPrompt: "test",
+      messages: [],
+      tools: [],
+      skills: [],
+    };
 
-    const definition = testPhase<{ value: string }, { result: string }>({
+    const definition = testPhase({
       id: "test",
       run: async (_ctx, input) => {
-        expect(input).toEqual({ value: "pre-built" });
-        return { result: "output" };
+        expect(input).toHaveProperty("systemPrompt");
+        return { message: "output", route: "stop" };
       },
     });
 
     const output = await definition.run(context, builtInput);
 
-    expect(output).toEqual({ result: "output" });
+    expect(output).toEqual({ message: "output", route: "stop" });
   });
 
-  test("runPhase returns output without constructing a PhaseTransition", async () => {
+  test("runPhase returns output with route for transitions", async () => {
     const runtime = createTestRuntime();
     const context = createTestContext(runtime);
 
-    const definition = testPhase<string, { answer: number }>({
+    const definition = testPhase({
       id: "test",
-      run: async () => ({ answer: 42 }),
+      run: async () => ({ message: "answer", route: "stop" }),
     });
 
-    const output = await definition.run(context, "input");
+    const output = await definition.run(context, {
+      phase: "test",
+      systemPrompt: "test",
+      messages: [],
+      tools: [],
+      skills: [],
+    });
 
-    expect(output).toEqual({ answer: 42 });
+    expect(output).toEqual({ message: "answer", route: "stop" });
     expect(output).not.toHaveProperty("type");
     expect(output).not.toHaveProperty("phaseId");
     expect(output).not.toHaveProperty("outcome");
@@ -120,38 +140,33 @@ describe("runPhase contract", () => {
     const context = createTestContext(runtime);
     let receivedContext: unknown;
 
-    const definition = testPhase<string, void>({
+    const definition = testPhase({
       id: "test",
       run: async (ctx) => {
         receivedContext = ctx;
+        return { message: "", route: "stop" };
       },
     });
 
-    await definition.run(context, "input");
+    await definition.run(context, {
+      phase: "test",
+      systemPrompt: "test",
+      messages: [],
+      tools: [],
+      skills: [],
+    });
 
     expect(receivedContext).toBeDefined();
     expect(receivedContext).toHaveProperty("phaseId");
     expect(receivedContext).toHaveProperty("messages");
+    expect(receivedContext).toHaveProperty("message");
+    expect(receivedContext).toHaveProperty("toolExecution");
     expect(receivedContext).toHaveProperty("model");
     expect(receivedContext).toHaveProperty("tools");
     expect(receivedContext).toHaveProperty("emit");
     expect(receivedContext).not.toHaveProperty("agentState");
     expect(receivedContext).not.toHaveProperty("currentTask");
     expect(receivedContext).not.toHaveProperty("attempt");
-  });
-
-  test("runPhase returns void output when definition.run returns undefined", async () => {
-    const runtime = createTestRuntime();
-    const context = createTestContext(runtime);
-
-    const definition = testPhase<string, void>({
-      id: "test",
-      run: async () => {},
-    });
-
-    const output = await definition.run(context, "input");
-
-    expect(output).toBeUndefined();
   });
 
   test("runPhase provides runs.create through PhaseContext", async () => {
@@ -176,14 +191,21 @@ describe("runPhase contract", () => {
 
     let receivedCreateRun: unknown;
 
-    const definition = testPhase<string, void>({
+    const definition = testPhase({
       id: "test",
       run: async (ctx) => {
         receivedCreateRun = ctx.runs.create;
+        return { message: "", route: "stop" };
       },
     });
 
-    await definition.run(context, "input");
+    await definition.run(context, {
+      phase: "test",
+      systemPrompt: "test",
+      messages: [],
+      tools: [],
+      skills: [],
+    });
 
     expect(receivedCreateRun).toBe(customCreateRun);
   });
@@ -195,11 +217,11 @@ describe("runPhase contract", () => {
 
 describe("loop-owned input builders", () => {
   test("PhaseDefinition has no buildInput field", () => {
-    const definition: PhaseDefinition<string, string> = {
+    const definition: PhaseDefinition = {
       id: "test",
       name: "Test",
       description: "Test phase",
-      run: async () => "output",
+      run: async () => ({ message: "output", route: "stop" }),
     };
 
     expect(definition).not.toHaveProperty("buildInput");
@@ -228,11 +250,11 @@ describe("loop-owned input builders", () => {
 
 describe("loop-owned output appliers", () => {
   test("PhaseDefinition has no apply field", () => {
-    const definition: PhaseDefinition<string, string> = {
+    const definition: PhaseDefinition = {
       id: "test",
       name: "Test",
       description: "Test phase",
-      run: async () => "output",
+      run: async () => ({ message: "output", route: "stop" }),
     };
 
     expect(definition).not.toHaveProperty("apply");

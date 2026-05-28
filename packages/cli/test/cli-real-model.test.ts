@@ -122,7 +122,7 @@ async function readLogEvents(path: string): Promise<LoggedEventSummary[]> {
 }
 
 function eventSessionId(event: AgentEvent): string | undefined {
-  if ((event.type === "chat_start" || event.type === "chat_end") && "parentSessionId" in event) {
+  if ((event.type === "turn_start" || event.type === "turn_end") && "parentSessionId" in event) {
     return event.parentSessionId;
   }
   return undefined;
@@ -136,7 +136,7 @@ async function summarizeLogFile(filePath: string): Promise<LogSummary> {
     if (event.sessionId) {
       sessionIds.add(event.sessionId);
     }
-    if (event.event && (event.event.type === "chat_start" || event.event.type === "chat_end") && "parentSessionId" in event.event && event.event.parentSessionId) {
+    if (event.event && (event.event.type === "turn_start" || event.event.type === "turn_end") && "parentSessionId" in event.event && event.event.parentSessionId) {
       sessionIds.add(event.event.parentSessionId);
     }
   }
@@ -533,7 +533,7 @@ test("CLI writes a default log without --log", async () => {
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
     expect(result.stderr).not.toContain("\"eventType\":\"agent_state_created\"");
     expect(result.stderr).not.toContain("\"eventType\":\"agent_state_loaded\"");
-    expect(result.stderr).toContain("\"eventType\":\"chat_start\"");
+    expect(result.stderr).toContain("\"eventType\":\"turn_start\"");
     expect(result.stderr).toContain("\"eventType\":\"model_requested\"");
     expect(result.stderr).toContain("\"eventType\":\"outcome\"");
     const metadataLines = result.stderr
@@ -554,17 +554,17 @@ test("CLI writes a default log without --log", async () => {
     const [firstEvent] = await readLogEvents(logPath);
     expect(firstRecord?.time).toEqual(expect.any(Number));
     expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
-    expect(firstEvent?.type).toBe("chat_start");
+    expect(firstEvent?.type).toBe("turn_start");
     expect(firstRecord?.timestamp).toBeUndefined();
     expect(firstRecord?.event).toBeUndefined();
     expect(firstRecord).toMatchObject({
       level: 30,
-      eventType: "chat_start",
+      eventType: "turn_start",
     });
     expect(firstRecord?.msg).toBeUndefined();
     expect(logText).not.toContain("\"eventType\":\"agent_state_created\"");
     expect(logText).not.toContain("\"eventType\":\"agent_state_loaded\"");
-    expect(logText).toContain("\"eventType\":\"chat_start\"");
+    expect(logText).toContain("\"eventType\":\"turn_start\"");
     expect(logText).not.toContain("\"msg\":");
     expect(logText).not.toContain("\"event\":");
     expect(logText).not.toContain("\"input\":\"hello\"");
@@ -623,7 +623,7 @@ test("CLI --log-level debug writes redacted event payloads", async () => {
     const logText = await Bun.file(logPath).text();
     const [firstRecord] = await readLogRecords(logPath);
     expect(firstRecord?.event).toMatchObject({
-      type: "chat_start",
+      type: "turn_start",
       content: [expect.objectContaining({ content: "hello" })],
     });
     expect(logText).toContain("\"event\":");
@@ -811,7 +811,7 @@ test("CLI --session continues a saved one-shot session", async () => {
     const summaries = await Promise.all(
       logFiles.map((file) => summarizeLogFile(join(runsDir, file))),
     );
-    expect(summaries.every((summary) => summary.eventTypes.chat_start === 1)).toBe(true);
+    expect(summaries.every((summary) => summary.eventTypes.turn_start === 1)).toBe(true);
     expect(summaries.every((summary) => summary.eventTypes.agent_state_created === undefined)).toBe(true);
     expect(summaries.every((summary) => summary.eventTypes.agent_state_loaded === undefined)).toBe(true);
     expect(second.stderr).toContain(`-${sessionId}.jsonl`);
@@ -881,7 +881,7 @@ test("CLI initial prompt continues into the default interactive session", async 
     expect(logFiles).toHaveLength(1);
     expect(logFiles[0]?.endsWith(`-${sessionId}.jsonl`)).toBe(true);
     const summary = await summarizeLogFile(join(runsDir, logFiles[0] ?? ""));
-    expect(summary.eventTypes.chat_start).toBe(2);
+    expect(summary.eventTypes.turn_start).toBe(2);
     expect(summary.eventTypes.agent_state_created).toBeUndefined();
     expect(summary.eventTypes.agent_state_loaded).toBeUndefined();
     expect(summary.eventTypes.session_start).toBeUndefined();
@@ -941,7 +941,7 @@ test("CLI --session can continue with additional interactive turns", async () =>
     const summaries = await Promise.all(
       logFiles.map((file) => summarizeLogFile(join(runsDir, file))),
     );
-    const loadedSummary = summaries.find((summary) => summary.eventTypes.chat_start === 2);
+    const loadedSummary = summaries.find((summary) => summary.eventTypes.turn_start === 2);
     expect(loadedSummary).toBeDefined();
     expect(loadedSummary?.eventTypes.agent_state_created).toBeUndefined();
     expect(loadedSummary?.eventTypes.agent_state_loaded).toBeUndefined();
@@ -949,7 +949,7 @@ test("CLI --session can continue with additional interactive turns", async () =>
     expect(loadedSummary?.eventTypes.session_end).toBeUndefined();
 
     const [firstEvent] = await readLogEvents(loadedSummary?.filePath ?? "");
-    expect(firstEvent?.type).toBe("chat_start");
+    expect(firstEvent?.type).toBe("turn_start");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

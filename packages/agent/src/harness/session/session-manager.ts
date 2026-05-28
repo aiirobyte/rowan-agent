@@ -18,8 +18,6 @@ export type SessionHeader = {
   systemPrompt: string;
   input: string;
   parentSessionId?: string;
-  task?: string;
-  goal?: string;
   skills: Skill[];
   title?: string;
   currentLeafId?: string | null;
@@ -107,8 +105,6 @@ export type CreateSessionManagerInput = {
   systemPrompt: string;
   input: string;
   parentSessionId?: string;
-  task?: string;
-  goal?: string;
   skills?: Skill[];
   title?: string;
 };
@@ -154,8 +150,6 @@ export function createSessionHeader(input: CreateSessionManagerInput): SessionHe
     systemPrompt: input.systemPrompt,
     input: input.input,
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
-    ...(input.task ? { task: input.task } : {}),
-    ...(input.goal ? { goal: input.goal } : {}),
     skills: input.skills?.map(clone) ?? [],
     ...(input.title ? { title: input.title } : {}),
     currentLeafId: null,

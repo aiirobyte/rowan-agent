@@ -16,8 +16,6 @@ test("SessionStore persists versioned conversation messages and metadata", async
   const session = createSession({
     systemPrompt: "Test system",
     input: "hello",
-    task: "Say hello",
-    goal: "A greeting is returned.",
     title: "Greeting",
   });
   appendUserTurn(session, "second turn");
@@ -35,8 +33,6 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(persisted.id).toBe(session.id);
   expect(persisted.input).toBe("hello");
   expect(persisted).not.toHaveProperty("userInput");
-  expect(persisted.task).toBe("Say hello");
-  expect(persisted.goal).toBe("A greeting is returned.");
   expect(persisted.title).toBe("Greeting");
   expect(persisted.messages.some((message) => message.content.includes("\"route\":\"direct\""))).toBe(false);
 
@@ -53,8 +49,6 @@ test("SessionStore persists versioned conversation messages and metadata", async
   const loaded = await store.load(session.id);
   expect(loaded?.id).toBe(session.id);
   expect(loaded?.input).toBe("hello");
-  expect(loaded?.task).toBe("Say hello");
-  expect(loaded?.goal).toBe("A greeting is returned.");
   expect(loaded ? latestUserInput(loaded) : undefined).toBe("second turn");
   expect(loaded?.log).toEqual([]);
   expect(loaded?.messages.map((message) => message.content)).not.toContain(

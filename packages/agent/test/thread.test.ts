@@ -3,7 +3,6 @@ import Type from "typebox";
 import { createSession } from "@rowan-agent/agent";
 import { Agent } from "../src/agent";
 import { runAgentLoop } from "../src/agent-loop";
-import { createDefaultCriteria } from "@rowan-agent/agent";
 import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
@@ -19,7 +18,7 @@ function detectPhase(messages: LlmRequest["messages"]): string {
 }
 
 function isThreadRun(messages: LlmRequest["messages"]): boolean {
-  return messages.some((m) => (m.content as string).includes("Agent state task:"));
+  return messages.some((m) => (m.content as string).includes("nested request"));
 }
 
 type ThreadResult = Extract<Awaited<ReturnType<typeof runAgentLoop>>, { kind: "thread" }>;
@@ -61,11 +60,11 @@ test("runAgentLoop creates a thread session with explicit tools and skills", asy
   expect(events).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
-        type: "chat_start",
+        type: "turn_start",
         parentSessionId: "ses_parent",
       }),
       expect.objectContaining({
-        type: "chat_end",
+        type: "turn_end",
         parentSessionId: "ses_parent",
       }),
     ]),
@@ -216,7 +215,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
           id: createId("task"),
           title: "Delegate thread work",
           instruction: "Ask a nested thread to use echo.",
-          acceptanceCriteria: createDefaultCriteria("Nested thread outcome must pass."),
+          acceptanceCriteria: ["Nested thread outcome must pass."],
           toolNames: ["delegate"],
           skillIds: [],
           status: "pending",
@@ -232,6 +231,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
         type: "text_delta",
         text: JSON.stringify({
           message: "Calling delegate tool.",
+          route: "verify",
           toolCalls: [
             {
               id: createId("call"),
@@ -251,6 +251,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       text: JSON.stringify({
         passed: true,
         message: "Nested thread outcome was returned.",
+        route: "stop",
       }),
     };
     yield { type: "done" };
@@ -259,8 +260,6 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
   const session = createSession<AgentEvent>({
     systemPrompt: "Test system",
     input: "call helper tool",
-    task: "Call helper tool.",
-    goal: "Nested thread outcome must be returned as delegate evidence.",
   });
   const agent = new Agent({
     context: createTestContext({
@@ -292,6 +291,6 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
         event.result.content.passed === true,
     ),
   ).toBe(true);
-  expect(events.some((event) => event.type === "chat_start" && "parentSessionId" in event)).toBe(true);
-  expect(events.some((event) => event.type === "chat_end" && "parentSessionId" in event)).toBe(true);
+  expect(events.some((event) => event.type === "turn_start" && "parentSessionId" in event)).toBe(true);
+  expect(events.some((event) => event.type === "turn_end" && "parentSessionId" in event)).toBe(true);
 });

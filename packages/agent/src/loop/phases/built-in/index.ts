@@ -14,7 +14,7 @@ import { verifyHandler } from "./verify";
 // Handler Registry
 // ============================================================================
 
-const handlers: Record<string, PhaseHandler<any, any>> = {
+const handlers: Record<string, PhaseHandler> = {
   chat: chatHandler,
   plan: planHandler,
   execute: executeHandler,
@@ -34,11 +34,11 @@ export const verifyPhaseDefinition = verifyHandler.definition;
 // Handler Access
 // ============================================================================
 
-export function getPhaseHandler(phaseId: string): PhaseHandler<any, any> | undefined {
+export function getPhaseHandler(phaseId: string): PhaseHandler | undefined {
   return handlers[phaseId];
 }
 
-export function getBuiltinHandlers(): PhaseHandler<any, any>[] {
+export function getBuiltinHandlers(): PhaseHandler[] {
   return Object.values(handlers);
 }
 

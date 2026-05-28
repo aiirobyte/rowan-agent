@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDefaultCriteria } from "@rowan-agent/agent";
 import { createSession } from "@rowan-agent/agent";
 import {
   detectRuntimeMode,
@@ -16,21 +15,9 @@ import { createCoreTools } from "../../../src/harness/tools";
 import { loadSkill, resolveSkillPath } from "../../../src/harness/skills";
 
 function createToolContext(toolCallId = createId("call")): ToolContext {
-  const task = {
-    id: createId("task"),
-    title: "Core tool task",
-    instruction: "Use core tools",
-    acceptanceCriteria: createDefaultCriteria("Core tools were used."),
-    toolNames: [],
-    skillIds: [],
-    status: "pending" as const,
-    attempts: 0,
-  };
-
   const state = createSession({ systemPrompt: "test", input: "inspect" });
   return {
     state,
-    task,
     toolCallId,
   };
 }

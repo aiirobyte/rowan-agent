@@ -1,11 +1,7 @@
-import { createId, createMessage, Validators } from "../../../../types";
-import type { Outcome, PhaseOutput } from "../../../../types";
-import type { LlmContext } from "../../../../protocol";
-import type { ChatInput } from "../../../types";
-import type { PhaseContext } from "../../config";
+import { createId, createMessage } from "../../../../types";
+import type { PhaseInput, PhaseOutput, PhaseContext } from "../../config";
 import { createPhaseDefinition, type PhaseHandler } from "../types";
-import type { PromptTool } from "../../../../harness/context/prompt-builder";
-import { toJson, latestUserInput, serializeSkills, serializeTools } from "../../../../harness/context/prompt-builder";
+import { toJson, serializeTools } from "../../../../harness/context/prompt-builder";
 import manifestJson from "./manifest.json";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -16,15 +12,7 @@ function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function createDirectOutcome(message: string): Outcome {
-  return Validators.outcome.Parse({
-    id: createId("out"),
-    passed: true,
-    message,
-  });
-}
-
-export function parseChatOutput(value: unknown, input: ChatInput): PhaseOutput {
+export function parseChatOutput(value: unknown): { route: string; message: string } {
   if (!isRecord(value)) {
     throw new Error("Expected chat output to be an object.");
   }
@@ -38,29 +26,18 @@ export function parseChatOutput(value: unknown, input: ChatInput): PhaseOutput {
     asNonEmptyString(value.message) ??
     asNonEmptyString(value.answer) ??
     asNonEmptyString(value.response) ??
-    (route === "direct" ? "Done." : "Creating a task for this request.");
-  const text = asNonEmptyString(value.text) ?? message;
+    (route === "stop" ? "Done." : "Creating a task for this request.");
 
-  const availablePhaseIds = new Set((input.availablePhases ?? []).map((phase) => phase.id));
-  if (route !== "direct" && (!availablePhaseIds.has(route) || route === "chat")) {
-    throw new Error(`Chat phase routed to unavailable phase "${route}".`);
-  }
-
-  return { route, message, text };
+  return { route, message };
 }
 
 export async function runChatPhase(
   context: PhaseContext,
-  input: ChatInput,
+  input: PhaseInput,
 ): Promise<PhaseOutput> {
   const collected = await context.model.collect({
     phase: "chat",
-    payload: {
-      phase: "chat",
-      state: input.state,
-      runtime: input.runtime,
-      availablePhases: input.availablePhases,
-    },
+    input,
     recordText: false,
   });
 
@@ -69,27 +46,21 @@ export async function runChatPhase(
     throw new Error("Chat phase did not produce a structured phase output.");
   }
 
-  const output = parseChatOutput(rawOutput, input);
-  if (output.route !== "direct") {
-    await context.messages.append(
-      createMessage("assistant", JSON.stringify(output), {
-        kind: "phase_output",
-        phase: "chat",
-        scope: "execution",
-      }),
-    );
+  const { route: rawRoute, message } = parseChatOutput(rawOutput);
+
+  // Normalize route: "direct" is an alias for "stop"
+  const route = rawRoute === "direct" ? "stop" : rawRoute;
+
+  // Validate route
+  const availablePhaseIds = new Set(context.availablePhases.map((p) => p.id));
+  if (route !== "stop" && (!availablePhaseIds.has(route) || route === "chat")) {
+    throw new Error(`Chat phase routed to unavailable phase "${route}".`);
   }
-  return output;
+
+  return { message, route };
 }
 
-function requireChatContext(context: LlmContext): Extract<LlmContext, { phase: "chat" }> {
-  if (context.phase !== "chat") {
-    throw new Error(`Expected chat context, received ${context.phase}.`);
-  }
-  return context as Extract<LlmContext, { phase: "chat" }>;
-}
-
-export const chatHandler: PhaseHandler<ChatInput, PhaseOutput> = {
+export const chatHandler: PhaseHandler = {
   definition: createPhaseDefinition(manifestJson, async (context, input) => {
     return runChatPhase(context, input);
   }),
@@ -98,71 +69,58 @@ export const chatHandler: PhaseHandler<ChatInput, PhaseOutput> = {
 
   buildInput(context) {
     return {
-      state: context.state.agentState,
-      runtime: context.state.depth,
+      phase: "chat",
+      systemPrompt: context.state.agentState.systemPrompt,
+      messages: context.messages.visible(),
       tools: [],
-      availablePhases: context.availablePhases.filter((p) => p.id !== "chat"),
-      workerTask: context.state.depth.threadDepth > 0 ? context.state.agentState.task : undefined,
-      workerGoal: context.state.depth.threadDepth > 0 ? context.state.agentState.goal : undefined,
+      skills: context.skills,
     };
   },
 
-  buildPrompt(context, tools) {
-    const ctx = requireChatContext(context);
-    const availablePhases = ctx.availablePhases ?? [];
+  buildPrompt(input) {
+    // Find the original user input, filtering out internal messages
+    const userMessages = input.messages.filter((m) => m.role === "user" && m.metadata?.scope === "conversation");
+    const latestUserMsg = userMessages[userMessages.length - 1];
     return [
       "Phase: chat",
       "",
-      'JSON-only contract: output exactly an object shaped like `{ "message": string, "route": "direct" | string }`.',
-      'Use route="direct" when you can fully answer the user without another loop phase.',
+      'JSON-only contract: output exactly an object shaped like `{ "message": string, "route": "stop" | string }`.',
+      'Use route="stop" when you can fully answer the user without another loop phase.',
       "Use another route only when it matches one of the available phase ids below.",
-      'When route="direct", message must be the complete final user-visible answer in the user\'s language.',
+      'When route="stop", message must be the complete final user-visible answer in the user\'s language.',
       "When route is another phase id, message is only a concise routing status.",
       "Do not call tools in this phase; only answer directly or choose the next phase.",
-      "If the user asks about the current workspace, repository, files, tools, or commands, route to an available tool-backed phase instead of guessing.",
-      "If Agent state task or Agent state goal is present, this is a worker thread; prioritize that task/goal over broad delegation.",
       "Route only the current user request below. Use prior conversation only as context.",
       "",
       "Current user request:",
-      toJson(latestUserInput(ctx)),
-      "",
-      "Agent state initial input:",
-      toJson(ctx.state.input),
-      "",
-      "Agent state task:",
-      toJson(ctx.state.task ?? null),
-      "",
-      "Agent state goal:",
-      toJson(ctx.state.goal ?? null),
-      "",
-      "Runtime thread depth:",
-      toJson(ctx.runtime ?? null),
-      "",
-      "Available phases:",
-      toJson(availablePhases),
-      "",
-      "Loaded skills summary:",
-      toJson(serializeSkills(ctx)),
+      toJson(latestUserMsg?.content ?? ""),
       "",
       "Available tools with name, description, and parameters:",
-      toJson(serializeTools(tools)),
+      toJson(serializeTools(input.tools)),
     ].join("\n");
   },
 
-  async applyOutput(context, _input, output) {
-    if (output.route === "direct") {
-      const outcome = createDirectOutcome(output.message);
-      await context.messages.appendState(
-        createMessage("assistant", outcome.message, {
-          kind: "direct_answer",
-          scope: "conversation",
+  async finalize(context, output) {
+    if (output.route === "stop") {
+      // Direct answer — emit through message lifecycle
+      const msgId = context.message.start("assistant", output.message, {
+        kind: "direct_answer",
+        scope: "conversation",
+      });
+      await context.message.end(msgId);
+    } else {
+      // Routing decision — append as execution message (no lifecycle events)
+      context.messages.appendState(
+        createMessage("assistant", JSON.stringify(output), {
+          kind: "phase_output",
+          phase: "chat",
+          scope: "execution",
         }),
       );
-      return { type: "stop", outcome };
     }
+  },
 
-    return { type: "next", phaseId: output.route };
+  createOutcome(output) {
+    return { id: createId("out"), passed: true, message: output.message };
   },
 };
-
-export type { ChatInput } from "../../../types";

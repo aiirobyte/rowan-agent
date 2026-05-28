@@ -93,8 +93,6 @@ export type Session<TLogEvent = never> = {
   parentSessionId?: string;
   systemPrompt: string;
   input: string;
-  task?: string;
-  goal?: string;
   messages: AgentMessage[];
   log: TLogEvent[];
   skills: Skill[];
@@ -158,8 +156,6 @@ export function createSession<TLogEvent = never>(input: {
   id?: string;
   systemPrompt: string;
   input: string;
-  task?: string;
-  goal?: string;
   skills?: Skill[];
   parentSessionId?: string;
   title?: string;
@@ -175,8 +171,6 @@ export function createSession<TLogEvent = never>(input: {
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
     systemPrompt: input.systemPrompt,
     input: input.input,
-    ...(input.task ? { task: input.task } : {}),
-    ...(input.goal ? { goal: input.goal } : {}),
     messages,
     log: [],
     skills: input.skills ?? [],

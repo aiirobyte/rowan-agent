@@ -1,11 +1,11 @@
-import type { LoopPhase, LoopPhaseOutputMap } from "../src/types";
+import type { LoopPhase } from "../src/types";
+import type { PhaseOutput } from "../src/loop/phases/config";
 import type { LlmRequest, LlmStreamEvent } from "@rowan-agent/models";
 
 const chatPhase: LoopPhase = "chat";
-const chatOutput: LoopPhaseOutputMap["chat"] = {
-  route: "direct",
+const chatOutput: PhaseOutput = {
+  route: "stop",
   message: "Hello.",
-  text: "Hello.",
 };
 
 void chatPhase;

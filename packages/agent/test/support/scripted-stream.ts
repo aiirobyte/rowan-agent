@@ -1,6 +1,5 @@
 import type { LlmRequest, StreamFn } from "../../src/types";
 import { createId } from "../../src/types";
-import { createDefaultCriteria } from "@rowan-agent/agent";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -44,11 +43,11 @@ function createScriptedTask(input: string, skillIds: string[]): {
     id: createId("task"),
     title: shouldUseEcho ? "Use echo tool" : "Respond to user",
     instruction: input,
-    acceptanceCriteria: createDefaultCriteria(
+    acceptanceCriteria: [
       shouldUseEcho
         ? "The outcome must include evidence from the echo tool."
         : "The outcome must address the user's input.",
-    ),
+    ],
     toolNames: shouldUseEcho ? ["echo"] : [],
     skillIds,
     status: "pending",
@@ -90,6 +89,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
       type: "text_delta",
       text: JSON.stringify({
         message: "Calling echo tool.",
+        route: "verify",
         toolCalls: [
           {
             id: createId("call"),
@@ -117,7 +117,8 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
       ? `Task passed: ${taskTitle}`
       : `Task failed: missing required echo evidence for ${taskTitle}`;
 
-    yield { type: "text_delta", text: JSON.stringify({ passed, message }) };
+    const route = passed ? "stop" : "execute";
+    yield { type: "text_delta", text: JSON.stringify({ passed, message, route }) };
     yield { type: "done" };
   }
 };

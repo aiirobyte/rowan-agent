@@ -12,7 +12,6 @@ import type {
   LoopPhase,
   Outcome,
   RunThread,
-  Task,
   Tool,
   ToolCall,
   ToolResult,
@@ -31,14 +30,17 @@ import {
   type AgentPhaseConfig,
   type PhaseContext,
   type PhaseDefinition,
+  type PhaseInput,
+  type PhaseOutput,
 } from "./loop/phases";
 import { buildPrompt } from "./loop/phases";
 import { executeRuntimeToolCall } from "./harness/tools";
 import { assertNotAborted, LimitExceededError } from "./loop/errors";
 import {
+  createDefaultOutcome,
   createDefaultPhaseOutcome,
   createLimitExceededOutcome,
-  createSkippedOutcome,
+  createMaxVisitsOutcome,
   createThreadDepthLimitOutcome,
 } from "./loop/outcomes";
 import {
@@ -101,8 +103,6 @@ export type AgentLoopRuntime = LoopRunInput & {
   maxThreadDepth: number;
   currentPhase: string;
   attempt: number;
-  toolResults: AgentLoopContext["state"]["toolResults"];
-  currentTask?: AgentLoopContext["state"]["task"];
   lastExecuteText?: string;
 };
 
@@ -124,8 +124,6 @@ export function createLoopRuntime(input: AgentLoopInput): AgentLoopRuntime {
     : createStateFromContext(context, input.kind === "thread" ? {
         input: input.prompt,
         parentSessionId: input.parentSessionId,
-        task: input.task,
-        goal: input.goal,
       } : { id: "sessionId" in input ? input.sessionId : undefined });
 
   return {
@@ -149,7 +147,6 @@ export function createLoopRuntime(input: AgentLoopInput): AgentLoopRuntime {
     maxThreadDepth: resolveMaxThreadDepth(input.limits),
     currentPhase: "",
     attempt: 0,
-    toolResults: [],
   };
 }
 
@@ -162,16 +159,14 @@ export async function emit(runtime: AgentLoopRuntime, event: AgentEvent): Promis
   await runtime.emit?.(event);
 }
 
-export async function emitChat(
+export async function emitTurn(
   runtime: AgentLoopRuntime,
-  type: "chat_start" | "chat_end",
+  type: "turn_start" | "turn_end",
   extra?: { outcome?: Outcome; limitUsage?: AgentLimitUsage },
 ): Promise<void> {
   const threadMeta = runtime.kind === "thread" ? {
     parentSessionId: runtime.agentState.parentSessionId,
     prompt: runtime.agentState.input,
-    ...(runtime.agentState.task ? { task: runtime.agentState.task } : {}),
-    ...(runtime.agentState.goal ? { goal: runtime.agentState.goal } : {}),
     threadDepth: runtime.threadDepth,
     maxThreadDepth: runtime.maxThreadDepth,
   } : {};
@@ -192,9 +187,7 @@ export async function appendMessage(
     runtime.agentState.messages.push(message);
   }
   runtime.transcript.push(message);
-  const snapshot = snapshotMessage(message);
-  await emit(runtime, { type: "message_start", message: snapshot, ts: nowIso() });
-  await emit(runtime, { type: "message_end", message: snapshot, ts: nowIso() });
+  // No auto event emission — use PhaseContext.message for lifecycle events
 }
 
 export async function appendAssistantMessage(
@@ -226,8 +219,6 @@ export function createRunResult(runtime: AgentLoopRuntime, outcome: Outcome): Ag
       kind: "thread",
       parentSessionId: runtime.agentState.parentSessionId,
       prompt: runtime.agentState.input,
-      ...(runtime.agentState.task ? { task: runtime.agentState.task } : {}),
-      ...(runtime.agentState.goal ? { goal: runtime.agentState.goal } : {}),
       ...base,
     };
   }
@@ -257,8 +248,6 @@ export function createAgentLoopContext(runtime: AgentLoopRuntime): AgentLoopCont
       agentState: runtime.agentState,
       currentPhase: runtime.currentPhase,
       attempt: runtime.attempt,
-      ...(runtime.currentTask ? { task: runtime.currentTask } : {}),
-      toolResults: runtime.toolResults,
       limitUsage: runtime.limitUsage,
       depth: runtimeDepth(runtime),
       ...(runtime.lastExecuteText ? { lastExecuteText: runtime.lastExecuteText } : {}),
@@ -297,7 +286,7 @@ export function consumeLimit(
 
 export async function completeRun(runtime: AgentLoopRuntime, outcome: Outcome): Promise<AgentRunResult> {
   const result = createRunResult(runtime, outcome);
-  await emitChat(runtime, "chat_end", {
+  await emitTurn(runtime, "turn_end", {
     outcome: result.outcome,
     limitUsage: result.limitUsage,
   });
@@ -310,6 +299,7 @@ export async function completeRun(runtime: AgentLoopRuntime, outcome: Outcome): 
 
 async function collectTextAndStructured(input: {
   context: AgentLoopContext;
+  message: import("./loop/phases/config").PhaseMessageManager;
   events: AsyncIterable<LlmStreamEvent>;
   metadataPhase: string;
   recordText?: boolean;
@@ -319,21 +309,7 @@ async function collectTextAndStructured(input: {
 }> {
   let text = "";
   let flushedText = "";
-  const flushText = async () => {
-    if (text.length === 0) {
-      return;
-    }
-
-    flushedText += text;
-    await input.context.appendMessage(
-      createMessage("assistant", text, {
-        kind: "model_message",
-        phase: input.metadataPhase,
-        scope: "execution",
-      }),
-    );
-    text = "";
-  };
+  let activeMessageId: string | undefined;
 
   for await (const event of input.events) {
     assertNotAborted(input.context.signal);
@@ -344,24 +320,31 @@ async function collectTextAndStructured(input: {
 
     if (event.type === "text_delta") {
       text += event.text;
-      await input.context.emit({
-        type: "message_update",
-        message: createMessage("assistant", text, {
+      if (!activeMessageId) {
+        activeMessageId = input.message.start("assistant", event.text, {
           kind: "model_message",
           phase: input.metadataPhase,
           scope: "execution",
-        }),
-        delta: event.text,
-        ts: nowIso(),
-      });
+        });
+      } else {
+        await input.message.update(activeMessageId, event.text);
+      }
     }
 
     if (event.type === "done") {
-      await flushText();
+      if (activeMessageId) {
+        await input.message.end(activeMessageId);
+        flushedText += text;
+        activeMessageId = undefined;
+        text = "";
+      }
     }
   }
 
-  await flushText();
+  if (activeMessageId) {
+    await input.message.end(activeMessageId);
+    flushedText += text;
+  }
 
   let structured: unknown;
   try {
@@ -375,55 +358,27 @@ async function collectTextAndStructured(input: {
 
 async function executeToolCall(input: {
   context: AgentLoopContext;
-  task: Task;
   toolCall: ToolCall;
 }): Promise<ToolResult> {
   if (input.context.config.runtime?.tools) {
     return input.context.config.runtime.tools({
       context: input.context,
-      task: input.task,
       toolCall: input.toolCall,
     });
   }
 
   const toolContext = {
     state: input.context.state.agentState,
-    task: input.task,
     toolCallId: input.toolCall.id,
     ...(input.context.runThread ? { runThread: input.context.runThread } : {}),
   };
   return executeRuntimeToolCall({
     tools: input.context.config.tools,
-    task: input.task,
     toolCall: input.toolCall,
     toolContext,
     beforeToolCall: input.context.config.beforeToolCall,
     afterToolCall: input.context.config.afterToolCall,
     signal: input.context.signal,
-    observe: async (event) => {
-      if (event.type === "tool_start") {
-        input.context.consumeLimit("toolCalls");
-        await input.context.emit({
-          type: "tool_execution_start",
-          toolCallId: input.toolCall.id,
-          toolName: event.tool.name,
-          args: event.args,
-          ts: nowIso(),
-        });
-        return;
-      }
-
-      if (event.type === "tool_end") {
-        await input.context.emit({
-          type: "tool_execution_end",
-          toolCallId: input.toolCall.id,
-          toolName: event.toolName,
-          result: event.result,
-          isError: !event.result.ok,
-          ts: nowIso(),
-        });
-      }
-    },
   });
 }
 
@@ -433,6 +388,39 @@ function createPhaseContext(
   loopContext: AgentLoopContext,
   availablePhases: PhaseContext["availablePhases"],
 ): PhaseContext {
+  // Track active messages for streaming lifecycle
+  const activeMessages = new Map<string, AgentMessage>();
+
+  const messageManager = {
+    start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>) {
+      const msg = createMessage(role, content, metadata);
+      activeMessages.set(msg.id, msg);
+      emit(runtime, { type: "message_start", message: snapshotMessage(msg), ts: nowIso() });
+      return msg.id;
+    },
+    async update(messageId: string, delta: string) {
+      const msg = activeMessages.get(messageId);
+      if (!msg) return;
+      msg.content += delta;
+      await emit(runtime, {
+        type: "message_update",
+        message: snapshotMessage(msg),
+        delta,
+        ts: nowIso(),
+      });
+    },
+    async end(messageId: string) {
+      const msg = activeMessages.get(messageId);
+      if (!msg) return;
+      activeMessages.delete(messageId);
+      runtime.transcript.push(msg);
+      // Only persist conversation-scoped messages to agent state
+      if (msg.metadata?.scope === "conversation") {
+        runtime.agentState.messages.push(msg);
+      }
+      await emit(runtime, { type: "message_end", message: snapshotMessage(msg), ts: nowIso() });
+    },
+  };
 
   return {
     phaseId: definition.id,
@@ -442,15 +430,41 @@ function createPhaseContext(
       append: (message) => appendMessage(runtime, message),
       appendState: (message) => appendMessage(runtime, message, true),
     },
+    message: messageManager,
+    toolExecution: {
+      async start(toolCallId, toolName, args) {
+        await emit(runtime, {
+          type: "tool_execution_start",
+          toolCallId,
+          toolName,
+          args,
+          ts: nowIso(),
+        });
+      },
+      async update(_toolCallId, _partialResult) {
+        // tool_execution_update — reserved for future use
+      },
+      async end(toolCallId, toolName, result, isError) {
+        await emit(runtime, {
+          type: "tool_execution_end",
+          toolCallId,
+          toolName,
+          result,
+          isError,
+          ts: nowIso(),
+        });
+      },
+    },
     model: {
       collect: async (input) => {
         const prompt = buildPrompt({
-          context: input.payload,
+          context: input.input,
           tools: loopContext.tools,
         });
         const [systemMsg, ...rest] = prompt.messages;
         return collectTextAndStructured({
           context: loopContext,
+          message: messageManager,
           events: loopContext.config.stream({
             model: loopContext.config.model,
             system: systemMsg?.role === "system" ? systemMsg.content : undefined,
@@ -470,7 +484,6 @@ function createPhaseContext(
       execute: async (input) => {
         return executeToolCall({
           context: loopContext,
-          task: input.task as Task,
           toolCall: input.toolCall,
         });
       },
@@ -488,14 +501,6 @@ function createPhaseContext(
     incrementAttempt() {
       runtime.attempt += 1;
       loopContext.state.attempt = runtime.attempt;
-    },
-    setTask(task) {
-      runtime.currentTask = task;
-      if (task) {
-        loopContext.state.task = task;
-      } else {
-        delete (loopContext.state as Record<string, unknown>).task;
-      }
     },
     setLastExecuteText(text) {
       runtime.lastExecuteText = text;
@@ -545,7 +550,7 @@ function contextFromLoopThreadInput(input: Extract<AgentLoopInput, { kind: "thre
 
 function createStateFromContext(
   context: AgentRunContext,
-  meta: { id?: string; input?: string; parentSessionId?: string; task?: string; goal?: string } = {},
+  meta: { id?: string; input?: string; parentSessionId?: string } = {},
 ): AgentState {
   const firstUser = context.messages.find((m) => m.role === "user");
   if (!firstUser) throw new Error("Agent context must include at least one user message.");
@@ -556,8 +561,6 @@ function createStateFromContext(
     input: meta.input ?? firstUser.content,
     skills: context.skills ?? [],
     ...(meta.parentSessionId ? { parentSessionId: meta.parentSessionId } : {}),
-    ...(meta.task ? { task: meta.task } : {}),
-    ...(meta.goal ? { goal: meta.goal } : {}),
   });
 
   if (context.messages.length > 0) {
@@ -630,7 +633,7 @@ async function runWithLifecycle(
     }
 
     assertNotAborted(runtime.signal);
-    await emitChat(runtime, "chat_start");
+    await emitTurn(runtime, "turn_start");
 
     return await loop(runtime);
   } catch (error) {
@@ -645,30 +648,40 @@ async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
 
   const availablePhases = config.phases.map((p) => ({ id: p.id, name: p.name, description: p.description }));
 
-  let phaseId = config.entryPhaseId;
+  let currentPhaseId = config.entryPhaseId;
+  let lastYield: unknown;
+  const phaseVisits = new Map<string, number>();
 
-  while (phaseId) {
+  while (currentPhaseId) {
     assertNotAborted(runtime.signal);
 
-    const definition = resolvePhase(config, phaseId);
+    const definition = resolvePhase(config, currentPhaseId);
     if (!definition) {
-      throw new Error(`Phase "${phaseId}" is not defined in the phase config.`);
+      throw new Error(`Phase "${currentPhaseId}" is not defined in the phase config.`);
     }
 
-    const handler = getPhaseHandler(phaseId);
-    runtime.currentPhase = phaseId;
+    const handler = getPhaseHandler(currentPhaseId);
+    runtime.currentPhase = currentPhaseId;
+
+    // Generic visit limit
+    const visits = (phaseVisits.get(currentPhaseId) ?? 0) + 1;
+    phaseVisits.set(currentPhaseId, visits);
+    if (visits > (handler?.conversationLimit ?? 20)) {
+      return completeRun(runtime, createMaxVisitsOutcome(currentPhaseId));
+    }
 
     const loopContext = createAgentLoopContext(runtime);
     const context = createPhaseContext(runtime, definition, loopContext, availablePhases);
 
     if (handler?.prepare) handler.prepare(context);
 
+    // Build unified input with yield from previous phase
     let phaseInput = handler
-      ? await handler.buildInput(context)
+      ? await handler.buildInput(context, lastYield)
       : undefined;
 
     // Emit phase_start
-    await emit(runtime, { type: "phase_start", phase: phaseId, ts: nowIso() });
+    await emit(runtime, { type: "phase_start", phase: currentPhaseId, ts: nowIso() });
 
     // beforePhase hook
     if (runtime.runtime?.beforePhase) {
@@ -678,33 +691,30 @@ async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
         phaseInput as never,
       );
       if (hasAbort(before)) {
-        await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+        await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
         return completeRun(runtime, before.abort);
       }
       if (hasSkip(before)) {
-        if (handler) {
-          const transition = await handler.applyOutput(
-            context,
-            phaseInput as never,
-            before.skip as never,
-          );
-          await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
-          if (transition.type === "stop" || transition.type === "abort") {
-            return completeRun(runtime, transition.outcome);
-          }
-          phaseId = transition.phaseId;
-          continue;
+        // Skip: use the skip output's route
+        const skipOutput = before.skip as { route: string; message: string };
+        await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
+        if (skipOutput.route === "stop") {
+          return completeRun(runtime, {
+            id: "skip",
+            passed: true,
+            message: skipOutput.message || "Skipped.",
+          });
         }
-        await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
-        return completeRun(runtime, createSkippedOutcome());
+        currentPhaseId = skipOutput.route;
+        continue;
       }
       if (hasInput(before) && before.input) {
-        phaseInput = before.input;
+        phaseInput = before.input as PhaseInput;
       }
     }
 
     // Run phase
-    let output = await definition.run(context, phaseInput);
+    let output = await definition.run(context, phaseInput!);
 
     // afterPhase hook
     if (runtime.runtime?.afterPhase) {
@@ -717,48 +727,50 @@ async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
           output as never,
         );
         if (hasAbort(after)) {
-          await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+          await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
           return completeRun(runtime, after.abort);
         }
         if (hasRetry(after) && after.retry) {
           retries += 1;
           if (retries > 3) {
-            throw new Error(`Runtime requested too many ${phaseId} phase retries.`);
+            throw new Error(`Runtime requested too many ${currentPhaseId} phase retries.`);
           }
-          output = await definition.run(context, after.retry);
+          output = await definition.run(context, after.retry as PhaseInput);
           continue;
         }
         if (hasOutput(after) && after.output) {
-          output = after.output;
+          output = after.output as PhaseOutput;
         }
         break;
       }
     }
 
-    if (handler?.finalize) handler.finalize(context, output);
+    // Finalize (side effects)
+    await handler?.finalize?.(context, output);
 
     // Emit phase_end
-    await emit(runtime, { type: "phase_end", phase: phaseId, ts: nowIso() });
+    await emit(runtime, { type: "phase_end", phase: currentPhaseId, ts: nowIso() });
 
-    // Apply output
-    if (handler) {
-      const transition = await handler.applyOutput(context, phaseInput, output);
-
-      if (transition.type === "stop" || transition.type === "abort") {
-        if (runtime.currentTask) {
-          runtime.currentTask.status = transition.outcome.passed ? "passed" : "failed";
-        }
-        return completeRun(runtime, transition.outcome);
+    // ★ Read route — main loop contains no phase-specific routing logic
+    if (output.route === "stop") {
+      // Create AgentRunState from runtime for createOutcome
+      const outcome = handler?.createOutcome?.(output)
+        ?? createDefaultOutcome(output);
+      const yieldTask = (output.yield as Record<string, unknown> | undefined)?.task;
+      if (yieldTask && typeof yieldTask === "object" && "status" in yieldTask) {
+        (yieldTask as { status: string }).status = outcome.passed ? "passed" : "failed";
       }
+      return completeRun(runtime, outcome);
+    }
 
-      if (!config.phases.some((p) => p.id === transition.phaseId)) {
-        return completeRun(runtime, createDefaultPhaseOutcome());
-      }
-
-      phaseId = transition.phaseId;
-    } else {
+    // Validate route target exists
+    if (!config.phases.some((p) => p.id === output.route)) {
       return completeRun(runtime, createDefaultPhaseOutcome());
     }
+
+    // Pass yield to next phase
+    lastYield = output.yield;
+    currentPhaseId = output.route;
   }
 
   throw new Error("Phase machine exited without a stop or abort transition.");
@@ -766,7 +778,7 @@ async function runLoop(runtime: AgentLoopRuntime): Promise<AgentRunResult> {
 
 async function handleLoopError(runtime: AgentLoopRuntime, error: unknown): Promise<AgentRunResult> {
   if (error instanceof LimitExceededError) {
-    const outcome = createLimitExceededOutcome(error, runtime.currentTask);
+    const outcome = createLimitExceededOutcome(error);
     return completeRun(runtime, outcome);
   }
 

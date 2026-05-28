@@ -1,6 +1,5 @@
-import type { LlmContext } from "../../../protocol";
-import type { PromptTool } from "../../../harness/context/prompt-builder";
-import type { PhaseContext, PhaseDefinition, PhaseTransition } from "../config";
+import type { Outcome } from "../../../protocol";
+import type { PhaseContext, PhaseDefinition, PhaseInput, PhaseOutput } from "../config";
 
 export type PhaseManifest = {
   id: string;
@@ -8,10 +7,10 @@ export type PhaseManifest = {
   description: string;
 };
 
-export function createPhaseDefinition<TInput, TOutput>(
+export function createPhaseDefinition(
   manifest: PhaseManifest,
-  run: PhaseDefinition<TInput, TOutput>["run"],
-): PhaseDefinition<TInput, TOutput> {
+  run: PhaseDefinition["run"],
+): PhaseDefinition {
   return {
     id: manifest.id,
     name: manifest.name,
@@ -20,16 +19,12 @@ export function createPhaseDefinition<TInput, TOutput>(
   };
 }
 
-export type PhaseHandler<TInput = unknown, TOutput = unknown> = {
-  definition: PhaseDefinition<TInput, TOutput>;
+export type PhaseHandler = {
+  definition: PhaseDefinition;
   conversationLimit?: number;
   prepare?(context: PhaseContext): void;
-  buildInput(context: PhaseContext): TInput | Promise<TInput>;
-  buildPrompt?(context: LlmContext, tools: PromptTool[]): string;
-  finalize?(context: PhaseContext, output: TOutput): void;
-  applyOutput(
-    context: PhaseContext,
-    input: TInput,
-    output: TOutput,
-  ): PhaseTransition | Promise<PhaseTransition>;
+  buildInput(context: PhaseContext, yield_?: unknown): PhaseInput | Promise<PhaseInput>;
+  buildPrompt?(input: PhaseInput): string;
+  finalize?(context: PhaseContext, output: PhaseOutput): void | Promise<void>;
+  createOutcome?(output: PhaseOutput): Outcome;
 };

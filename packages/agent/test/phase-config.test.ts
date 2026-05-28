@@ -13,7 +13,7 @@ function stubPhase(id: string): PhaseDefinition {
     id,
     name: id,
     description: `${id} phase`,
-    run: async () => undefined,
+    run: async () => ({ message: "", route: "stop" }),
   };
 }
 
@@ -47,7 +47,7 @@ test("validatePhaseConfig rejects empty phases array", () => {
 test("validatePhaseConfig rejects phase with empty id", () => {
   const config: AgentPhaseConfig = {
     entryPhaseId: "a",
-    phases: [{ id: "", name: "", description: "", run: async () => undefined }],
+    phases: [{ id: "", name: "", description: "", run: async () => ({ message: "", route: "stop" }) }],
   };
 
   expect(() => validatePhaseConfig(config)).toThrow("non-empty id");

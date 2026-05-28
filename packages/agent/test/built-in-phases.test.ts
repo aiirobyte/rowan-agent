@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { runAgentLoop } from "../src/agent-loop";
-import { createDefaultCriteria } from "@rowan-agent/agent";
 import type { AgentEvent, LlmRequest, StreamFn } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";
@@ -109,12 +108,12 @@ test("custom phase plugin can replace the builtin phase machine", async () => {
     input: "plug me in",
   });
   const events: AgentEvent[] = [];
-  const customPhase = definePhase<void, { message: string }>({
+  const customPhase = definePhase({
     id: "custom",
     name: "Custom",
     description: "Handle the run outside of the builtin phase chain.",
     async run(_context, _input) {
-      return { message: "Handled by plugin: plug me in" };
+      return { message: "Handled by plugin: plug me in", route: "stop" };
     },
   });
 
@@ -152,7 +151,7 @@ test("default config preserves execute/verify retry behavior", async () => {
     id: createId("task"),
     title: "Retry verify",
     instruction: "use echo tool",
-    acceptanceCriteria: createDefaultCriteria("Echo evidence is present."),
+    acceptanceCriteria: ["Echo evidence is present."],
     toolNames: ["echo"],
     skillIds: [],
     status: "pending" as const,
@@ -177,6 +176,7 @@ test("default config preserves execute/verify retry behavior", async () => {
         type: "text_delta",
         text: JSON.stringify({
           message: "Calling echo.",
+          route: "verify",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
         }),
       };
@@ -189,12 +189,12 @@ test("default config preserves execute/verify retry behavior", async () => {
     if (verifyCalls === 1) {
       yield {
         type: "text_delta",
-        text: JSON.stringify({ passed: false, message: "Missing echo evidence." }),
+        text: JSON.stringify({ passed: false, message: "Missing echo evidence.", route: "execute" }),
       };
     } else {
       yield {
         type: "text_delta",
-        text: JSON.stringify({ passed: true, message: "Verified after retry." }),
+        text: JSON.stringify({ passed: true, message: "Verified after retry.", route: "stop" }),
       };
     }
     yield { type: "done" };
@@ -223,7 +223,7 @@ test("default config preserves max attempt exhaustion", async () => {
     id: createId("task"),
     title: "Fail task",
     instruction: "use echo tool",
-    acceptanceCriteria: createDefaultCriteria("Echo evidence is present."),
+    acceptanceCriteria: ["Echo evidence is present."],
     toolNames: ["echo"],
     skillIds: [],
     status: "pending" as const,
@@ -247,6 +247,7 @@ test("default config preserves max attempt exhaustion", async () => {
         type: "text_delta",
         text: JSON.stringify({
           message: "Calling echo.",
+          route: "verify",
           toolCalls: [{ id: createId("call"), name: "echo", args: { message: "fail" } }],
         }),
       };
@@ -256,7 +257,7 @@ test("default config preserves max attempt exhaustion", async () => {
 
     yield {
       type: "text_delta",
-      text: JSON.stringify({ passed: false, message: "Always fails." }),
+      text: JSON.stringify({ passed: false, message: "Always fails.", route: "execute" }),
     };
     yield { type: "done" };
   };

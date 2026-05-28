@@ -14,13 +14,13 @@ Project-level references:
 
 ## Active Version
 
-Active version: `0.4.7` planned
+Active version: `0.4.8` planned
 
-- Previous implemented baseline: `0.4.5`
-- Planning baseline: current v0.4.6 phase module shape
-- Active version docs: `docs/version/0.4.7/`
-- Planning source: user correction that phase definitions should be `input + context capabilities -> output`, while `runLoop` owns runtime execution
-- Next version: `0.5.0` Context Projection And Provider IR planning after v0.4.7
+- Previous implemented baseline: `0.4.7`
+- Planning baseline: v0.4.7 phase definition runtime boundary
+- Active version docs: `docs/version/0.4.8/`
+- Planning source: lifecycle unification — unified phase input/output with yield, model-driven routing, streaming lifecycles, event renaming
+- Next version: `0.5.0` Context Projection And Provider IR planning after v0.4.8
 
 ## Product Intent
 
@@ -61,7 +61,8 @@ v0.4.7 narrows the phase/runtime boundary further: phase definitions should not 
 - `0.4.4`: Agent Run Persistence And Data Flow Refactor. Complete.
 - `0.4.5`: Phase-Configured Agent Loop. Complete.
 - `0.4.6`: Loop Phase Refactoring. Planned.
-- `0.4.7`: Phase Definition Runtime Boundary. Planned.
+- `0.4.7`: Phase Definition Runtime Boundary. Complete.
+- `0.4.8`: Lifecycle Unification. Planned.
 - `0.5.0`: Context Projection And Provider IR. Planned.
 - `0.6.0`: Tool Runtime Policy Ports. Planned.
 - `0.7.0`: Replay, Fork, And Compaction. Planned.

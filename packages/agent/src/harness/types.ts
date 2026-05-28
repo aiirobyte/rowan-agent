@@ -2,15 +2,17 @@ import Type from "typebox";
 import type {
   AgentContextState,
   AgentContextSkill,
-  AgentRunLimits,
-  Task,
   ToolResult,
 } from "../protocol";
+import type { AgentRunLimits } from "../loop/types";
 
-export { createId, Validators } from "../protocol";
+export { createId } from "../types";
 export type {
   AgentLimitUsage,
   AgentRunLimits,
+  RuntimeDepth,
+} from "../loop/types";
+export type {
   LlmModelRef,
   LlmModelUsage,
   LlmRequest,
@@ -18,25 +20,17 @@ export type {
   LlmStreamOptions,
   ExecutionTurn,
   ExecutionTurnEntry,
-  LlmContext,
   LoopPhase,
   Outcome,
-  RuntimeDepth,
   StepFilter,
   StreamFn,
-  Task,
-  TaskOutput,
   ToolCall,
   ToolResult,
-  ToolTaskOutput,
-  VerificationResult,
 } from "../protocol";
 
 export type RuntimeThreadInput = {
   parentSessionId?: string;
   prompt: string;
-  task?: string;
-  goal?: string;
   tools: Tool[];
   skills?: AgentContextSkill[];
   maxAttempts?: number;
@@ -55,7 +49,6 @@ export type ToolContext<
   TThreadInput extends RuntimeThreadInput = RuntimeThreadInput,
 > = {
   state: AgentContextState;
-  task: Task;
   toolCallId: string;
   runThread?: RuntimeRunThread<TThreadInput, TThreadResult>;
 };
@@ -76,13 +69,11 @@ export type Tool<
 };
 
 export type BeforeToolCall<TTool extends Tool = Tool> = (input: {
-  task: Task;
   tool: TTool;
   args: unknown;
 }) => Promise<{ allow: true } | { allow: false; reason: string }>;
 
 export type AfterToolCall<TTool extends Tool = Tool> = (input: {
-  task: Task;
   tool: TTool;
   result: ToolResult;
 }) => Promise<ToolResult>;

@@ -1,23 +1,23 @@
 # Rowan Current Prompt Plan
 
-Last updated: 2026-05-25
+Last updated: 2026-05-28
 
 Specific version prompt plans live under `docs/version/<semver>/prompt_plan.md`.
 
 ## Active Version
 
-v0.4.7 is active. Continue with Prompt 1:
+v0.4.8 is active. Continue with Prompt 1:
 
 ```text
 Read AGENT.md.
 Read docs/todo.md.
 Read docs/spec.md.
 Read docs/version/README.md.
-Read docs/version/0.4.7/spec.md.
-Read docs/version/0.4.7/prompt_plan.md.
-Read docs/version/0.4.7/todo.md.
+Read docs/version/0.4.8/spec.md.
+Read docs/version/0.4.8/prompt_plan.md.
+Read docs/version/0.4.8/todo.md.
 Inspect the current diff with git status --short.
-Start Prompt 1: lock the new phase/runtime boundary with failing tests.
+Start Prompt 1: unified phase types and event renaming.
 ```
 
 Current next prompt:
