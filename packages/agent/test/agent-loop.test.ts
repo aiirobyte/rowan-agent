@@ -9,7 +9,7 @@ import { scriptedStream } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = messages[i].content.match(/^Phase:\s*(\w+)/);
+    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
     if (match) return match[1];
   }
   return "chat";
@@ -17,7 +17,7 @@ function detectPhase(messages: LlmRequest["messages"]): string {
 
 function extractUserRequest(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = messages[i].content.match(/Current user request:\s*\n"([^"]+)"/);
+    const match = (messages[i].content as string).match(/Current user request:\s*\n"([^"]+)"/);
     if (match) return match[1];
   }
   return "";

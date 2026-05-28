@@ -12,14 +12,14 @@ import { scriptedStream } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = messages[i].content.match(/^Phase:\s*(\w+)/);
+    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
     if (match) return match[1];
   }
   return "chat";
 }
 
 function isThreadRun(messages: LlmRequest["messages"]): boolean {
-  return messages.some((m: { content: string }) => m.content.includes("Agent state task:"));
+  return messages.some((m) => (m.content as string).includes("Agent state task:"));
 }
 
 type ThreadResult = Extract<Awaited<ReturnType<typeof runAgentLoop>>, { kind: "thread" }>;

@@ -9,7 +9,7 @@ import { scriptedStream } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = messages[i].content.match(/^Phase:\s*(\w+)/);
+    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
     if (match) return match[1];
   }
   return "chat";
@@ -23,8 +23,8 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
       return;
     }
 
-    routeContexts.push(request.messages.map((message) => message.content));
-    const sawFirstAnswer = request.messages.some((message) => message.content.includes("First answer"));
+    routeContexts.push(request.messages.map((message) => message.content as string));
+    const sawFirstAnswer = request.messages.some((message) => (message.content as string).includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
     yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
     yield { type: "text_delta", text: JSON.stringify({ route: "direct", message }) };
@@ -62,7 +62,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   const stream: StreamFn = async function* taskMultiTurnStream(request, options) {
     const phase = detectPhase(request.messages);
     if (phase === "chat") {
-      routeContexts.push(request.messages.map((message) => message.content));
+      routeContexts.push(request.messages.map((message) => message.content as string));
     }
     yield* scriptedStream(request, options);
   };
@@ -115,12 +115,12 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
 
     if (phase === "chat") {
       const outcomeMessages = request.messages
-        .filter((message) => message.role === "assistant" && message.content.includes("Missing some functions"))
-        .map((message) => message.content);
+        .filter((message) => message.role === "assistant" && (message.content as string).includes("Missing some functions"))
+        .map((message) => message.content as string);
       routeOutcomeContexts.push(outcomeMessages);
       const hasFailedOutcome = outcomeMessages.some((m) => m.includes("Missing some functions to finish the task"));
       // Extract current user request from the phase prompt, not the full prompt
-      const lastUserMsg = request.messages.filter((m) => m.role === "user").pop()?.content ?? "";
+      const lastUserMsg = (request.messages.filter((m) => m.role === "user").pop()?.content ?? "") as string;
       const currentRequest = lastUserMsg.match(/Current user request:\s*\n"([^"]+)"/)?.[1] ?? "";
       const route = currentRequest.includes("trigger failure") || hasFailedOutcome ? "plan" : "direct";
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";

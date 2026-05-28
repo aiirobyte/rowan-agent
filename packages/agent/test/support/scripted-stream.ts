@@ -4,7 +4,7 @@ import { createDefaultCriteria } from "@rowan-agent/agent";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = messages[i].content.match(/^Phase:\s*(\w+)/);
+    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
     if (match) {
       return match[1];
     }
@@ -20,7 +20,7 @@ function extractUserRequest(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === "user") {
-      const match = msg.content.match(/Current user request:\s*\n"([^"]+)"/);
+      const match = (msg.content as string).match(/Current user request:\s*\n"([^"]+)"/);
       if (match) {
         return match[1];
       }
@@ -106,7 +106,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
   if (phase === "verify") {
     // The verify prompt includes task output with tool results as JSON.
     // Check if echo tool evidence is present in the prompt content.
-    const lastUserMsg = request.messages.filter((m) => m.role === "user").pop()?.content ?? "";
+    const lastUserMsg = (request.messages.filter((m) => m.role === "user").pop()?.content ?? "") as string;
     const requiresEcho = lastUserMsg.includes("echo") && lastUserMsg.includes("acceptanceCriteria");
     const hasEchoEvidence = /"toolName"\s*:\s*"echo"/.test(lastUserMsg) && /"ok"\s*:\s*true/.test(lastUserMsg);
     const passed = requiresEcho ? hasEchoEvidence : true;
