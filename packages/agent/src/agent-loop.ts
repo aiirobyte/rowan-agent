@@ -1,4 +1,4 @@
-import { extractJsonObject } from "./json-extract";
+import { extractJsonObject } from "./loop/response-parser";
 import type {
   AgentContext as AgentRunContext,
   AgentEvent,
