@@ -513,7 +513,7 @@ async function promptWithLog(input: {
   logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
-}): Promise<{ outcome: Outcome; sessionManager: LocalJsonlSessionManager; streamedContent: boolean }> {
+}): Promise<{ outcome: Outcome; sessionManager: LocalJsonlSessionManager; streamedContent: boolean; pendingConsoleEvents: AgentEvent[] }> {
   let sessionManager = input.sessionManager;
   let unsubscribe: (() => void) | undefined;
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
@@ -529,12 +529,12 @@ async function promptWithLog(input: {
     const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, sessionManager.getSessionId());
     const runEventLogger = pinoAgentEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
     eventLogger = runEventLogger;
-    const consoleLogger = consoleAgentEventLogger({ level: input.logLevel });
     let messageId: string | undefined;
     let streamedContent = false;
+    const pendingConsoleEvents: AgentEvent[] = [];
     const listener: AgentEventListener = ((event: AgentEvent) => {
       runEventLogger(event);
-      consoleLogger(event);
+      pendingConsoleEvents.push(event);
 
       if (event.type === "chat_start" && !messageId) {
         messageId = currentTurnMessageId(event.content);
@@ -554,7 +554,6 @@ async function promptWithLog(input: {
     }) as AgentEventListener;
     listener.flush = async () => {
       await runEventLogger.flush();
-      await consoleLogger.flush();
     };
 
     unsubscribe = input.agent.subscribe(listener);
@@ -576,7 +575,7 @@ async function promptWithLog(input: {
       }
     }
     await sessionManager.appendOutcome(result.outcome);
-    return { outcome: result.outcome, sessionManager, streamedContent };
+    return { outcome: result.outcome, sessionManager, streamedContent, pendingConsoleEvents };
   } catch (error) {
     throw error;
   } finally {
@@ -654,6 +653,11 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       });
       sessionManager = run.sessionManager;
       printRunHeader();
+      const replayLogger = consoleAgentEventLogger({ level: logLevel });
+      for (const event of run.pendingConsoleEvents) {
+        replayLogger(event);
+      }
+      await replayLogger.flush();
       if (!run.streamedContent) {
         console.log(formatOutcomeOutput(run.outcome));
       }
