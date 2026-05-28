@@ -24,10 +24,10 @@ async function sourceFiles(dir: string): Promise<string[]> {
 
 test("packages follow Rowan dependency direction", async () => {
   const rules: Record<string, Set<string>> = {
-    engine: new Set(),
-    agent: new Set(["engine"]),
+    models: new Set(),
+    agent: new Set(["models"]),
     logging: new Set(["agent"]),
-    cli: new Set(["agent", "engine", "logging"]),
+    cli: new Set(["agent", "models", "logging"]),
   };
   const violations: string[] = [];
 

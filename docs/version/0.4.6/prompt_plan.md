@@ -133,7 +133,7 @@ Expected next change:
 1. `harness/context/prompt.ts`: Delete all phase-specific prompt functions. Keep only `buildSystemPrompt`.
 2. `harness/context/prompt-builder.ts`: Import prompts from phase modules. Update `"route"` → `"chat"` in dispatch. `LlmPhase` → `LoopPhase`.
 3. `harness/types.ts`: Delete `RoutingDecision` re-export. `LlmPhase` → `LoopPhase`.
-4. `packages/engine/`: Update `LlmPhase` → `LoopPhase`. Delete `RoutingDecision` references.
+4. `packages/models/`: Update `LlmPhase` → `LoopPhase`. Delete `RoutingDecision` references.
 5. `packages/logging/`: Update `LlmPhase` → `LoopPhase`.
 6. `packages/cli/`: Update any `LlmPhase` references.
 

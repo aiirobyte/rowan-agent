@@ -11,7 +11,7 @@ export type {
   LlmStreamEvent,
   LlmStreamOptions,
   StreamFn,
-} from "@rowan-agent/engine";
+} from "@rowan-agent/models";
 
 export type ContextScope = "conversation" | "execution" | "diagnostic";
 

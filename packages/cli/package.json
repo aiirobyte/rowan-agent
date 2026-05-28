@@ -11,7 +11,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/engine": "workspace:*",
+    "@rowan-agent/models": "workspace:*",
     "@rowan-agent/agent": "workspace:*",
     "@rowan-agent/logging": "workspace:*"
   }
