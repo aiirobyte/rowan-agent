@@ -37,6 +37,16 @@ export {
 } from "./harness/session";
 
 export {
+  ExtensionRunner,
+  type ExtensionAPI,
+  type ExtensionFactory,
+  type ExtensionPhaseHandler,
+  type PhaseManifest,
+  type BeforePhaseHookContext,
+  type AfterPhaseHookContext,
+} from "./extensions";
+
+export {
   type ToolDefinition,
   type ExecutionTurn,
 } from "./protocol";

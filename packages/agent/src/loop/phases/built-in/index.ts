@@ -4,50 +4,71 @@ import {
   type AgentPhaseConfig,
   type AgentPhasePlugin,
 } from "../config";
+import { ExtensionRunner } from "../../extensions";
 import type { PhaseHandler } from "./types";
-import { chatHandler } from "./chat";
-import { planHandler } from "./plan";
-import { executeHandler } from "./execute";
-import { verifyHandler } from "./verify";
+import type { PhaseDefinition } from "../config";
+import { chatExtension } from "./chat";
+import { planExtension } from "./plan";
+import { executeExtension } from "./execute";
+import { verifyExtension } from "./verify";
 
-// ============================================================================
-// Handler Registry
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Extension runner — loads all built-in phase extensions
+// ---------------------------------------------------------------------------
 
-const handlers: Record<string, PhaseHandler> = {
-  chat: chatHandler,
-  plan: planHandler,
-  execute: executeHandler,
-  verify: verifyHandler,
-};
+const runner = new ExtensionRunner();
+runner.loadSync([chatExtension, planExtension, executeExtension, verifyExtension]);
 
-// ============================================================================
-// Phase Definitions
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Backward-compatible API — delegates to the runner
+// ---------------------------------------------------------------------------
 
-export const chatPhaseDefinition = chatHandler.definition;
-export const planPhaseDefinition = planHandler.definition;
-export const executePhaseDefinition = executeHandler.definition;
-export const verifyPhaseDefinition = verifyHandler.definition;
+/** Get phase definition by id (resolves via extension runner). */
+export function getPhase(id: string): PhaseDefinition | undefined {
+  return runner.getPhase(id);
+}
 
-// ============================================================================
-// Handler Access
-// ============================================================================
+/** Get all registered phase definitions. */
+export function getPhases(): PhaseDefinition[] {
+  return runner.getPhases();
+}
 
+/** Get handler by id — wraps ExtensionPhaseHandler into legacy PhaseHandler shape. */
 export function getPhaseHandler(phaseId: string): PhaseHandler | undefined {
-  return handlers[phaseId];
+  const handler = runner.getHandler(phaseId);
+  const definition = runner.getPhase(phaseId);
+  if (!handler || !definition) return undefined;
+  return { ...handler, definition };
 }
 
+/** Get all handlers in legacy PhaseHandler shape. */
 export function getBuiltinHandlers(): PhaseHandler[] {
-  return Object.values(handlers);
+  return runner.getPhases().map((p) => {
+    const handler = runner.getHandler(p.id)!;
+    return { ...handler, definition: p };
+  });
 }
 
-// ============================================================================
-// Config Factory
-// ============================================================================
+/** Access the extension runner directly. */
+export function getRunner(): ExtensionRunner {
+  return runner;
+}
+
+// ---------------------------------------------------------------------------
+// Phase definitions — re-export for barrel consumers
+// ---------------------------------------------------------------------------
+
+export const chatPhaseDefinition = (): PhaseDefinition | undefined => runner.getPhase("chat");
+export const planPhaseDefinition = (): PhaseDefinition | undefined => runner.getPhase("plan");
+export const executePhaseDefinition = (): PhaseDefinition | undefined => runner.getPhase("execute");
+export const verifyPhaseDefinition = (): PhaseDefinition | undefined => runner.getPhase("verify");
+
+// ---------------------------------------------------------------------------
+// Config factory
+// ---------------------------------------------------------------------------
 
 export function createBuiltinPhasePlugin(): AgentPhasePlugin {
-  const phases = Object.values(handlers).map((h) => h.definition);
+  const phases = runner.getPhases();
   return definePhasePlugin({
     id: "builtin",
     entryPhaseId: "chat",
@@ -61,4 +82,11 @@ export function createBuiltinPhaseConfig(): AgentPhaseConfig {
   });
 }
 
-export { chatHandler, planHandler, executeHandler, verifyHandler };
+// ---------------------------------------------------------------------------
+// Re-export extensions API for convenience
+// ---------------------------------------------------------------------------
+
+export { chatExtension } from "./chat";
+export { planExtension } from "./plan";
+export { executeExtension } from "./execute";
+export { verifyExtension } from "./verify";

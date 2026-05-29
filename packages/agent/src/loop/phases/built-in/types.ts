@@ -1,24 +1,6 @@
-import type { Outcome } from "../../../protocol";
-import type { PhaseContext, PhaseDefinition, PhaseInput, PhaseOutput } from "../config";
+import type { Outcome, PhaseContext, PhaseDefinition, PhaseInput, PhaseOutput } from "../config";
 
-export type PhaseManifest = {
-  id: string;
-  name: string;
-  description: string;
-};
-
-export function createPhaseDefinition(
-  manifest: PhaseManifest,
-  run: PhaseDefinition["run"],
-): PhaseDefinition {
-  return {
-    id: manifest.id,
-    name: manifest.name,
-    description: manifest.description,
-    run,
-  };
-}
-
+// Backward-compatible type alias — ExtensionPhaseHandler is the canonical form
 export type PhaseHandler = {
   definition: PhaseDefinition;
   conversationLimit?: number;

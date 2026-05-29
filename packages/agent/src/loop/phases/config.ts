@@ -3,15 +3,20 @@ import type {
   AgentLimitUsage,
   AgentMessage,
   AgentState,
+  Outcome,
   RunThread,
   Skill,
   Tool,
-  ToolCall,
-  ToolResult,
 } from "../../types";
+import { createId, type ToolCall, type ToolResult } from "../../types";
 import type { ContentBlock } from "@rowan-agent/models";
 import type { PhaseOutput } from "../../protocol/context";
 import type { AgentRunState } from "../types";
+import { LimitExceededError } from "../errors";
+import { toJson, serializeTools } from "../../harness/context/prompt-builder";
+
+export { createId, LimitExceededError, toJson, serializeTools };
+export type { Outcome, ToolCall, ToolResult };
 
 export type { PhaseOutput };
 

@@ -1,6 +1,5 @@
-import type { PhaseInput } from "../../config";
-import { createPhaseDefinition, type PhaseHandler } from "../types";
-import { toJson, serializeTools } from "../../../../harness/context/prompt-builder";
+import { toJson, serializeTools, type PhaseInput, type PhaseOutput, type PhaseContext } from "../../config";
+import type { ExtensionFactory } from "../../../../extensions";
 import manifestJson from "./manifest.json";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -31,65 +30,67 @@ function normalizeTask(value: unknown): Record<string, unknown> {
   };
 }
 
-export const planHandler: PhaseHandler = {
-  definition: createPhaseDefinition(manifestJson, async (context, input) => {
-    const collected = await context.turn(() => context.model.collect({
-      phase: "plan",
-      input,
-    }));
+async function run(context: PhaseContext, input: PhaseInput): Promise<PhaseOutput> {
+  const collected = await context.turn(() => context.model.collect({
+    phase: "plan",
+    input,
+  }));
 
-    // Plan phase still uses JSON for structured task data
-    let raw: Record<string, unknown> | undefined;
-    try {
-      raw = JSON.parse(collected.text) as Record<string, unknown>;
-    } catch {
-      throw new Error("Planner did not produce valid JSON.");
-    }
+  // Plan phase still uses JSON for structured task data
+  let raw: Record<string, unknown> | undefined;
+  try {
+    raw = JSON.parse(collected.text) as Record<string, unknown>;
+  } catch {
+    throw new Error("Planner did not produce valid JSON.");
+  }
 
-    const rawTask = raw?.task ?? raw;
-    if (!rawTask) {
-      throw new Error("Planner did not produce a structured task.");
-    }
+  const rawTask = raw?.task ?? raw;
+  if (!rawTask) {
+    throw new Error("Planner did not produce a structured task.");
+  }
 
-    const task = normalizeTask(rawTask);
-    const message = (raw?.message as string) ?? "";
+  const task = normalizeTask(rawTask);
+  const message = (raw?.message as string) ?? "";
 
-    return {
-      message,
-      route: "execute",
-      yield: { task },
-    };
-  }),
+  return {
+    message,
+    route: "execute",
+    yield: { task },
+  };
+}
 
-  conversationLimit: 20,
+export const planExtension: ExtensionFactory = (api) => {
+  api.registerPhase(manifestJson, {
+    conversationLimit: 20,
 
-  buildInput(context) {
-    return {
-      phase: "plan",
-      systemPrompt: context.state.agentState.systemPrompt,
-      messages: context.messages.visible(),
-      tools: [],
-      skills: context.skills,
-    };
-  },
+    buildInput(context) {
+      return {
+        phase: "plan",
+        systemPrompt: context.state.agentState.systemPrompt,
+        messages: context.messages.visible(),
+        tools: [],
+        skills: context.skills,
+      };
+    },
 
-  buildPrompt(input) {
-    const userMessages = input.messages.filter((m) => m.role === "user" && m.metadata?.scope === "conversation");
-    const latestUserMsg = userMessages[userMessages.length - 1];
-    return [
-      "Phase: plan",
-      "",
-      "Analyze the user's request and create a task plan.",
-      'Output a JSON object: { "task": { ... }, "message": "explanation" }',
-      "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
-      'Prefer setting task.status to "pending" and task.attempts to 0.',
-      "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
-      "",
-      "Current user request:",
-      toJson(latestUserMsg?.content ?? ""),
-      "",
-      "Available tools with name, description, and parameters:",
-      toJson(serializeTools(input.tools)),
-    ].join("\n");
-  },
+    buildPrompt(input) {
+      const userMessages = input.messages.filter((m) => m.role === "user" && m.metadata?.scope === "conversation");
+      const latestUserMsg = userMessages[userMessages.length - 1];
+      return [
+        "Phase: plan",
+        "",
+        "Analyze the user's request and create a task plan.",
+        'Output a JSON object: { "task": { ... }, "message": "explanation" }',
+        "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
+        'Prefer setting task.status to "pending" and task.attempts to 0.',
+        "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
+        "",
+        "Current user request:",
+        toJson(latestUserMsg?.content ?? ""),
+        "",
+        "Available tools with name, description, and parameters:",
+        toJson(serializeTools(input.tools)),
+      ].join("\n");
+    },
+  }, run);
 };
