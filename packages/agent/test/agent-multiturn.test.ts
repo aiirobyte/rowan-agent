@@ -4,7 +4,7 @@ import type { LlmRequest } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
-import { scriptedStream } from "./support/scripted-stream";
+import { buildTestPartial, buildToolCallPartial, scriptedStream } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -26,7 +26,8 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
     const sawFirstAnswer = request.messages.some((message) => (message.content as string).includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
     yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
-    yield { type: "text_delta", text: JSON.stringify({ route: "direct", message }) };
+    const text = JSON.stringify({ route: "direct", message });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
   const agent = new Agent({
@@ -125,39 +126,37 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
       const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
       yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
-      yield { type: "text_delta", text: JSON.stringify({ route, message }) };
+      const text = JSON.stringify({ route, message });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "plan") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          id: createId("task"),
-          title: "Fail once",
-          instruction: "Return a failed verification result.",
-          acceptanceCriteria: ["The task should fail."],
-          toolNames: [],
-          skillIds: [],
-          status: "pending",
-          attempts: 0,
-        }),
-      };
+      const text = JSON.stringify({
+        id: createId("task"),
+        title: "Fail once",
+        instruction: "Return a failed verification result.",
+        acceptanceCriteria: ["The task should fail."],
+        toolNames: [],
+        skillIds: [],
+        status: "pending",
+        attempts: 0,
+      });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "execute") {
-      yield { type: "text_delta", text: JSON.stringify({ message: "No tool output.", route: "verify" }) };
+      const text = JSON.stringify({ message: "No tool output.", route: "verify" });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
 
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ passed: false, message: "Missing some functions to finish the task", route: "execute" }),
-    };
+    const text = JSON.stringify({ passed: false, message: "Missing some functions to finish the task", route: "execute" });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
   const agent = new Agent({

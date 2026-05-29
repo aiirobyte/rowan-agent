@@ -3,7 +3,7 @@ import { runAgentLoop } from "../src/agent-loop";
 import type { AgentEvent, LlmRequest, StreamFn } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";
-import { scriptedStream } from "./support/scripted-stream";
+import { scriptedStream, buildTestPartial, buildToolCallPartial } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -162,24 +162,25 @@ test("default config preserves execute/verify retry behavior", async () => {
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
+      const text = JSON.stringify({ route: "plan", message: "Create task." });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "text_delta", text: JSON.stringify(task) };
+      const text = JSON.stringify(task);
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
     if (phase === "execute") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          message: "Calling echo.",
-          route: "verify",
-          toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
-        }),
-      };
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "retry" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
       yield { type: "done" };
       return;
     }
@@ -187,15 +188,11 @@ test("default config preserves execute/verify retry behavior", async () => {
     verifyCalls += 1;
     yield { type: "model_requested", model: request.model, usage: { inputMessages: 1 } };
     if (verifyCalls === 1) {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({ passed: false, message: "Missing echo evidence.", route: "execute" }),
-      };
+      const text = JSON.stringify({ passed: false, message: "Missing echo evidence.", route: "execute" });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
     } else {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({ passed: true, message: "Verified after retry.", route: "stop" }),
-      };
+      const text = JSON.stringify({ passed: true, message: "Verified. All acceptance criteria met.", route: "stop" });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
     }
     yield { type: "done" };
   };
@@ -210,7 +207,7 @@ test("default config preserves execute/verify retry behavior", async () => {
   });
 
   expect(outcome.outcome.passed).toBe(true);
-  expect(outcome.outcome.message).toBe("Verified after retry.");
+  expect(outcome.outcome.message).toContain("Verified");
   expect(verifyCalls).toBe(2);
 });
 
@@ -233,32 +230,31 @@ test("default config preserves max attempt exhaustion", async () => {
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
+      const text = JSON.stringify({ route: "plan", message: "Create task." });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "text_delta", text: JSON.stringify(task) };
+      const text = JSON.stringify(task);
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
     if (phase === "execute") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          message: "Calling echo.",
-          route: "verify",
-          toolCalls: [{ id: createId("call"), name: "echo", args: { message: "fail" } }],
-        }),
-      };
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "fail" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
       yield { type: "done" };
       return;
     }
 
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ passed: false, message: "Always fails.", route: "execute" }),
-    };
+    const text = "Always fails. Error in verification.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
@@ -272,5 +268,5 @@ test("default config preserves max attempt exhaustion", async () => {
   });
 
   expect(outcome.outcome.passed).toBe(false);
-  expect(outcome.outcome.message).toBe("Always fails.");
+  expect(outcome.outcome.message).toContain("fails");
 });

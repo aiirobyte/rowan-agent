@@ -9,6 +9,7 @@ import type {
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
+  AssistantMessagePartial,
 } from "../protocol";
 import { iterateSseMessages } from "../sse";
 import {
@@ -309,6 +310,26 @@ async function* streamChatCompletions(
       let usage: LlmTokenUsage | undefined;
       const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 
+      const partial: AssistantMessagePartial = {
+        role: "assistant",
+        contentBlocks: [],
+      };
+
+      function rebuildPartial(): void {
+        partial.contentBlocks = [];
+        if (content) {
+          partial.contentBlocks.push({ type: "text", text: content });
+        }
+        for (const tc of toolCalls.values()) {
+          partial.contentBlocks.push({
+            type: "tool_call",
+            id: tc.id,
+            name: tc.name,
+            args: tc.arguments,
+          });
+        }
+      }
+
       for await (const sse of iterateSseMessages(response.body, signal)) {
         if (sse.data === "[DONE]") break;
 
@@ -324,7 +345,8 @@ async function* streamChatCompletions(
         if (delta) {
           if (delta.content) {
             content += delta.content;
-            yield { type: "text_delta", text: delta.content };
+            rebuildPartial();
+            yield { type: "text_delta", text: delta.content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           }
           if (delta.tool_calls) {
             for (const tc of delta.tool_calls) {
@@ -333,14 +355,16 @@ async function* streamChatCompletions(
                 const newTc = { id: tc.id ?? "", name: tc.function?.name ?? "", arguments: tc.function?.arguments ?? "" };
                 toolCalls.set(tc.index, newTc);
                 if (tc.id || tc.function?.name) {
-                  yield { type: "tool_call_start", id: newTc.id, name: newTc.name };
+                  rebuildPartial();
+                  yield { type: "tool_call_start", id: newTc.id, name: newTc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
               } else {
                 if (tc.id) existing.id = tc.id;
                 if (tc.function?.name) existing.name = tc.function.name;
                 if (tc.function?.arguments) {
                   existing.arguments += tc.function.arguments;
-                  yield { type: "tool_call_delta", id: existing.id, arguments: tc.function.arguments };
+                  rebuildPartial();
+                  yield { type: "tool_call_delta", id: existing.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
               }
             }
@@ -350,7 +374,8 @@ async function* streamChatCompletions(
       }
 
       for (const tc of toolCalls.values()) {
-        yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments };
+        rebuildPartial();
+        yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       }
 
       const toolCallResults: LlmToolCall[] = [];

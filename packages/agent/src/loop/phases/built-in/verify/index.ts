@@ -30,7 +30,6 @@ export const verifyHandler: PhaseHandler = {
         input,
       }));
     } catch (error) {
-      // On error, route to execute for retry (if attempts remain)
       if (context.state.attempt >= maxAttempts) {
         return {
           message: "Verification error, no retries remaining.",
@@ -45,17 +44,35 @@ export const verifyHandler: PhaseHandler = {
       };
     }
 
-    const raw = collected.structured as Record<string, unknown> | undefined;
-    const message = (raw?.message as string) ?? "";
-    const modelPassed = raw?.passed as boolean | undefined;
-    let route = (raw?.route as string) ?? (modelPassed === false ? "execute" : "stop");
+    // If model called tools, route to execute for rework
+    if (collected.toolCalls.length > 0) {
+      if (context.state.attempt >= maxAttempts) {
+        return { message: collected.text || "Verification fix attempted.", route: "stop", yield: { task, passed: true } };
+      }
+      return { message: collected.text || "Fixing issues.", route: "execute", yield: { task } };
+    }
 
-    // Force stop if max attempts exhausted
+    // Try to parse JSON routing (for models that output structured verify results)
+    let message = collected.text.trim();
+    let passed = !/fail|error|issue|fix|retry/i.test(message);
+    let route = passed ? "stop" : "execute";
+
+    try {
+      const parsed = JSON.parse(collected.text);
+      if (parsed && typeof parsed === "object") {
+        if (typeof parsed.passed === "boolean") passed = parsed.passed;
+        if (typeof parsed.message === "string" && parsed.message.trim()) message = parsed.message.trim();
+        if (typeof parsed.route === "string") route = parsed.route;
+      }
+    } catch {
+      // Plain text — use heuristic above
+    }
+
     if (route === "execute" && context.state.attempt >= maxAttempts) {
       route = "stop";
     }
 
-    return { message, route, yield: { task, passed: modelPassed ?? true } };
+    return { message, route, yield: { task, passed } };
   }),
 
   conversationLimit: 8,
@@ -78,10 +95,10 @@ export const verifyHandler: PhaseHandler = {
     return [
       "Phase: verify",
       "",
-      'JSON-only contract: output exactly an object shaped like `{ "message": string, "route": "stop" | "execute" }`.',
-      'Use route="stop" when the task output satisfies the acceptance criteria.',
-      'Use route="execute" when more work is needed.',
-      "Do not return a task, plan, toolCalls, or instructions for future work in this phase.",
+      "Review the task output against the acceptance criteria.",
+      "If the criteria are met, respond with a confirmation.",
+      "If more work is needed, call tools to fix issues.",
+      "Do NOT output JSON.",
       "",
       "Task:",
       toJson(task ?? null),

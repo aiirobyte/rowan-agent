@@ -1,5 +1,22 @@
 import type { LlmRequest, StreamFn } from "../../src/types";
+import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { createId } from "../../src/types";
+
+/** Build a partial snapshot for test events */
+export function buildTestPartial(text: string): AssistantMessagePartial {
+  return {
+    role: "assistant",
+    contentBlocks: text ? [{ type: "text", text }] : [],
+  };
+}
+
+/** Build a partial with a tool call for test events */
+export function buildToolCallPartial(toolId: string, toolName: string, toolArgs: string): AssistantMessagePartial {
+  return {
+    role: "assistant",
+    contentBlocks: [{ type: "tool_call", id: toolId, name: toolName, args: toolArgs }],
+  };
+}
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -71,54 +88,49 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
       model: request.model,
       usage: { inputMessages: request.messages.length },
     };
-    yield { type: "text_delta", text: JSON.stringify({ message, route }) };
+    const text = JSON.stringify({ message, route });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
     return;
   }
 
   if (phase === "plan") {
     const input = userRequest || "hello";
-    yield { type: "text_delta", text: JSON.stringify({ message: "Planning task...", task: createScriptedTask(input, []) }) };
+    const text = JSON.stringify({ message: "Planning task...", task: createScriptedTask(input, []) });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
     return;
   }
 
   if (phase === "execute") {
-    // Always yield tool call - the execute handler handles unknown/blocked tools
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({
-        message: "Calling echo tool.",
-        route: "verify",
-        toolCalls: [
-          {
-            id: createId("call"),
-            name: "echo",
-            args: { message: userRequest || "echo" },
-          },
-        ],
-      }),
+    // Yield native tool call events for the echo tool
+    const toolId = createId("call");
+    const toolName = "echo";
+    const toolArgs = JSON.stringify({ message: userRequest || "echo" });
+    const textPartial = buildTestPartial("");
+    const withTool: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [{ type: "tool_call", id: toolId, name: toolName, args: toolArgs }],
     };
+    yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...withTool, contentBlocks: [...withTool.contentBlocks] } };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...withTool, contentBlocks: [...withTool.contentBlocks] } };
+    yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...withTool, contentBlocks: [...withTool.contentBlocks] } };
     yield { type: "done" };
     return;
   }
 
   if (phase === "verify") {
-    // The verify prompt includes task output with tool results as JSON.
-    // Check if echo tool evidence is present in the prompt content.
     const lastUserMsg = (request.messages.filter((m) => m.role === "user").pop()?.content ?? "") as string;
     const requiresEcho = lastUserMsg.includes("echo") && lastUserMsg.includes("acceptanceCriteria");
     const hasEchoEvidence = /"toolName"\s*:\s*"echo"/.test(lastUserMsg) && /"ok"\s*:\s*true/.test(lastUserMsg);
     const passed = requiresEcho ? hasEchoEvidence : true;
-    // Extract task title from verify prompt for the message
     const taskTitleMatch = lastUserMsg.match(/"title"\s*:\s*"([^"]+)"/);
     const taskTitle = taskTitleMatch?.[1] ?? (userRequest || "task");
     const message = passed
       ? `Task passed: ${taskTitle}`
       : `Task failed: missing required echo evidence for ${taskTitle}`;
-
-    const route = passed ? "stop" : "execute";
-    yield { type: "text_delta", text: JSON.stringify({ passed, message, route }) };
+    const text = message;
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   }
 };

@@ -9,6 +9,7 @@ import type {
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
+  AssistantMessagePartial,
 } from "../protocol";
 import { iterateSseMessages } from "../sse";
 import {
@@ -271,6 +272,26 @@ async function* streamResponses(
       // Map output_index -> tool call state
       const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 
+      const partial: AssistantMessagePartial = {
+        role: "assistant",
+        contentBlocks: [],
+      };
+
+      function rebuildPartial(): void {
+        partial.contentBlocks = [];
+        if (content) {
+          partial.contentBlocks.push({ type: "text", text: content });
+        }
+        for (const tc of toolCalls.values()) {
+          partial.contentBlocks.push({
+            type: "tool_call",
+            id: tc.id,
+            name: tc.name,
+            args: tc.arguments,
+          });
+        }
+      }
+
       for await (const sse of iterateSseMessages(response.body, signal)) {
         let event: ResponsesStreamEvent;
         try { event = JSON.parse(sse.data) as ResponsesStreamEvent; } catch { continue; }
@@ -278,14 +299,16 @@ async function* streamResponses(
         switch (event.type) {
           case "response.output_text.delta":
             content += event.delta;
-            yield { type: "text_delta", text: event.delta };
+            rebuildPartial();
+            yield { type: "text_delta", text: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             break;
 
           case "response.output_item.added":
             if (event.item.type === "function_call") {
               const tc = { id: event.item.id ?? "", name: event.item.name ?? "", arguments: "" };
               toolCalls.set(event.output_index, tc);
-              yield { type: "tool_call_start", id: tc.id, name: tc.name };
+              rebuildPartial();
+              yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
 
@@ -293,7 +316,8 @@ async function* streamResponses(
             const tc = toolCalls.get(event.output_index);
             if (tc) {
               tc.arguments += event.delta;
-              yield { type: "tool_call_delta", id: tc.id, arguments: event.delta };
+              rebuildPartial();
+              yield { type: "tool_call_delta", id: tc.id, arguments: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
           }
@@ -311,7 +335,8 @@ async function* streamResponses(
               const tc = toolCalls.get(event.output_index);
               if (tc) {
                 if (event.item.arguments) tc.arguments = event.item.arguments;
-                yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments };
+                rebuildPartial();
+                yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
             break;

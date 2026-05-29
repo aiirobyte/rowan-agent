@@ -10,6 +10,7 @@ import type {
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
+  AssistantMessagePartial,
 } from "../protocol";
 import { iterateSseMessages } from "../sse";
 import {
@@ -291,6 +292,29 @@ async function* streamAnthropicMessages(
       const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
       const blockTypes = new Map<number, "text" | "thinking" | "tool_use">();
 
+      const partial: AssistantMessagePartial = {
+        role: "assistant",
+        contentBlocks: [],
+      };
+
+      function rebuildPartial(): void {
+        partial.contentBlocks = [];
+        if (thinking) {
+          partial.contentBlocks.push({ type: "thinking", thinking });
+        }
+        if (content) {
+          partial.contentBlocks.push({ type: "text", text: content });
+        }
+        for (const tc of toolCalls.values()) {
+          partial.contentBlocks.push({
+            type: "tool_call",
+            id: tc.id,
+            name: tc.name,
+            args: tc.arguments,
+          });
+        }
+      }
+
       for await (const sse of iterateSseMessages(response.body, signal)) {
         if (!sse.event || !MESSAGE_EVENTS.has(sse.event)) continue;
 
@@ -308,22 +332,26 @@ async function* streamAnthropicMessages(
             if (event.content_block.type === "tool_use") {
               const tc = { id: event.content_block.id ?? "", name: event.content_block.name ?? "", arguments: "" };
               toolCalls.set(event.index, tc);
-              yield { type: "tool_call_start", id: tc.id, name: tc.name };
+              rebuildPartial();
+              yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
 
           case "content_block_delta":
             if (event.delta.type === "text_delta") {
               content += event.delta.text;
-              yield { type: "text_delta", text: event.delta.text };
+              rebuildPartial();
+              yield { type: "text_delta", text: event.delta.text, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             } else if (event.delta.type === "thinking_delta") {
               thinking += event.delta.thinking;
-              yield { type: "thinking_delta", thinking: event.delta.thinking };
+              rebuildPartial();
+              yield { type: "thinking_delta", thinking: event.delta.thinking, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             } else if (event.delta.type === "input_json_delta") {
               const tc = toolCalls.get(event.index);
               if (tc) {
                 tc.arguments += event.delta.partial_json;
-                yield { type: "tool_call_delta", id: tc.id, arguments: event.delta.partial_json };
+                rebuildPartial();
+                yield { type: "tool_call_delta", id: tc.id, arguments: event.delta.partial_json, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
             break;
@@ -331,7 +359,10 @@ async function* streamAnthropicMessages(
           case "content_block_stop": {
             if (blockTypes.get(event.index) === "tool_use") {
               const tc = toolCalls.get(event.index);
-              if (tc) yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments };
+              if (tc) {
+                rebuildPartial();
+                yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+              }
             }
             break;
           }

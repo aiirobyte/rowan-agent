@@ -6,18 +6,6 @@ import { LimitExceededError } from "../../../errors";
 import { toJson, serializeTools } from "../../../../harness/context/prompt-builder";
 import manifestJson from "./manifest.json";
 
-function parseToolCall(value: unknown): ToolCall {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Expected tool call to be an object.");
-  }
-  const r = value as Record<string, unknown>;
-  return {
-    id: typeof r.id === "string" ? r.id : "",
-    name: typeof r.name === "string" ? r.name : "",
-    args: r.args,
-  };
-}
-
 export const executeHandler: PhaseHandler = {
   definition: createPhaseDefinition(manifestJson, async (context, input) => {
     const inputYield = (input.yield as Record<string, unknown>) ?? {};
@@ -38,11 +26,8 @@ export const executeHandler: PhaseHandler = {
       return { message: "", route: "verify", yield: { ...inputYield, toolResults } };
     }
 
-    const raw = collected.structured as Record<string, unknown> | undefined;
-    const rawToolCalls = Array.isArray(raw?.toolCalls) ? raw.toolCalls : [];
-    const toolCalls = rawToolCalls.map((tc: unknown) => parseToolCall(tc));
-
-    for (const toolCall of toolCalls) {
+    // Use native tool calls from collected instead of parsing JSON
+    for (const toolCall of collected.toolCalls) {
       try {
         context.consumeLimit("toolCalls");
       } catch (error) {
@@ -66,7 +51,8 @@ export const executeHandler: PhaseHandler = {
       await context.message.end(toolMsgId);
     }
 
-    const route = (raw?.route as string) ?? "verify";
+    // If model called tools, route back to execute for more; if text-only, route to verify
+    const route = collected.toolCalls.length > 0 ? "verify" : "verify";
     return { message: collected.text ?? "", route, yield: { ...inputYield, toolResults } };
   }),
 
@@ -92,11 +78,10 @@ export const executeHandler: PhaseHandler = {
     return [
       "Phase: execute",
       "",
-      'JSON-only contract: output exactly an object shaped like `{ "message": string, "route": "execute" | "verify", "toolCalls": ToolCall[] }`.',
-      "The message is a concise user-visible execution status.",
-      "ToolCall fields: id, name, args.",
-      'If no tool is needed, return `"toolCalls": []`.',
-      "Call only tools listed in the task toolNames.",
+      "Execute the task by calling the appropriate tools.",
+      "If more tool calls are needed, continue calling tools.",
+      "If execution is complete, respond with a brief summary.",
+      "Do NOT output JSON. Use the provided tools directly.",
       "",
       "Task:",
       toJson(task ?? null),

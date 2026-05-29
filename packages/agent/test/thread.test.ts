@@ -7,7 +7,7 @@ import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
-import { scriptedStream } from "./support/scripted-stream";
+import { scriptedStream, buildTestPartial, buildToolCallPartial } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -197,63 +197,43 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          route: "plan",
-          message: "Start a nested thread.",
-        }),
-      };
+      const text = JSON.stringify({ route: "plan", message: "Start a nested thread." });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "plan") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          id: createId("task"),
-          title: "Delegate thread work",
-          instruction: "Ask a nested thread to use echo.",
-          acceptanceCriteria: ["Nested thread outcome must pass."],
-          toolNames: ["delegate"],
-          skillIds: [],
-          status: "pending",
-          attempts: 0,
-        }),
-      };
+      const text = JSON.stringify({
+        id: createId("task"),
+        title: "Delegate thread work",
+        instruction: "Ask a nested thread to use echo.",
+        acceptanceCriteria: ["Nested thread outcome must pass."],
+        toolNames: ["delegate"],
+        skillIds: [],
+        status: "pending",
+        attempts: 0,
+      });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "execute") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          message: "Calling delegate tool.",
-          route: "verify",
-          toolCalls: [
-            {
-              id: createId("call"),
-              name: "delegate",
-              args: { prompt: "use echo tool" },
-            },
-          ],
-        }),
-      };
+      const toolId = createId("call");
+      const toolName = "delegate";
+      const toolArgs = JSON.stringify({ prompt: "use echo tool" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "done" };
       return;
     }
 
     // verify phase - assume passed since delegate tool returns nested outcome
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({
-        passed: true,
-        message: "Nested thread outcome was returned.",
-        route: "stop",
-      }),
-    };
+    const text = JSON.stringify({ passed: true, message: "Nested thread outcome was returned.", route: "stop" });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
   const events: AgentEvent[] = [];

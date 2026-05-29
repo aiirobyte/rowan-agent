@@ -561,6 +561,15 @@ async function promptWithLog(input: {
         process.stdout.write("\n");
         currentStreamableMessage = false;
       }
+
+      if (event.type === "tool_execution_start") {
+        const argsPreview = JSON.stringify(event.args).slice(0, 60);
+        process.stderr.write(`  ⚙ ${event.toolName}(${argsPreview})\n`);
+      }
+      if (event.type === "tool_execution_end") {
+        const icon = event.isError ? "✗" : "✓";
+        process.stderr.write(`  ${icon} ${event.toolName}\n`);
+      }
     }) as AgentEventListener;
     listener.flush = async () => {
       await runEventLogger.flush();

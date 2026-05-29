@@ -3,7 +3,7 @@ import { Agent } from "../src/agent";
 import type { AgentEventListener, StreamFn } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
-import { scriptedStream } from "./support/scripted-stream";
+import { buildTestPartial, scriptedStream } from "./support/scripted-stream";
 
 test("Agent.run returns a run result and emits events", async () => {
   const agent = new Agent({
@@ -68,7 +68,7 @@ test("Agent rejects concurrent runs", async () => {
 
 test("Agent.abort stops an active run", async () => {
   const hangingStream: StreamFn = async function* hangingStream(_request, options) {
-    yield { type: "text_delta", text: "working" };
+    yield { type: "text_delta", text: "working", partial: buildTestPartial("working") };
     await new Promise((_resolve, reject) => {
       options.signal?.addEventListener("abort", () => reject(new Error("aborted")));
     });

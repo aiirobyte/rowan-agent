@@ -1,4 +1,3 @@
-import { extractJsonObject } from "./loop/response-parser";
 import type {
   AgentContext as AgentRunContext,
   AgentEvent,
@@ -16,6 +15,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "./types";
+import type { ContentBlock, AssistantMessagePartial, TextBlock, ToolCallBlock } from "@rowan-agent/models";
 import {
   createAgentState,
   createMessage,
@@ -561,19 +561,21 @@ async function runLoop(
 // Phase Capabilities
 // ============================================================================
 
-async function collectTextAndStructured(input: {
+async function collectStructured(input: {
   context: AgentLoopContext;
   message: import("./loop/phases/config").PhaseMessageManager;
   events: AsyncIterable<LlmStreamEvent>;
   metadataPhase: string;
-  recordText?: boolean;
+  scope?: "conversation" | "execution";
 }): Promise<{
   text: string;
-  structured?: unknown;
+  contentBlocks: ContentBlock[];
+  toolCalls: ToolCall[];
+  stopReason?: string;
 }> {
-  let text = "";
-  let flushedText = "";
   let activeMessageId: string | undefined;
+  let lastPartial: AssistantMessagePartial | undefined;
+  let stopReason: string | undefined;
 
   for await (const event of input.events) {
     assertNotAborted(input.context.signal);
@@ -582,42 +584,59 @@ async function collectTextAndStructured(input: {
       input.context.consumeLimit("modelCalls");
     }
 
+    // ---- Text: stream to UI ----
     if (event.type === "text_delta") {
-      text += event.text;
+      lastPartial = event.partial;
       if (!activeMessageId) {
         activeMessageId = input.message.start("assistant", event.text, {
           kind: "model_message",
           phase: input.metadataPhase,
-          scope: "execution",
+          scope: input.scope ?? "execution",
         });
       } else {
         await input.message.update(activeMessageId, event.text);
       }
     }
 
+    // ---- Tool call events: just update partial ----
+    if (event.type === "tool_call_start" || event.type === "tool_call_delta" || event.type === "tool_call_end") {
+      lastPartial = event.partial;
+    }
+
+    // ---- Thinking: update partial ----
+    if (event.type === "thinking_delta") {
+      lastPartial = event.partial;
+    }
+
+    // ---- Done: finalize ----
     if (event.type === "done") {
+      stopReason = event.response?.stopReason;
       if (activeMessageId) {
         await input.message.end(activeMessageId);
-        flushedText += text;
         activeMessageId = undefined;
-        text = "";
       }
     }
   }
 
   if (activeMessageId) {
     await input.message.end(activeMessageId);
-    flushedText += text;
   }
 
-  let structured: unknown;
-  try {
-    structured = extractJsonObject(flushedText);
-  } catch {
-    // Response is not JSON — structured remains undefined
-  }
+  // Extract from lastPartial
+  const contentBlocks = lastPartial?.contentBlocks ?? [];
+  const text = contentBlocks
+    .filter((b): b is TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+  const toolCalls: ToolCall[] = contentBlocks
+    .filter((b): b is ToolCallBlock => b.type === "tool_call")
+    .map((b) => {
+      let parsedArgs: unknown = b.args;
+      try { parsedArgs = JSON.parse(b.args); } catch { /* keep raw */ }
+      return { id: b.id, name: b.name, args: parsedArgs };
+    });
 
-  return { text: flushedText, structured };
+  return { text, contentBlocks, toolCalls, stopReason };
 }
 
 async function executeToolCall(input: {
@@ -679,8 +698,9 @@ function createPhaseContext(
       if (!msg) return;
       activeMessages.delete(messageId);
       state.transcript.push(msg);
-      // Only persist conversation-scoped messages to agent state
-      if (msg.metadata?.scope === "conversation") {
+      // Only persist conversation-scoped messages to agent state,
+      // but skip model_message kind (raw model output) — phases create their own outcome messages
+      if (msg.metadata?.scope === "conversation" && msg.metadata?.kind !== "model_message") {
         state.agentState.messages.push(msg);
       }
       emit(state, config.emit, { type: "message_end", message: snapshotMessage(msg), ts: nowIso() });
@@ -728,7 +748,7 @@ function createPhaseContext(
           toolResults: input.toolResults,
         });
         const [systemMsg, ...rest] = prompt.messages;
-        return collectTextAndStructured({
+        return collectStructured({
           context: loopContext,
           message: messageManager,
           events: loopContext.config.stream({
@@ -742,7 +762,7 @@ function createPhaseContext(
             })),
           }, { signal: loopContext.signal }),
           metadataPhase: input.phase,
-          recordText: input.recordText,
+          scope: input.scope,
         });
       },
     },

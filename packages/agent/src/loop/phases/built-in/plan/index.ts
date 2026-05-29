@@ -38,7 +38,14 @@ export const planHandler: PhaseHandler = {
       input,
     }));
 
-    const raw = collected.structured as Record<string, unknown> | undefined;
+    // Plan phase still uses JSON for structured task data
+    let raw: Record<string, unknown> | undefined;
+    try {
+      raw = JSON.parse(collected.text) as Record<string, unknown>;
+    } catch {
+      throw new Error("Planner did not produce valid JSON.");
+    }
+
     const rawTask = raw?.task ?? raw;
     if (!rawTask) {
       throw new Error("Planner did not produce a structured task.");
@@ -67,17 +74,16 @@ export const planHandler: PhaseHandler = {
   },
 
   buildPrompt(input) {
-    // Find the original user input, filtering out internal messages
     const userMessages = input.messages.filter((m) => m.role === "user" && m.metadata?.scope === "conversation");
     const latestUserMsg = userMessages[userMessages.length - 1];
     return [
       "Phase: plan",
       "",
-      'JSON-only contract: output exactly an object shaped like `{ "message": string, "route": "execute", "task": Task }`.',
+      "Analyze the user's request and create a task plan.",
+      'Output a JSON object: { "task": { ... }, "message": "explanation" }',
       "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
       'Prefer setting task.status to "pending" and task.attempts to 0.',
       "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
-      "Create the task for the current user request below.",
       "",
       "Current user request:",
       toJson(latestUserMsg?.content ?? ""),

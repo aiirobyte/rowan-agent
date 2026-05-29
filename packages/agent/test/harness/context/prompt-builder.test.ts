@@ -83,12 +83,10 @@ test("chat prompt defaults to direct answers unless another phase is needed", ()
 
   expect(messages).toHaveLength(3);
   expect(combined).toContain("Phase: chat");
-  expect(combined).toContain("Route only the current user request below.");
+  expect(combined).toContain("Answer the user's question directly in natural language.");
   expect(combined).toContain("Current user request:");
   expect(combined).toContain("\"What is 2 + 2?\"");
-  expect(combined).toContain("route");
-  expect(combined).toContain("stop");
-  expect(combined).toContain("Do not call tools in this phase");
+  expect(combined).toContain("Do NOT output JSON");
   expect(combined).toContain("echo");
 });
 
@@ -115,12 +113,10 @@ test("plan prompt includes phase, JSON-only contract, tools, and skills", () => 
   expect(messages).toHaveLength(3);
   expect(messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user", content: "Plan with echo." })]));
   expect(combined).toContain("Phase: plan");
-  expect(combined).toContain("Create the task for the current user request below.");
+  expect(combined).toContain("Analyze the user's request and create a task plan.");
   expect(combined).toContain("Current user request:");
   expect(combined).toContain("\"Plan with echo.\"");
-  expect(combined).toContain("JSON-only contract");
-  expect(combined).toContain("route");
-  expect(combined).toContain("execute");
+  expect(combined).toContain("Output a JSON object");
   expect(combined).toContain("Plan with echo.");
   expect(combined).toContain("echo");
   expect(combined).toContain("Returns the input message.");
@@ -171,9 +167,8 @@ test("execute prompt includes phase, JSON-only contract, task, allowed tools, an
   const combined = messages.map((message) => message.content).join("\n");
 
   expect(combined).toContain("Phase: execute");
-  expect(combined).toContain("JSON-only contract");
-  expect(combined).toContain("route");
-  expect(combined).toContain("toolCalls");
+  expect(combined).toContain("Execute the task by calling the appropriate tools.");
+  expect(combined).toContain("Do NOT output JSON");
   expect(combined).toContain("Task");
   expect(combined).toContain("echo");
 });
@@ -287,11 +282,8 @@ test("verify prompt includes phase, lightweight judgement contract, task, criter
   const combined = messages.map((message) => message.content).join("\n");
 
   expect(combined).toContain("Phase: verify");
-  expect(combined).toContain("JSON-only contract");
-  expect(combined).toContain("route");
-  expect(combined).toContain("stop");
-  expect(combined).toContain("execute");
-  expect(combined).toContain("Do not return a task, plan, toolCalls");
+  expect(combined).toContain("Review the task output against the acceptance criteria.");
+  expect(combined).toContain("Do NOT output JSON");
   expect(combined).toContain("Task output");
   expect(combined).toContain("\"toolResults\"");
 });

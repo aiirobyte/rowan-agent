@@ -9,6 +9,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../../types";
+import type { ContentBlock } from "@rowan-agent/models";
 import type { PhaseOutput } from "../../protocol/context";
 import type { AgentRunState } from "../types";
 
@@ -40,14 +41,16 @@ export type AgentPhasePlugin = {
 
 export type CollectedModelOutput = {
   text: string;
-  structured?: unknown;
+  contentBlocks: ContentBlock[];
+  toolCalls: ToolCall[];
+  stopReason?: string;
 };
 
 export type ModelCollectInput = {
   phase: string;
   input: PhaseInput;
   toolResults?: ToolResult[];
-  recordText?: boolean;
+  scope?: "conversation" | "execution";
 };
 
 /** Message lifecycle manager for streaming updates */

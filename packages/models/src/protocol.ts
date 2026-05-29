@@ -148,18 +148,66 @@ export type LlmResponse = {
 };
 
 // ---------------------------------------------------------------------------
+// Content blocks (for streaming partial accumulation)
+// ---------------------------------------------------------------------------
+
+export type TextBlock = {
+  type: "text";
+  text: string;
+};
+
+export type ThinkingBlock = {
+  type: "thinking";
+  thinking: string;
+};
+
+export type ToolCallBlock = {
+  type: "tool_call";
+  id: string;
+  name: string;
+  args: string;  // Raw JSON string (may be incomplete during streaming)
+};
+
+export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock;
+
+/**
+ * Accumulated assistant message partial, carried by each streaming event.
+ * The provider builds this incrementally; the consumer reads it directly.
+ */
+export type AssistantMessagePartial = {
+  role: "assistant";
+  contentBlocks: ContentBlock[];
+  stopReason?: LlmStopReason;
+};
+
+// ---------------------------------------------------------------------------
 // Stream events
 // ---------------------------------------------------------------------------
 
 export type LlmStreamEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "thinking_delta"; thinking: string }
-  | { type: "tool_call_start"; id: string; name: string }
-  | { type: "tool_call_delta"; id: string; arguments: string }
-  | { type: "tool_call_end"; id: string; name: string; arguments: string }
+  | { type: "text_delta"; text: string; partial: AssistantMessagePartial }
+  | { type: "thinking_delta"; thinking: string; partial: AssistantMessagePartial }
+  | { type: "tool_call_start"; id: string; name: string; partial: AssistantMessagePartial }
+  | { type: "tool_call_delta"; id: string; arguments: string; partial: AssistantMessagePartial }
+  | { type: "tool_call_end"; id: string; name: string; arguments: string; partial: AssistantMessagePartial }
   | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage }
   | { type: "error"; error: Error }
   | { type: "done"; response?: LlmResponse };
+
+// ---------------------------------------------------------------------------
+// Partial helpers
+// ---------------------------------------------------------------------------
+
+export function textFromPartial(partial: AssistantMessagePartial): string {
+  return partial.contentBlocks
+    .filter((b): b is TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+}
+
+export function toolCallsFromPartial(partial: AssistantMessagePartial): ToolCallBlock[] {
+  return partial.contentBlocks.filter((b): b is ToolCallBlock => b.type === "tool_call");
+}
 
 // ---------------------------------------------------------------------------
 // Stream options

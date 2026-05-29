@@ -4,7 +4,7 @@ import { runAgentLoop } from "../src/agent-loop";
 import type { AgentEvent, AgentRuntimePort, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
 import { echoTool } from "./support/echo-tool";
-import { scriptedStream } from "./support/scripted-stream";
+import { buildTestPartial, buildToolCallPartial, scriptedStream } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -74,10 +74,8 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   const stream: StreamFn = async function* requestRecordingStream(request, options) {
     seenRequests.push(request);
     expect(options.signal).toBe(controller.signal);
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ route: "direct", message: "Done." }),
-    };
+    const text = JSON.stringify({ route: "direct", message: "Done." });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
@@ -151,37 +149,33 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Routing from model." }) };
+      const chatText = JSON.stringify({ route: "plan", message: "Routing from model." });
+      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "plan") {
-      yield { type: "text_delta", text: JSON.stringify(task) };
+      const planText = JSON.stringify(task);
+      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "execute") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          message: "Executing from model.",
-          route: "verify",
-          toolCalls: [
-            {
-              id: createId("call"),
-              name: "echo",
-              args: { message: "ordered" },
-            },
-          ],
-        }),
-      };
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "ordered" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "done" };
       return;
     }
 
-    yield { type: "text_delta", text: JSON.stringify({ passed: true, message: "Verified.", route: "stop" }) };
+    const verifyText = JSON.stringify({ passed: true, message: "Verified.", route: "stop" });
+    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
     yield { type: "done" };
   };
   const session = createState({
@@ -230,10 +224,8 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
   const emittedEvents: AgentEvent[] = [];
   const stream: StreamFn = async function* promptRecordingStream(request) {
     yield { type: "model_requested", model: request.model, usage: { inputMessages: 3 } };
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ route: "direct", message: "Hello." }),
-    };
+    const text = JSON.stringify({ route: "direct", message: "Hello." });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
@@ -371,24 +363,25 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
+      const chatText = JSON.stringify({ route: "plan", message: "Create task." });
+      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "text_delta", text: JSON.stringify(task) };
+      const planText = JSON.stringify(task);
+      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
       yield { type: "done" };
       return;
     }
     if (phase === "execute") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          message: "Calling echo.",
-          route: "verify",
-          toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
-        }),
-      };
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "retry" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "done" };
       return;
     }
@@ -398,10 +391,8 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     if (verifyCalls === 1) {
       throw invalidModelSchemaError("Model output for verify did not match the expected schema.");
     }
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ passed: true, message: "Verified after retry.", route: "stop" }),
-    };
+    const verifyText = JSON.stringify({ passed: true, message: "Verified after retry.", route: "stop" });
+    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
     yield { type: "done" };
   };
 
@@ -450,12 +441,14 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield { type: "text_delta", text: JSON.stringify({ route: "plan", message: "Create task." }) };
+      const chatText = JSON.stringify({ route: "plan", message: "Create task." });
+      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
-      yield { type: "text_delta", text: JSON.stringify(task) };
+      const planText = JSON.stringify(task);
+      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
       yield { type: "done" };
       return;
     }
@@ -465,35 +458,32 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
       if (executeCalls === 1) {
         throw invalidModelSchemaError("Model output for execute did not include toolCalls.");
       }
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          message: "Calling echo.",
-          route: "verify",
-          toolCalls: [{ id: createId("call"), name: "echo", args: { message: "retry" } }],
-        }),
-      };
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "retry" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "done" };
       return;
     }
 
     verifyCalls += 1;
-    yield {
-      type: "text_delta",
-      text: JSON.stringify(
-        verifyCalls === 1
-          ? {
-              passed: false,
-              message: "Missing echo evidence.",
-              route: "execute",
-            }
-          : {
-              passed: true,
-              message: "Verified after execute retry.",
-              route: "stop",
-            },
-      ),
-    };
+    const verifyText = JSON.stringify(
+      verifyCalls === 1
+        ? {
+            passed: false,
+            message: "Missing echo evidence.",
+            route: "execute",
+          }
+        : {
+            passed: true,
+            message: "Verified after execute retry.",
+            route: "stop",
+          },
+    );
+    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
     yield { type: "done" };
   };
 
@@ -580,58 +570,45 @@ test("invalid tool args do not execute tool", async () => {
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          route: "plan",
-          message: "Routing invalid args task.",
-        }),
-      };
+      const chatText = JSON.stringify({
+        route: "plan",
+        message: "Routing invalid args task.",
+      });
+      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "plan") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          id: createId("task"),
-          title: "Invalid args task",
-          instruction: "Call strict tool",
-          acceptanceCriteria: ["Strict tool should pass"],
-          toolNames: ["strict"],
-          skillIds: [],
-          status: "pending",
-          attempts: 0,
-        }),
-      };
+      const planText = JSON.stringify({
+        id: createId("task"),
+        title: "Invalid args task",
+        instruction: "Call strict tool",
+        acceptanceCriteria: ["Strict tool should pass"],
+        toolNames: ["strict"],
+        skillIds: [],
+        status: "pending",
+        attempts: 0,
+      });
+      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
       yield { type: "done" };
       return;
     }
 
     if (phase === "execute") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({
-          message: "Calling strict tool.",
-          route: "verify",
-          toolCalls: [
-            {
-              id: createId("call"),
-              name: "strict",
-              args: { value: 123 },
-            },
-          ],
-        }),
-      };
+      const toolId = createId("call");
+      const toolName = "strict";
+      const toolArgs = JSON.stringify({ value: 123 });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "done" };
       return;
     }
 
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ passed: false, message: "Invalid args prevented execution.", route: "execute" }),
-    };
+    const verifyText = JSON.stringify({ passed: false, message: "Invalid args prevented execution.", route: "execute" });
+    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
     yield { type: "done" };
   };
   const session = createState({
@@ -668,10 +645,8 @@ test("runtime beforePhase can adjust phase input", async () => {
       return;
     }
 
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ route: "direct", message: "Adjusted route input." }),
-    };
+    const text = JSON.stringify({ route: "direct", message: "Adjusted route input." });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
   const runtime: AgentRuntimePort = {
@@ -712,10 +687,8 @@ test("runtime afterPhase can adjust phase output", async () => {
       return;
     }
 
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({ route: "direct", message: "Original route output." }),
-    };
+    const text = JSON.stringify({ route: "direct", message: "Original route output." });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
@@ -796,13 +769,11 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
     }
 
     routeCalls += 1;
-    yield {
-      type: "text_delta",
-      text: JSON.stringify({
-        route: "direct",
-        message: routeCalls > 1 ? "Retried with adjusted input." : "Needs retry.",
-      }),
-    };
+    const text = JSON.stringify({
+      route: "direct",
+      message: routeCalls > 1 ? "Retried with adjusted input." : "Needs retry.",
+    });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
@@ -845,10 +816,8 @@ test("runtime phase port can abort with an outcome", async () => {
   const stream: StreamFn = async function* taskRouteStream(request) {
     const phase = detectPhase(request.messages);
     if (phase === "chat") {
-      yield {
-        type: "text_delta",
-        text: JSON.stringify({ route: "plan", message: "Create a task." }),
-      };
+      const chatText = JSON.stringify({ route: "plan", message: "Create a task." });
+      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
       yield { type: "done" };
     }
   };
