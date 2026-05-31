@@ -3,6 +3,7 @@
 .agents/
 .codex/
 .claude/
+.rowan/
 CLAUDE.md
 AGENTS.md
 
