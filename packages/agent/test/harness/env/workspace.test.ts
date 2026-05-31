@@ -43,10 +43,11 @@ test("source runtime resolves workspace to the project root", async () => {
     execPath: "/usr/local/bin/bun",
   });
   expect(paths.mode).toBe("source");
-  expect(paths.root).toBe(root);
-  expect(paths.runsDir).toBe(join(root, "runs"));
-  expect(paths.sessionsDir).toBe(join(root, "sessions"));
-  expect(paths.skillsDir).toBe(join(root, "skills"));
+  expect(paths.cwd).toBe(root);
+  expect(paths.rowanDir).toBe(join(root, ".rowan"));
+  expect("runsDir" in paths).toBe(false);
+  expect("sessionsDir" in paths).toBe(false);
+  expect("skillsDir" in paths).toBe(false);
 });
 
 test("binary runtime resolves workspace to ~/.rowan", () => {
@@ -57,10 +58,8 @@ test("binary runtime resolves workspace to ~/.rowan", () => {
   });
 
   expect(paths.mode).toBe("binary");
-  expect(paths.root).toBe("/Users/tester/.rowan");
-  expect(paths.runsDir).toBe("/Users/tester/.rowan/runs");
-  expect(paths.sessionsDir).toBe("/Users/tester/.rowan/sessions");
-  expect(paths.skillsDir).toBe("/Users/tester/.rowan/skills");
+  expect(paths.cwd).toBe("/Users/tester");
+  expect(paths.rowanDir).toBe("/Users/tester/.rowan");
 });
 
 test("source runtime can resolve workspace from the running entrypoint path", async () => {
@@ -76,7 +75,7 @@ test("source runtime can resolve workspace from the running entrypoint path", as
     entrypoint: join(entrypointDir, "cli.ts"),
   });
 
-  expect(paths.root).toBe(root);
+  expect(paths.cwd).toBe(root);
 });
 
 test("runtime and workspace env vars can override detection", () => {
@@ -89,7 +88,8 @@ test("runtime and workspace env vars can override detection", () => {
     execPath: "/usr/local/bin/rowan",
     homeDir: "/Users/tester",
   });
-  expect(paths.root).toBe("/Users/tester/custom-rowan");
+  expect(paths.cwd).toBe("/Users/tester/custom-rowan");
+  expect(paths.rowanDir).toBe("/Users/tester/custom-rowan/.rowan");
 });
 
 test("relative paths resolve inside the workspace", () => {
@@ -129,16 +129,14 @@ test("loadSkill reads SKILL.md and infers id from parent directory", async () =>
 
 test("loadSkill resolves skill ids from the workspace skills directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-workspace-skill-"));
-  const skillDir = join(root, "skills", "example");
+  const skillDir = join(root, ".rowan", "skills", "example");
   await mkdir(skillDir, { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), "# Example\n\nUse workspace skill.");
 
   const workspace = {
     mode: "source" as const,
-    root,
-    runsDir: join(root, "runs"),
-    sessionsDir: join(root, "sessions"),
-    skillsDir: join(root, "skills"),
+    cwd: root,
+    rowanDir: join(root, ".rowan"),
   };
 
   expect(resolveSkillPath("example", workspace)).toBe(join(skillDir, "SKILL.md"));

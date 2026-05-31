@@ -1,63 +1,34 @@
+export { builtinPhases } from "./built-in";
 export {
-  createBuiltinPhaseConfig,
-  createBuiltinPhasePlugin,
-  getPhase,
-  getPhases,
-  getPhaseHandler,
-  getBuiltinHandlers,
-  getRunner,
-  chatPhaseDefinition,
-  planPhaseDefinition,
-  executePhaseDefinition,
-  verifyPhaseDefinition,
-  chatExtension,
-  planExtension,
-  executeExtension,
-  verifyExtension,
-} from "./built-in";
-export {
-  buildMessages,
-  buildPrompt,
-  builtinPhasePromptBuilders,
-  createBuiltinPromptBuilder,
-  createPhasePromptBuilder,
-  createPhasePromptBuilders,
-} from "./built-in/prompt-builder";
-export type { PhaseHandler } from "./built-in/types";
-export {
-  createPhaseConfig,
-  createDefaultPhaseConfig,
+  createPhaseRegistry,
   definePhase,
-  definePhasePlugin,
-  resolvePhase,
-  validatePhaseConfig,
-  createId,
-  LimitExceededError,
-  toJson,
-  serializeTools,
+  resolvePhaseEntry,
+  ensurePhaseRegistry,
   DEFAULT_PHASE_ID,
-  type PhaseConfig,
-  type PhaseConfigInput,
-  type PhasePlugin,
+  type PhaseRegistry,
+  type PhaseRegistryInput,
+  type PhaseHandler,
+  type PhaseManifest,
   type PhaseContext,
   type PhaseDefinition,
   type PhaseInput,
   type PhaseOutput,
-  type Outcome,
+  type PhaseRun,
   type ToolCall,
-  type ToolResult,
-  type CollectedModelOutput,
+  type ModelCollectedOutput,
   type ModelCollectInput,
   type PhaseMessageManager,
   type PhaseToolExecutionManager,
-} from "./config";
-export { createFailedPhaseOutcome, createPhaseOutcome } from "./built-in/verify";
-export { ExtensionRunner } from "../../extensions";
+} from "./registry";
+export {
+  ExtensionRunner,
+  loadExtensionFromFactory,
+  loadExtensionFromFactorySync,
+} from "../../extensions";
 export type {
   ExtensionAPI,
   ExtensionFactory,
   ExtensionPhaseHandler,
-  PhaseManifest,
   BeforePhaseHookContext,
   AfterPhaseHookContext,
 } from "../../extensions";

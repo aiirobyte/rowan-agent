@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Agent, type StreamFn } from "../src";
 import type { LlmRequest } from "../src/types";
-import { createId } from "../src/types";
+import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { buildTestPartial, buildToolCallPartial, scriptedStream } from "./support/scripted-stream";

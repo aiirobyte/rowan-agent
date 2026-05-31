@@ -1,15 +1,7 @@
 import type {
-  AgentLimitUsage,
   AgentMessage,
   RuntimeDepth,
 } from "../types";
-
-export function cloneLimitUsage(usage: AgentLimitUsage): AgentLimitUsage {
-  return {
-    modelCalls: usage.modelCalls,
-    toolCalls: usage.toolCalls,
-  };
-}
 
 export function snapshotMessage(message: AgentMessage): AgentMessage {
   return {

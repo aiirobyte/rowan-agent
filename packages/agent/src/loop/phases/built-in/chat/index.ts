@@ -1,47 +1,53 @@
-import { createId, toJson, serializeTools, type PhaseInput, type PhaseOutput, type PhaseContext } from "../../config";
-import type { ExtensionFactory } from "../../../../extensions";
-import manifestJson from "./manifest.json";
+import { defineExtension } from "../../../../extensions/types";
+import manifest from "./package.json";
+
+const manifestObject = manifest.rowan.phase;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function run(context: PhaseContext, input: PhaseInput): Promise<PhaseOutput> {
-  const collected = await context.turn(() => context.model.collect({
-    phase: "chat",
-    input,
-  }));
+export const chatPhaseExtension = defineExtension((rowan) => {
+  rowan.registerPhase({
+    ...manifestObject,
 
-  // If the model called tools, route to execute to handle them
-  if (collected.toolCalls.length > 0) {
-    return { message: collected.text.trim() || "Executing tools.", route: "execute", yield: { toolResults: [] } };
-  }
+    async run(context, input) {
+      const collected = await context.turn(() => context.model.collect({
+        phase: "chat",
+        input,
+      }));
 
-  // Try to parse JSON routing from the response (for models that still output JSON)
-  let message = collected.text.trim() || "Done.";
-  let route = "stop";
-  try {
-    const parsed = JSON.parse(collected.text);
-    if (isRecord(parsed) && typeof parsed.route === "string") {
-      route = parsed.route === "direct" ? "stop" : parsed.route;
-      message = (typeof parsed.message === "string" && parsed.message.trim()) || message;
-    }
-  } catch {
-    // Plain text response — use as-is, route to stop
-  }
+      // Check if collection was stopped due to abort
+      if (collected.stopReason === "aborted") {
+        return { message: collected.text, route: "stop" };
+      }
 
-  // Validate route
-  const availablePhaseIds = new Set(context.availablePhases.map((p) => p.id));
-  if (route !== "stop" && (!availablePhaseIds.has(route) || route === "chat")) {
-    route = "stop";
-  }
+      // If the model called tools, route to execute to handle them
+      if (collected.toolCalls.length > 0) {
+        return { message: collected.text.trim() || "Executing tools.", route: "execute", yield: { toolResults: [] } };
+      }
 
-  return { message, route };
-}
+      // Try to parse JSON routing from the response (for models that still output JSON)
+      let message = collected.text.trim() || "Done.";
+      let route = "stop";
+      try {
+        const parsed = JSON.parse(collected.text);
+        if (isRecord(parsed) && typeof parsed.route === "string") {
+          route = parsed.route === "direct" ? "stop" : parsed.route;
+          message = (typeof parsed.message === "string" && parsed.message.trim()) || message;
+        }
+      } catch {
+        // Plain text response — use as-is, route to stop
+      }
 
-export const chatExtension: ExtensionFactory = (api) => {
-  api.registerPhase(manifestJson, {
-    conversationLimit: 12,
+      // Validate route
+      const availablePhaseIds = new Set(context.availablePhases.map((p) => p.id));
+      if (route !== "stop" && (!availablePhaseIds.has(route) || route === "chat")) {
+        route = "stop";
+      }
+
+      return { message, route };
+    },
 
     buildInput(context) {
       return {
@@ -54,8 +60,6 @@ export const chatExtension: ExtensionFactory = (api) => {
     },
 
     buildPrompt(input) {
-      const userMessages = input.messages.filter((m: { role: string; metadata?: Record<string, unknown> }) => m.role === "user" && m.metadata?.scope === "conversation");
-      const latestUserMsg = userMessages[userMessages.length - 1];
       return [
         "Phase: chat",
         "",
@@ -64,15 +68,16 @@ export const chatExtension: ExtensionFactory = (api) => {
         "Do NOT output JSON. Respond in the user's language.",
         "",
         "Current user request:",
-        toJson(latestUserMsg?.content ?? ""),
+        rowan.format.json(rowan.input.latestUserMessage(input)),
         "",
         "Available tools with name, description, and parameters:",
-        toJson(serializeTools(input.tools)),
+        rowan.format.json(rowan.format.tools(input.tools)),
       ].join("\n");
     },
 
     createOutcome(output) {
-      return { id: createId("out"), passed: true, message: output.message };
+      const isAborted = output.message?.includes("aborted");
+      return { id: rowan.id.create("out"), passed: !isAborted, message: output.message };
     },
-  }, run);
-};
+  });
+});

@@ -1,12 +1,18 @@
 import { expect, test } from "bun:test";
 import {
-  createPhaseConfig,
-  createDefaultPhaseConfig,
-  definePhasePlugin,
-  resolvePhase,
-  validatePhaseConfig,
+  createPhaseRegistry,
+  resolvePhaseEntry,
+  ensurePhaseRegistry,
 } from "../src/loop/phases";
-import type { PhaseConfig, PhaseDefinition } from "../src/loop/phases";
+import type { PhaseRegistry, PhaseDefinition } from "../src/loop/phases";
+import {
+  createDefaultPhaseRegistry,
+  createExtensionRuntime,
+  ExtensionRunner,
+  loadExtensionFromFactory,
+} from "../src/extensions";
+
+const testRuntime = createExtensionRuntime();
 
 function stubPhase(id: string): PhaseDefinition {
   return {
@@ -17,154 +23,177 @@ function stubPhase(id: string): PhaseDefinition {
   };
 }
 
-test("validatePhaseConfig accepts a valid config", () => {
-  const config: PhaseConfig = {
+test("ensurePhaseRegistry accepts a valid registry", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "a",
     phases: [stubPhase("a"), stubPhase("b")],
+    phaseHandlers: new Map(),
   };
 
-  expect(() => validatePhaseConfig(config)).not.toThrow();
+  expect(() => ensurePhaseRegistry(registry)).not.toThrow();
 });
 
-test("validatePhaseConfig rejects empty entryPhaseId", () => {
-  const config: PhaseConfig = {
+test("ensurePhaseRegistry rejects empty entryPhaseId", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "",
     phases: [stubPhase("a")],
+    phaseHandlers: new Map(),
   };
 
-  expect(() => validatePhaseConfig(config)).toThrow("non-empty entryPhaseId");
+  expect(() => ensurePhaseRegistry(registry)).toThrow("non-empty entryPhaseId");
 });
 
-test("validatePhaseConfig rejects empty phases array", () => {
-  const config: PhaseConfig = {
+test("ensurePhaseRegistry rejects empty phases array", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "a",
     phases: [],
+    phaseHandlers: new Map(),
   };
 
-  expect(() => validatePhaseConfig(config)).toThrow("at least one phase definition");
+  expect(() => ensurePhaseRegistry(registry)).toThrow("at least one phase definition");
 });
 
-test("validatePhaseConfig rejects phase with empty id", () => {
-  const config: PhaseConfig = {
+test("ensurePhaseRegistry rejects phase with empty id", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "a",
     phases: [{ id: "", name: "", description: "", run: async () => ({ message: "", route: "stop" }) }],
+    phaseHandlers: new Map(),
   };
 
-  expect(() => validatePhaseConfig(config)).toThrow("non-empty id");
+  expect(() => ensurePhaseRegistry(registry)).toThrow("non-empty id");
 });
 
-test("validatePhaseConfig rejects duplicate phase ids", () => {
-  const config: PhaseConfig = {
+test("ensurePhaseRegistry rejects duplicate phase ids", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "a",
     phases: [stubPhase("a"), stubPhase("a")],
+    phaseHandlers: new Map(),
   };
 
-  expect(() => validatePhaseConfig(config)).toThrow("Duplicate phase id: a");
+  expect(() => ensurePhaseRegistry(registry)).toThrow("Duplicate phase id: a");
 });
 
-test("validatePhaseConfig rejects entryPhaseId not in phases", () => {
-  const config: PhaseConfig = {
+test("ensurePhaseRegistry rejects entryPhaseId not in phases", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "missing",
     phases: [stubPhase("a")],
+    phaseHandlers: new Map(),
   };
 
-  expect(() => validatePhaseConfig(config)).toThrow("not defined in phases");
+  expect(() => ensurePhaseRegistry(registry)).toThrow("not defined in phases");
 });
 
 test("resolvePhase returns matching phase definition", () => {
   const phase = stubPhase("target");
-  const config: PhaseConfig = {
+  const registry: PhaseRegistry = {
     entryPhaseId: "target",
     phases: [stubPhase("other"), phase],
+    phaseHandlers: new Map(),
   };
 
-  expect(resolvePhase(config, "target")).toBe(phase);
+  expect(resolvePhaseEntry(registry, "target").phase).toBe(phase);
 });
 
-test("resolvePhase returns undefined for unknown id", () => {
-  const config: PhaseConfig = {
+test("resolvePhaseEntry throws for unknown id", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "a",
     phases: [stubPhase("a")],
+    phaseHandlers: new Map(),
   };
 
-  expect(resolvePhase(config, "missing")).toBeUndefined();
+  expect(() => resolvePhaseEntry(registry, "missing")).toThrow("not defined in the phase registry");
 });
 
-test("createDefaultPhaseConfig returns chat as the default phase id", () => {
-  const config = createDefaultPhaseConfig();
+test("createDefaultPhaseRegistry returns chat as the default phase id", async () => {
+  const registry = await createDefaultPhaseRegistry();
 
-  expect(config.entryPhaseId).toBe("chat");
-  expect(config.phases.map((p) => p.id)).toEqual(["chat"]);
-  expect(config.phases[0]).toMatchObject({
+  expect(registry.entryPhaseId).toBe("chat");
+  expect(registry.phases.map((p) => p.id)).toEqual(["chat", "plan", "execute", "verify"]);
+  expect(registry.phaseHandlers.has("chat")).toBe(true);
+  expect(registry.phases[0]).toMatchObject({
     name: "Chat",
     description: expect.any(String),
   });
 });
 
-test("createDefaultPhaseConfig passes validation", () => {
-  const config = createDefaultPhaseConfig();
+test("createDefaultPhaseRegistry passes validation", async () => {
+  const registry = await createDefaultPhaseRegistry();
 
-  expect(() => validatePhaseConfig(config)).not.toThrow();
+  expect(() => ensurePhaseRegistry(registry)).not.toThrow();
 });
 
-test("createPhaseConfig composes phases from plugins", () => {
+test("createPhaseRegistry composes phases directly", () => {
   const first = stubPhase("first");
   const second = stubPhase("second");
 
-  const config = createPhaseConfig({
-    plugins: [
-      definePhasePlugin({
-        id: "core",
-        entryPhaseId: "first",
-        phases: [first],
-      }),
-      definePhasePlugin({
-        id: "extra",
-        phases: [second],
-      }),
-    ],
+  const registry = createPhaseRegistry({
+    entryPhaseId: "first",
+    phases: [first, second],
   });
 
-  expect(config.entryPhaseId).toBe("first");
-  expect(config.phases).toEqual([first, second]);
-  expect(resolvePhase(config, "second")).toBe(second);
+  expect(registry.entryPhaseId).toBe("first");
+  expect(registry.phases).toEqual([first, second]);
+  expect(resolvePhaseEntry(registry, "second").phase).toBe(second);
 });
 
-test("createPhaseConfig lets explicit entryPhaseId override plugin entry", () => {
-  const config = createPhaseConfig({
-    entryPhaseId: "override",
-    plugins: [
-      definePhasePlugin({
-        id: "core",
-        entryPhaseId: "first",
-        phases: [stubPhase("first"), stubPhase("override")],
-      }),
-    ],
+test("createPhaseRegistry uses first phase as default entry", () => {
+  const registry = createPhaseRegistry({
+    phases: [stubPhase("first"), stubPhase("second")],
   });
 
-  expect(config.entryPhaseId).toBe("override");
+  expect(registry.entryPhaseId).toBe("first");
 });
 
-test("createPhaseConfig rejects duplicate plugin ids", () => {
-  expect(() =>
-    createPhaseConfig({
-      plugins: [
-        definePhasePlugin({ id: "duplicate", phases: [stubPhase("a")] }),
-        definePhasePlugin({ id: "duplicate", phases: [stubPhase("b")] }),
-      ],
-    }),
-  ).toThrow("Duplicate phase plugin id: duplicate");
+test("ExtensionRunner creates phase registry with registered handlers", async () => {
+  const extension = await loadExtensionFromFactory((rowan) => {
+    rowan.registerPhase({
+      id: "custom",
+      name: "Custom",
+      description: "Custom phase.",
+      buildInput(context) {
+        return {
+          phase: "custom",
+          systemPrompt: context.state.agentState.systemPrompt,
+          messages: context.messages.visible(),
+          tools: [],
+          skills: context.skills,
+        };
+      },
+      buildPrompt() {
+        return "custom prompt";
+      },
+      createOutcome(output) {
+        return { id: "custom_outcome", passed: true, message: output.message };
+      },
+      async run() {
+        return { message: "custom done", route: "stop" };
+      },
+    });
+  }, testRuntime, process.cwd(), "<test:custom>");
+
+  const runner = new ExtensionRunner([extension]);
+  const registry = runner.createPhaseRegistry({ entryPhaseId: "custom" });
+  const { handler } = resolvePhaseEntry(registry, "custom");
+
+  expect(handler?.buildPrompt?.({
+    phase: "custom",
+    systemPrompt: "system",
+    messages: [],
+    tools: [],
+    skills: [],
+  })).toBe("custom prompt");
 });
 
-test("custom three-phase config runs validation correctly", () => {
-  const config: PhaseConfig = {
+test("custom three-phase registry runs validation correctly", () => {
+  const registry: PhaseRegistry = {
     entryPhaseId: "decide",
     phases: [stubPhase("decide"), stubPhase("act"), stubPhase("check")],
+    phaseHandlers: new Map(),
   };
 
-  expect(() => validatePhaseConfig(config)).not.toThrow();
-  expect(resolvePhase(config, "decide")).toBeDefined();
-  expect(resolvePhase(config, "act")).toBeDefined();
-  expect(resolvePhase(config, "check")).toBeDefined();
-  expect(resolvePhase(config, "missing")).toBeUndefined();
+  expect(() => ensurePhaseRegistry(registry)).not.toThrow();
+  expect(resolvePhaseEntry(registry, "decide").phase).toBeDefined();
+  expect(resolvePhaseEntry(registry, "act").phase).toBeDefined();
+  expect(resolvePhaseEntry(registry, "check").phase).toBeDefined();
+  expect(() => resolvePhaseEntry(registry, "missing")).toThrow("not defined in the phase registry");
 });

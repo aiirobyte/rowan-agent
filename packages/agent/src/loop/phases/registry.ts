@@ -1,6 +1,5 @@
 import type {
   AgentEvent,
-  AgentLimitUsage,
   AgentMessage,
   AgentState,
   Outcome,
@@ -8,14 +7,13 @@ import type {
   Skill,
   Tool,
 } from "../../types";
-import { createId, type ToolCall, type ToolResult } from "../../types";
+import type { ToolCall, ToolResult } from "../../types";
+import { createId } from "../../utils";
 import type { ContentBlock } from "@rowan-agent/models";
 import type { PhaseOutput } from "../../protocol/context";
 import type { AgentRunState } from "../types";
-import { LimitExceededError } from "../errors";
-import { toJson, serializeTools } from "../../harness/context/prompt-builder";
 
-export { createId, LimitExceededError, toJson, serializeTools };
+export { createId };
 export type { Outcome, ToolCall, ToolResult };
 
 export type { PhaseOutput };
@@ -31,20 +29,28 @@ export type PhaseInput = {
   yield?: unknown;
 };
 
-export type PhaseDefinition = {
+export type PhaseManifest = {
   id: string;
   name: string;
   description: string;
-  run(context: PhaseContext, input: PhaseInput): Promise<PhaseOutput>;
 };
 
-export type PhasePlugin = {
-  id: string;
-  entryPhaseId?: string;
-  phases: PhaseDefinition[];
+export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput>;
+
+export type PhaseDefinition = PhaseManifest & {
+  run: PhaseRun;
 };
 
-export type CollectedModelOutput = {
+export type PhaseHandler = {
+  conversationLimit?: number;
+  prepare?(context: PhaseContext): void | Promise<void>;
+  buildInput(context: PhaseContext, yield_?: unknown): PhaseInput | Promise<PhaseInput>;
+  buildPrompt?(input: PhaseInput): string;
+  finalize?(context: PhaseContext, output: PhaseOutput): void | Promise<void>;
+  createOutcome?(output: PhaseOutput): Outcome;
+};
+
+export type ModelCollectedOutput = {
   text: string;
   contentBlocks: ContentBlock[];
   toolCalls: ToolCall[];
@@ -89,7 +95,7 @@ export type PhaseContext = {
   message: PhaseMessageManager;
   toolExecution: PhaseToolExecutionManager;
   model: {
-    collect(input: ModelCollectInput): Promise<CollectedModelOutput>;
+    collect(input: ModelCollectInput): Promise<ModelCollectedOutput>;
   };
   tools: {
     execute(input: { toolCall: ToolCall }): Promise<ToolResult>;
@@ -99,7 +105,6 @@ export type PhaseContext = {
   };
   skills: AgentState["skills"];
   emit(event: AgentEvent): void;
-  consumeLimit(resource: keyof AgentLimitUsage): void;
   turn<T>(fn: () => Promise<T>): Promise<T>;
   maxAttempts?: number;
   signal?: AbortSignal;
@@ -108,15 +113,16 @@ export type PhaseContext = {
   availablePhases: Array<{ id: string; name: string; description: string }>;
 };
 
-export type PhaseConfig = {
+export type PhaseRegistry = {
   entryPhaseId: string;
   phases: PhaseDefinition[];
+  phaseHandlers: Map<string, PhaseHandler>;
 };
 
-export type PhaseConfigInput = {
+export type PhaseRegistryInput = {
   entryPhaseId?: string;
   phases?: PhaseDefinition[];
-  plugins?: PhasePlugin[];
+  phaseHandlers?: Map<string, PhaseHandler>;
 };
 
 export function definePhase(
@@ -125,21 +131,17 @@ export function definePhase(
   return definition;
 }
 
-export function definePhasePlugin(plugin: PhasePlugin): PhasePlugin {
-  return plugin;
-}
-
-export function validatePhaseConfig(config: PhaseConfig): void {
-  if (!config.entryPhaseId || config.entryPhaseId.trim().length === 0) {
-    throw new Error("Phase config must have a non-empty entryPhaseId.");
+function validatePhaseRegistry(registry: PhaseRegistry): void {
+  if (!registry.entryPhaseId || registry.entryPhaseId.trim().length === 0) {
+    throw new Error("Phase registry must have a non-empty entryPhaseId.");
   }
 
-  if (!Array.isArray(config.phases) || config.phases.length === 0) {
-    throw new Error("Phase config must include at least one phase definition.");
+  if (!Array.isArray(registry.phases) || registry.phases.length === 0) {
+    throw new Error("Phase registry must include at least one phase definition.");
   }
 
   const ids = new Set<string>();
-  for (const phase of config.phases) {
+  for (const phase of registry.phases) {
     if (!phase.id || phase.id.trim().length === 0) {
       throw new Error("Each phase definition must have a non-empty id.");
     }
@@ -149,51 +151,47 @@ export function validatePhaseConfig(config: PhaseConfig): void {
     ids.add(phase.id);
   }
 
-  if (!ids.has(config.entryPhaseId)) {
-    throw new Error(`Entry phase id "${config.entryPhaseId}" is not defined in phases.`);
+  if (!ids.has(registry.entryPhaseId)) {
+    throw new Error(`Entry phase id "${registry.entryPhaseId}" is not defined in phases.`);
   }
 }
 
-export function createPhaseConfig(input: PhaseConfigInput): PhaseConfig {
-  const phases: PhaseDefinition[] = [];
-  const pluginIds = new Set<string>();
+export function createPhaseRegistry(input: PhaseRegistryInput): PhaseRegistry {
+  const phases: PhaseDefinition[] = [...(input.phases ?? [])];
+  const phaseHandlers = new Map<string, PhaseHandler>();
 
-  for (const plugin of input.plugins ?? []) {
-    if (!plugin.id || plugin.id.trim().length === 0) {
-      throw new Error("Each phase plugin must have a non-empty id.");
-    }
-    if (pluginIds.has(plugin.id)) {
-      throw new Error(`Duplicate phase plugin id: ${plugin.id}`);
-    }
-    pluginIds.add(plugin.id);
-    phases.push(...plugin.phases);
+  for (const [id, handler] of input.phaseHandlers ?? []) {
+    phaseHandlers.set(id, handler);
   }
 
-  phases.push(...(input.phases ?? []));
-
-  const pluginEntryPhaseId = input.plugins?.find((plugin) => plugin.entryPhaseId)?.entryPhaseId;
-  const config: PhaseConfig = {
-    entryPhaseId: input.entryPhaseId ?? pluginEntryPhaseId ?? phases[0]?.id ?? "",
+  const registry: PhaseRegistry = {
+    entryPhaseId: input.entryPhaseId ?? phases[0]?.id ?? "",
     phases,
+    phaseHandlers,
   };
-  validatePhaseConfig(config);
-  return config;
+  validatePhaseRegistry(registry);
+  return registry;
 }
 
-export function resolvePhase(config: PhaseConfig, phaseId: string): PhaseDefinition | undefined {
-  return config.phases.find((phase) => phase.id === phaseId);
+
+
+/** Look up a phase definition and its handler by id; throws if not found. */
+export function resolvePhaseEntry(
+  registry: PhaseRegistry,
+  phaseId: string,
+): { phase: PhaseDefinition; handler: PhaseHandler | undefined } {
+  const phase = registry.phases.find((p) => p.id === phaseId);
+  if (!phase) {
+    throw new Error(`Phase "${phaseId}" is not defined in the phase registry.`);
+  }
+  const handler = registry.phaseHandlers.get(phaseId);
+  return { phase, handler };
 }
 
-export const DEFAULT_PHASE_ID = "chat";
-
-export function createDefaultPhaseConfig(): PhaseConfig {
-  return {
-    entryPhaseId: DEFAULT_PHASE_ID,
-    phases: [{
-      id: DEFAULT_PHASE_ID,
-      name: "Chat",
-      description: "Decide whether to answer directly or transition to another available phase.",
-      run: async () => ({ message: "", route: "stop" }),
-    }],
-  };
+/** Validate and return a phase registry — idempotent, safe for externally-provided registries. */
+export function ensurePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {
+  validatePhaseRegistry(registry);
+  return registry;
 }
+
+export const DEFAULT_PHASE_ID = process.env.ROWAN_DEFAULT_PHASE ?? "chat";

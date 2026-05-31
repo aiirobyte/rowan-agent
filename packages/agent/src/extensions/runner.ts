@@ -1,92 +1,192 @@
-import type { PhaseDefinition } from "../loop/phases/config";
+import { execFile } from "node:child_process";
+import { createPhaseRegistry, type PhaseRegistry, type PhaseDefinition } from "../loop/phases/registry";
+import { serializeSkills, serializeTools, latestUserInput } from "../harness/context/prompt-builder";
+import { createId, createJson } from "../utils";
 import type {
+  ExecOptions,
+  ExecResult,
+  Extension,
   ExtensionAPI,
-  ExtensionFactory,
+  ExtensionHandler,
   ExtensionPhaseHandler,
-  PhaseManifest,
-  BeforePhaseHookContext,
-  AfterPhaseHookContext,
+  ExtensionRuntime,
+  RegisteredPhase,
 } from "./types";
 
 // ---------------------------------------------------------------------------
-// Extension Runner — loads extensions and provides phase definitions + handlers
+// Command execution
 // ---------------------------------------------------------------------------
 
+async function execCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  options?: ExecOptions,
+): Promise<ExecResult> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      {
+        cwd: options?.cwd ?? cwd,
+        env: options?.env ? { ...process.env, ...options.env } : undefined,
+        timeout: options?.timeout,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        if (error && error.killed && options?.signal?.aborted) {
+          reject(new Error("Command was aborted"));
+          return;
+        }
+        resolve({
+          exitCode: typeof error?.code === "number" ? error.code : (error ? 1 : 0),
+          stdout: stdout ?? "",
+          stderr: stderr ?? "",
+        });
+      },
+    );
+
+    if (options?.signal) {
+      options.signal.addEventListener("abort", () => {
+        child.kill("SIGTERM");
+      }, { once: true });
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Extension Runtime
+// ---------------------------------------------------------------------------
+
+export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRuntime {
+  const cwd = options?.cwd ?? process.cwd();
+  const state: { staleMessage?: string } = {};
+
+  const assertActive = () => {
+    if (state.staleMessage) {
+      throw new Error(state.staleMessage);
+    }
+  };
+
+  return {
+    assertActive,
+    invalidate: (message) => {
+      state.staleMessage ??=
+        message ?? "This extension context is stale after session replacement or reload.";
+    },
+
+    registerPhase(extension, registration) {
+      assertActive();
+      const handler: ExtensionPhaseHandler = {
+        conversationLimit: registration.conversationLimit,
+        prepare: registration.prepare,
+        buildInput: registration.buildInput,
+        buildPrompt: registration.buildPrompt,
+        finalize: registration.finalize,
+        createOutcome: registration.createOutcome,
+      };
+      const definition: PhaseDefinition = {
+        id: registration.id,
+        name: registration.name,
+        description: registration.description,
+        run: registration.run,
+      };
+      extension.phases.set(registration.id, { definition, handler, source: { extensionPath: extension.path } });
+    },
+
+    addEventHandler(extension, event, handler) {
+      assertActive();
+      const handlers = extension.eventHandlers.get(event) ?? [];
+      handlers.push(handler);
+      extension.eventHandlers.set(event, handlers);
+    },
+
+    exec(command, args, options) {
+      assertActive();
+      return execCommand(command, args, cwd, options);
+    },
+
+    id: { create: createId },
+    format: { json: createJson.stringify, tools: serializeTools, skills: serializeSkills },
+    input: { latestUserMessage: latestUserInput },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Extension API creation
+// ---------------------------------------------------------------------------
+
+export function createExtensionAPI(extension: Extension, runtime: ExtensionRuntime): ExtensionAPI {
+  return {
+    registerPhase(registration) { runtime.registerPhase(extension, registration); },
+    on(event, handler) { runtime.addEventHandler(extension, event, handler); },
+    beforePhase(hook) { runtime.addEventHandler(extension, "before_phase", hook as ExtensionHandler); },
+    afterPhase(hook) { runtime.addEventHandler(extension, "after_phase", hook as ExtensionHandler); },
+    exec(command, args, options) { return runtime.exec(command, args, options); },
+    id: runtime.id,
+    format: runtime.format,
+    input: runtime.input,
+    runtime,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Extension Runner
+// ---------------------------------------------------------------------------
+
+export type ExtensionRunnerOptions = {
+  entryPhaseId?: string;
+  validatePhaseOverride?: (phaseId: string, extensionPath: string) => boolean;
+};
+
 export class ExtensionRunner {
-  readonly #phases = new Map<string, PhaseDefinition>();
-  readonly #handlers = new Map<string, ExtensionPhaseHandler>();
-  readonly #beforeHooks: Array<(ctx: BeforePhaseHookContext) => void | Promise<void>> = [];
-  readonly #afterHooks: Array<(ctx: AfterPhaseHookContext) => void | Promise<void>> = [];
+  private readonly validatePhaseOverride?: (phaseId: string, extensionPath: string) => boolean;
 
-  // ---- Extension loading --------------------------------------------------
-
-  /** Load extensions synchronously (factory must not be async). */
-  loadSync(factories: ExtensionFactory[]): void {
-    for (const factory of factories) {
-      const api = this.#createAPI();
-      const result = factory(api);
-      if (result && typeof (result as Promise<void>).then === "function") {
-        throw new Error("loadSync does not support async factories. Use load() instead.");
-      }
-    }
+  constructor(
+    private readonly extensions: Extension[],
+    options?: { validatePhaseOverride?: (phaseId: string, extensionPath: string) => boolean },
+  ) {
+    this.validatePhaseOverride = options?.validatePhaseOverride;
   }
-
-  /** Load extensions (supports async factories). */
-  async load(factories: ExtensionFactory[]): Promise<void> {
-    for (const factory of factories) {
-      const api = this.#createAPI();
-      await factory(api);
-    }
-  }
-
-  // ---- Phase resolution ---------------------------------------------------
 
   getPhase(id: string): PhaseDefinition | undefined {
-    return this.#phases.get(id);
+    return this.getRegisteredPhase(id)?.definition;
   }
 
   getPhases(): PhaseDefinition[] {
-    return [...this.#phases.values()];
+    return [...this.collectRegisteredPhases().values()].map((p) => p.definition);
   }
 
-  getHandler(id: string): ExtensionPhaseHandler | undefined {
-    return this.#handlers.get(id);
+  getPhaseHandler(id: string): ExtensionPhaseHandler | undefined {
+    return this.getRegisteredPhase(id)?.handler;
   }
 
-  getHandlers(): ExtensionPhaseHandler[] {
-    return [...this.#handlers.values()];
+  createPhaseRegistry(input: { entryPhaseId?: string } = {}): PhaseRegistry {
+    const registered = this.collectRegisteredPhases();
+    return createPhaseRegistry({
+      entryPhaseId: input.entryPhaseId,
+      phases: [...registered.values()].map((p) => p.definition),
+      phaseHandlers: new Map([...registered].map(([id, p]) => [id, p.handler])),
+    });
   }
 
-  // ---- Hooks --------------------------------------------------------------
-
-  get beforeHooks(): ReadonlyArray<(ctx: BeforePhaseHookContext) => void | Promise<void>> {
-    return this.#beforeHooks;
+  private getRegisteredPhase(id: string): RegisteredPhase | undefined {
+    return this.collectRegisteredPhases().get(id);
   }
 
-  get afterHooks(): ReadonlyArray<(ctx: AfterPhaseHookContext) => void | Promise<void>> {
-    return this.#afterHooks;
-  }
-
-  // ---- Internal -----------------------------------------------------------
-
-  #createAPI(): ExtensionAPI {
-    return {
-      registerPhase: (manifest, handler, run) => {
-        const definition: PhaseDefinition = {
-          id: manifest.id,
-          name: manifest.name,
-          description: manifest.description,
-          run,
-        };
-        this.#phases.set(manifest.id, definition);
-        this.#handlers.set(manifest.id, handler);
-      },
-      beforePhase: (hook) => {
-        this.#beforeHooks.push(hook);
-      },
-      afterPhase: (hook) => {
-        this.#afterHooks.push(hook);
-      },
-    };
+  private collectRegisteredPhases(): Map<string, RegisteredPhase> {
+    const phases = new Map<string, RegisteredPhase>();
+    for (const extension of this.extensions) {
+      for (const [id, phase] of extension.phases) {
+        if (this.validatePhaseOverride?.(id, phase.source.extensionPath)) {
+          throw new Error(`External extension cannot override built-in phase: ${id}`);
+        }
+        if (phases.has(id)) {
+          throw new Error(`Duplicate phase id: ${id}`);
+        }
+        phases.set(id, phase);
+      }
+    }
+    return phases;
   }
 }

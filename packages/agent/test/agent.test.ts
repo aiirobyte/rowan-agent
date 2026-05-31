@@ -1,9 +1,20 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
-import type { AgentEventListener, StreamFn } from "../src/types";
+import type { AgentEventListener, LlmRequest, StreamFn } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { buildTestPartial, scriptedStream } from "./support/scripted-stream";
+
+function detectPhase(messages: LlmRequest["messages"]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
+    if (match) return match[1];
+  }
+  return "chat";
+}
 
 test("Agent.run returns a run result and emits events", async () => {
   const agent = new Agent({
@@ -25,6 +36,68 @@ test("Agent.run returns a run result and emits events", async () => {
   expect(agent.state.context.messages[0]?.content).toBe("use echo tool");
   expect(events).toContain("tool_execution_start");
   expect(events).toContain("tool_execution_end");
+});
+
+test("Agent discovers custom phases from cwd .rowan extensions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-extension-"));
+  try {
+    const extDir = join(root, ".rowan", "extensions", "echo");
+    await mkdir(extDir, { recursive: true });
+    await writeFile(join(extDir, "package.json"), JSON.stringify({
+      name: "rowan-test-extension",
+      rowan: { extensions: ["./index.ts"] },
+    }));
+    await writeFile(join(extDir, "index.ts"), `
+      import type { ExtensionFactory } from "@rowan-agent/agent";
+      const extension: ExtensionFactory = (rowan) => {
+        rowan.registerPhase({
+          id: "echo",
+          name: "Echo",
+          description: "Echo extension phase.",
+          buildInput(context) {
+            return {
+              phase: "echo",
+              systemPrompt: context.state.agentState.systemPrompt,
+              messages: context.messages.visible(),
+              tools: [],
+              skills: context.skills,
+            };
+          },
+          createOutcome(output) {
+            return { id: "out_echo", passed: true, message: output.message };
+          },
+          async run() {
+            return { message: "custom extension ran", route: "stop" };
+          },
+        });
+      };
+      export default extension;
+    `);
+
+    const stream: StreamFn = async function* routeToEcho(request) {
+      expect(detectPhase(request.messages)).toBe("chat");
+      const text = JSON.stringify({ route: "echo", message: "Routing to extension." });
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "done" };
+    };
+
+    const agent = new Agent({
+      cwd: root,
+      context: createTestContext(),
+      model: { provider: "test", name: "extension" },
+      stream,
+    });
+
+    const outcome = await runAgentTurn(agent, "use extension");
+
+    expect(outcome.outcome).toMatchObject({
+      id: "out_echo",
+      passed: true,
+      message: "custom extension ran",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Agent.run does not wait for async event listeners", async () => {

@@ -1,23 +1,36 @@
 import type { Outcome } from "../types";
-import { createId } from "../types";
-import type { LimitExceededError } from "./errors";
+import { createId } from "../utils";
+import type { LoopResult } from "./errors";
 
-export function createLimitExceededOutcome(error: LimitExceededError): Outcome {
-  return { id: createId("out"), passed: false, message: error.message };
-}
+export const createOutcome = {
+  fromResult(result: LoopResult): Outcome {
+    if (result.stopReason === "none") {
+      return { id: createId("out"), passed: true, message: "Completed." };
+    }
+    return { id: createId("out"), passed: false, message: result.message };
+  },
 
-export function createThreadDepthLimitOutcome(input: { threadDepth: number; maxThreadDepth: number }): Outcome {
-  return { id: createId("out"), passed: false, message: `Thread depth limit exceeded (${input.threadDepth}/${input.maxThreadDepth}).` };
-}
+  threadDepthLimit(input: { threadDepth: number; maxThreadDepth: number }): Outcome {
+    return { id: createId("out"), passed: false, message: `Thread depth limit exceeded (${input.threadDepth}/${input.maxThreadDepth}).` };
+  },
 
-export function createDefaultPhaseOutcome(): Outcome {
-  return { id: "default", passed: true, message: "Phase completed." };
-}
+  phase(): Outcome {
+    return { id: "default", passed: true, message: "Phase completed." };
+  },
 
-export function createDefaultOutcome(output: { message: string }): Outcome {
-  return { id: createId("out"), passed: true, message: output.message || "Completed." };
-}
+  default(output: { message: string }): Outcome {
+    return { id: createId("out"), passed: true, message: output.message || "Completed." };
+  },
 
-export function createMaxVisitsOutcome(phaseId: string): Outcome {
-  return { id: createId("out"), passed: false, message: `Phase "${phaseId}" exceeded maximum visit limit.` };
-}
+  visitsExceeded(phaseId: string): Outcome {
+    return { id: createId("out"), passed: false, message: `Phase "${phaseId}" exceeded maximum visit limit.` };
+  },
+
+  aborted(): Outcome {
+    return { id: createId("out"), passed: false, message: "Agent run aborted." };
+  },
+
+  error(message: string): Outcome {
+    return { id: createId("out"), passed: false, message };
+  },
+};

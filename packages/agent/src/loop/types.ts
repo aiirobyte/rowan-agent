@@ -14,17 +14,10 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { PhaseConfig } from "./phases/config";
+import type { PhaseRegistry } from "./phases/registry";
 
 export type AgentRunLimits = {
-  maxToolCalls?: number;
-  maxModelCalls?: number;
   maxThreadDepth?: number;
-};
-
-export type AgentLimitUsage = {
-  toolCalls: number;
-  modelCalls: number;
 };
 
 export type RuntimeDepth = {
@@ -45,14 +38,13 @@ export type AgentLoopConfig = {
   afterToolCall?: AfterToolCall;
   runThread?: RunThread;
   emit?: AgentEventListener;
-  phaseConfig?: PhaseConfig;
+  phaseConfig?: PhaseRegistry;
 };
 
 export type AgentRunState = {
   agentState: AgentState;
   currentPhase: string;
   attempt: number;
-  limitUsage: AgentLimitUsage;
   depth: {
     threadDepth: number;
     maxThreadDepth: number;
@@ -78,7 +70,6 @@ export type AgentLoopContext = {
   emit(event: AgentEvent): void;
   appendMessage(message: AgentMessageSnapshot): void;
   appendStateMessage(message: AgentMessageSnapshot): void;
-  consumeLimit(resource: keyof AgentLimitUsage): void;
   runThread?: RunThread;
 };
 
@@ -87,7 +78,7 @@ export type AgentEffect =
   | { type: "event_message"; message: AgentMessageSnapshot }
   | { type: "agent_state_message"; message: AgentMessageSnapshot };
 
-import type { PhaseInput, PhaseOutput } from "./phases/config";
+import type { PhaseInput, PhaseOutput } from "./phases/registry";
 
 export type PhaseResult =
   | { action: "continue"; output: PhaseOutput; effects?: AgentEffect[] }

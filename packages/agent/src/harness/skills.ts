@@ -28,7 +28,7 @@ export function resolveSkillPath(input: string, workspace = resolveWorkspacePath
   }
 
   if (!isExplicitPath(input)) {
-    return join(workspace.skillsDir, input, "SKILL.md");
+    return join(workspace.rowanDir, "skills", input, "SKILL.md");
   }
 
   const workspacePath = resolveInWorkspace(input, workspace);

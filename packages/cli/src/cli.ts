@@ -10,7 +10,7 @@ import {
   Agent,
   DEFAULT_MAX_THREAD_DEPTH,
   createMessage,
-  formatLocalTimestamp,
+  createTimestamp,
   isConversationMessage,
   type AgentEvent,
   type AgentEventListener,
@@ -101,20 +101,30 @@ async function runRegisteredCommand(args: CliArgs): Promise<boolean> {
 }
 
 function createDefaultLogPath(workspace: WorkspacePaths, sessionId: string): string {
-  return join(workspace.runsDir, `${formatLocalTimestamp()}-${sessionId}.jsonl`);
+  return join(workspaceRunsDir(workspace), `${createTimestamp()}-${sessionId}.jsonl`);
 }
 
 function resolveOptionalWorkspacePath(path: string | undefined, workspace: WorkspacePaths): string | undefined {
-  return path ? resolveInWorkspace(path, workspace) : undefined;
+  return path ? resolveInWorkspace(path, workspace.rowanDir) : undefined;
 }
 
 function formatWorkspacePathForDisplay(path: string, workspace: WorkspacePaths): string {
-  const workspaceRelativePath = relative(workspace.root, path);
-  if (workspaceRelativePath && !workspaceRelativePath.startsWith("..") && !isAbsolute(workspaceRelativePath)) {
-    return workspaceRelativePath.split(sep).join("/");
+  for (const root of [workspace.cwd, workspace.rowanDir]) {
+    const workspaceRelativePath = relative(root, path);
+    if (workspaceRelativePath && !workspaceRelativePath.startsWith("..") && !isAbsolute(workspaceRelativePath)) {
+      return workspaceRelativePath.split(sep).join("/");
+    }
   }
 
   return path;
+}
+
+function workspaceRunsDir(workspace: WorkspacePaths): string {
+  return join(workspace.rowanDir, "runs");
+}
+
+function workspaceSessionsDir(workspace: WorkspacePaths): string {
+  return join(workspace.rowanDir, "sessions");
 }
 
 function currentTurnMessageId(messages: AgentMessage[]): string | undefined {
@@ -150,23 +160,22 @@ ${formatCommandHelp()}
   When no command is provided, positional text is treated as the prompt.
 
 Run logs:
-  Source runs use the Rowan project root as the workspace.
-  Packaged binary runs use ~/.rowan as the workspace.
-  Session run logs are written automatically to <workspace>/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
+  Rowan resources are stored in <cwd>/.rowan.
+  Session run logs are written automatically to <cwd>/.rowan/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
   --log-level controls run log detail: debug, info, warn, error, or silent. Default: info.
   Info logs write event summaries only; debug logs include redacted event payloads.
   Matching run log records are streamed live to stderr; stdout is reserved for command results.
   Turns in one process append to the same run log; explicit session loads start a new run log.
-  Relative --log paths are resolved from <workspace>.
+  Relative --log paths are resolved from <cwd>/.rowan.
   CLI output prints Session id once, Message id before each turn result, and Log path last once per entry.
 
 Sessions:
-  Sessions are saved automatically to <workspace>/sessions/<session-id>.jsonl.
+  Sessions are saved automatically to <cwd>/.rowan/sessions/<session-id>.jsonl.
   Use --session <id> to continue a saved conversation.
   Interactive controls: :session, :exit, :quit.
 
 Skills:
-  --skill example resolves to <workspace>/skills/example/SKILL.md.
+  --skill example resolves to <cwd>/.rowan/skills/example/SKILL.md.
 
 Environment:
   ROWAN_OPENAI_BASE_URL  Defaults to https://api.openai.com/v1
@@ -176,7 +185,7 @@ Environment:
   ROWAN_MAX_THREAD_DEPTH Optional maximum nested thread depth, defaults to 4
   ROWAN_LOG_LEVEL        Optional run log detail: debug, info, warn, error, or silent
   ROWAN_RUNTIME          Optional override: source or binary
-  ROWAN_WORKSPACE        Optional workspace root override
+  ROWAN_WORKSPACE        Optional cwd override
 `);
 }
 
@@ -377,16 +386,14 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
     DEFAULT_MAX_THREAD_DEPTH;
   const logPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args);
-  const tools = createCoreTools({ root: workspace.root });
+  const tools = createCoreTools({ root: workspace.cwd });
 
   return {
     command: "config",
     workspace: {
       mode: workspace.mode,
-      root: workspace.root,
-      runsDir: workspace.runsDir,
-      sessionsDir: workspace.sessionsDir,
-      skillsDir: workspace.skillsDir,
+      cwd: workspace.cwd,
+      rowanDir: workspace.rowanDir,
     },
     openaiCompatible: {
       baseUrl: baseUrl ? normalizeBaseUrl(baseUrl) : undefined,
@@ -444,7 +451,7 @@ async function runConfigCommand(args: CliArgs): Promise<void> {
 
 async function runListCommand(_args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  const sessions = [...(await LocalJsonlSessionManager.list(workspace.sessionsDir))]
+  const sessions = [...(await LocalJsonlSessionManager.list(workspaceSessionsDir(workspace)))]
     .map<CliSessionListItem>((session) => ({
       id: session.id,
       ...(session.title ? { title: session.title } : {}),
@@ -460,9 +467,9 @@ async function createConfiguredAgent(
   workspace: WorkspacePaths,
 ): Promise<ConfiguredAgent> {
   const skills = await loadSkills(args.skills, workspace);
-  const tools = createCoreTools({ root: workspace.root });
+  const tools = createCoreTools({ root: workspace.cwd });
   const sessionManager = args.sessionId
-    ? await LocalJsonlSessionManager.open(workspace.sessionsDir, args.sessionId)
+    ? await LocalJsonlSessionManager.open(workspaceSessionsDir(workspace), args.sessionId)
     : undefined;
   if (args.sessionId && !sessionManager) {
     throw new Error(`Session not found: ${args.sessionId}`);
@@ -488,6 +495,7 @@ async function createConfiguredAgent(
       skills,
     };
   const agent = new Agent({
+    cwd: workspace.cwd,
     context,
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompletionsStream(config),
@@ -519,7 +527,7 @@ async function promptWithLog(input: {
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
   try {
     if (!sessionManager) {
-      sessionManager = await LocalJsonlSessionManager.create(input.workspace.sessionsDir, {
+      sessionManager = await LocalJsonlSessionManager.create(workspaceSessionsDir(input.workspace), {
         systemPrompt: input.agent.state.context.systemPrompt,
         input: input.prompt,
         skills: input.agent.state.context.skills ?? [],

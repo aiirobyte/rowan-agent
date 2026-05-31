@@ -1,22 +1,21 @@
-import type { AgentLimitUsage } from "../types";
+/** Stop reason for loop termination */
+export type StopReason = "none" | "completed" | "aborted" | "error";
 
-export class LimitExceededError extends Error {
-  readonly resource: keyof AgentLimitUsage;
-  readonly limit: number;
-  readonly usage: AgentLimitUsage;
+/** Result with stop reason */
+export type LoopResult = {
+  stopReason: "none";
+} | {
+  stopReason: Exclude<StopReason, "none">;
+  message: string;
+};
 
-  constructor(input: { resource: keyof AgentLimitUsage; limit: number; usage: AgentLimitUsage }) {
-    const label = input.resource === "modelCalls" ? "model calls" : "tool calls";
-    super(`Agent run exceeded ${label} limit (${input.usage[input.resource]}/${input.limit}).`);
-    this.name = "LimitExceededError";
-    this.resource = input.resource;
-    this.limit = input.limit;
-    this.usage = { ...input.usage };
-  }
-}
-
-export function assertNotAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw new Error("Agent run aborted.");
-  }
-}
+/** Loop guard functions - pure, no exceptions */
+export const LoopGuard = {
+  /** Returns abort result if signal is aborted */
+  checkAbort(signal?: AbortSignal): LoopResult {
+    if (signal?.aborted) {
+      return { stopReason: "aborted", message: "Agent run aborted." };
+    }
+    return { stopReason: "none" };
+  },
+};

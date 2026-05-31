@@ -1,5 +1,5 @@
 import type { AgentContextMessage, AgentContextSkill, ToolResult } from "../../protocol";
-import type { PhaseInput } from "../../loop/phases/config";
+import type { PhaseInput } from "../../loop/phases/registry";
 import {
   buildSystemPrompt,
 } from "./prompt";
@@ -29,10 +29,6 @@ export type PhasePromptBuilder = {
   conversationLimit?: number;
   build(input: PhasePromptBuildInput): string;
 };
-
-export function toJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
 
 function summarizeText(text: string, maxLength = 700): string {
   const compact = text.trim().replace(/\s+/g, " ");

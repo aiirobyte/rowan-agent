@@ -1,6 +1,6 @@
 import type { LlmRequest, StreamFn } from "../../src/types";
 import type { AssistantMessagePartial } from "@rowan-agent/models";
-import { createId } from "../../src/types";
+import { createId } from "../../src/utils";
 
 /** Build a partial snapshot for test events */
 export function buildTestPartial(text: string): AssistantMessagePartial {

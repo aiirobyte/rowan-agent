@@ -1,5 +1,5 @@
 import type { LoopPhase } from "../src/types";
-import type { PhaseOutput } from "../src/loop/phases/config";
+import type { PhaseOutput } from "../src/loop/phases/registry";
 import type { LlmRequest, LlmStreamEvent } from "@rowan-agent/models";
 
 const chatPhase: LoopPhase = "chat";

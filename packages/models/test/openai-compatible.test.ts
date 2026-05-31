@@ -338,7 +338,7 @@ test("createOpenAICompletionsStream sends tools in request body", async () => {
 
   expect(requestBody?.tools).toBeDefined();
   expect((requestBody?.tools as unknown[]).length).toBe(1);
-  expect((requestBody?.tools as Array<{ function: { name: string } }>[0]).function.name).toBe("echo");
+  expect((requestBody?.tools as Array<{ function: { name: string } }>)[0]?.function.name).toBe("echo");
   expect(requestBody?.stream).toBe(true);
 });
 

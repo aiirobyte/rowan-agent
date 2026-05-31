@@ -1,4 +1,6 @@
 import { runAgentLoop } from "./agent-loop";
+import { createDefaultPhaseRegistry } from "./extensions";
+import type { PhaseRegistry } from "./loop/phases";
 import type {
   AgentMessage,
   LlmModelRef,
@@ -18,6 +20,8 @@ export type AgentOptions = {
   context: AgentContext;
   model: LlmModelRef;
   stream: StreamFn;
+  cwd?: string;
+  phaseConfig?: PhaseRegistry;
   sessionId?: string;
   maxAttempts?: number;
   limits?: AgentRunLimits;
@@ -181,6 +185,9 @@ export class Agent {
       const emit = (event: AgentEvent) => {
         this.processEvents(event);
       };
+      const phaseConfig = resolved.phaseConfig ?? await createDefaultPhaseRegistry({
+        cwd: resolved.cwd ?? process.cwd(),
+      });
 
       const result = await runAgentLoop({
         kind: "run",
@@ -194,6 +201,7 @@ export class Agent {
         signal,
         beforeToolCall: resolved.beforeToolCall,
         afterToolCall: resolved.afterToolCall,
+        phaseConfig,
         emit,
       });
 

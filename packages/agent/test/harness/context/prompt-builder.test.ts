@@ -1,9 +1,61 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import { createPromptBuilder } from "../../../src/harness/context/prompt-builder";
-import { buildMessages, buildPrompt, createId, createMessage, createAgentState } from "@rowan-agent/agent";
-import type { Tool } from "@rowan-agent/agent";
-import type { PhaseInput } from "@rowan-agent/agent";
+import {
+  buildMessages as buildHarnessMessages,
+  buildPrompt as buildHarnessPrompt,
+  createPromptBuilder,
+  type PhasePromptBuilder,
+} from "../../../src/harness/context/prompt-builder";
+import {
+  createBuiltinPhaseRegistry,
+} from "../../../src/extensions";
+import {
+  resolvePhaseEntry,
+} from "../../../src/loop/phases";
+import { createId, createMessage, createAgentState } from "@rowan-agent/agent";
+import type { PhaseInput, Tool, ToolResult } from "@rowan-agent/agent";
+
+const builtinPhaseRegistry = createBuiltinPhaseRegistry();
+
+function phasePromptBuilderFor(phaseId: string): PhasePromptBuilder {
+  const { phase, handler } = resolvePhaseEntry(builtinPhaseRegistry, phaseId);
+  if (!handler?.buildPrompt) {
+    throw new Error(`Missing prompt builder for phase "${phaseId}".`);
+  }
+
+  return {
+    phase: phase.id,
+    conversationLimit: handler.conversationLimit,
+    build({ input, tools }) {
+      return handler.buildPrompt!({
+        ...input,
+        tools: tools as PhaseInput["tools"],
+      });
+    },
+  };
+}
+
+function buildPrompt(input: {
+  context: PhaseInput;
+  tools?: PhaseInput["tools"];
+  toolResults?: ToolResult[];
+}) {
+  return buildHarnessPrompt({
+    ...input,
+    phasePromptBuilder: phasePromptBuilderFor(input.context.phase),
+  });
+}
+
+function buildMessages(input: {
+  context: PhaseInput;
+  tools?: PhaseInput["tools"];
+  toolResults?: ToolResult[];
+}) {
+  return buildHarnessMessages({
+    ...input,
+    phasePromptBuilder: phasePromptBuilderFor(input.context.phase),
+  });
+}
 
 const echoTool: Tool<{ message: string }> = {
   name: "echo",

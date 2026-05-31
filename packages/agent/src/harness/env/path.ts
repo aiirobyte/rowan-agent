@@ -6,18 +6,13 @@ export const WORKSPACE_ENV = "ROWAN_WORKSPACE";
 export const RUNTIME_ENV = "ROWAN_RUNTIME";
 export const PACKAGED_ENV = "ROWAN_PACKAGED";
 export const BINARY_WORKSPACE_DIR = ".rowan";
-export const RUNS_DIR = "runs";
-export const SESSIONS_DIR = "sessions";
-export const SKILLS_DIR = "skills";
 
 export type RuntimeMode = "source" | "binary";
 
 export type WorkspacePaths = {
   mode: RuntimeMode;
-  root: string;
-  runsDir: string;
-  sessionsDir: string;
-  skillsDir: string;
+  cwd: string;
+  rowanDir: string;
 };
 
 export type WorkspacePathContext = {
@@ -139,7 +134,7 @@ export function resolveWorkspaceRoot(options: ResolveWorkspaceOptions = {}): str
 
   const mode = options.mode ?? detectRuntimeMode(options);
   if (mode === "binary") {
-    return join(homeDir, BINARY_WORKSPACE_DIR);
+    return homeDir;
   }
 
   return findSourceWorkspaceRoot(defaultSourceStartDir(options));
@@ -147,17 +142,15 @@ export function resolveWorkspaceRoot(options: ResolveWorkspaceOptions = {}): str
 
 export function resolveWorkspacePaths(options: ResolveWorkspaceOptions = {}): WorkspacePaths {
   const mode = options.mode ?? detectRuntimeMode(options);
-  const root = resolveWorkspaceRoot({ ...options, mode });
+  const cwd = resolveWorkspaceRoot({ ...options, mode });
   return {
     mode,
-    root,
-    runsDir: join(root, RUNS_DIR),
-    sessionsDir: join(root, SESSIONS_DIR),
-    skillsDir: join(root, SKILLS_DIR),
+    cwd,
+    rowanDir: join(cwd, BINARY_WORKSPACE_DIR),
   };
 }
 
-export function resolveInWorkspace(path: string, rootOrPaths: string | Pick<WorkspacePaths, "root">): string {
+export function resolveInWorkspace(path: string, rootOrPaths: string | Pick<WorkspacePaths, "cwd">): string {
   if (path === "~" || path.startsWith("~/") || path.startsWith("~\\")) {
     return resolveUserPath(path, homedir());
   }
@@ -166,7 +159,7 @@ export function resolveInWorkspace(path: string, rootOrPaths: string | Pick<Work
     return path;
   }
 
-  const root = typeof rootOrPaths === "string" ? rootOrPaths : rootOrPaths.root;
+  const root = typeof rootOrPaths === "string" ? rootOrPaths : rootOrPaths.cwd;
   return resolve(root, path);
 }
 

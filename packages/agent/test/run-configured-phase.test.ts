@@ -3,12 +3,19 @@ import type { PhaseContext, PhaseDefinition } from "../src/loop/phases";
 import type { AgentLoopConfig, AgentRunState } from "../src/loop/types";
 import { createLoopLifecycle } from "../src/agent-loop";
 import { createMessage } from "../src/types";
-import {
-  chatPhaseDefinition,
-  planPhaseDefinition,
-  executePhaseDefinition,
-  verifyPhaseDefinition,
-} from "../src/loop/phases";
+import { createBuiltinPhaseRegistry } from "../src/extensions";
+import { resolvePhaseEntry } from "../src/loop/phases";
+
+const builtinPhaseRegistry = createBuiltinPhaseRegistry();
+
+function requireBuiltinPhase(id: string): PhaseDefinition {
+  return resolvePhaseEntry(builtinPhaseRegistry, id).phase;
+}
+
+const chatPhase = requireBuiltinPhase("chat");
+const planPhase = requireBuiltinPhase("plan");
+const executePhase = requireBuiltinPhase("execute");
+const verifyPhase = requireBuiltinPhase("verify");
 
 // ============================================================================
 // Test Helpers
@@ -35,7 +42,6 @@ function createTestContext(state: AgentRunState): PhaseContext {
       agentState: state.agentState,
       currentPhase: "test",
       attempt: 0,
-      limitUsage: { modelCalls: 0, toolCalls: 0 },
       depth: { threadDepth: 0, maxThreadDepth: 4 },
       transcript: [],
     },
@@ -55,7 +61,7 @@ function createTestContext(state: AgentRunState): PhaseContext {
       end: async () => {},
     },
     model: {
-      collect: async () => ({ text: "", structured: undefined }),
+      collect: async () => ({ text: "", contentBlocks: [], toolCalls: [] }),
     },
     tools: {
       execute: async () => ({ toolCallId: "tc", toolName: "t", ok: true, content: null }),
@@ -67,7 +73,6 @@ function createTestContext(state: AgentRunState): PhaseContext {
     },
     skills: [],
     emit: () => {},
-    consumeLimit: () => {},
     turn: async (fn) => fn(),
     incrementAttempt: () => {},
     setLastExecuteText: () => {},
@@ -230,19 +235,19 @@ describe("loop-owned input builders", () => {
   });
 
   test("built-in chat phase definition does not include buildInput", () => {
-    expect(chatPhaseDefinition).not.toHaveProperty("buildInput");
+    expect(chatPhase).not.toHaveProperty("buildInput");
   });
 
   test("built-in plan phase definition does not include buildInput", () => {
-    expect(planPhaseDefinition).not.toHaveProperty("buildInput");
+    expect(planPhase).not.toHaveProperty("buildInput");
   });
 
   test("built-in execute phase definition does not include buildInput", () => {
-    expect(executePhaseDefinition).not.toHaveProperty("buildInput");
+    expect(executePhase).not.toHaveProperty("buildInput");
   });
 
   test("built-in verify phase definition does not include buildInput", () => {
-    expect(verifyPhaseDefinition).not.toHaveProperty("buildInput");
+    expect(verifyPhase).not.toHaveProperty("buildInput");
   });
 });
 
@@ -263,19 +268,19 @@ describe("loop-owned output appliers", () => {
   });
 
   test("built-in chat phase definition does not include apply", () => {
-    expect(chatPhaseDefinition).not.toHaveProperty("apply");
+    expect(chatPhase).not.toHaveProperty("apply");
   });
 
   test("built-in plan phase definition does not include apply", () => {
-    expect(planPhaseDefinition).not.toHaveProperty("apply");
+    expect(planPhase).not.toHaveProperty("apply");
   });
 
   test("built-in execute phase definition does not include apply", () => {
-    expect(executePhaseDefinition).not.toHaveProperty("apply");
+    expect(executePhase).not.toHaveProperty("apply");
   });
 
   test("built-in verify phase definition does not include apply", () => {
-    expect(verifyPhaseDefinition).not.toHaveProperty("apply");
+    expect(verifyPhase).not.toHaveProperty("apply");
   });
 });
 
@@ -285,13 +290,13 @@ describe("loop-owned output appliers", () => {
 
 describe("built-in phase runtime boundary", () => {
   test("built-in phase definitions have no buildInput or apply", () => {
-    expect(chatPhaseDefinition).not.toHaveProperty("buildInput");
-    expect(chatPhaseDefinition).not.toHaveProperty("apply");
-    expect(planPhaseDefinition).not.toHaveProperty("buildInput");
-    expect(planPhaseDefinition).not.toHaveProperty("apply");
-    expect(executePhaseDefinition).not.toHaveProperty("buildInput");
-    expect(executePhaseDefinition).not.toHaveProperty("apply");
-    expect(verifyPhaseDefinition).not.toHaveProperty("buildInput");
-    expect(verifyPhaseDefinition).not.toHaveProperty("apply");
+    expect(chatPhase).not.toHaveProperty("buildInput");
+    expect(chatPhase).not.toHaveProperty("apply");
+    expect(planPhase).not.toHaveProperty("buildInput");
+    expect(planPhase).not.toHaveProperty("apply");
+    expect(executePhase).not.toHaveProperty("buildInput");
+    expect(executePhase).not.toHaveProperty("apply");
+    expect(verifyPhase).not.toHaveProperty("buildInput");
+    expect(verifyPhase).not.toHaveProperty("apply");
   });
 });

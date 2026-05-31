@@ -1,6 +1,6 @@
 import Type from "typebox";
-import type { AgentRuntimePort, AgentLimitUsage, AgentRunLimits, RuntimeDepth } from "./loop/types";
-import type { PhaseConfig, PhaseInput } from "./loop/phases";
+import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth } from "./loop/types";
+import type { PhaseRegistry, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
   AgentContextSkill,
@@ -15,10 +15,7 @@ import type {
   StreamFn,
   ToolResult,
 } from "./protocol";
-
-export function createId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
-}
+import { createId, createTimestamp, createJson } from "./utils";
 
 export type {
   AgentEffect,
@@ -35,7 +32,6 @@ export type {
 export type { PhaseInput, PhaseOutput } from "./loop/phases";
 
 export type {
-  AgentLimitUsage,
   AgentRunLimits,
   RuntimeDepth,
 } from "./loop/types";
@@ -139,7 +135,7 @@ export type AgentLoopRunConfig = AgentRunCommonConfig & {
   state?: AgentState;
   threadDepth?: number;
   runThread?: RunThread;
-  phaseConfig?: PhaseConfig;
+  phaseConfig?: PhaseRegistry;
 };
 
 export type AgentThreadRunConfig = AgentRunCommonConfig & {
@@ -157,7 +153,6 @@ export type RunResult =
       sessionId: string;
       messages: AgentMessage[];
       outcome: Outcome;
-      limitUsage: AgentLimitUsage;
       depth: RuntimeDepth;
     }
   | {
@@ -166,7 +161,6 @@ export type RunResult =
       sessionId: string;
       messages: AgentMessage[];
       outcome: Outcome;
-      limitUsage: AgentLimitUsage;
       depth: RuntimeDepth;
       prompt: string;
     };
@@ -212,11 +206,11 @@ export type AgentEvent =
       sessionId: string;
       content: AgentMessage[];
       outcome?: Outcome;
-      limitUsage?: AgentLimitUsage;
       threadDepth?: number;
       maxThreadDepth?: number;
       ts: string;
     }
+  | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage; ts: string }
   // Phase lifecycle
   | { type: "phase_start"; phase: string; ts: string }
   | { type: "phase_end"; phase: string; ts: string }
@@ -242,34 +236,6 @@ export function resolveMaxThreadDepth(limits?: AgentRunLimits): number {
     throw new Error("maxThreadDepth must be a non-negative integer.");
   }
   return value;
-}
-
-function padDatePart(value: number, length = 2): string {
-  return String(value).padStart(length, "0");
-}
-
-export function formatLocalTimestamp(date = new Date()): string {
-  const offsetMinutes = -date.getTimezoneOffset();
-  const offsetSign = offsetMinutes >= 0 ? "+" : "-";
-  const offsetAbsolute = Math.abs(offsetMinutes);
-  const offsetHours = Math.floor(offsetAbsolute / 60);
-  const offsetRemainingMinutes = offsetAbsolute % 60;
-
-  return [
-    `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`,
-    "T",
-    `${padDatePart(date.getHours())}${padDatePart(date.getMinutes())}${padDatePart(date.getSeconds())}`,
-    "-",
-    padDatePart(Math.floor(date.getMilliseconds() / 10)),
-    offsetSign,
-    padDatePart(offsetHours),
-    ":",
-    padDatePart(offsetRemainingMinutes),
-  ].join("");
-}
-
-export function nowIso(): string {
-  return formatLocalTimestamp();
 }
 
 export function isContextScope(value: unknown): value is ContextScope {
@@ -318,7 +284,7 @@ export function createMessage(
     id: createId("msg"),
     role,
     content,
-    createdAt: nowIso(),
+    createdAt: createTimestamp(),
     ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
   };
 }
@@ -332,13 +298,9 @@ export function isConversationMessage(message: AgentMessage): boolean {
   return messageScope(message) === "conversation";
 }
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 export function createAgentState(input: CreateAgentStateInput): AgentState {
-  const createdAt = nowIso();
-  const messages = input.messages?.map(clone) ?? [
+  const createdAt = createTimestamp();
+  const messages = input.messages?.map(createJson.new) ?? [
     createMessage("user", input.input, { scope: "conversation" }),
   ];
 
@@ -349,7 +311,7 @@ export function createAgentState(input: CreateAgentStateInput): AgentState {
     systemPrompt: input.systemPrompt,
     input: input.input,
     messages,
-    skills: input.skills?.map(clone) ?? [],
+    skills: input.skills?.map(createJson.new) ?? [],
     createdAt,
     updatedAt: createdAt,
     ...(input.title ? { title: input.title } : {}),

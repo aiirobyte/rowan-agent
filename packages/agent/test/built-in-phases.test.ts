@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 import { runAgentLoop } from "../src/agent-loop";
 import type { AgentEvent, LlmRequest, StreamFn } from "../src/types";
-import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
+import { createAgentState as createBaseAgentState, createMessage } from "../src/types";
+import { createId } from "../src/utils";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream, buildTestPartial, buildToolCallPartial } from "./support/scripted-stream";
+import chatPackage from "../src/loop/phases/built-in/chat/package.json";
+import { createBuiltinPhaseRegistry } from "../src/extensions";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -13,17 +16,53 @@ function detectPhase(messages: LlmRequest["messages"]): string {
   return "chat";
 }
 import {
-  chatPhaseDefinition,
-  createPhaseConfig,
+  createPhaseRegistry,
   definePhase,
-  definePhasePlugin,
-  planPhaseDefinition,
-  executePhaseDefinition,
+  resolvePhaseEntry,
 } from "../src/loop/phases";
 
 function createState(input: Parameters<typeof createBaseAgentState>[0]) {
   return createBaseAgentState(input);
 }
+
+function requireBuiltinPhase(id: string) {
+  const registry = createBuiltinPhaseRegistry();
+  const { phase } = resolvePhaseEntry(registry, id);
+  return phase;
+}
+
+function builtinPhaseRegistryFor(ids: string[]) {
+  const builtinRegistry = createBuiltinPhaseRegistry();
+  const phases = ids.map((id) => {
+    return resolvePhaseEntry(builtinRegistry, id).phase;
+  });
+  const phaseHandlers = new Map(ids.map((id) => {
+    return [id, resolvePhaseEntry(builtinRegistry, id).handler!] as const;
+  }));
+
+  return createPhaseRegistry({
+    entryPhaseId: ids[0],
+    phases,
+    phaseHandlers,
+  });
+}
+
+test("built-in phase metadata uses package.json rowan phase manifest", () => {
+  const chatPhase = requireBuiltinPhase("chat");
+  const { handler: chatHandler } = resolvePhaseEntry(createBuiltinPhaseRegistry(), "chat");
+
+  expect(chatPackage.rowan.extensions).toEqual(["./index.ts"]);
+  expect(chatPackage.rowan.phase).toMatchObject({
+    id: "chat",
+    name: "Chat",
+  });
+  expect(chatPhase).toMatchObject({
+    id: "chat",
+    name: "Chat",
+    description: "Decide whether to answer directly or transition to another available phase.",
+  });
+  expect(chatHandler?.buildPrompt).toBeFunction();
+});
 
 test("default config preserves direct answer behavior", async () => {
   const session = createState({
@@ -80,19 +119,7 @@ test("custom phase config without verify phase skips verification", async () => 
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
     tools: [echoTool],
-    phaseConfig: createPhaseConfig({
-      entryPhaseId: "chat",
-      plugins: [
-        definePhasePlugin({
-          id: "no-verify",
-          phases: [
-            chatPhaseDefinition,
-            planPhaseDefinition,
-            executePhaseDefinition,
-          ],
-        }),
-      ],
-    }),
+    phaseConfig: builtinPhaseRegistryFor(["chat", "plan", "execute"]),
     emit: (event) => {
       events.push(event.type);
     },
@@ -123,14 +150,9 @@ test("custom phase plugin can replace the builtin phase machine", async () => {
     model: { provider: "test", name: "unused" },
     stream: async function* () {},
     tools: [],
-    phaseConfig: createPhaseConfig({
-      plugins: [
-        definePhasePlugin({
-          id: "custom-plugin",
-          entryPhaseId: "custom",
-          phases: [customPhase],
-        }),
-      ],
+    phaseConfig: createPhaseRegistry({
+      entryPhaseId: "custom",
+      phases: [customPhase],
     }),
     emit: (event) => {
       events.push(event);

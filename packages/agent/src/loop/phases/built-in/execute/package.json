@@ -1,0 +1,10 @@
+{
+  "rowan": {
+    "extensions": ["./index.ts"],
+    "phase": {
+      "id": "execute",
+      "name": "Execute",
+      "description": "Call allowed tools for the current task and collect tool results."
+    }
+  }
+}

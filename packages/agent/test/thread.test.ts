@@ -4,7 +4,7 @@ import { createSession } from "@rowan-agent/agent";
 import { Agent } from "../src/agent";
 import { runAgentLoop } from "../src/agent-loop";
 import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
-import { createId } from "../src/types";
+import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream, buildTestPartial, buildToolCallPartial } from "./support/scripted-stream";
@@ -56,7 +56,6 @@ test("runAgentLoop creates a thread session with explicit tools and skills", asy
   expect(result.parentSessionId).toBe("ses_parent");
   expect(result.sessionId).toEqual(expect.stringMatching(/^ses_/));
   expect(result.outcome.passed).toBe(true);
-  expect(result.limitUsage.toolCalls).toBe(1);
   expect(events).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -108,65 +107,6 @@ test("Agent does not expose startThread; thread runs use explicit loop config", 
   expect(withTools.outcome.passed).toBe(true);
 });
 
-test("thread model limits returns a structured failed outcome", async () => {
-  const events: AgentEvent[] = [];
-  const result = asThreadResult(await runAgentLoop({
-    kind: "thread",
-    parentSessionId: "ses_parent",
-    prompt: "hello",
-    systemPrompt: "Session system",
-    model: { provider: "test", name: "scripted" },
-    stream: scriptedStream,
-    tools: [echoTool],
-    limits: { maxModelCalls: 0 },
-    emit: (event) => {
-      events.push(event);
-    },
-  }));
-
-  expect(result.outcome.passed).toBe(false);
-  expect(result.outcome.taskId).toBeUndefined();
-  expect(result.outcome.message).toContain("model calls limit");
-  expect(result.outcome).not.toHaveProperty("evidence");
-  expect(result.outcome).not.toHaveProperty("failedCriteria");
-  expect(result.limitUsage).toEqual({ modelCalls: 1, toolCalls: 0 });
-});
-
-test("thread tool limits stops before executing extra tools", async () => {
-  const events: AgentEvent[] = [];
-  let executed = false;
-  const trackedEcho: typeof echoTool = {
-    ...echoTool,
-    async execute(args, context, signal) {
-      executed = true;
-      return echoTool.execute(args, context, signal);
-    },
-  };
-
-  const result = asThreadResult(await runAgentLoop({
-    kind: "thread",
-    parentSessionId: "ses_parent",
-    prompt: "use echo tool",
-    systemPrompt: "Session system",
-    model: { provider: "test", name: "scripted" },
-    stream: scriptedStream,
-    tools: [trackedEcho],
-    limits: { maxToolCalls: 0 },
-    emit: (event) => {
-      events.push(event);
-    },
-  }));
-
-  expect(executed).toBe(false);
-  expect(result.outcome.passed).toBe(false);
-  expect(result.outcome.taskId).toEqual(expect.any(String));
-  expect(result.outcome.message).toContain("tool calls limit");
-  expect(result.outcome).not.toHaveProperty("evidence");
-  expect(result.outcome).not.toHaveProperty("failedCriteria");
-  expect(result.limitUsage).toEqual({ modelCalls: 1, toolCalls: 1 });
-  expect(events.some((event) => event.type === "tool_execution_start")).toBe(false);
-});
-
 test("tools can launch threads and return outcomes as tool evidence", async () => {
   const delegateTool: Tool<{ prompt: string }> = {
     name: "delegate",
@@ -176,7 +116,6 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       const nested = await context.runThread?.({
         prompt: args.prompt,
         tools: [echoTool],
-        limits: { maxToolCalls: 1 },
       });
 
       return {

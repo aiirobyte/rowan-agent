@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import { runAgentLoop } from "../src/agent-loop";
 import type { AgentEvent, AgentRuntimePort, LlmRequest, StreamFn, Tool } from "../src/types";
-import { createAgentState as createBaseAgentState, createId, createMessage } from "../src/types";
+import { createAgentState as createBaseAgentState, createMessage } from "../src/types";
+import { createId } from "../src/utils";
 import { echoTool } from "./support/echo-tool";
 import { buildTestPartial, buildToolCallPartial, scriptedStream } from "./support/scripted-stream";
 

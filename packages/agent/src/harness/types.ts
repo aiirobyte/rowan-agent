@@ -6,9 +6,8 @@ import type {
 } from "../protocol";
 import type { AgentRunLimits } from "../loop/types";
 
-export { createId } from "../types";
+export { createId } from "../utils";
 export type {
-  AgentLimitUsage,
   AgentRunLimits,
   RuntimeDepth,
 } from "../loop/types";

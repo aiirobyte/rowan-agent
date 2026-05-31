@@ -236,6 +236,9 @@ function buildRequestBody(
 
 function mapFinishReason(reason: string | null | undefined): "end_turn" | "max_tokens" | "tool_use" | "error" | "unknown" {
   switch (reason) {
+    case null:
+    case undefined:
+      return "end_turn";
     case "stop": return "end_turn";
     case "length": return "max_tokens";
     case "tool_calls": return "tool_use";
@@ -257,6 +260,21 @@ type ChatCompletionChunk = {
       content?: string | null;
       tool_calls?: Array<{
         index: number;
+        id?: string;
+        type?: "function";
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+    finish_reason?: string | null;
+  }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; input_tokens?: number; output_tokens?: number };
+};
+
+type ChatCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{
         id?: string;
         type?: "function";
         function?: { name?: string; arguments?: string };
@@ -304,6 +322,46 @@ async function* streamChatCompletions(
       }
 
       yield { type: "model_requested", model: request.model, usage: { ...requestUsage } };
+
+      if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+        const data = await response.json() as ChatCompletionResponse;
+        const choice = data.choices?.[0];
+        const message = choice?.message;
+        const content = message?.content ?? "";
+        const partial: AssistantMessagePartial = {
+          role: "assistant",
+          contentBlocks: [],
+        };
+        if (content) {
+          partial.contentBlocks.push({ type: "text", text: content });
+          yield { type: "text_delta", text: content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+        }
+
+        const toolCallResults: LlmToolCall[] = [];
+        for (const [index, tc] of (message?.tool_calls ?? []).entries()) {
+          const id = tc.id ?? `call_${index}`;
+          const name = tc.function?.name ?? "";
+          const args = tc.function?.arguments ?? "";
+          partial.contentBlocks.push({ type: "tool_call", id, name, args });
+          yield { type: "tool_call_start", id, name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+          yield { type: "tool_call_end", id, name, arguments: args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+          let parsedArgs: unknown = args;
+          try { parsedArgs = JSON.parse(args); } catch {}
+          toolCallResults.push({ id, name, arguments: parsedArgs });
+        }
+
+        const usage = normalizeUsage(data.usage);
+        yield {
+          type: "done",
+          response: {
+            content,
+            stopReason: mapFinishReason(choice?.finish_reason),
+            ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
+            ...(usage ? { usage } : {}),
+          },
+        };
+        return;
+      }
 
       let content = "";
       let finishReason: string | null = null;
@@ -357,6 +415,9 @@ async function* streamChatCompletions(
                 if (tc.id || tc.function?.name) {
                   rebuildPartial();
                   yield { type: "tool_call_start", id: newTc.id, name: newTc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+                }
+                if (tc.function?.arguments) {
+                  yield { type: "tool_call_delta", id: newTc.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
               } else {
                 if (tc.id) existing.id = tc.id;

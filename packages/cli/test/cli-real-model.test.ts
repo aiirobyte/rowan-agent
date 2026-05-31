@@ -65,11 +65,23 @@ async function runCli(
 }
 
 function openAIResponse(content: unknown): Response {
+  const toolCalls = content && typeof content === "object" && "toolCalls" in content && Array.isArray(content.toolCalls)
+    ? content.toolCalls.map((toolCall: { id?: string; name?: string; args?: unknown }, index: number) => ({
+        id: toolCall.id ?? `call_${index}`,
+        type: "function",
+        function: {
+          name: toolCall.name ?? "",
+          arguments: JSON.stringify(toolCall.args ?? {}),
+        },
+      }))
+    : undefined;
+
   return Response.json({
     choices: [
       {
         message: {
           content: JSON.stringify(content),
+          ...(toolCalls ? { tool_calls: toolCalls } : {}),
         },
       },
     ],
@@ -205,7 +217,7 @@ test("CLI config shows missing and default configuration without requiring model
     expect(result.stderr).not.toContain("Missing model");
     const config = JSON.parse(result.stdout) as {
       command?: string;
-      workspace?: { root?: string; sessionsDir?: string; runsDir?: string; skillsDir?: string };
+      workspace?: { cwd?: string; rowanDir?: string };
       openaiCompatible?: {
         baseUrl?: string;
         baseUrlSource?: string;
@@ -225,10 +237,8 @@ test("CLI config shows missing and default configuration without requiring model
     };
 
     expect(config.command).toBe("config");
-    expect(config.workspace?.root).toBe(workspace);
-    expect(config.workspace?.sessionsDir).toBe(join(workspace, "sessions"));
-    expect(config.workspace?.runsDir).toBe(join(workspace, "runs"));
-    expect(config.workspace?.skillsDir).toBe(join(workspace, "skills"));
+    expect(config.workspace?.cwd).toBe(workspace);
+    expect(config.workspace?.rowanDir).toBe(join(workspace, ".rowan"));
     expect(config.openaiCompatible).toMatchObject({
       baseUrl: "https://api.openai.com/v1",
       baseUrlSource: "default",
@@ -316,14 +326,14 @@ test("CLI config reports resolved flags without exposing API key material", asyn
     expect(config.session).toEqual({ id: "ses_example", source: "flag" });
     expect(config.logging).toEqual({
       automatic: false,
-      path: "runs/custom.jsonl",
+      path: ".rowan/runs/custom.jsonl",
       level: "debug",
       levelSource: "flag",
     });
     expect(config.skills).toEqual([
       {
         idOrPath: "example",
-        path: "skills/example/SKILL.md",
+        path: ".rowan/skills/example/SKILL.md",
       },
     ]);
     expect(config.tools).toEqual(["read", "write", "edit", "bash"]);
@@ -341,7 +351,7 @@ test("CLI config rejects trailing prompt text", async () => {
 
 test("CLI list returns saved sessions in the current workspace", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-list-"));
-  const older = await LocalJsonlSessionManager.create(join(workspace, "sessions"), {
+  const older = await LocalJsonlSessionManager.create(join(workspace, ".rowan", "sessions"), {
     systemPrompt: "Test system",
     input: "old hello",
     title: "Older session",
@@ -349,7 +359,7 @@ test("CLI list returns saved sessions in the current workspace", async () => {
   await older.appendMessage(createMessage("user", "old hello", { scope: "conversation" }));
   await older.appendMessage(createMessage("assistant", "Older answer", { scope: "conversation" }));
   await Bun.sleep(20);
-  const newer = await LocalJsonlSessionManager.create(join(workspace, "sessions"), {
+  const newer = await LocalJsonlSessionManager.create(join(workspace, ".rowan", "sessions"), {
     systemPrompt: "Test system",
     input: "new hello",
     title: "Newer session",
@@ -535,17 +545,16 @@ test("CLI writes a default log without --log", async () => {
     expect(result.stderr).not.toContain("\"eventType\":\"agent_state_loaded\"");
     expect(result.stderr).toContain("\"eventType\":\"turn_start\"");
     expect(result.stderr).toContain("\"eventType\":\"model_requested\"");
-    expect(result.stderr).toContain("\"eventType\":\"outcome\"");
     const metadataLines = result.stderr
       .trim()
       .split("\n")
       .filter((line) => /^(Session id|Message id|Log written to)/.test(line));
     expect(metadataLines[0]).toMatch(/^Session id: ses_[A-Za-z0-9_-]+$/);
     expect(metadataLines[1]).toMatch(/^Message id: msg_[A-Za-z0-9_-]+$/);
-    expect(metadataLines[2]).toMatch(/^Log written to runs\/.+\.jsonl$/);
-    expect(displayedLogPath?.startsWith("runs/")).toBe(true);
+    expect(metadataLines[2]).toMatch(/^Log written to \.rowan\/runs\/.+\.jsonl$/);
+    expect(displayedLogPath?.startsWith(".rowan/runs/")).toBe(true);
     expect(displayedLogPath).toMatch(
-      new RegExp(`^runs/\\d{4}-\\d{2}-\\d{2}T\\d{6}-\\d{2}[+-]\\d{2}:\\d{2}-${sessionId}\\.jsonl$`),
+      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{6}-\\d{2}[+-]\\d{2}:\\d{2}-${sessionId}\\.jsonl$`),
     );
 
     const logPath = join(workspace, displayedLogPath ?? "");
@@ -554,12 +563,12 @@ test("CLI writes a default log without --log", async () => {
     const [firstEvent] = await readLogEvents(logPath);
     expect(firstRecord?.time).toEqual(expect.any(Number));
     expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
-    expect(firstEvent?.type).toBe("turn_start");
+    expect(firstEvent?.type).toBe("agent_start");
     expect(firstRecord?.timestamp).toBeUndefined();
     expect(firstRecord?.event).toBeUndefined();
     expect(firstRecord).toMatchObject({
       level: 30,
-      eventType: "turn_start",
+      eventType: "agent_start",
     });
     expect(firstRecord?.msg).toBeUndefined();
     expect(logText).not.toContain("\"eventType\":\"agent_state_created\"");
@@ -569,11 +578,11 @@ test("CLI writes a default log without --log", async () => {
     expect(logText).not.toContain("\"event\":");
     expect(logText).not.toContain("\"input\":\"hello\"");
     expect(logText).toContain("\"eventType\":\"model_requested\"");
-    expect(logText).toContain("\"phase\":\"route\"");
+    expect(logText).toContain("\"phase\":\"chat\"");
     expect(logText).not.toContain("\"eventType\":\"task_created\"");
-    expect(logText).toContain("\"eventType\":\"outcome\"");
+    expect(logText).toContain("\"eventType\":\"turn_end\"");
 
-    const sessionPath = join(workspace, "sessions", `${sessionId}.jsonl`);
+    const sessionPath = join(workspace, ".rowan", "sessions", `${sessionId}.jsonl`);
     const sessionLines = (await Bun.file(sessionPath).text()).trim().split("\n");
     const session = JSON.parse(sessionLines[0] ?? "{}") as {
       version?: string;
@@ -622,10 +631,8 @@ test("CLI --log-level debug writes redacted event payloads", async () => {
     const logPath = join(workspace, logMatch?.[1] ?? "");
     const logText = await Bun.file(logPath).text();
     const [firstRecord] = await readLogRecords(logPath);
-    expect(firstRecord?.event).toMatchObject({
-      type: "turn_start",
-      content: [expect.objectContaining({ content: "hello" })],
-    });
+    expect(logText).toContain("\"type\":\"turn_start\"");
+    expect(logText).toContain("\"content\":\"hello\"");
     expect(logText).toContain("\"event\":");
     expect(logText).toContain("\"content\":\"hello\"");
     expect(logText).not.toContain("\"eventType\":\"agent_state_created\"");
@@ -662,7 +669,7 @@ test("CLI --log-level silent suppresses run log files", async () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("Log written to");
     expect(result.stderr).not.toContain("\"eventType\":");
-    const runsDir = join(workspace, "runs");
+    const runsDir = join(workspace, ".rowan", "runs");
     const logFiles = await readdir(runsDir).catch(() => []);
     expect(logFiles.filter((file) => file.endsWith(".jsonl"))).toHaveLength(0);
   } finally {
@@ -676,7 +683,7 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
   const responses = [
     {
       message: "Use bash to check the current date: $(date)",
-      route: "direct",
+      route: "plan",
     },
     {
       task: {
@@ -684,6 +691,9 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
         instruction: "run a bash command",
         acceptanceCriteria: ["The bash command output is present."],
         toolNames: ["bash"],
+        skillIds: [],
+        status: "pending",
+        attempts: 0,
       },
     },
     {
@@ -804,7 +814,7 @@ test("CLI --session continues a saved one-shot session", async () => {
     expect(secondPrompt).toContain("First saved answer");
     expect(secondPrompt).toContain("continue");
 
-    const runsDir = join(workspace, "runs");
+    const runsDir = join(workspace, ".rowan", "runs");
     const logFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
     expect(logFiles).toHaveLength(2);
     expect(logFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
@@ -873,10 +883,10 @@ test("CLI initial prompt continues into the default interactive session", async 
     expect(secondPrompt).toContain("Chat first");
     expect(secondPrompt).toContain("again");
 
-    const sessionFiles = await readdir(join(workspace, "sessions"));
+    const sessionFiles = await readdir(join(workspace, ".rowan", "sessions"));
     expect(sessionFiles).toEqual([`${sessionId}.jsonl`]);
 
-    const runsDir = join(workspace, "runs");
+    const runsDir = join(workspace, ".rowan", "runs");
     const logFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
     expect(logFiles).toHaveLength(1);
     expect(logFiles[0]?.endsWith(`-${sessionId}.jsonl`)).toBe(true);
@@ -933,7 +943,7 @@ test("CLI --session can continue with additional interactive turns", async () =>
     expect(countMatches(chat.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(chat.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(2);
 
-    const runsDir = join(workspace, "runs");
+    const runsDir = join(workspace, ".rowan", "runs");
     const logFiles = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
     expect(logFiles).toHaveLength(2);
     expect(logFiles.every((file) => file.endsWith(`-${sessionId}.jsonl`))).toBe(true);
@@ -949,7 +959,7 @@ test("CLI --session can continue with additional interactive turns", async () =>
     expect(loadedSummary?.eventTypes.session_end).toBeUndefined();
 
     const [firstEvent] = await readLogEvents(loadedSummary?.filePath ?? "");
-    expect(firstEvent?.type).toBe("turn_start");
+    expect(firstEvent?.type).toBe("agent_start");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

@@ -1,6 +1,7 @@
-import { toJson, serializeTools, type PhaseInput, type PhaseOutput, type PhaseContext } from "../../config";
-import type { ExtensionFactory } from "../../../../extensions";
-import manifestJson from "./manifest.json";
+import { defineExtension } from "../../../../extensions/types";
+import packageJson from "./package.json";
+
+const manifestJson = packageJson.rowan.phase;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -30,38 +31,39 @@ function normalizeTask(value: unknown): Record<string, unknown> {
   };
 }
 
-async function run(context: PhaseContext, input: PhaseInput): Promise<PhaseOutput> {
-  const collected = await context.turn(() => context.model.collect({
-    phase: "plan",
-    input,
-  }));
-
-  // Plan phase still uses JSON for structured task data
-  let raw: Record<string, unknown> | undefined;
-  try {
-    raw = JSON.parse(collected.text) as Record<string, unknown>;
-  } catch {
-    throw new Error("Planner did not produce valid JSON.");
-  }
-
-  const rawTask = raw?.task ?? raw;
-  if (!rawTask) {
-    throw new Error("Planner did not produce a structured task.");
-  }
-
-  const task = normalizeTask(rawTask);
-  const message = (raw?.message as string) ?? "";
-
-  return {
-    message,
-    route: "execute",
-    yield: { task },
-  };
-}
-
-export const planExtension: ExtensionFactory = (api) => {
-  api.registerPhase(manifestJson, {
+export const planPhaseExtension = defineExtension((rowan) => {
+  rowan.registerPhase({
+    ...manifestJson,
     conversationLimit: 20,
+
+    async run(context, input) {
+      const collected = await context.turn(() => context.model.collect({
+        phase: "plan",
+        input,
+      }));
+
+      // Plan phase still uses JSON for structured task data
+      let raw: Record<string, unknown> | undefined;
+      try {
+        raw = JSON.parse(collected.text) as Record<string, unknown>;
+      } catch {
+        throw new Error("Planner did not produce valid JSON.");
+      }
+
+      const rawTask = raw?.task ?? raw;
+      if (!rawTask) {
+        throw new Error("Planner did not produce a structured task.");
+      }
+
+      const task = normalizeTask(rawTask);
+      const message = (raw?.message as string) ?? "";
+
+      return {
+        message,
+        route: "execute",
+        yield: { task },
+      };
+    },
 
     buildInput(context) {
       return {
@@ -74,8 +76,6 @@ export const planExtension: ExtensionFactory = (api) => {
     },
 
     buildPrompt(input) {
-      const userMessages = input.messages.filter((m) => m.role === "user" && m.metadata?.scope === "conversation");
-      const latestUserMsg = userMessages[userMessages.length - 1];
       return [
         "Phase: plan",
         "",
@@ -86,11 +86,11 @@ export const planExtension: ExtensionFactory = (api) => {
         "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
         "",
         "Current user request:",
-        toJson(latestUserMsg?.content ?? ""),
+        rowan.format.json(rowan.input.latestUserMessage(input)),
         "",
         "Available tools with name, description, and parameters:",
-        toJson(serializeTools(input.tools)),
+        rowan.format.json(rowan.format.tools(input.tools)),
       ].join("\n");
     },
-  }, run);
-};
+  });
+});

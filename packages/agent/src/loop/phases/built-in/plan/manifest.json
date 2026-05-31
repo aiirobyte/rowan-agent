@@ -1,5 +1,0 @@
-{
-  "id": "plan",
-  "name": "Plan",
-  "description": "Create a concrete task from the current user request and available tools."
-}

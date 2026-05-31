@@ -1,59 +1,55 @@
-import { createId, toJson, serializeTools, LimitExceededError, type Outcome, type ToolCall, type ToolResult, type PhaseInput, type PhaseOutput, type PhaseContext } from "../../config";
-import type { ExtensionFactory } from "../../../../extensions";
-import manifestJson from "./manifest.json";
+import type { ToolResult } from "../../registry";
+import { defineExtension } from "../../../../extensions/types";
+import packageJson from "./package.json";
 
-async function run(context: PhaseContext, input: PhaseInput): Promise<PhaseOutput> {
-  const inputYield = (input.yield as Record<string, unknown>) ?? {};
-  const prevToolResults = (inputYield.toolResults as ToolResult[]) ?? [];
-  const toolResults: ToolResult[] = [...prevToolResults];
+const manifestJson = packageJson.rowan.phase;
 
-  let collected;
-  try {
-    collected = await context.turn(() => context.model.collect({
-      phase: "execute",
-      input,
-      toolResults: toolResults.length > 0 ? toolResults : undefined,
-    }));
-  } catch (error) {
-    if (error instanceof LimitExceededError) {
-      return { message: error.message, route: "stop", yield: { ...inputYield, toolResults } };
-    }
-    return { message: "", route: "verify", yield: { ...inputYield, toolResults } };
-  }
-
-  // Use native tool calls from collected instead of parsing JSON
-  for (const toolCall of collected.toolCalls) {
-    try {
-      context.consumeLimit("toolCalls");
-    } catch (error) {
-      if (error instanceof LimitExceededError) {
-        return { message: error.message, route: "stop", yield: { ...inputYield, toolResults } };
-      }
-      throw error;
-    }
-    await context.toolExecution.start(toolCall.id, toolCall.name, toolCall.args);
-
-    const result = await context.tools.execute({ toolCall });
-    toolResults.push(result);
-
-    await context.toolExecution.end(result.toolCallId, result.toolName, result, !result.ok);
-
-    const toolMsgId = context.message.start("tool", JSON.stringify(result), {
-      toolCallId: result.toolCallId,
-      toolName: result.toolName,
-      scope: "execution",
-    });
-    await context.message.end(toolMsgId);
-  }
-
-  // If model called tools, route back to execute for more; if text-only, route to verify
-  const route = collected.toolCalls.length > 0 ? "verify" : "verify";
-  return { message: collected.text ?? "", route, yield: { ...inputYield, toolResults } };
-}
-
-export const executeExtension: ExtensionFactory = (api) => {
-  api.registerPhase(manifestJson, {
+export const executePhaseExtension = defineExtension((rowan) => {
+  rowan.registerPhase({
+    ...manifestJson,
     conversationLimit: 8,
+
+    async run(context, input) {
+      const inputYield = (input.yield as Record<string, unknown>) ?? {};
+      const prevToolResults = (inputYield.toolResults as ToolResult[]) ?? [];
+      const toolResults: ToolResult[] = [...prevToolResults];
+
+      let collected;
+      try {
+        collected = await context.turn(() => context.model.collect({
+          phase: "execute",
+          input,
+          toolResults: toolResults.length > 0 ? toolResults : undefined,
+        }));
+      } catch (error) {
+        // Model errors (e.g. invalid schema) - route to verify to handle gracefully
+        return { message: "", route: "verify", yield: { ...inputYield, toolResults } };
+      }
+
+      // Check if collection was stopped due to abort
+      if (collected.stopReason === "aborted") {
+        return { message: collected.text, route: "stop", yield: { ...inputYield, toolResults } };
+      }
+
+      // Use native tool calls from collected instead of parsing JSON
+      for (const toolCall of collected.toolCalls) {
+        await context.toolExecution.start(toolCall.id, toolCall.name, toolCall.args);
+
+        const result = await context.tools.execute({ toolCall });
+        toolResults.push(result);
+
+        await context.toolExecution.end(result.toolCallId, result.toolName, result, !result.ok);
+
+        const toolMsgId = context.message.start("tool", JSON.stringify(result), {
+          toolCallId: result.toolCallId,
+          toolName: result.toolName,
+          scope: "execution",
+        });
+        await context.message.end(toolMsgId);
+      }
+
+      return { message: collected.text ?? "", route: "verify", yield: { ...inputYield, toolResults } };
+    },
 
     prepare(context) {
       context.incrementAttempt();
@@ -81,10 +77,10 @@ export const executeExtension: ExtensionFactory = (api) => {
         "Do NOT output JSON. Use the provided tools directly.",
         "",
         "Task:",
-        toJson(task ?? null),
+        rowan.format.json(task ?? null),
         "",
         "Available tools with name, description, and parameters:",
-        toJson(serializeTools(input.tools)),
+        rowan.format.json(rowan.format.tools(input.tools)),
       ].join("\n");
     },
 
@@ -97,7 +93,7 @@ export const executeExtension: ExtensionFactory = (api) => {
     createOutcome(output) {
       const task = (output.yield as Record<string, unknown> | undefined)?.task as Record<string, unknown> | undefined;
       const taskId = typeof task?.id === "string" ? task.id : undefined;
-      return { id: createId("out"), ...(taskId ? { taskId } : {}), passed: false, message: output.message };
+      return { id: rowan.id.create("out"), ...(taskId ? { taskId } : {}), passed: false, message: output.message };
     },
-  }, run);
-};
+  });
+});

@@ -70,6 +70,31 @@ type RegisteredPhase = {
 
 `eventHandlers` exists to match Pi's object shape and to give lifecycle hooks a durable home, even if this ADR only needs phase-related events.
 
+## Extension API
+
+`ExtensionFactory` receives a `rowan` host API. Besides registration methods, the host API exposes small stable utilities so extensions do not import Rowan internals for ids, prompt-safe formatting, or common phase-input reads:
+
+```typescript
+type ExtensionAPI = {
+  registerPhase(registration: PhaseRegistration): void;
+  id: {
+    create(prefix: string): string;
+  };
+  format: {
+    json(value: unknown): string;
+    tools(tools: PhaseInput["tools"]): SerializableTool[];
+    skills(skills: PhaseInput["skills"]): unknown[];
+  };
+  input: {
+    latestUserMessage(input: PhaseInput): string;
+  };
+  beforePhase(hook: (ctx: BeforePhaseHookContext) => void | Promise<void>): void;
+  afterPhase(hook: (ctx: AfterPhaseHookContext) => void | Promise<void>): void;
+};
+```
+
+This keeps extension modules dependent on the host contract instead of importing helpers from `loop/phases/config` or `harness/context/prompt-builder`.
+
 ## Loading
 
 Extension loading has two entry points:
@@ -108,25 +133,26 @@ Agent and CLI composition should fail fast if `errors.length > 0`. Silent fallba
 
 ## Built-In Phases
 
-Built-in phases are loaded as a synthetic extension:
+Built-in phases are loaded as synthetic extensions:
 
 ```text
-<builtin:phases>
+<builtin:chat>
+<builtin:plan>
+<builtin:execute>
+<builtin:verify>
 ```
 
 The default load order is:
 
 ```text
-<builtin:phases>
+<builtin:*>
 <cwd>/.rowan/extensions/*
 ```
 
-Built-in `chat`, `plan`, `execute`, and `verify` should be packaged in the same shape as file extensions. Each built-in phase directory uses `package.json`, not `manifest.json`, and the package metadata contains the phase manifest plus the extension entry, matching the external extension discovery format:
+Built-in `chat`, `plan`, `execute`, and `verify` use the same Rowan manifest shape as file extensions, but they are not npm packages. Each built-in phase directory uses `package.json`, not `manifest.json`, and the metadata contains only the Rowan phase manifest plus the extension entry:
 
 ```json
 {
-  "name": "@rowan-agent/builtin-phase-chat",
-  "private": true,
   "rowan": {
     "extensions": ["./index.ts"],
     "phase": {
@@ -138,7 +164,7 @@ Built-in `chat`, `plan`, `execute`, and `verify` should be packaged in the same 
 }
 ```
 
-The phase implementation reads its local package metadata, registers through the same `ExtensionAPI.registerPhase()` path used by file extensions, and there should be no global built-in runner.
+The phase implementation reads its local Rowan metadata, registers through the same `ExtensionAPI.registerPhase()` path used by file extensions, and there should be no global built-in runner.
 
 External extensions may not override built-in phase ids in this ADR. Duplicate non-built-in phase ids are load errors.
 
@@ -151,7 +177,6 @@ class ExtensionRunner {
   getPhase(id: string): PhaseDefinition | undefined;
   getPhaseHandler(id: string): ExtensionPhaseHandler | undefined;
   getPhases(): PhaseDefinition[];
-  getPhasePromptBuilders(): PhasePromptBuilder[];
   createPhaseConfig(input?: { entryPhaseId?: string }): PhaseConfig;
 }
 ```
