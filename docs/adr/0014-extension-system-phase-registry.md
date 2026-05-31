@@ -91,7 +91,7 @@ Supported entries:
 - `.rowan/extensions/*/index.js`
 - `.rowan/extensions/*/package.json` with `rowan.extensions`
 
-The loader should use `jiti` or the closest local equivalent so `.ts` and `.js` extension modules can both be loaded in source and packaged runtimes.
+The loader should use `jiti` so `.ts` and `.js` extension modules can both be loaded in source and packaged runtimes.
 
 No explicit extension paths are supported. Callers may explicitly pass `cwd`; they may not pass a separate extension path list.
 
@@ -121,7 +121,24 @@ The default load order is:
 <cwd>/.rowan/extensions/*
 ```
 
-Built-in `chat`, `plan`, `execute`, and `verify` should be registered through the same `ExtensionAPI.registerPhase()` path used by file extensions. There should be no global built-in runner.
+Built-in `chat`, `plan`, `execute`, and `verify` should be packaged in the same shape as file extensions. Each built-in phase directory uses `package.json`, not `manifest.json`, and the package metadata contains the phase manifest plus the extension entry, matching the external extension discovery format:
+
+```json
+{
+  "name": "@rowan-agent/builtin-phase-chat",
+  "private": true,
+  "rowan": {
+    "extensions": ["./index.ts"],
+    "phase": {
+      "id": "chat",
+      "name": "Chat",
+      "description": "Decide whether to answer directly or transition to another available phase."
+    }
+  }
+}
+```
+
+The phase implementation reads its local package metadata, registers through the same `ExtensionAPI.registerPhase()` path used by file extensions, and there should be no global built-in runner.
 
 External extensions may not override built-in phase ids in this ADR. Duplicate non-built-in phase ids are load errors.
 
@@ -206,6 +223,7 @@ Add focused tests for:
 - invalid extension modules return load errors.
 - factories load into `Extension` objects with registered phases.
 - built-in phases load through the same extension path as file extensions.
+- built-in phase directories use `package.json` metadata rather than `manifest.json`.
 - duplicate external phase ids fail.
 - external override of `chat`, `plan`, `execute`, or `verify` fails.
 - a custom phase's handler, prompt builder, and outcome behavior are resolved from `PhaseConfig`.
