@@ -38,7 +38,7 @@ export type PhaseDefinition = {
   run(context: PhaseContext, input: PhaseInput): Promise<PhaseOutput>;
 };
 
-export type AgentPhasePlugin = {
+export type PhasePlugin = {
   id: string;
   entryPhaseId?: string;
   phases: PhaseDefinition[];
@@ -108,15 +108,15 @@ export type PhaseContext = {
   availablePhases: Array<{ id: string; name: string; description: string }>;
 };
 
-export type AgentPhaseConfig = {
+export type PhaseConfig = {
   entryPhaseId: string;
   phases: PhaseDefinition[];
 };
 
-export type AgentPhaseConfigInput = {
+export type PhaseConfigInput = {
   entryPhaseId?: string;
   phases?: PhaseDefinition[];
-  plugins?: AgentPhasePlugin[];
+  plugins?: PhasePlugin[];
 };
 
 export function definePhase(
@@ -125,11 +125,11 @@ export function definePhase(
   return definition;
 }
 
-export function definePhasePlugin(plugin: AgentPhasePlugin): AgentPhasePlugin {
+export function definePhasePlugin(plugin: PhasePlugin): PhasePlugin {
   return plugin;
 }
 
-export function validatePhaseConfig(config: AgentPhaseConfig): void {
+export function validatePhaseConfig(config: PhaseConfig): void {
   if (!config.entryPhaseId || config.entryPhaseId.trim().length === 0) {
     throw new Error("Phase config must have a non-empty entryPhaseId.");
   }
@@ -154,7 +154,7 @@ export function validatePhaseConfig(config: AgentPhaseConfig): void {
   }
 }
 
-export function createAgentPhaseConfig(input: AgentPhaseConfigInput): AgentPhaseConfig {
+export function createPhaseConfig(input: PhaseConfigInput): PhaseConfig {
   const phases: PhaseDefinition[] = [];
   const pluginIds = new Set<string>();
 
@@ -172,7 +172,7 @@ export function createAgentPhaseConfig(input: AgentPhaseConfigInput): AgentPhase
   phases.push(...(input.phases ?? []));
 
   const pluginEntryPhaseId = input.plugins?.find((plugin) => plugin.entryPhaseId)?.entryPhaseId;
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: input.entryPhaseId ?? pluginEntryPhaseId ?? phases[0]?.id ?? "",
     phases,
   };
@@ -180,13 +180,13 @@ export function createAgentPhaseConfig(input: AgentPhaseConfigInput): AgentPhase
   return config;
 }
 
-export function resolvePhase(config: AgentPhaseConfig, phaseId: string): PhaseDefinition | undefined {
+export function resolvePhase(config: PhaseConfig, phaseId: string): PhaseDefinition | undefined {
   return config.phases.find((phase) => phase.id === phaseId);
 }
 
 export const DEFAULT_PHASE_ID = "chat";
 
-export function createDefaultAgentPhaseConfig(): AgentPhaseConfig {
+export function createDefaultPhaseConfig(): PhaseConfig {
   return {
     entryPhaseId: DEFAULT_PHASE_ID,
     phases: [{

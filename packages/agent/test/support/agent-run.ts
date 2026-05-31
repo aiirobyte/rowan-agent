@@ -1,5 +1,5 @@
 import { createMessage, type AgentMessage } from "@rowan-agent/agent";
-import type { Agent, AgentRunOverride } from "../../src/agent";
+import type { Agent, RunOptions } from "../../src/agent";
 import type { AgentContext, Tool } from "../../src/types";
 
 export function createTestContext(input: {
@@ -37,7 +37,7 @@ export function contextFromAgentTurn(agent: Agent, input: string): AgentContext 
 export function runAgentTurn(
   agent: Agent,
   input: string,
-  config: Partial<Omit<AgentRunOverride, "context">> = {},
+  config: Partial<Omit<RunOptions, "context">> = {},
 ) {
   return agent.run({ ...config, context: contextFromAgentTurn(agent, input) });
 }

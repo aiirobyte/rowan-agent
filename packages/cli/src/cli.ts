@@ -23,7 +23,7 @@ import {
   type AgentEventLogLevel,
 } from "@rowan-agent/logging";
 import {
-  type SessionManagerSessionListItem,
+  type SessionListItem,
 } from "@rowan-agent/agent";
 import { LocalJsonlSessionManager } from "@rowan-agent/agent";
 import {
@@ -352,7 +352,7 @@ function parseArgs(argv: string[]): CliArgs {
 
   return parsed;
 }
-type CliSessionListItem = Pick<SessionManagerSessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
+type CliSessionListItem = Pick<SessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
 type ConfiguredAgent = {
   agent: Agent;
   sessionManager?: LocalJsonlSessionManager;

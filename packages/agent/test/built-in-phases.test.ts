@@ -14,7 +14,7 @@ function detectPhase(messages: LlmRequest["messages"]): string {
 }
 import {
   chatPhaseDefinition,
-  createAgentPhaseConfig,
+  createPhaseConfig,
   definePhase,
   definePhasePlugin,
   planPhaseDefinition,
@@ -80,7 +80,7 @@ test("custom phase config without verify phase skips verification", async () => 
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
     tools: [echoTool],
-    phaseConfig: createAgentPhaseConfig({
+    phaseConfig: createPhaseConfig({
       entryPhaseId: "chat",
       plugins: [
         definePhasePlugin({
@@ -123,7 +123,7 @@ test("custom phase plugin can replace the builtin phase machine", async () => {
     model: { provider: "test", name: "unused" },
     stream: async function* () {},
     tools: [],
-    phaseConfig: createAgentPhaseConfig({
+    phaseConfig: createPhaseConfig({
       plugins: [
         definePhasePlugin({
           id: "custom-plugin",

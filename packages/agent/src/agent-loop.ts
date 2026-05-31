@@ -5,7 +5,7 @@ import type {
   AgentLoopContext,
   AgentLoopInput,
   AgentMessage,
-  AgentRunResult,
+  RunResult,
   AgentState,
   LlmStreamEvent,
   LoopPhase,
@@ -204,7 +204,7 @@ function createRunResult(
   config: Pick<AgentLoopConfig, "kind">,
   state: AgentRunState,
   outcome: Outcome,
-): AgentRunResult {
+): RunResult {
   const base = {
     sessionId: state.agentState.id,
     messages: snapshotMessages(state.agentState.messages),
@@ -236,7 +236,7 @@ function completeRun(
   config: AgentLoopConfig,
   state: AgentRunState,
   outcome: Outcome,
-): AgentRunResult {
+): RunResult {
   return createRunResult(config, state, outcome);
 }
 
@@ -373,7 +373,7 @@ function syncStateFromContext(state: AgentState, context: AgentRunContext): Agen
 // Main Loop
 // ============================================================================
 
-export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResult> {
+export async function runAgentLoop(input: AgentLoopInput): Promise<RunResult> {
   const { config: initialConfig, state } = createLoopLifecycle(input);
   const config = { ...initialConfig };
   config.runThread ??= createLoopThread(config, state);
@@ -412,7 +412,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentRunResul
 async function runLoop(
   config: AgentLoopConfig,
   state: AgentRunState,
-): Promise<AgentRunResult> {
+): Promise<RunResult> {
   const phaseConfig = config.phaseConfig ?? createBuiltinPhaseConfig();
   if (config.phaseConfig) validatePhaseConfig(phaseConfig);
   config.phaseConfig = phaseConfig;

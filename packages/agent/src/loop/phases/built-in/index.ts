@@ -1,10 +1,10 @@
 import {
-  createAgentPhaseConfig,
+  createPhaseConfig,
   definePhasePlugin,
-  type AgentPhaseConfig,
-  type AgentPhasePlugin,
+  type PhaseConfig,
+  type PhasePlugin,
 } from "../config";
-import { ExtensionRunner } from "../../extensions";
+import { ExtensionRunner } from "../../../extensions";
 import type { PhaseHandler } from "./types";
 import type { PhaseDefinition } from "../config";
 import { chatExtension } from "./chat";
@@ -67,7 +67,7 @@ export const verifyPhaseDefinition = (): PhaseDefinition | undefined => runner.g
 // Config factory
 // ---------------------------------------------------------------------------
 
-export function createBuiltinPhasePlugin(): AgentPhasePlugin {
+export function createBuiltinPhasePlugin(): PhasePlugin {
   const phases = runner.getPhases();
   return definePhasePlugin({
     id: "builtin",
@@ -76,8 +76,8 @@ export function createBuiltinPhasePlugin(): AgentPhasePlugin {
   });
 }
 
-export function createBuiltinPhaseConfig(): AgentPhaseConfig {
-  return createAgentPhaseConfig({
+export function createBuiltinPhaseConfig(): PhaseConfig {
+  return createPhaseConfig({
     plugins: [createBuiltinPhasePlugin()],
   });
 }

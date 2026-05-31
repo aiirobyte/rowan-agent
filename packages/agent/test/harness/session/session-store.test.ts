@@ -1,15 +1,17 @@
 import { expect, test } from "bun:test";
 import {
-  InMemorySessionStore,
   SESSION_SCHEMA_VERSION,
   appendUserTurn,
   createMessage,
   createSession,
   latestUserInput,
+} from "../../../src/harness/session";
+import {
+  InMemorySessionStore,
   sessionFromPersisted,
   summarizePersistedSession,
   toPersistedSession,
-} from "../../../src/harness/session";
+} from "../../../src/harness/session/session-store";
 
 test("SessionStore persists versioned conversation messages and metadata", async () => {
   const store = new InMemorySessionStore();

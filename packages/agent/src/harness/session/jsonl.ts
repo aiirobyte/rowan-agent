@@ -12,7 +12,7 @@ import {
   type SessionEntry,
   type SessionHeader,
   type SessionManager,
-  type SessionManagerSessionListItem,
+  type SessionListItem,
   type SessionRecord,
   type StepFilter,
 } from "./session-manager";
@@ -136,7 +136,7 @@ export class LocalJsonlSessionManager implements SessionManager {
     );
   }
 
-  static async list(sessionsDir: string): Promise<SessionManagerSessionListItem[]> {
+  static async list(sessionsDir: string): Promise<SessionListItem[]> {
     const entries = await readdir(sessionsDir, { withFileTypes: true }).catch((error) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
@@ -153,7 +153,7 @@ export class LocalJsonlSessionManager implements SessionManager {
         }),
     );
     return sessions
-      .filter((session): session is SessionManagerSessionListItem => Boolean(session))
+      .filter((session): session is SessionListItem => Boolean(session))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 

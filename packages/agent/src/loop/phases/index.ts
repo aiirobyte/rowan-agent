@@ -1,9 +1,15 @@
 export {
   createBuiltinPhaseConfig,
   createBuiltinPhasePlugin,
+  getPhase,
+  getPhases,
   getPhaseHandler,
   getBuiltinHandlers,
   getRunner,
+  chatPhaseDefinition,
+  planPhaseDefinition,
+  executePhaseDefinition,
+  verifyPhaseDefinition,
   chatExtension,
   planExtension,
   executeExtension,
@@ -19,8 +25,8 @@ export {
 } from "./built-in/prompt-builder";
 export type { PhaseHandler } from "./built-in/types";
 export {
-  createAgentPhaseConfig,
-  createDefaultAgentPhaseConfig,
+  createPhaseConfig,
+  createDefaultPhaseConfig,
   definePhase,
   definePhasePlugin,
   resolvePhase,
@@ -30,9 +36,9 @@ export {
   toJson,
   serializeTools,
   DEFAULT_PHASE_ID,
-  type AgentPhaseConfig,
-  type AgentPhaseConfigInput,
-  type AgentPhasePlugin,
+  type PhaseConfig,
+  type PhaseConfigInput,
+  type PhasePlugin,
   type PhaseContext,
   type PhaseDefinition,
   type PhaseInput,
@@ -41,6 +47,9 @@ export {
   type ToolCall,
   type ToolResult,
   type CollectedModelOutput,
+  type ModelCollectInput,
+  type PhaseMessageManager,
+  type PhaseToolExecutionManager,
 } from "./config";
 export { createFailedPhaseOutcome, createPhaseOutcome } from "./built-in/verify";
 export { ExtensionRunner } from "../../extensions";

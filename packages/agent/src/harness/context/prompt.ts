@@ -1,4 +1,4 @@
-export interface BuildSystemPromptOptions {
+export interface SystemPromptOptions {
   /** Base system prompt. */
   systemPrompt: string;
   /** Additional guideline bullets appended to the default runtime instructions. */
@@ -7,7 +7,7 @@ export interface BuildSystemPromptOptions {
   appendSystemPrompt?: string;
 }
 
-export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
+export function buildSystemPrompt(options: SystemPromptOptions): string {
   const { systemPrompt, promptGuidelines, appendSystemPrompt } = options;
 
   const guidelines = (promptGuidelines ?? [])

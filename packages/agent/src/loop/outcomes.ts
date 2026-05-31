@@ -10,10 +10,6 @@ export function createThreadDepthLimitOutcome(input: { threadDepth: number; maxT
   return { id: createId("out"), passed: false, message: `Thread depth limit exceeded (${input.threadDepth}/${input.maxThreadDepth}).` };
 }
 
-export function createSkippedOutcome(): Outcome {
-  return { id: "skip", passed: true, message: "Skipped." };
-}
-
 export function createDefaultPhaseOutcome(): Outcome {
   return { id: "default", passed: true, message: "Phase completed." };
 }

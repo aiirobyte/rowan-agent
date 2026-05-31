@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import {
-  createAgentPhaseConfig,
-  createDefaultAgentPhaseConfig,
+  createPhaseConfig,
+  createDefaultPhaseConfig,
   definePhasePlugin,
   resolvePhase,
   validatePhaseConfig,
 } from "../src/loop/phases";
-import type { AgentPhaseConfig, PhaseDefinition } from "../src/loop/phases";
+import type { PhaseConfig, PhaseDefinition } from "../src/loop/phases";
 
 function stubPhase(id: string): PhaseDefinition {
   return {
@@ -18,7 +18,7 @@ function stubPhase(id: string): PhaseDefinition {
 }
 
 test("validatePhaseConfig accepts a valid config", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "a",
     phases: [stubPhase("a"), stubPhase("b")],
   };
@@ -27,7 +27,7 @@ test("validatePhaseConfig accepts a valid config", () => {
 });
 
 test("validatePhaseConfig rejects empty entryPhaseId", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "",
     phases: [stubPhase("a")],
   };
@@ -36,7 +36,7 @@ test("validatePhaseConfig rejects empty entryPhaseId", () => {
 });
 
 test("validatePhaseConfig rejects empty phases array", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "a",
     phases: [],
   };
@@ -45,7 +45,7 @@ test("validatePhaseConfig rejects empty phases array", () => {
 });
 
 test("validatePhaseConfig rejects phase with empty id", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "a",
     phases: [{ id: "", name: "", description: "", run: async () => ({ message: "", route: "stop" }) }],
   };
@@ -54,7 +54,7 @@ test("validatePhaseConfig rejects phase with empty id", () => {
 });
 
 test("validatePhaseConfig rejects duplicate phase ids", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "a",
     phases: [stubPhase("a"), stubPhase("a")],
   };
@@ -63,7 +63,7 @@ test("validatePhaseConfig rejects duplicate phase ids", () => {
 });
 
 test("validatePhaseConfig rejects entryPhaseId not in phases", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "missing",
     phases: [stubPhase("a")],
   };
@@ -73,7 +73,7 @@ test("validatePhaseConfig rejects entryPhaseId not in phases", () => {
 
 test("resolvePhase returns matching phase definition", () => {
   const phase = stubPhase("target");
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "target",
     phases: [stubPhase("other"), phase],
   };
@@ -82,7 +82,7 @@ test("resolvePhase returns matching phase definition", () => {
 });
 
 test("resolvePhase returns undefined for unknown id", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "a",
     phases: [stubPhase("a")],
   };
@@ -90,8 +90,8 @@ test("resolvePhase returns undefined for unknown id", () => {
   expect(resolvePhase(config, "missing")).toBeUndefined();
 });
 
-test("createDefaultAgentPhaseConfig returns chat as the default phase id", () => {
-  const config = createDefaultAgentPhaseConfig();
+test("createDefaultPhaseConfig returns chat as the default phase id", () => {
+  const config = createDefaultPhaseConfig();
 
   expect(config.entryPhaseId).toBe("chat");
   expect(config.phases.map((p) => p.id)).toEqual(["chat"]);
@@ -101,17 +101,17 @@ test("createDefaultAgentPhaseConfig returns chat as the default phase id", () =>
   });
 });
 
-test("createDefaultAgentPhaseConfig passes validation", () => {
-  const config = createDefaultAgentPhaseConfig();
+test("createDefaultPhaseConfig passes validation", () => {
+  const config = createDefaultPhaseConfig();
 
   expect(() => validatePhaseConfig(config)).not.toThrow();
 });
 
-test("createAgentPhaseConfig composes phases from plugins", () => {
+test("createPhaseConfig composes phases from plugins", () => {
   const first = stubPhase("first");
   const second = stubPhase("second");
 
-  const config = createAgentPhaseConfig({
+  const config = createPhaseConfig({
     plugins: [
       definePhasePlugin({
         id: "core",
@@ -130,8 +130,8 @@ test("createAgentPhaseConfig composes phases from plugins", () => {
   expect(resolvePhase(config, "second")).toBe(second);
 });
 
-test("createAgentPhaseConfig lets explicit entryPhaseId override plugin entry", () => {
-  const config = createAgentPhaseConfig({
+test("createPhaseConfig lets explicit entryPhaseId override plugin entry", () => {
+  const config = createPhaseConfig({
     entryPhaseId: "override",
     plugins: [
       definePhasePlugin({
@@ -145,9 +145,9 @@ test("createAgentPhaseConfig lets explicit entryPhaseId override plugin entry", 
   expect(config.entryPhaseId).toBe("override");
 });
 
-test("createAgentPhaseConfig rejects duplicate plugin ids", () => {
+test("createPhaseConfig rejects duplicate plugin ids", () => {
   expect(() =>
-    createAgentPhaseConfig({
+    createPhaseConfig({
       plugins: [
         definePhasePlugin({ id: "duplicate", phases: [stubPhase("a")] }),
         definePhasePlugin({ id: "duplicate", phases: [stubPhase("b")] }),
@@ -157,7 +157,7 @@ test("createAgentPhaseConfig rejects duplicate plugin ids", () => {
 });
 
 test("custom three-phase config runs validation correctly", () => {
-  const config: AgentPhaseConfig = {
+  const config: PhaseConfig = {
     entryPhaseId: "decide",
     phases: [stubPhase("decide"), stubPhase("act"), stubPhase("check")],
   };

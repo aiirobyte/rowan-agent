@@ -1,6 +1,6 @@
 import Type from "typebox";
 import type { AgentRuntimePort, AgentLimitUsage, AgentRunLimits, RuntimeDepth } from "./loop/types";
-import type { AgentPhaseConfig, PhaseInput } from "./loop/phases";
+import type { PhaseConfig, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
   AgentContextSkill,
@@ -139,7 +139,7 @@ export type AgentLoopRunConfig = AgentRunCommonConfig & {
   state?: AgentState;
   threadDepth?: number;
   runThread?: RunThread;
-  phaseConfig?: AgentPhaseConfig;
+  phaseConfig?: PhaseConfig;
 };
 
 export type AgentThreadRunConfig = AgentRunCommonConfig & {
@@ -151,7 +151,7 @@ export type AgentThreadRunConfig = AgentRunCommonConfig & {
   threadDepth?: number;
 };
 
-export type AgentRunResult =
+export type RunResult =
   | {
       kind: "run";
       sessionId: string;
@@ -190,7 +190,7 @@ type AgentThreadStartConfig =
 
 export type RunThread = (
   input: AgentThreadStartConfig,
-) => Promise<Extract<AgentRunResult, { kind: "thread" }>>;
+) => Promise<Extract<RunResult, { kind: "thread" }>>;
 
 export type AgentEvent =
   // Agent lifecycle

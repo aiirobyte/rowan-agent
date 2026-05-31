@@ -14,7 +14,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { AgentPhaseConfig } from "./phases/config";
+import type { PhaseConfig } from "./phases/config";
 
 export type AgentRunLimits = {
   maxToolCalls?: number;
@@ -45,7 +45,7 @@ export type AgentLoopConfig = {
   afterToolCall?: AfterToolCall;
   runThread?: RunThread;
   emit?: AgentEventListener;
-  phaseConfig?: AgentPhaseConfig;
+  phaseConfig?: PhaseConfig;
 };
 
 export type AgentRunState = {

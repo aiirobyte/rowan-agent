@@ -7,14 +7,14 @@ import type {
   BeforeToolCall,
   Tool,
   AfterToolCall,
-  AgentRunResult,
+  RunResult,
   AgentEvent,
   AgentContext,
   AgentEventListener,
   Unsubscribe,
 } from "./types";
 
-export type AgentRunConfig = {
+export type AgentOptions = {
   context: AgentContext;
   model: LlmModelRef;
   stream: StreamFn;
@@ -25,29 +25,29 @@ export type AgentRunConfig = {
   afterToolCall?: AfterToolCall;
 };
 
-export type AgentRunOverride = Partial<Omit<AgentRunConfig, "context">> & {
+export type RunOptions = Partial<Omit<AgentOptions, "context">> & {
   context: AgentContext;
 };
 
-export type AgentControllerState = {
+export type AgentStatus = {
   sessionId?: string;
   context: AgentContext;
   model: LlmModelRef;
   tools: Tool[];
   isRunning: boolean;
-  currentResult?: AgentRunResult;
+  currentResult?: RunResult;
   error?: string;
 };
 
 export class Agent {
-  readonly state: AgentControllerState;
-  private options: AgentRunConfig;
+  readonly state: AgentStatus;
+  private options: AgentOptions;
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
-  private activeRun?: { promise: Promise<AgentRunResult>; resolve: (result: AgentRunResult) => void; abortController: AbortController };
+  private activeRun?: { promise: Promise<RunResult>; resolve: (result: RunResult) => void; abortController: AbortController };
 
-  constructor(options: AgentRunConfig) {
+  constructor(options: AgentOptions) {
     this.options = {
       ...options,
       context: cloneAgentContext(options.context),
@@ -130,15 +130,15 @@ export class Agent {
   }
 
   private async runWithLifecycle(
-    executor: (signal: AbortSignal) => Promise<AgentRunResult>,
-  ): Promise<AgentRunResult> {
+    executor: (signal: AbortSignal) => Promise<RunResult>,
+  ): Promise<RunResult> {
     if (this.activeRun) {
       throw new Error("Agent is already running.");
     }
 
-    let resolvePromise!: (result: AgentRunResult) => void;
+    let resolvePromise!: (result: RunResult) => void;
     const abortController = new AbortController();
-    const promise = new Promise<AgentRunResult>((resolve) => {
+    const promise = new Promise<RunResult>((resolve) => {
       resolvePromise = resolve;
     });
     this.activeRun = { promise, resolve: resolvePromise, abortController };
@@ -150,7 +150,7 @@ export class Agent {
       return result;
     } catch (error) {
       this.handleRunFailure(error, abortController.signal.aborted);
-      resolvePromise(undefined as unknown as AgentRunResult);
+      resolvePromise(undefined as unknown as RunResult);
       throw error;
     } finally {
       this.finishRun();
@@ -162,7 +162,7 @@ export class Agent {
     this.activeRun = undefined;
   }
 
-  async run(config?: AgentRunOverride): Promise<AgentRunResult> {
+  async run(config?: RunOptions): Promise<RunResult> {
     const resolved = this.resolveRunConfig(config);
     const previousSessionId = this.state.sessionId ?? this.options.sessionId;
     const sessionId = resolved.sessionId ?? this.state.sessionId;
@@ -224,7 +224,7 @@ export class Agent {
     await this.flushEvents().catch(() => undefined);
   }
 
-  private resolveRunConfig(config?: AgentRunOverride): AgentRunConfig {
+  private resolveRunConfig(config?: RunOptions): AgentOptions {
     const context = cloneAgentContext(config?.context ?? this.createContextSnapshot());
     return {
       ...this.options,

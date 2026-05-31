@@ -109,7 +109,7 @@ export type CreateSessionManagerInput = {
   title?: string;
 };
 
-export type SessionManagerSessionListItem = {
+export type SessionListItem = {
   id: string;
   title?: string;
   createdAt: string;
@@ -324,7 +324,7 @@ export class InMemorySessionManager implements SessionManager {
   }
 }
 
-export function summarizeSessionManagerRecords(records: readonly SessionRecord[]): SessionManagerSessionListItem {
+export function summarizeSessionManagerRecords(records: readonly SessionRecord[]): SessionListItem {
   const [header, ...entries] = records;
   if (!header || header.type !== "header") {
     throw new Error("Session records must start with a header.");
