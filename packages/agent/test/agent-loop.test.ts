@@ -126,7 +126,6 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
     },
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome).not.toHaveProperty("evidence");
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
   expect(events).toContain("tool_execution_end");
@@ -269,7 +268,6 @@ test("runAgentLoop can return a direct response without creating a task", async 
   });
   const events = emittedEvents.map((event) => event.type);
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.taskId).toBeUndefined();
   expect(outcome.outcome.message).toBe("Direct response: hello");
   expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
@@ -303,7 +301,6 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
     },
   });
 
-  expect(outcome.outcome.passed).toBe(false);
   expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
 });
 
@@ -409,7 +406,6 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     },
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.message).toBe("Verified after retry.");
   expect(verifyCalls).toBe(2);
   expect(
@@ -497,7 +493,6 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
     maxAttempts: 2,
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.message).toBe("Verified after execute retry.");
   expect(executeCalls).toBe(2);
   expect(session.messages.some((message) => message.metadata?.toolName === "model.execute")).toBe(false);
@@ -523,7 +518,6 @@ test("beforeToolCall hook can block execution", async () => {
     },
   });
 
-  expect(outcome.outcome.passed).toBe(false);
 });
 
 test("afterToolCall hook review is logged with original and reviewed result", async () => {
@@ -548,7 +542,6 @@ test("afterToolCall hook review is logged with original and reviewed result", as
     },
   });
 
-  expect(outcome.outcome.passed).toBe(true);
 });
 
 test("invalid tool args do not execute tool", async () => {
@@ -630,7 +623,6 @@ test("invalid tool args do not execute tool", async () => {
     },
   });
 
-  expect(outcome.outcome.passed).toBe(false);
   expect(executed).toBe(false);
   expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
 });
@@ -673,7 +665,6 @@ test("runtime beforePhase can adjust phase input", async () => {
     runtime,
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.message).toBe("Adjusted route input.");
 });
 
@@ -716,7 +707,6 @@ test("runtime afterPhase can adjust phase output", async () => {
     },
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.message).toBe("Adjusted route output.");
 });
 
@@ -753,7 +743,6 @@ test("runtime beforePhase can skip a phase", async () => {
   });
 
   expect(modelCalled).toBe(false);
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.message).toBe("Skipped route phase.");
 });
 
@@ -804,7 +793,6 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
   });
 
   expect(routeCalls).toBe(2);
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.message).toBe("Retried with adjusted input.");
 });
 
@@ -849,7 +837,5 @@ test("runtime phase port can abort with an outcome", async () => {
     },
   });
 
-  expect(outcome.outcome.passed).toBe(false);
   expect(outcome.outcome.message).toBe("Aborted by runtime.");
-  expect(outcome.outcome.passed).toBe(false);
 });

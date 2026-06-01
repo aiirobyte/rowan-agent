@@ -55,7 +55,6 @@ test("runAgentLoop creates a thread session with explicit tools and skills", asy
 
   expect(result.parentSessionId).toBe("ses_parent");
   expect(result.sessionId).toEqual(expect.stringMatching(/^ses_/));
-  expect(result.outcome.passed).toBe(true);
   expect(events).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -68,7 +67,6 @@ test("runAgentLoop creates a thread session with explicit tools and skills", asy
       }),
     ]),
   );
-  expect(result.outcome.passed).toBe(true);
 });
 
 test("Agent does not expose startThread; thread runs use explicit loop config", async () => {
@@ -102,9 +100,7 @@ test("Agent does not expose startThread; thread runs use explicit loop config", 
 
   expect(withoutTools.parentSessionId).toBe("ses_parent");
   expect(withoutTools.sessionId).toEqual(expect.stringMatching(/^ses_/));
-  expect(withoutTools.outcome.passed).toBe(false);
   expect(withoutTools.outcome.message).toContain("missing required echo evidence");
-  expect(withTools.outcome.passed).toBe(true);
 });
 
 test("tools can launch threads and return outcomes as tool evidence", async () => {
@@ -121,9 +117,9 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       return {
         toolCallId: context.toolCallId,
         toolName: "delegate",
-        ok: nested?.outcome.passed ?? false,
+        ok: nested?.outcome != null,
         content: nested?.outcome ?? null,
-        ...(nested?.outcome.passed ? {} : { error: nested?.outcome.message ?? "Nested thread did not run." }),
+        ...(nested?.outcome ? {} : { error: nested?.outcome?.message ?? "Nested thread did not run." }),
       };
     },
   };
@@ -195,7 +191,6 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
 
   const outcome = await runAgentTurn(agent, "call helper tool");
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome).not.toHaveProperty("evidence");
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
   expect(
@@ -206,8 +201,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
         !event.isError &&
         typeof event.result.content === "object" &&
         event.result.content !== null &&
-        "passed" in event.result.content &&
-        event.result.content.passed === true,
+        "id" in event.result.content,
     ),
   ).toBe(true);
   expect(events.some((event) => event.type === "turn_start" && "parentSessionId" in event)).toBe(true);

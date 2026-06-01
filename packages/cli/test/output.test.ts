@@ -5,14 +5,12 @@ import type { Outcome } from "@rowan-agent/agent";
 test("formatOutcomeOutput uses the outcome JSON shape", () => {
   const directOutcome: Outcome = {
     id: "out_direct",
-    passed: true,
     message: "Hello from model",
   };
   const taskOutcome: Outcome = {
     id: "out_task",
     taskId: "task_123",
-    passed: true,
-    message: "Task passed",
+    message: "Task completed",
   };
 
   expect(formatOutcomeOutput(directOutcome)).toBe(formatJsonOutput(directOutcome));

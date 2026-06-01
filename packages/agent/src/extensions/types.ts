@@ -1,6 +1,5 @@
 import type {
   PhaseDefinition,
-  PhaseHandler,
   PhaseInput,
   PhaseManifest,
   PhaseOutput,
@@ -18,7 +17,10 @@ export type ExtensionHandler = (...args: unknown[]) => unknown | Promise<unknown
 // Extension phase handler — lifecycle methods for a registered phase
 // ---------------------------------------------------------------------------
 
-export type ExtensionPhaseHandler = PhaseHandler;
+/** PhaseHandler only contains buildPrompt — other hooks removed in ADR-0015 refactor. */
+export type ExtensionPhaseHandler = {
+  buildPrompt?(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
+};
 
 /** Declarative prompt configuration — alternative to implementing buildPrompt. */
 export type PhasePromptConfig = {
@@ -29,16 +31,12 @@ export type PhasePromptConfig = {
 };
 
 export type PhaseRegistration = PhaseManifest & {
-  run: PhaseRun;
-  /** Declarative prompt config — used by the default buildPrompt. Ignored if buildPrompt is provided. */
+  /** Optional execution override — takes over model invocation at step 4 */
+  run?: PhaseRun;
+  /** Declarative prompt config — framework generates buildPrompt from this */
   prompt?: PhasePromptConfig;
-  /** Custom prompt builder. If omitted, the framework uses `prompt` config or a default. */
-  buildPrompt?: PhaseHandler["buildPrompt"];
-  /** Lifecycle hooks. */
-  prepare?: PhaseHandler["prepare"];
-  finalize?: PhaseHandler["finalize"];
-  /** Outcome builder. Defaults to { id, passed: true, message }. */
-  createOutcome?: PhaseHandler["createOutcome"];
+  /** Custom prompt builder — overrides prompt config if provided */
+  buildPrompt?: ExtensionPhaseHandler["buildPrompt"];
 };
 
 export type RegisteredPhase = {

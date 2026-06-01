@@ -528,7 +528,6 @@ test("CLI writes a default log without --log", async () => {
     expect(result.exitCode).toBe(0);
     const outcome = JSON.parse(result.stdout) as Outcome;
     expect(outcome).toMatchObject({
-      passed: true,
       message: "Hello from model",
     });
     expect(outcome.taskId).toBeUndefined();
@@ -739,7 +738,7 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("\"passed\": true");
+    expect(result.stdout).toContain("\"id\"");
     expect(requests[0]?.tools?.some((t: { function: { name: string } }) => t.function.name === "bash")).toBe(true);
 
     const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);

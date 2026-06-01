@@ -34,17 +34,14 @@ export type PhaseManifest = {
   description: string;
 };
 
-export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput>;
+export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
 
 export type PhaseDefinition = PhaseManifest & {
-  run: PhaseRun;
+  run?: PhaseRun;
 };
 
 export type PhaseHandler = {
-  prepare?(context: PhaseContext): void | Promise<void>;
   buildPrompt?(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
-  finalize?(context: PhaseContext, output: PhaseOutput): void | Promise<void>;
-  createOutcome?(output: PhaseOutput): Outcome;
 };
 
 export type ModelCollectedOutput = {

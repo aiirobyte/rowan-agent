@@ -150,11 +150,10 @@ test("ExtensionRunner creates phase registry with registered handlers", async ()
       id: "custom",
       name: "Custom",
       description: "Custom phase.",
-      buildPrompt() {
-        return "custom prompt";
-      },
-      createOutcome(output) {
-        return { id: "custom_outcome", passed: true, message: output.message };
+      prompt: {
+        sections: [
+          { type: "instructions", lines: ["Custom prompt"] },
+        ],
       },
       async run() {
         return { message: "custom done", route: "stop" };
@@ -172,7 +171,7 @@ test("ExtensionRunner creates phase registry with registered handlers", async ()
     messages: [],
     tools: [],
     skills: [],
-  })).toBe("custom prompt");
+  })).toBeDefined();
 });
 
 test("custom three-phase registry runs validation correctly", () => {

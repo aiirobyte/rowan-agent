@@ -8,7 +8,25 @@ export const executePhaseExtension = defineExtension((rowan) => {
   rowan.registerPhase({
     ...manifestJson,
 
+    prompt: {
+      sections: [
+        { type: "instructions", lines: [
+          "Phase: execute",
+          "",
+          "Execute the task by calling the appropriate tools.",
+          "If more tool calls are needed, continue calling tools.",
+          "If execution is complete, respond with a brief summary.",
+          "Do NOT output JSON. Use the provided tools directly.",
+        ]},
+        { type: "task" },
+        { type: "tools" },
+      ],
+      withToolResults: true,
+    },
+
     async run(context, input) {
+      context.incrementAttempt();
+
       const inputYield = (input.yield as Record<string, unknown>) ?? {};
       const prevToolResults = (inputYield.toolResults as ToolResult[]) ?? [];
       const toolResults: ToolResult[] = [...prevToolResults];
@@ -47,40 +65,6 @@ export const executePhaseExtension = defineExtension((rowan) => {
       }
 
       return { message: collected.text ?? "", route: "verify", yield: { ...inputYield, toolResults } };
-    },
-
-    prepare(context) {
-      context.incrementAttempt();
-    },
-
-    buildPrompt(input, options) {
-      const req = rowan.prompt.buildModelRequest(input, { toolResults: options?.toolResults });
-      req.messages.push({
-        role: "user",
-        content: rowan.prompt.buildPhaseContent(input, [
-          { type: "instructions", lines: [
-            "Phase: execute",
-            "",
-            "Execute the task by calling the appropriate tools.",
-            "If more tool calls are needed, continue calling tools.",
-            "If execution is complete, respond with a brief summary.",
-            "Do NOT output JSON. Use the provided tools directly.",
-          ]},
-          { type: "task" },
-          { type: "tools" },
-        ]),
-      });
-      return req;
-    },
-
-    finalize(_context, _output) {
-      // Reserved for future side effects
-    },
-
-    createOutcome(output) {
-      const task = (output.yield as Record<string, unknown> | undefined)?.task as Record<string, unknown> | undefined;
-      const taskId = typeof task?.id === "string" ? task.id : undefined;
-      return { id: rowan.id.create("out"), ...(taskId ? { taskId } : {}), passed: false, message: output.message };
     },
   });
 });

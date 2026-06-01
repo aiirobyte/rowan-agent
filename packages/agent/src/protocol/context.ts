@@ -42,7 +42,6 @@ export type AgentContextState = {
 export type Outcome = {
   id: string;
   taskId?: string;
-  passed: boolean;
   message: string;
 };
 

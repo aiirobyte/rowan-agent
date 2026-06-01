@@ -78,7 +78,6 @@ test("default config preserves direct answer behavior", async () => {
     tools: [echoTool],
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.taskId).toBeUndefined();
   expect(outcome.outcome.message).toBe("Direct response: hello");
 });
@@ -101,7 +100,6 @@ test("default config preserves task plan/execute/verify behavior", async () => {
     },
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(events).toContain("tool_execution_end");
   expect(events).toContain("phase_end");
 });
@@ -125,7 +123,6 @@ test("custom phase config without verify phase skips verification", async () => 
     },
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(events).toContain("tool_execution_end");
 });
 
@@ -228,7 +225,6 @@ test("default config preserves execute/verify retry behavior", async () => {
     maxAttempts: 2,
   });
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(outcome.outcome.message).toContain("Verified");
   expect(verifyCalls).toBe(2);
 });
@@ -289,6 +285,5 @@ test("default config preserves max attempt exhaustion", async () => {
     maxAttempts: 2,
   });
 
-  expect(outcome.outcome.passed).toBe(false);
   expect(outcome.outcome.message).toContain("fails");
 });

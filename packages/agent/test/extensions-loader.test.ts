@@ -47,9 +47,6 @@ test("loadExtensionFromFactory exposes host utilities on the Rowan API", async (
           ],
         };
       },
-      createOutcome(output) {
-        return { id: rowan.id.create("out"), passed: true, message: output.message };
-      },
       async run() {
         return { message: "Utilities loaded.", route: "stop" };
       },
@@ -76,10 +73,8 @@ test("loadExtensionFromFactory exposes host utilities on the Rowan API", async (
       toolNames: ["echo"],
     }],
   });
-  const outcome = handler?.createOutcome?.({ message: "ok", route: "stop" });
 
   expect(request?.messages.some(m => m.content === "hello from user")).toBe(true);
-  expect(outcome?.id).toEqual(expect.stringMatching(/^out_/));
 });
 
 test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", async () => {
@@ -98,9 +93,6 @@ test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", as
           id: "echo",
           name: "Echo",
           description: "Echo test phase.",
-          createOutcome(output) {
-            return { id: "out_test", passed: true, message: output.message };
-          },
           async run() {
             return { message: "Loaded extension", route: "stop" };
           },

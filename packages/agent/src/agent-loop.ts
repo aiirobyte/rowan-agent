@@ -65,6 +65,18 @@ function hasRetry(value: unknown): value is { retry: unknown } {
   return isRecord(value) && "retry" in value;
 }
 
+/** Execute phase run and handle void return by auto-assembling PhaseOutput. */
+function resolvePhaseOutput(
+  result: PhaseOutput | void,
+  state: AgentRunState,
+): PhaseOutput {
+  if (result) return result;
+  return {
+    message: state.transcript.filter(m => m.role === "assistant").pop()?.content ?? "",
+    route: "stop",
+  };
+}
+
 // ============================================================================
 // Lifecycle Factory
 // ============================================================================
@@ -401,8 +413,6 @@ async function runLoop(
     const loopContext = createAgentLoopContext(config, state);
     const context = createPhaseContext(config, state, phase, handler, loopContext, availablePhases);
 
-    if (handler?.prepare) handler.prepare(context);
-
     // Build unified input — framework handles data preparation
     let phaseInput: PhaseInput = {
       phase: currentPhaseId,
@@ -428,7 +438,6 @@ async function runLoop(
         if (extBefore.skip.route === "stop") {
           return completeRun(config, state, {
             id: "skip",
-            passed: true,
             message: extBefore.skip.message || "Skipped.",
           });
         }
@@ -457,7 +466,6 @@ async function runLoop(
         if (skipOutput.route === "stop") {
           return completeRun(config, state, {
             id: "skip",
-            passed: true,
             message: skipOutput.message || "Skipped.",
           });
         }
@@ -469,8 +477,18 @@ async function runLoop(
       }
     }
 
-    // Run phase
-    let output = await phase.run(context, phaseInput);
+    // Step 4: Run phase — if run is provided, it takes over; otherwise framework calls model.collect
+    let output: PhaseOutput;
+    if (phase.run) {
+      output = resolvePhaseOutput(await phase.run(context, phaseInput), state);
+    } else {
+      // Default: call model.collect
+      const collected = await context.turn(() => context.model.collect({ input: phaseInput }));
+      output = {
+        message: collected.text,
+        route: "stop",
+      };
+    }
 
     // afterPhase hook — extension hooks first, then runtime hooks
     if (config.afterPhase) {
@@ -479,8 +497,8 @@ async function runLoop(
         emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         return completeRun(config, state, extAfter.abort);
       }
-      if (extAfter.retry) {
-        output = await phase.run(context, extAfter.retry);
+      if (extAfter.retry && phase.run) {
+        output = resolvePhaseOutput(await phase.run(context, extAfter.retry), state);
       }
       if (extAfter.output) {
         output = extAfter.output;
@@ -500,13 +518,13 @@ async function runLoop(
           emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
           return completeRun(config, state, after.abort);
         }
-        if (hasRetry(after) && after.retry) {
+        if (hasRetry(after) && after.retry && phase.run) {
           retries += 1;
           if (retries > 3) {
             emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
             return completeRun(config, state, createOutcome.error(`Runtime requested too many ${currentPhaseId} phase retries.`));
           }
-          output = await phase.run(context, after.retry as PhaseInput);
+          output = resolvePhaseOutput(await phase.run(context, after.retry as PhaseInput), state);
           continue;
         }
         if (hasOutput(after) && after.output) {
@@ -515,9 +533,6 @@ async function runLoop(
         break;
       }
     }
-
-    // Finalize (side effects)
-    await handler?.finalize?.(context, output);
 
     // Emit phase_end
     emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
@@ -535,12 +550,7 @@ async function runLoop(
         state.transcript.push(outcomeMsg);
       }
 
-      const outcome = handler?.createOutcome?.(output)
-        ?? createOutcome.default(output);
-      const yieldTask = (output.yield as Record<string, unknown> | undefined)?.task;
-      if (yieldTask && typeof yieldTask === "object" && "status" in yieldTask) {
-        (yieldTask as { status: string }).status = outcome.passed ? "passed" : "failed";
-      }
+      const outcome = createOutcome.default(output);
       return completeRun(config, state, outcome);
     }
 

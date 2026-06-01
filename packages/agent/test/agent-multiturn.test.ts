@@ -79,8 +79,6 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   const sessionId = agent.state.sessionId;
   const second = await runAgentTurn(agent, "use echo tool again");
 
-  expect(first.outcome.passed).toBe(true);
-  expect(second.outcome.passed).toBe(true);
   expect(agent.state.sessionId).toBe(sessionId);
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining([
@@ -169,9 +167,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
   const first = await runAgentTurn(agent, "trigger failure");
   const second = await runAgentTurn(agent, "hello");
 
-  expect(first.outcome.passed).toBe(false);
   expect(first.outcome.message).toBe("Missing some functions to finish the task");
-  expect(second.outcome.passed).toBe(false);
   expect(second.outcome.message).toBe("Missing some functions to finish the task");
   expect(
     agent.state.context.messages.some(

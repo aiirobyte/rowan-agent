@@ -50,6 +50,8 @@ function createTestContext(state: AgentRunState): PhaseContext {
       start: () => "msg_1",
       update: async () => {},
       end: async () => {},
+      snapshot: () => ({ transcriptLength: 0, stateMessagesLength: 0 }),
+      restore: () => {},
     },
     toolExecution: {
       start: async () => {},
@@ -108,7 +110,7 @@ describe("runPhase contract", () => {
       },
     });
 
-    const output = await definition.run(context, builtInput);
+    const output = await definition.run!(context, builtInput);
 
     expect(output).toEqual({ message: "output", route: "stop" });
   });
@@ -122,7 +124,7 @@ describe("runPhase contract", () => {
       run: async () => ({ message: "answer", route: "stop" }),
     });
 
-    const output = await definition.run(context, {
+    const output = await definition.run!(context, {
       phase: "test",
       systemPrompt: "test",
       messages: [],
@@ -149,7 +151,7 @@ describe("runPhase contract", () => {
       },
     });
 
-    await definition.run(context, {
+    await definition.run!(context, {
       phase: "test",
       systemPrompt: "test",
       messages: [],
@@ -182,7 +184,7 @@ describe("runPhase contract", () => {
       },
     });
 
-    await definition.run(context, {
+    await definition.run!(context, {
       phase: "test",
       systemPrompt: "test",
       messages: [],

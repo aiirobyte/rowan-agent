@@ -29,7 +29,6 @@ test("Agent.run returns a run result and emits events", async () => {
 
   const outcome = await runAgentTurn(agent, "use echo tool");
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(agent.state.isRunning).toBe(false);
   expect(agent.state.sessionId).toEqual(expect.stringMatching(/^ses_/));
   expect(agent.state.context.messages.length).toBeGreaterThan(0);
@@ -54,9 +53,6 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
           id: "echo",
           name: "Echo",
           description: "Echo extension phase.",
-          createOutcome(output) {
-            return { id: "out_echo", passed: true, message: output.message };
-          },
           async run() {
             return { message: "custom extension ran", route: "stop" };
           },
@@ -82,8 +78,6 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
     const outcome = await runAgentTurn(agent, "use extension");
 
     expect(outcome.outcome).toMatchObject({
-      id: "out_echo",
-      passed: true,
       message: "custom extension ran",
     });
   } finally {
@@ -112,7 +106,6 @@ test("Agent.run does not wait for async event listeners", async () => {
 
   const outcome = await runAgentTurn(agent, "hello");
 
-  expect(outcome.outcome.passed).toBe(true);
   expect(blocked).toBe(true);
   release?.();
   await agent.flushEvents();

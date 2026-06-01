@@ -30,7 +30,7 @@ test("LocalJsonlSessionManager writes append-only JSONL sessions", async () => {
     });
     await manager.appendMessage(createMessage("user", "hello", { scope: "conversation" }));
     await manager.appendExecutionTurn(executionTurn(manager.getSessionId()));
-    await manager.appendOutcome({ id: "out_test", passed: true, message: "ok" });
+    await manager.appendOutcome({ id: "out_test", message: "ok" });
 
     const files = await readdir(sessionsDir);
     expect(files).toEqual([`${manager.getSessionId()}.jsonl`]);

@@ -130,12 +130,22 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
 
     registerPhase(extension, registration) {
       assertActive();
-      const handler: ExtensionPhaseHandler = {
-        prepare: registration.prepare,
-        buildPrompt: registration.buildPrompt,
-        finalize: registration.finalize,
-        createOutcome: registration.createOutcome,
-      };
+
+      // Generate buildPrompt from prompt config if not provided
+      let buildPrompt = registration.buildPrompt;
+      if (!buildPrompt && registration.prompt) {
+        const promptConfig = registration.prompt;
+        buildPrompt = (input, options) => {
+          const req = buildModelRequest(input, { toolResults: promptConfig.withToolResults ? options?.toolResults : undefined });
+          req.messages.push({
+            role: "user",
+            content: buildPhaseContent(input, promptConfig.sections),
+          });
+          return req;
+        };
+      }
+
+      const handler: ExtensionPhaseHandler = { buildPrompt };
       const definition: PhaseDefinition = {
         id: registration.id,
         name: registration.name,

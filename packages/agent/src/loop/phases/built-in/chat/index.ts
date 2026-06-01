@@ -11,6 +11,19 @@ export const chatPhaseExtension = defineExtension((rowan) => {
   rowan.registerPhase({
     ...manifestObject,
 
+    prompt: {
+      sections: [
+        { type: "instructions", lines: [
+          "Phase: chat",
+          "",
+          "Answer the user's question directly in natural language.",
+          "If the request requires tool access, call the available tools.",
+          "Do NOT output JSON. Respond in the user's language.",
+        ]},
+        { type: "userRequest" },
+      ],
+    },
+
     async run(context, input) {
       const collected = await context.turn(() => context.model.collect({ input }));
 
@@ -44,29 +57,6 @@ export const chatPhaseExtension = defineExtension((rowan) => {
       }
 
       return { message, route };
-    },
-
-    buildPrompt(input) {
-      const req = rowan.prompt.buildModelRequest(input);
-      req.messages.push({
-        role: "user",
-        content: rowan.prompt.buildPhaseContent(input, [
-          { type: "instructions", lines: [
-            "Phase: chat",
-            "",
-            "Answer the user's question directly in natural language.",
-            "If the request requires tool access, call the available tools.",
-            "Do NOT output JSON. Respond in the user's language.",
-          ]},
-          { type: "userRequest" },
-        ]),
-      });
-      return req;
-    },
-
-    createOutcome(output) {
-      const isAborted = output.message?.includes("aborted");
-      return { id: rowan.id.create("out"), passed: !isAborted, message: output.message };
     },
   });
 });
