@@ -20,7 +20,6 @@ export function createFailedPhaseOutcome(taskId: string | undefined, message?: s
 export const verifyPhaseExtension = defineExtension((rowan) => {
   rowan.registerPhase({
     ...manifestJson,
-    conversationLimit: 8,
 
     async run(context, input) {
       const maxAttempts = context.maxAttempts ?? 2;

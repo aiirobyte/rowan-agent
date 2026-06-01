@@ -52,6 +52,37 @@ export interface Model {
 }
 
 // ---------------------------------------------------------------------------
+// Provider configuration (used by extension registerProvider)
+// ---------------------------------------------------------------------------
+
+export type ProviderModelConfig = {
+  id: string;
+  name: string;
+  api: Api;
+  reasoning: boolean;
+  input: ("text" | "image")[];
+  cost: ModelCost;
+  contextWindow: number;
+  maxTokens: number;
+};
+
+export type ProviderConfig = {
+  name: string;
+  baseUrl: string;
+  apiKey?: string;
+  api: Api;
+  streamSimple?: ApiStreamFn;
+  headers?: Record<string, string>;
+  authHeader?: string;
+  models: ProviderModelConfig[];
+  oauth?: {
+    clientId: string;
+    scopes?: string[];
+    tokenEndpoint?: string;
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Backward-compatible model reference
 // ---------------------------------------------------------------------------
 

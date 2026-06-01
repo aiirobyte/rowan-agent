@@ -72,15 +72,12 @@ test("pinoAgentEventLogger includes redacted event payloads at debug level", asy
 test("pinoAgentEventLogger resolves dynamic paths from the first session event", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-logging-dynamic-"));
   const logger = pinoAgentEventLogger((event) =>
-    event.type === "turn_start" && "parentSessionId" in event ? join(root, `${event.sessionId}.jsonl`) : undefined
+    event.type === "agent_start" ? join(root, `${event.sessionId}.jsonl`) : undefined
   );
 
   logger({
-    type: "turn_start",
-    content: [],
+    type: "agent_start",
     sessionId: "ses_12345678",
-    parentSessionId: "ses_parent",
-    prompt: "hello",
     ts: "2026-05-03T141659-32+08:00",
   });
   await logger.flush?.();
@@ -88,8 +85,8 @@ test("pinoAgentEventLogger resolves dynamic paths from the first session event",
   expect(logger.path()).toBe(join(root, "ses_12345678.jsonl"));
   const [record] = parseLogLines(await readFile(logger.path() ?? "", "utf8"));
   expect(record).toMatchObject({
-    eventType: "turn_start",
-    sessionId: "ses_parent",
+    eventType: "agent_start",
+    sessionId: "ses_12345678",
   });
   expect(record?.msg).toBeUndefined();
   expect(record?.event).toBeUndefined();

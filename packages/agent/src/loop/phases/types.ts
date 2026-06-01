@@ -1,5 +1,6 @@
 import type { PhaseOutput } from "../../protocol";
 import type {
+  MessageSnapshot,
   PhaseContext,
   PhaseDefinition,
   PhaseHandler,
@@ -8,6 +9,7 @@ import type {
 } from "./registry";
 
 export type {
+  MessageSnapshot,
   PhaseContext,
   PhaseDefinition,
   PhaseHandler,

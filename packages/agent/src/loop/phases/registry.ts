@@ -41,7 +41,6 @@ export type PhaseDefinition = PhaseManifest & {
 };
 
 export type PhaseHandler = {
-  conversationLimit?: number;
   prepare?(context: PhaseContext): void | Promise<void>;
   buildInput(context: PhaseContext, yield_?: unknown): PhaseInput | Promise<PhaseInput>;
   buildPrompt?(input: PhaseInput): string;
@@ -64,6 +63,12 @@ export type ModelCollectInput = {
 };
 
 /** Message lifecycle manager for streaming updates */
+/** Snapshot of message state, used for restore */
+export type MessageSnapshot = {
+  transcriptLength: number;
+  stateMessagesLength: number;
+};
+
 export type PhaseMessageManager = {
   /** Get all visible messages in the transcript */
   visible(): AgentMessage[];
@@ -73,6 +78,10 @@ export type PhaseMessageManager = {
   update(messageId: string, delta: string): Promise<void>;
   /** End the message stream, appends to transcript */
   end(messageId: string): Promise<void>;
+  /** Capture current message state for later restore */
+  snapshot(): MessageSnapshot;
+  /** Restore message state to a previous snapshot, discarding messages added after it */
+  restore(snap: MessageSnapshot): void;
 };
 
 /** Tool execution lifecycle manager */

@@ -362,7 +362,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<RunResult> {
 
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
-      return completeRun(config, state, createOutcome.fromResult(abortResult));
+      return completeRun(config, state, createOutcome.aborted());
     }
 
     const result = await runLoop(config, state);
@@ -389,23 +389,15 @@ async function runLoop(
 
   let currentPhaseId = phaseConfig.entryPhaseId;
   let lastYield: unknown;
-  const phaseVisits = new Map<string, number>();
 
   while (currentPhaseId) {
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
-      return completeRun(config, state, createOutcome.fromResult(abortResult));
+      return completeRun(config, state, createOutcome.aborted());
     }
 
     const { phase, handler } = resolvePhaseEntry(phaseConfig, currentPhaseId);
     state.currentPhase = currentPhaseId;
-
-    // Generic visit limit
-    const visits = (phaseVisits.get(currentPhaseId) ?? 0) + 1;
-    phaseVisits.set(currentPhaseId, visits);
-    if (visits > (handler?.conversationLimit ?? 20)) {
-      return completeRun(config, state, createOutcome.visitsExceeded(currentPhaseId));
-    }
 
     const loopContext = createAgentLoopContext(config, state);
     const context = createPhaseContext(config, state, phase, handler, loopContext, availablePhases);
@@ -507,7 +499,8 @@ async function runLoop(
         if (hasRetry(after) && after.retry) {
           retries += 1;
           if (retries > 3) {
-            throw new Error(`Runtime requested too many ${currentPhaseId} phase retries.`);
+            emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+            return completeRun(config, state, createOutcome.error(`Runtime requested too many ${currentPhaseId} phase retries.`));
           }
           output = await phase.run(context, after.retry as PhaseInput);
           continue;
@@ -722,6 +715,22 @@ function createPhaseContext(
       }
       emit(state, config.emit, { type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
     },
+    snapshot() {
+      return {
+        transcriptLength: state.transcript.length,
+        stateMessagesLength: state.agentState.messages.length,
+      };
+    },
+    restore(snap) {
+      state.transcript.length = snap.transcriptLength;
+      state.agentState.messages.length = snap.stateMessagesLength;
+      // Discard any in-flight messages that started after the snapshot
+      for (const [id, msg] of activeMessages) {
+        if (msg.metadata?.scope !== "conversation") {
+          activeMessages.delete(id);
+        }
+      }
+    },
   };
 
   return {
@@ -763,7 +772,6 @@ function createPhaseContext(
           toolResults: input.toolResults,
           phasePromptBuilder: {
             phase: phase.id,
-            conversationLimit: handler.conversationLimit,
             build({ input: phaseInput, tools }) {
               return handler.buildPrompt!({
                 ...phaseInput,

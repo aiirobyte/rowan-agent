@@ -76,6 +76,17 @@ export function clearModels(): void {
   modelRegistry.clear();
 }
 
+/**
+ * Unregister all models for a given provider. Returns the number of models removed.
+ */
+export function unregisterProviderModels(provider: string): number {
+  const models = modelRegistry.get(provider);
+  if (!models) return 0;
+  const count = models.size;
+  modelRegistry.delete(provider);
+  return count;
+}
+
 // ---------------------------------------------------------------------------
 // Cost calculation
 // ---------------------------------------------------------------------------

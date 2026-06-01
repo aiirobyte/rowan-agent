@@ -135,6 +135,7 @@ export {
   type PhaseRun,
   type ModelCollectedOutput,
   type ModelCollectInput,
+  type MessageSnapshot,
   type PhaseMessageManager,
   type PhaseToolExecutionManager,
 } from "./loop/phases";

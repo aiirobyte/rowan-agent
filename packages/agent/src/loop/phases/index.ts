@@ -17,6 +17,7 @@ export {
   type ToolCall,
   type ModelCollectedOutput,
   type ModelCollectInput,
+  type MessageSnapshot,
   type PhaseMessageManager,
   type PhaseToolExecutionManager,
 } from "./registry";

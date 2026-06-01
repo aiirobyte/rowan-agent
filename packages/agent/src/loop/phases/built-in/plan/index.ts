@@ -34,7 +34,6 @@ function normalizeTask(value: unknown): Record<string, unknown> {
 export const planPhaseExtension = defineExtension((rowan) => {
   rowan.registerPhase({
     ...manifestJson,
-    conversationLimit: 20,
 
     async run(context, input) {
       const collected = await context.turn(() => context.model.collect({

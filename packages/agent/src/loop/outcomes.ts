@@ -7,7 +7,10 @@ export const createOutcome = {
     if (result.stopReason === "none") {
       return { id: createId("out"), passed: true, message: "Completed." };
     }
-    return { id: createId("out"), passed: false, message: result.message };
+    if (result.stopReason === "aborted") {
+      return createOutcome.aborted();
+    }
+    return createOutcome.error(result.message);
   },
 
   threadDepthLimit(input: { threadDepth: number; maxThreadDepth: number }): Outcome {
@@ -20,10 +23,6 @@ export const createOutcome = {
 
   default(output: { message: string }): Outcome {
     return { id: createId("out"), passed: true, message: output.message || "Completed." };
-  },
-
-  visitsExceeded(phaseId: string): Outcome {
-    return { id: createId("out"), passed: false, message: `Phase "${phaseId}" exceeded maximum visit limit.` };
   },
 
   aborted(): Outcome {

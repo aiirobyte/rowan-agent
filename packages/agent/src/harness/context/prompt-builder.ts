@@ -26,7 +26,6 @@ export type PhasePromptBuildInput = {
 
 export type PhasePromptBuilder = {
   phase: string;
-  conversationLimit?: number;
   build(input: PhasePromptBuildInput): string;
 };
 
@@ -86,14 +85,8 @@ function toConversationMessage(message: AgentContextMessage): PromptMessage | un
   };
 }
 
-function conversationForPhase(messages: AgentContextMessage[], conversationLimit: number): AgentContextMessage[] {
-  const conversation = messages.filter(isConversationMessage);
-  const limit = Math.max(0, Math.floor(conversationLimit));
-  return limit === 0 ? [] : conversation.slice(-limit);
-}
-
-function buildConversationMessages(input: PhaseInput, conversationLimit: number): PromptMessage[] {
-  return conversationForPhase(input.messages, conversationLimit).flatMap((message) => {
+function buildConversationMessages(input: PhaseInput): PromptMessage[] {
+  return input.messages.filter(isConversationMessage).flatMap((message) => {
     const chatMessage = toConversationMessage(message);
     return chatMessage ? [chatMessage] : [];
   });
@@ -114,11 +107,9 @@ export function buildPrompt(input: {
       toolResults: input.toolResults,
     }),
   };
-  const conversationLimit = input.phasePromptBuilder.conversationLimit ?? 8;
-
   const messages: PromptMessage[] = [
     buildSystemMessage(input.context.systemPrompt),
-    ...buildConversationMessages(input.context, conversationLimit),
+    ...buildConversationMessages(input.context),
   ];
 
   if (input.toolResults && input.toolResults.length > 0) {

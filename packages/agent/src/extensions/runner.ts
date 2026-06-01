@@ -131,7 +131,6 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
     registerPhase(extension, registration) {
       assertActive();
       const handler: ExtensionPhaseHandler = {
-        conversationLimit: registration.conversationLimit,
         prepare: registration.prepare,
         buildInput: registration.buildInput,
         buildPrompt: registration.buildPrompt,

@@ -44,6 +44,14 @@ export function clearApiProviders(): void {
   apiProviderRegistry.clear();
 }
 
+/**
+ * Unregister an API provider by protocol name.
+ * Returns true if a provider was removed.
+ */
+export function unregisterApiProvider(api: Api): boolean {
+  return apiProviderRegistry.delete(api);
+}
+
 // ---------------------------------------------------------------------------
 // Built-in provider registration
 // ---------------------------------------------------------------------------

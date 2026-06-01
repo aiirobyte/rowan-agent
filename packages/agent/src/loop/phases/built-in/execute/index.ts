@@ -7,7 +7,6 @@ const manifestJson = packageJson.rowan.phase;
 export const executePhaseExtension = defineExtension((rowan) => {
   rowan.registerPhase({
     ...manifestJson,
-    conversationLimit: 8,
 
     async run(context, input) {
       const inputYield = (input.yield as Record<string, unknown>) ?? {};

@@ -25,7 +25,6 @@ function phasePromptBuilderFor(phaseId: string): PhasePromptBuilder {
 
   return {
     phase: phase.id,
-    conversationLimit: handler.conversationLimit,
     build({ input, tools }) {
       return handler.buildPrompt!({
         ...input,
@@ -104,7 +103,6 @@ test("generic prompt builder delegates phase content to registered phase builder
   const promptBuilder = createPromptBuilder([
     {
       phase: "chat",
-      conversationLimit: 1,
       build({ input, tools }) {
         return `Custom ${input.phase} prompt with ${tools.map((tool) => tool.name).join(",")}`;
       },
