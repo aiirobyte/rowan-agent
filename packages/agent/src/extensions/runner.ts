@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createPhaseRegistry, type PhaseRegistry, type PhaseDefinition } from "../loop/phases/registry";
-import { serializeSkills, serializeTools, latestUserInput } from "../harness/context/prompt-builder";
+import { latestUserInput, buildModelRequest, buildPhaseContent } from "../harness/context/prompt-builder";
 import { createId, createJson } from "../utils";
 import type { ProviderConfig } from "@rowan-agent/models";
 import { registerModel, unregisterProviderModels } from "@rowan-agent/models";
@@ -183,8 +183,9 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
     },
 
     id: { create: createId },
-    format: { json: createJson.stringify, tools: serializeTools, skills: serializeSkills },
+    format: { json: createJson.stringify },
     input: { latestUserMessage: latestUserInput },
+    prompt: { buildModelRequest, buildPhaseContent },
   };
 }
 
@@ -206,6 +207,7 @@ export function createExtensionAPI(extension: Extension, runtime: ExtensionRunti
     id: runtime.id,
     format: runtime.format,
     input: runtime.input,
+    prompt: runtime.prompt,
   };
 }
 

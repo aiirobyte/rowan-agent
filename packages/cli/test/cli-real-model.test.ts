@@ -710,14 +710,14 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
       message: "cli-bash-ok",
     },
   ];
-  const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
+  const requests: Array<{ messages?: Array<{ content?: string }>; tools?: Array<{ function: { name: string } }> }> = [];
   let requestCount = 0;
   let server: ReturnType<typeof Bun.serve> | undefined;
   try {
     server = Bun.serve({
       port: 0,
       async fetch(request) {
-        requests.push((await request.json()) as { messages?: Array<{ content?: string }> });
+        requests.push((await request.json()) as { messages?: Array<{ content?: string }>; tools?: Array<{ function: { name: string } }> });
         return openAIResponse(responses[requestCount++] ?? responses.at(-1));
       },
     });
@@ -740,7 +740,7 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("\"passed\": true");
-    expect(requests[0]?.messages?.at(-1)?.content).toContain("\"name\": \"bash\"");
+    expect(requests[0]?.tools?.some((t: { function: { name: string } }) => t.function.name === "bash")).toBe(true);
 
     const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
     expect(logMatch).not.toBeNull();

@@ -89,23 +89,23 @@ export const verifyPhaseExtension = defineExtension((rowan) => {
     },
 
     buildPrompt(input) {
-      const yield_ = input.yield as Record<string, unknown> | undefined;
-      const task = yield_?.task;
-      const toolResults = (yield_?.toolResults as unknown[]) ?? [];
-      return [
-        "Phase: verify",
-        "",
-        "Review the task output against the acceptance criteria.",
-        "If the criteria are met, respond with a confirmation.",
-        "If more work is needed, call tools to fix issues.",
-        "Do NOT output JSON.",
-        "",
-        "Task:",
-        rowan.format.json(task ?? null),
-        "",
-        "Task output:",
-        rowan.format.json({ kind: "tools", toolResults }),
-      ].join("\n");
+      const req = rowan.prompt.buildModelRequest(input);
+      req.messages.push({
+        role: "user",
+        content: rowan.prompt.buildPhaseContent(input, [
+          { type: "instructions", lines: [
+            "Phase: verify",
+            "",
+            "Review the task output against the acceptance criteria.",
+            "If the criteria are met, respond with a confirmation.",
+            "If more work is needed, call tools to fix issues.",
+            "Do NOT output JSON.",
+          ]},
+          { type: "task" },
+          { type: "taskOutput" },
+        ]),
+      });
+      return req;
     },
 
     createOutcome(output) {

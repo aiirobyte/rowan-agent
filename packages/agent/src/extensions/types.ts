@@ -6,8 +6,8 @@ import type {
   PhaseOutput,
   PhaseRun,
 } from "../loop/phases/registry";
-import type { SerializableTool } from "../harness/context/prompt-builder";
-import type { ProviderConfig } from "@rowan-agent/models";
+import type { LlmRequest, ProviderConfig } from "@rowan-agent/models";
+import type { PhaseSection } from "../harness/context/prompt-builder";
 import type { Outcome, Tool, ToolResult } from "../types";
 export type { PhaseManifest } from "../loop/phases/registry";
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
@@ -126,13 +126,17 @@ export type ExtensionRuntime = {
   // Formatting utilities
   format: {
     json(value: unknown): string;
-    tools(tools: PhaseInput["tools"]): SerializableTool[];
-    skills(skills: PhaseInput["skills"]): unknown[];
   };
 
   // Input utilities
   input: {
     latestUserMessage(input: PhaseInput): string;
+  };
+
+  // Prompt building
+  prompt: {
+    buildModelRequest(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
+    buildPhaseContent(input: PhaseInput, sections: PhaseSection[]): string;
   };
 };
 
@@ -197,6 +201,7 @@ export type ExtensionAPI = {
   id: ExtensionRuntime["id"];
   format: ExtensionRuntime["format"];
   input: ExtensionRuntime["input"];
+  prompt: ExtensionRuntime["prompt"];
 };
 
 // ---------------------------------------------------------------------------

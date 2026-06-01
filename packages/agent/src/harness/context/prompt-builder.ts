@@ -1,16 +1,11 @@
 import type { AgentContextMessage, AgentContextSkill, ToolResult } from "../../protocol";
 import type { PhaseInput } from "../../loop/phases/registry";
+import type { LlmRequest, LlmMessage, LlmModelRef } from "@rowan-agent/models";
 import {
   buildSystemPrompt,
 } from "./prompt";
 
-export type PromptMessage = { role: "system" | "user" | "assistant"; content: string };
 export type PromptTool = { name: string; description: string; parameters: unknown };
-
-export type Prompt = {
-  messages: PromptMessage[];
-  phasePromptMessage: PromptMessage;
-};
 
 export type SerializableTool = {
   name: string;
@@ -18,16 +13,22 @@ export type SerializableTool = {
   parameters: unknown;
 };
 
-export type PhasePromptBuildInput = {
-  input: PhaseInput;
-  tools: PromptTool[];
-  toolResults?: ToolResult[];
-};
+// ---------------------------------------------------------------------------
+// Section types for buildPhaseContent
+// ---------------------------------------------------------------------------
 
-export type PhasePromptBuilder = {
-  phase: string;
-  build(input: PhasePromptBuildInput): string;
-};
+export type PhaseSection =
+  | { type: "instructions"; lines: string[] }
+  | { type: "userRequest" }
+  | { type: "task" }
+  | { type: "taskOutput" }
+  | { type: "tools" }
+  | { type: "skills" }
+  | { type: "custom"; text: string };
+
+// ---------------------------------------------------------------------------
+// Internal utilities
+// ---------------------------------------------------------------------------
 
 function summarizeText(text: string, maxLength = 700): string {
   const compact = text.trim().replace(/\s+/g, " ");
@@ -51,10 +52,6 @@ export function serializeSkills(skills: AgentContextSkill[]): unknown[] {
   }));
 }
 
-function buildSystemMessage(systemPrompt: string): PromptMessage {
-  return { role: "system", content: buildSystemPrompt({ systemPrompt }) };
-}
-
 function isConversationMessage(message: AgentContextMessage): boolean {
   return message.metadata?.scope === "conversation";
 }
@@ -70,114 +67,92 @@ export function latestUserInput(input: PhaseInput): string {
   return "";
 }
 
-function toConversationMessage(message: AgentContextMessage): PromptMessage | undefined {
-  if (!isConversationMessage(message)) {
-    return undefined;
-  }
-
-  if (message.role !== "user" && message.role !== "assistant") {
-    return undefined;
-  }
-
-  return {
-    role: message.role,
-    content: message.content,
-  };
-}
-
-function buildConversationMessages(input: PhaseInput): PromptMessage[] {
-  return input.messages.filter(isConversationMessage).flatMap((message) => {
-    const chatMessage = toConversationMessage(message);
-    return chatMessage ? [chatMessage] : [];
+export function conversationMessages(messages: AgentContextMessage[]): LlmMessage[] {
+  return messages.filter(isConversationMessage).flatMap((message) => {
+    if (message.role !== "user" && message.role !== "assistant") return [];
+    if (!isConversationMessage(message)) return [];
+    return [{ role: message.role, content: message.content }];
   });
 }
 
-export function buildPrompt(input: {
-  context: PhaseInput;
-  tools?: PromptTool[];
-  toolResults?: ToolResult[];
-  phasePromptBuilder: PhasePromptBuilder;
-}): Prompt {
-  const tools = input.tools ?? [];
-  const phasePromptMessage: PromptMessage = {
-    role: "user",
-    content: input.phasePromptBuilder.build({
-      input: input.context,
-      tools,
-      toolResults: input.toolResults,
-    }),
-  };
-  const messages: PromptMessage[] = [
-    buildSystemMessage(input.context.systemPrompt),
-    ...buildConversationMessages(input.context),
-  ];
+// ---------------------------------------------------------------------------
+// buildModelRequest — builds a complete LlmRequest from PhaseInput
+// ---------------------------------------------------------------------------
 
-  if (input.toolResults && input.toolResults.length > 0) {
+export function buildModelRequest(
+  input: PhaseInput,
+  options?: { toolResults?: ToolResult[]; model?: LlmModelRef },
+): LlmRequest {
+  let systemText = buildSystemPrompt({ systemPrompt: input.systemPrompt });
+
+  if (input.skills.length > 0) {
+    systemText += "\n\nLoaded skills:\n" + JSON.stringify(serializeSkills(input.skills));
+  }
+
+  const messages: LlmMessage[] = [...conversationMessages(input.messages)];
+
+  if (options?.toolResults?.length) {
     messages.push({
       role: "user",
-      content: `Previous tool results:\n${JSON.stringify(input.toolResults, null, 2)}`,
+      content: `Previous tool results:\n${JSON.stringify(options.toolResults, null, 2)}`,
     });
   }
 
-  messages.push(phasePromptMessage);
+  const tools = input.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }));
 
   return {
-    phasePromptMessage,
+    model: options?.model ?? { provider: "", name: "" },
+    system: systemText,
     messages,
+    tools: tools.length > 0 ? tools : undefined,
   };
 }
 
-export function buildMessages(input: {
-  context: PhaseInput;
-  tools?: PromptTool[];
-  toolResults?: ToolResult[];
-  phasePromptBuilder: PhasePromptBuilder;
-}): PromptMessage[] {
-  return buildPrompt(input).messages;
-}
+// ---------------------------------------------------------------------------
+// buildPhaseContent — assembles phase-specific content from sections
+// ---------------------------------------------------------------------------
 
-export function createPromptBuilder(phasePromptBuilders: PhasePromptBuilder[]): {
-  buildPrompt(input: {
-    context: PhaseInput;
-    tools?: PromptTool[];
-    toolResults?: ToolResult[];
-  }): Prompt;
-  buildMessages(input: {
-    context: PhaseInput;
-    tools?: PromptTool[];
-    toolResults?: ToolResult[];
-  }): PromptMessage[];
-} {
-  const buildersByPhase = new Map<string, PhasePromptBuilder>();
-  for (const builder of phasePromptBuilders) {
-    if (buildersByPhase.has(builder.phase)) {
-      throw new Error(`Duplicate prompt builder registered for phase "${builder.phase}".`);
+export function buildPhaseContent(input: PhaseInput, sections: PhaseSection[]): string {
+  const parts: string[] = [];
+
+  for (const section of sections) {
+    switch (section.type) {
+      case "instructions":
+        parts.push(...section.lines);
+        break;
+      case "userRequest":
+        parts.push("Current user request:", JSON.stringify(latestUserInput(input)));
+        break;
+      case "task": {
+        const task = (input.yield as Record<string, unknown>)?.task;
+        parts.push("Task:", JSON.stringify(task ?? null, null, 2));
+        break;
+      }
+      case "taskOutput": {
+        const yield_ = input.yield as Record<string, unknown> | undefined;
+        const toolResults = (yield_?.toolResults as unknown[]) ?? [];
+        parts.push("Task output:", JSON.stringify({ kind: "tools", toolResults }, null, 2));
+        break;
+      }
+      case "tools":
+        parts.push(
+          "Available tools with name, description, and parameters:",
+          JSON.stringify(serializeTools(input.tools), null, 2),
+        );
+        break;
+      case "skills":
+        parts.push("Skills:", JSON.stringify(serializeSkills(input.skills), null, 2));
+        break;
+      case "custom":
+        parts.push(section.text);
+        break;
     }
-    buildersByPhase.set(builder.phase, builder);
+    parts.push("");
   }
 
-  function resolvePhasePromptBuilder(phase: string): PhasePromptBuilder {
-    const builder = buildersByPhase.get(phase);
-    if (!builder) {
-      throw new Error(`No prompt builder registered for phase "${phase}".`);
-    }
-
-    return builder;
-  }
-
-  return {
-    buildPrompt(input) {
-      return buildPrompt({
-        ...input,
-        phasePromptBuilder: resolvePhasePromptBuilder(input.context.phase),
-      });
-    },
-
-    buildMessages(input) {
-      return buildMessages({
-        ...input,
-        phasePromptBuilder: resolvePhasePromptBuilder(input.context.phase),
-      });
-    },
-  };
+  return parts.join("\n").trimEnd();
 }

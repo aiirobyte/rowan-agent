@@ -31,7 +31,6 @@ import {
   type PhaseOutput,
 } from "./loop/phases";
 import { createBuiltinPhaseRegistry } from "./extensions";
-import { buildPrompt as buildHarnessPrompt } from "./harness/context/prompt-builder";
 import { executeRuntimeToolCall } from "./harness/tools";
 import { LoopGuard } from "./loop/errors";
 import { createOutcome } from "./loop/outcomes";
@@ -766,34 +765,20 @@ function createPhaseContext(
         if (!handler?.buildPrompt) {
           throw new Error(`Phase "${phase.id}" does not have a buildPrompt method.`);
         }
-        const prompt = buildHarnessPrompt({
-          context: input.input,
-          tools: loopContext.tools,
-          toolResults: input.toolResults,
-          phasePromptBuilder: {
-            phase: phase.id,
-            build({ input: phaseInput, tools }) {
-              return handler.buildPrompt!({
-                ...phaseInput,
-                tools: tools as PhaseInput["tools"],
-              });
-            },
-          },
-        });
-        const [systemMsg, ...rest] = prompt.messages;
+        const request = handler.buildPrompt(input.input, { toolResults: input.toolResults });
+        request.model = loopContext.config.model;
+        // Ensure tools are always available in the request when configured
+        if (!request.tools && loopContext.tools.length > 0) {
+          request.tools = loopContext.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters,
+          }));
+        }
         return collectStructured({
           context: loopContext,
           message: messageManager,
-          events: loopContext.config.stream({
-            model: loopContext.config.model,
-            system: systemMsg?.role === "system" ? systemMsg.content : undefined,
-            messages: rest.filter((m) => m.role !== "system") as Array<{ role: "user" | "assistant"; content: string }>,
-            tools: loopContext.tools.map((t) => ({
-              name: t.name,
-              description: t.description,
-              parameters: t.parameters,
-            })),
-          }, { signal: loopContext.signal }),
+          events: loopContext.config.stream(request, { signal: loopContext.signal }),
           metadataPhase: input.phase,
           scope: input.scope,
         });

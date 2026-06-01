@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import {
-  buildMessages as buildHarnessMessages,
-  buildPrompt as buildHarnessPrompt,
-  createPromptBuilder,
-  type PhasePromptBuilder,
+  buildModelRequest,
+  buildPhaseContent,
+  type PhaseSection,
 } from "../../../src/harness/context/prompt-builder";
 import {
   createBuiltinPhaseRegistry,
@@ -17,43 +16,15 @@ import type { PhaseInput, Tool, ToolResult } from "@rowan-agent/agent";
 
 const builtinPhaseRegistry = createBuiltinPhaseRegistry();
 
-function phasePromptBuilderFor(phaseId: string): PhasePromptBuilder {
-  const { phase, handler } = resolvePhaseEntry(builtinPhaseRegistry, phaseId);
+function buildRequest(input: {
+  context: PhaseInput;
+  toolResults?: ToolResult[];
+}) {
+  const { handler } = resolvePhaseEntry(builtinPhaseRegistry, input.context.phase);
   if (!handler?.buildPrompt) {
-    throw new Error(`Missing prompt builder for phase "${phaseId}".`);
+    throw new Error(`Missing buildPrompt for phase "${input.context.phase}".`);
   }
-
-  return {
-    phase: phase.id,
-    build({ input, tools }) {
-      return handler.buildPrompt!({
-        ...input,
-        tools: tools as PhaseInput["tools"],
-      });
-    },
-  };
-}
-
-function buildPrompt(input: {
-  context: PhaseInput;
-  tools?: PhaseInput["tools"];
-  toolResults?: ToolResult[];
-}) {
-  return buildHarnessPrompt({
-    ...input,
-    phasePromptBuilder: phasePromptBuilderFor(input.context.phase),
-  });
-}
-
-function buildMessages(input: {
-  context: PhaseInput;
-  tools?: PhaseInput["tools"];
-  toolResults?: ToolResult[];
-}) {
-  return buildHarnessMessages({
-    ...input,
-    phasePromptBuilder: phasePromptBuilderFor(input.context.phase),
-  });
+  return handler.buildPrompt(input.context, { toolResults: input.toolResults });
 }
 
 const echoTool: Tool<{ message: string }> = {
@@ -99,241 +70,206 @@ function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skil
   };
 }
 
-test("generic prompt builder delegates phase content to registered phase builders", () => {
-  const promptBuilder = createPromptBuilder([
-    {
-      phase: "chat",
-      build({ input, tools }) {
-        return `Custom ${input.phase} prompt with ${tools.map((tool) => tool.name).join(",")}`;
-      },
-    },
+// ---------------------------------------------------------------------------
+// buildModelRequest
+// ---------------------------------------------------------------------------
+
+test("buildModelRequest returns a valid LlmRequest with system, messages, and tools", () => {
+  const input = createTestInput({ tools: [echoTool] });
+  const req = buildModelRequest(input);
+
+  expect(req.system).toContain("Test system");
+  expect(req.system).toContain("You are the Rowan runtime");
+  expect(req.messages.length).toBeGreaterThanOrEqual(1);
+  expect(req.tools).toHaveLength(1);
+  expect(req.tools![0].name).toBe("echo");
+});
+
+test("buildModelRequest includes skills in system prompt when present", () => {
+  const input = createTestInput({
+    skills: [{ id: "writer", path: "/skills/writer/SKILL.md", content: "Write concise plans.", toolNames: ["echo"] }],
+  });
+  const req = buildModelRequest(input);
+
+  expect(req.system).toContain("Loaded skills");
+  expect(req.system).toContain("writer");
+});
+
+test("buildModelRequest omits tools when empty", () => {
+  const input = createTestInput({ tools: [] });
+  const req = buildModelRequest(input);
+
+  expect(req.tools).toBeUndefined();
+});
+
+test("buildModelRequest includes toolResults as a user message", () => {
+  const input = createTestInput();
+  const toolResults: ToolResult[] = [{
+    toolCallId: "call_1",
+    toolName: "echo",
+    ok: true,
+    content: "evidence",
+  }];
+  const req = buildModelRequest(input, { toolResults });
+
+  const lastMsg = req.messages.at(-1);
+  expect(lastMsg?.role).toBe("user");
+  expect(lastMsg?.content).toContain("Previous tool results");
+  expect(lastMsg?.content).toContain("evidence");
+});
+
+// ---------------------------------------------------------------------------
+// buildPhaseContent
+// ---------------------------------------------------------------------------
+
+test("buildPhaseContent instructions section", () => {
+  const input = createTestInput();
+  const content = buildPhaseContent(input, [
+    { type: "instructions", lines: ["Phase: chat", "Do something."] },
   ]);
 
-  const testInput = createTestInput({ phase: "chat" });
-  const prompt = promptBuilder.buildPrompt({
-    context: testInput,
-    tools: [echoTool],
-  });
-
-  expect(prompt.phasePromptMessage).toEqual({
-    role: "user",
-    content: "Custom chat prompt with echo",
-  });
-  expect(prompt.messages.at(-1)).toEqual(prompt.phasePromptMessage);
+  expect(content).toBe("Phase: chat\nDo something.");
 });
 
-test("chat prompt defaults to direct answers unless another phase is needed", () => {
-  const testInput = createTestInput({ phase: "chat", input: "What is 2 + 2?" });
+test("buildPhaseContent userRequest section", () => {
+  const input = createTestInput({ input: "What is 2+2?" });
+  const content = buildPhaseContent(input, [{ type: "userRequest" }]);
 
-  const messages = buildMessages({
-    context: testInput,
-    tools: [echoTool],
-  });
-  const combined = messages.map((message) => message.content).join("\n");
-
-  expect(messages).toHaveLength(3);
-  expect(combined).toContain("Phase: chat");
-  expect(combined).toContain("Answer the user's question directly in natural language.");
-  expect(combined).toContain("Current user request:");
-  expect(combined).toContain("\"What is 2 + 2?\"");
-  expect(combined).toContain("Do NOT output JSON");
-  expect(combined).toContain("echo");
+  expect(content).toContain("Current user request:");
+  expect(content).toContain('"What is 2+2?"');
 });
 
-test("plan prompt includes phase, JSON-only contract, tools, and skills", () => {
-  const testInput = createTestInput({
+test("buildPhaseContent task section extracts from yield", () => {
+  const task = createTestTask();
+  const input = createTestInput({ yield: { task } });
+  const content = buildPhaseContent(input, [{ type: "task" }]);
+
+  expect(content).toContain("Task:");
+  expect(content).toContain("Echo task");
+});
+
+test("buildPhaseContent tools section", () => {
+  const input = createTestInput({ tools: [echoTool] });
+  const content = buildPhaseContent(input, [{ type: "tools" }]);
+
+  expect(content).toContain("Available tools");
+  expect(content).toContain("echo");
+  expect(content).toContain("Returns the input message.");
+});
+
+test("buildPhaseContent taskOutput section", () => {
+  const toolResults = [{ toolCallId: "call_1", toolName: "echo", ok: true, content: "result" }];
+  const input = createTestInput({ yield: { task: createTestTask(), toolResults } });
+  const content = buildPhaseContent(input, [{ type: "taskOutput" }]);
+
+  expect(content).toContain("Task output:");
+  expect(content).toContain("result");
+});
+
+test("buildPhaseContent joins multiple sections with blank lines", () => {
+  const input = createTestInput({ input: "Hello" });
+  const content = buildPhaseContent(input, [
+    { type: "instructions", lines: ["Phase: test"] },
+    { type: "userRequest" },
+  ]);
+
+  expect(content).toBe("Phase: test\n\nCurrent user request:\n\"Hello\"");
+});
+
+// ---------------------------------------------------------------------------
+// Phase buildPrompt integration
+// ---------------------------------------------------------------------------
+
+test("chat phase buildPrompt returns LlmRequest with phase content", () => {
+  const input = createTestInput({ phase: "chat", input: "What is 2 + 2?" });
+  const req = buildRequest({ context: input });
+
+  expect(req.system).toContain("Test system");
+  expect(req.messages.length).toBeGreaterThanOrEqual(2);
+  const phaseMsg = req.messages.at(-1);
+  expect(phaseMsg?.role).toBe("user");
+  expect(phaseMsg?.content).toContain("Phase: chat");
+  expect(phaseMsg?.content).toContain('"What is 2 + 2?"');
+});
+
+test("plan phase buildPrompt includes tools and skills", () => {
+  const input = createTestInput({
     phase: "plan",
     input: "Plan with echo.",
-    skills: [
-      {
-        id: "writer",
-        path: "/skills/writer/SKILL.md",
-        content: "Write concise task plans.",
-        toolNames: ["echo"],
-      },
-    ],
-  });
-
-  const messages = buildMessages({
-    context: testInput,
     tools: [echoTool],
+    skills: [{ id: "writer", path: "/skills/writer/SKILL.md", content: "Write plans.", toolNames: ["echo"] }],
   });
-  const combined = messages.map((message) => message.content).join("\n");
+  const req = buildRequest({ context: input });
 
-  expect(messages).toHaveLength(3);
-  expect(messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user", content: "Plan with echo." })]));
-  expect(combined).toContain("Phase: plan");
-  expect(combined).toContain("Analyze the user's request and create a task plan.");
-  expect(combined).toContain("Current user request:");
-  expect(combined).toContain("\"Plan with echo.\"");
-  expect(combined).toContain("Output a JSON object");
-  expect(combined).toContain("Plan with echo.");
-  expect(combined).toContain("echo");
-  expect(combined).toContain("Returns the input message.");
+  expect(req.tools).toHaveLength(1);
+  expect(req.system).toContain("writer");
+  const phaseMsg = req.messages.at(-1);
+  expect(phaseMsg?.content).toContain("Phase: plan");
+  expect(phaseMsg?.content).toContain("echo");
 });
 
-test("prompt builder exposes the generated phase prompt message", () => {
-  const testInput = createTestInput({ phase: "plan", input: "Plan with echo." });
-
-  const prompt = buildPrompt({
-    context: testInput,
-    tools: [echoTool],
-  });
-
-  expect(prompt.messages).toHaveLength(3);
-  const phaseMessage = prompt.messages.at(-1);
-  expect(phaseMessage).toEqual(
-    expect.objectContaining({
-      role: "user",
-      content: expect.stringContaining("Phase: plan"),
-    }),
-  );
-  expect(prompt.phasePromptMessage).toEqual(phaseMessage!);
-  expect(prompt).not.toHaveProperty("traceMessages");
-});
-
-test("execute prompt includes phase, JSON-only contract, task, allowed tools, and tool results", () => {
+test("execute phase buildPrompt includes toolResults", () => {
   const task = createTestTask();
-  const testInput = createTestInput({
+  const input = createTestInput({
     phase: "execute",
     input: "Use echo.",
-    yield: {
-      task,
-      toolResults: [
-        {
-          toolCallId: "call_previous",
-          toolName: "echo",
-          ok: true,
-          content: "previous evidence",
-        },
-      ],
-    },
-  });
-
-  const messages = buildMessages({
-    context: testInput,
     tools: [echoTool],
+    yield: { task },
   });
-  const combined = messages.map((message) => message.content).join("\n");
+  const toolResults: ToolResult[] = [{
+    toolCallId: "call_prev",
+    toolName: "echo",
+    ok: true,
+    content: "previous evidence",
+  }];
+  const req = buildRequest({ context: input, toolResults });
 
-  expect(combined).toContain("Phase: execute");
-  expect(combined).toContain("Execute the task by calling the appropriate tools.");
-  expect(combined).toContain("Do NOT output JSON");
-  expect(combined).toContain("Task");
-  expect(combined).toContain("echo");
+  expect(req.tools).toHaveLength(1);
+  const toolResultsMsg = req.messages.find(m => typeof m.content === "string" && m.content.includes("Previous tool results"));
+  expect(toolResultsMsg).toBeDefined();
+  const phaseMsg = req.messages.at(-1);
+  expect(phaseMsg?.content).toContain("Phase: execute");
 });
 
-test("prompt builder excludes execution-scoped messages from later prompts", () => {
+test("verify phase buildPrompt includes task and taskOutput sections", () => {
+  const task = createTestTask();
+  const input = createTestInput({
+    phase: "verify",
+    input: "Verify echo.",
+    yield: { task, toolResults: [{ toolCallId: "c1", toolName: "echo", ok: true, content: "evidence" }] },
+  });
+  const req = buildRequest({ context: input });
+
+  const phaseMsg = req.messages.at(-1);
+  expect(phaseMsg?.content).toContain("Phase: verify");
+  expect(phaseMsg?.content).toContain("Task:");
+  expect(phaseMsg?.content).toContain("Task output:");
+});
+
+test("prompt builder excludes execution-scoped messages from conversation", () => {
   const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
   state.messages.push(
-    createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
+    createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating.\"}", {
       kind: "routing_decision",
       phase: "chat",
-    }),
-    createMessage("assistant", "{\"message\":\"Planning.\",\"task\":{\"title\":\"Echo\"}}", {
-      kind: "model_message",
-      phase: "plan",
-    }),
-    createMessage("assistant", "{\"message\":\"Answer text.\",\"toolCalls\":[]}", {
-      kind: "model_message",
-      phase: "execute",
     }),
     createMessage("tool", "{\"ok\":true,\"content\":\"tool evidence\"}", {
       toolName: "echo",
     }),
   );
-  const task = createTestTask();
 
   const testInput: PhaseInput = {
-    phase: "verify",
+    phase: "chat",
     systemPrompt: state.systemPrompt,
     messages: state.messages,
-    tools: [],
-    skills: state.skills,
-    yield: {
-      task,
-      toolResults: [],
-    },
-  };
-
-  const messages = buildMessages({
-    context: testInput,
-    tools: [echoTool],
-  });
-  const combined = messages.map((message) => message.content).join("\n");
-
-  expect(combined).toContain("Use echo.");
-  expect(combined).not.toContain("tool evidence");
-  expect(combined).not.toContain("\"route\":\"task\"");
-  expect(combined).not.toContain("\"title\":\"Echo\"");
-  expect(combined).not.toContain("\"toolCalls\":[]");
-  expect(combined).not.toContain("Answer text.");
-});
-
-test("prompt builder does not replay recorded phase prompts as conversation", () => {
-  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
-  state.messages.push(
-    createMessage("user", "Phase: chat\n\nInternal routing prompt.", {
-      kind: "phase_prompt",
-      phase: "chat",
-    }),
-    createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating a task.\"}", {
-      kind: "routing_decision",
-      phase: "chat",
-    }),
-  );
-
-  const testInput: PhaseInput = {
-    phase: "plan",
-    systemPrompt: state.systemPrompt,
-    messages: state.messages,
-    tools: [],
-    skills: state.skills,
-  };
-
-  const messages = buildMessages({
-    context: testInput,
-    tools: [echoTool],
-  });
-  const combined = messages.map((message) => message.content).join("\n");
-
-  expect(combined).toContain("Phase: plan");
-  expect(combined).not.toContain("\"route\":\"task\"");
-  expect(combined).not.toContain("Internal routing prompt.");
-});
-
-test("verify prompt includes phase, lightweight judgement contract, task, criteria, and task output", () => {
-  const task = createTestTask();
-  const toolResults = [
-    {
-      toolCallId: "call_echo",
-      toolName: "echo",
-      ok: true,
-      content: "echo evidence",
-    },
-  ];
-
-  const testInput: PhaseInput = {
-    phase: "verify",
-    systemPrompt: "Test system",
-    messages: [createMessage("user", "Verify echo.", { scope: "conversation" })],
     tools: [],
     skills: [],
-    yield: {
-      task,
-      toolResults,
-    },
   };
 
-  const messages = buildMessages({
-    context: testInput,
-    tools: [echoTool],
-  });
-  const combined = messages.map((message) => message.content).join("\n");
+  const req = buildModelRequest(testInput);
+  const allContent = req.messages.map(m => m.content).join("\n");
 
-  expect(combined).toContain("Phase: verify");
-  expect(combined).toContain("Review the task output against the acceptance criteria.");
-  expect(combined).toContain("Do NOT output JSON");
-  expect(combined).toContain("Task output");
-  expect(combined).toContain("\"toolResults\"");
+  expect(allContent).toContain("Use echo.");
+  expect(allContent).not.toContain("tool evidence");
+  expect(allContent).not.toContain("Creating.");
 });

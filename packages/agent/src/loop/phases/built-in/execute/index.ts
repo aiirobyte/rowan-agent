@@ -65,22 +65,24 @@ export const executePhaseExtension = defineExtension((rowan) => {
       };
     },
 
-    buildPrompt(input) {
-      const task = (input.yield as Record<string, unknown> | undefined)?.task;
-      return [
-        "Phase: execute",
-        "",
-        "Execute the task by calling the appropriate tools.",
-        "If more tool calls are needed, continue calling tools.",
-        "If execution is complete, respond with a brief summary.",
-        "Do NOT output JSON. Use the provided tools directly.",
-        "",
-        "Task:",
-        rowan.format.json(task ?? null),
-        "",
-        "Available tools with name, description, and parameters:",
-        rowan.format.json(rowan.format.tools(input.tools)),
-      ].join("\n");
+    buildPrompt(input, options) {
+      const req = rowan.prompt.buildModelRequest(input, { toolResults: options?.toolResults });
+      req.messages.push({
+        role: "user",
+        content: rowan.prompt.buildPhaseContent(input, [
+          { type: "instructions", lines: [
+            "Phase: execute",
+            "",
+            "Execute the task by calling the appropriate tools.",
+            "If more tool calls are needed, continue calling tools.",
+            "If execution is complete, respond with a brief summary.",
+            "Do NOT output JSON. Use the provided tools directly.",
+          ]},
+          { type: "task" },
+          { type: "tools" },
+        ]),
+      });
+      return req;
     },
 
     finalize(_context, _output) {

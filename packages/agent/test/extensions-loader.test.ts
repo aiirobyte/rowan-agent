@@ -57,11 +57,13 @@ test("loadExtensionFromFactory exposes host utilities on the Rowan API", async (
         };
       },
       buildPrompt(input) {
-        return [
-          rowan.input.latestUserMessage(input),
-          rowan.format.json(rowan.format.tools(input.tools)),
-          rowan.format.json(rowan.format.skills(input.skills)),
-        ].join("\n");
+        return {
+          model: { provider: "test", name: "test" },
+          system: input.systemPrompt,
+          messages: [
+            { role: "user" as const, content: rowan.input.latestUserMessage(input) },
+          ],
+        };
       },
       createOutcome(output) {
         return { id: rowan.id.create("out"), passed: true, message: output.message };
@@ -73,7 +75,7 @@ test("loadExtensionFromFactory exposes host utilities on the Rowan API", async (
   }, testRuntime, process.cwd(), "<test:utilities>");
 
   const handler = extension.phases.get("utilities")?.handler;
-  const prompt = handler?.buildPrompt?.({
+  const request = handler?.buildPrompt?.({
     phase: "utilities",
     systemPrompt: "system",
     messages: [createMessage("user", "hello from user", { scope: "conversation" })],
@@ -94,9 +96,7 @@ test("loadExtensionFromFactory exposes host utilities on the Rowan API", async (
   });
   const outcome = handler?.createOutcome?.({ message: "ok", route: "stop" });
 
-  expect(prompt).toContain("hello from user");
-  expect(prompt).toContain("\"name\": \"echo\"");
-  expect(prompt).toContain("\"id\": \"writer\"");
+  expect(request?.messages.some(m => m.content === "hello from user")).toBe(true);
   expect(outcome?.id).toEqual(expect.stringMatching(/^out_/));
 });
 

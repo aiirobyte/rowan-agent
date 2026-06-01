@@ -8,7 +8,7 @@ import type {
 } from "../../types";
 import type { ToolCall, ToolResult } from "../../types";
 import { createId } from "../../utils";
-import type { ContentBlock } from "@rowan-agent/models";
+import type { ContentBlock, LlmRequest } from "@rowan-agent/models";
 import type { PhaseOutput } from "../../protocol/context";
 import type { AgentRunState } from "../types";
 
@@ -43,7 +43,7 @@ export type PhaseDefinition = PhaseManifest & {
 export type PhaseHandler = {
   prepare?(context: PhaseContext): void | Promise<void>;
   buildInput(context: PhaseContext, yield_?: unknown): PhaseInput | Promise<PhaseInput>;
-  buildPrompt?(input: PhaseInput): string;
+  buildPrompt?(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
   finalize?(context: PhaseContext, output: PhaseOutput): void | Promise<void>;
   createOutcome?(output: PhaseOutput): Outcome;
 };

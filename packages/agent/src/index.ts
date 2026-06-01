@@ -142,16 +142,16 @@ export {
 
 // ── prompt / context ───────────────────────────────────────────
 export {
-  createPromptBuilder,
   buildSystemPrompt,
+  buildModelRequest,
+  buildPhaseContent,
+  conversationMessages,
+  latestUserInput,
   serializeTools,
   serializeSkills,
-  type Prompt,
-  type PromptMessage,
   type PromptTool,
   type SerializableTool,
-  type PhasePromptBuildInput,
-  type PhasePromptBuilder,
+  type PhaseSection,
   type SystemPromptOptions,
 } from "./harness/context";
 

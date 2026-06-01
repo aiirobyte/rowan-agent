@@ -60,19 +60,21 @@ export const chatPhaseExtension = defineExtension((rowan) => {
     },
 
     buildPrompt(input) {
-      return [
-        "Phase: chat",
-        "",
-        "Answer the user's question directly in natural language.",
-        "If the request requires tool access, call the available tools.",
-        "Do NOT output JSON. Respond in the user's language.",
-        "",
-        "Current user request:",
-        rowan.format.json(rowan.input.latestUserMessage(input)),
-        "",
-        "Available tools with name, description, and parameters:",
-        rowan.format.json(rowan.format.tools(input.tools)),
-      ].join("\n");
+      const req = rowan.prompt.buildModelRequest(input);
+      req.messages.push({
+        role: "user",
+        content: rowan.prompt.buildPhaseContent(input, [
+          { type: "instructions", lines: [
+            "Phase: chat",
+            "",
+            "Answer the user's question directly in natural language.",
+            "If the request requires tool access, call the available tools.",
+            "Do NOT output JSON. Respond in the user's language.",
+          ]},
+          { type: "userRequest" },
+        ]),
+      });
+      return req;
     },
 
     createOutcome(output) {

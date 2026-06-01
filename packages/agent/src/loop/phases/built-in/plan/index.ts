@@ -75,21 +75,24 @@ export const planPhaseExtension = defineExtension((rowan) => {
     },
 
     buildPrompt(input) {
-      return [
-        "Phase: plan",
-        "",
-        "Analyze the user's request and create a task plan.",
-        'Output a JSON object: { "task": { ... }, "message": "explanation" }',
-        "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
-        'Prefer setting task.status to "pending" and task.attempts to 0.',
-        "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
-        "",
-        "Current user request:",
-        rowan.format.json(rowan.input.latestUserMessage(input)),
-        "",
-        "Available tools with name, description, and parameters:",
-        rowan.format.json(rowan.format.tools(input.tools)),
-      ].join("\n");
+      const req = rowan.prompt.buildModelRequest(input);
+      req.messages.push({
+        role: "user",
+        content: rowan.prompt.buildPhaseContent(input, [
+          { type: "instructions", lines: [
+            "Phase: plan",
+            "",
+            "Analyze the user's request and create a task plan.",
+            'Output a JSON object: { "task": { ... }, "message": "explanation" }',
+            "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
+            'Prefer setting task.status to "pending" and task.attempts to 0.',
+            "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
+          ]},
+          { type: "userRequest" },
+          { type: "tools" },
+        ]),
+      });
+      return req;
     },
   });
 });
