@@ -1,5 +1,5 @@
 import Type from "typebox";
-import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth, BeforePhaseHook, AfterPhaseHook } from "./loop/types";
+import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth, BeforePhaseHook, AfterPhaseHook, BeforePromptHook } from "./loop/types";
 import type { PhaseRegistry, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
@@ -130,6 +130,7 @@ type AgentRunCommonConfig = {
   afterToolCall?: AfterToolCall;
   beforePhase?: BeforePhaseHook;
   afterPhase?: AfterPhaseHook;
+  beforePrompt?: BeforePromptHook;
   emit?: AgentEventListener;
 };
 

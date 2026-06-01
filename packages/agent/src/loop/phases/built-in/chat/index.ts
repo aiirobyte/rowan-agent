@@ -12,10 +12,7 @@ export const chatPhaseExtension = defineExtension((rowan) => {
     ...manifestObject,
 
     async run(context, input) {
-      const collected = await context.turn(() => context.model.collect({
-        phase: "chat",
-        input,
-      }));
+      const collected = await context.turn(() => context.model.collect({ input }));
 
       // Check if collection was stopped due to abort
       if (collected.stopReason === "aborted") {
@@ -47,16 +44,6 @@ export const chatPhaseExtension = defineExtension((rowan) => {
       }
 
       return { message, route };
-    },
-
-    buildInput(context) {
-      return {
-        phase: "chat",
-        systemPrompt: context.state.agentState.systemPrompt,
-        messages: context.messages.visible(),
-        tools: [],
-        skills: context.skills,
-      };
     },
 
     buildPrompt(input) {

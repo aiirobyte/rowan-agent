@@ -132,7 +132,6 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
       assertActive();
       const handler: ExtensionPhaseHandler = {
         prepare: registration.prepare,
-        buildInput: registration.buildInput,
         buildPrompt: registration.buildPrompt,
         finalize: registration.finalize,
         createOutcome: registration.createOutcome,
@@ -199,6 +198,7 @@ export function createExtensionAPI(extension: Extension, runtime: ExtensionRunti
     registerPhase(registration) { runtime.registerPhase(extension, registration); },
     beforePhase(hook) { runtime.addEventHandler(extension, "before_phase", hook as ExtensionHandler); },
     afterPhase(hook) { runtime.addEventHandler(extension, "after_phase", hook as ExtensionHandler); },
+    beforePrompt(hook) { runtime.addEventHandler(extension, "before_prompt", hook as ExtensionHandler); },
     beforeToolCall(hook) { runtime.addEventHandler(extension, "before_tool_call", hook as ExtensionHandler); },
     afterToolCall(hook) { runtime.addEventHandler(extension, "after_tool_call", hook as ExtensionHandler); },
     exec(command, args, options) { return runtime.exec(command, args, options); },
@@ -321,6 +321,31 @@ export class ExtensionRunner {
       }
     }
     return result;
+  }
+
+  /**
+   * Invoke before_prompt handlers. Each handler can mutate the PhaseInput in place.
+   * This runs before buildPrompt, allowing extensions to
+   * transform messages, tools, systemPrompt, etc.
+   */
+  async emitBeforePrompt(phaseId: string, input: PhaseInput): Promise<PhaseInput> {
+    for (const extension of this.extensions) {
+      const handlers = extension.eventHandlers.get("before_prompt");
+      if (!handlers?.length) continue;
+      for (const handler of handlers) {
+        try {
+          const ctx = { phaseId, input };
+          await handler(ctx);
+          // Handler may replace input via mutation
+          if (ctx.input !== input) {
+            input = ctx.input;
+          }
+        } catch (error) {
+          console.error(`[extension] before_prompt handler error in ${extension.path}:`, error);
+        }
+      }
+    }
+    return input;
   }
 
   /**

@@ -42,7 +42,6 @@ export type PhaseDefinition = PhaseManifest & {
 
 export type PhaseHandler = {
   prepare?(context: PhaseContext): void | Promise<void>;
-  buildInput(context: PhaseContext, yield_?: unknown): PhaseInput | Promise<PhaseInput>;
   buildPrompt?(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
   finalize?(context: PhaseContext, output: PhaseOutput): void | Promise<void>;
   createOutcome?(output: PhaseOutput): Outcome;
@@ -56,7 +55,6 @@ export type ModelCollectedOutput = {
 };
 
 export type ModelCollectInput = {
-  phase: string;
   input: PhaseInput;
   toolResults?: ToolResult[];
   scope?: "conversation" | "execution";

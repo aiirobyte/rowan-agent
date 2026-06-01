@@ -16,7 +16,6 @@ export const executePhaseExtension = defineExtension((rowan) => {
       let collected;
       try {
         collected = await context.turn(() => context.model.collect({
-          phase: "execute",
           input,
           toolResults: toolResults.length > 0 ? toolResults : undefined,
         }));
@@ -52,17 +51,6 @@ export const executePhaseExtension = defineExtension((rowan) => {
 
     prepare(context) {
       context.incrementAttempt();
-    },
-
-    buildInput(context, yield_) {
-      return {
-        phase: "execute",
-        systemPrompt: context.state.agentState.systemPrompt,
-        messages: context.messages.visible(),
-        tools: [],
-        skills: context.skills,
-        yield: yield_,
-      };
     },
 
     buildPrompt(input, options) {

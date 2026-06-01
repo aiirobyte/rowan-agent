@@ -36,10 +36,7 @@ export const planPhaseExtension = defineExtension((rowan) => {
     ...manifestJson,
 
     async run(context, input) {
-      const collected = await context.turn(() => context.model.collect({
-        phase: "plan",
-        input,
-      }));
+      const collected = await context.turn(() => context.model.collect({ input }));
 
       // Plan phase still uses JSON for structured task data
       let raw: Record<string, unknown> | undefined;
@@ -61,16 +58,6 @@ export const planPhaseExtension = defineExtension((rowan) => {
         message,
         route: "execute",
         yield: { task },
-      };
-    },
-
-    buildInput(context) {
-      return {
-        phase: "plan",
-        systemPrompt: context.state.agentState.systemPrompt,
-        messages: context.messages.visible(),
-        tools: [],
-        skills: context.skills,
       };
     },
 

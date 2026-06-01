@@ -175,6 +175,16 @@ export class Agent {
     return runner.emitAfterPhase(phaseId, output);
   }
 
+  /**
+   * Hook for before_prompt — called before buildPrompt, allowing extensions to transform PhaseInput.
+   * Extensions can transform the PhaseInput (messages, tools, systemPrompt, etc.).
+   */
+  private async handleBeforePrompt(phaseId: string, input: PhaseInput): Promise<PhaseInput> {
+    const runner = this.options.extensionRunnerRef?.current;
+    if (!runner) return input;
+    return runner.emitBeforePrompt(phaseId, input);
+  }
+
   private handleRunFailure(error: unknown, aborted: boolean): void {
     const message = error instanceof Error ? error.message : "Agent run failed.";
     this.state.error = message;
@@ -276,6 +286,7 @@ export class Agent {
         afterToolCall,
         beforePhase: (phaseId: string, input: PhaseInput) => this.handleBeforePhase(phaseId, input),
         afterPhase: (phaseId: string, output: PhaseOutput) => this.handleAfterPhase(phaseId, output),
+        beforePrompt: (phaseId: string, input: PhaseInput) => this.handleBeforePrompt(phaseId, input),
         phaseConfig,
         emit,
       });

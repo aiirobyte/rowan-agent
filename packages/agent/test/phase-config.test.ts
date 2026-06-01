@@ -150,15 +150,6 @@ test("ExtensionRunner creates phase registry with registered handlers", async ()
       id: "custom",
       name: "Custom",
       description: "Custom phase.",
-      buildInput(context) {
-        return {
-          phase: "custom",
-          systemPrompt: context.state.agentState.systemPrompt,
-          messages: context.messages.visible(),
-          tools: [],
-          skills: context.skills,
-        };
-      },
       buildPrompt() {
         return "custom prompt";
       },

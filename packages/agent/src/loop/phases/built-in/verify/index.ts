@@ -27,10 +27,7 @@ export const verifyPhaseExtension = defineExtension((rowan) => {
 
       let collected;
       try {
-        collected = await context.turn(() => context.model.collect({
-          phase: "verify",
-          input,
-        }));
+        collected = await context.turn(() => context.model.collect({ input }));
       } catch (error) {
         if (context.state.attempt >= maxAttempts) {
           return {
@@ -75,17 +72,6 @@ export const verifyPhaseExtension = defineExtension((rowan) => {
       }
 
       return { message, route, yield: { task, passed } };
-    },
-
-    buildInput(context, yield_) {
-      return {
-        phase: "verify",
-        systemPrompt: context.state.agentState.systemPrompt,
-        messages: context.messages.visible(),
-        tools: [],
-        skills: context.skills,
-        yield: yield_,
-      };
     },
 
     buildPrompt(input) {

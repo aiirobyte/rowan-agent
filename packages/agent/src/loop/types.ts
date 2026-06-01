@@ -28,6 +28,7 @@ export type RuntimeDepth = {
 
 export type BeforePhaseHook = (phaseId: string, input: PhaseInput) => Promise<BeforePhaseHookResult>;
 export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;
+export type BeforePromptHook = (phaseId: string, input: PhaseInput) => Promise<PhaseInput>;
 
 export type AgentLoopConfig = {
   kind?: "run" | "thread";
@@ -42,6 +43,7 @@ export type AgentLoopConfig = {
   afterToolCall?: AfterToolCall;
   beforePhase?: BeforePhaseHook;
   afterPhase?: AfterPhaseHook;
+  beforePrompt?: BeforePromptHook;
   runThread?: RunThread;
   emit?: AgentEventListener;
   phaseConfig?: PhaseRegistry;

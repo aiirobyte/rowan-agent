@@ -20,8 +20,25 @@ export type ExtensionHandler = (...args: unknown[]) => unknown | Promise<unknown
 
 export type ExtensionPhaseHandler = PhaseHandler;
 
-export type PhaseRegistration = PhaseManifest & ExtensionPhaseHandler & {
+/** Declarative prompt configuration — alternative to implementing buildPrompt. */
+export type PhasePromptConfig = {
+  /** Sections to include in the prompt. */
+  sections: PhaseSection[];
+  /** Whether to pass accumulated toolResults to buildModelRequest. */
+  withToolResults?: boolean;
+};
+
+export type PhaseRegistration = PhaseManifest & {
   run: PhaseRun;
+  /** Declarative prompt config — used by the default buildPrompt. Ignored if buildPrompt is provided. */
+  prompt?: PhasePromptConfig;
+  /** Custom prompt builder. If omitted, the framework uses `prompt` config or a default. */
+  buildPrompt?: PhaseHandler["buildPrompt"];
+  /** Lifecycle hooks. */
+  prepare?: PhaseHandler["prepare"];
+  finalize?: PhaseHandler["finalize"];
+  /** Outcome builder. Defaults to { id, passed: true, message }. */
+  createOutcome?: PhaseHandler["createOutcome"];
 };
 
 export type RegisteredPhase = {
@@ -163,6 +180,9 @@ export type AfterToolCallContext = {
 export type BeforePhaseHookContext = { phaseId: string; input?: PhaseInput };
 export type AfterPhaseHookContext = { phaseId: string; output: PhaseOutput };
 
+/** Context for before_prompt hooks — allows transforming PhaseInput before buildPrompt. */
+export type BeforePromptHookContext = { phaseId: string; input: PhaseInput };
+
 /** Aggregated result from all extension beforePhase hooks. */
 export type BeforePhaseHookResult = {
   abort?: Outcome;
@@ -185,6 +205,7 @@ export type ExtensionAPI = {
   registerPhase(registration: PhaseRegistration): void;
   beforePhase(hook: (ctx: BeforePhaseHookContext) => void | Promise<void>): void;
   afterPhase(hook: (ctx: AfterPhaseHookContext) => void | Promise<void>): void;
+  beforePrompt(hook: (ctx: BeforePromptHookContext) => void | Promise<void>): void;
 
   // Tool call interception
   beforeToolCall(hook: (ctx: BeforeToolCallContext) => void | Promise<void>): void;

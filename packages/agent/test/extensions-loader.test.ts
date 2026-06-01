@@ -18,15 +18,6 @@ test("loadExtensionFromFactory creates an Extension object with registered phase
       id: "factory",
       name: "Factory",
       description: "Factory registered phase.",
-      buildInput(context) {
-        return {
-          phase: "factory",
-          systemPrompt: context.state.agentState.systemPrompt,
-          messages: context.messages.visible(),
-          tools: [],
-          skills: context.skills,
-        };
-      },
       async run() {
         return { message: "Factory loaded.", route: "stop" };
       },
@@ -47,15 +38,6 @@ test("loadExtensionFromFactory exposes host utilities on the Rowan API", async (
       id: "utilities",
       name: "Utilities",
       description: "Uses host utility helpers.",
-      buildInput(context) {
-        return {
-          phase: "utilities",
-          systemPrompt: context.state.agentState.systemPrompt,
-          messages: context.messages.visible(),
-          tools: [],
-          skills: context.skills,
-        };
-      },
       buildPrompt(input) {
         return {
           model: { provider: "test", name: "test" },
@@ -116,15 +98,6 @@ test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", as
           id: "echo",
           name: "Echo",
           description: "Echo test phase.",
-          buildInput(context) {
-            return {
-              phase: "echo",
-              systemPrompt: context.state.agentState.systemPrompt,
-              messages: context.messages.visible(),
-              tools: [],
-              skills: context.skills,
-            };
-          },
           createOutcome(output) {
             return { id: "out_test", passed: true, message: output.message };
           },

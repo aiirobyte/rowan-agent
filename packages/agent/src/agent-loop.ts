@@ -403,17 +403,22 @@ async function runLoop(
 
     if (handler?.prepare) handler.prepare(context);
 
-    // Build unified input with yield from previous phase
-    let phaseInput = handler
-      ? await handler.buildInput(context, lastYield)
-      : undefined;
+    // Build unified input — framework handles data preparation
+    let phaseInput: PhaseInput = {
+      phase: currentPhaseId,
+      systemPrompt: state.agentState.systemPrompt,
+      messages: context.messages.visible(),
+      tools: [],
+      skills: context.skills,
+      yield: lastYield,
+    };
 
     // Emit phase_start
     emit(state, config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
 
     // beforePhase hook — extension hooks first, then runtime hooks
     if (config.beforePhase) {
-      const extBefore = await config.beforePhase(currentPhaseId, phaseInput!);
+      const extBefore = await config.beforePhase(currentPhaseId, phaseInput);
       if (extBefore.abort) {
         emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         return completeRun(config, state, extBefore.abort);
@@ -465,7 +470,7 @@ async function runLoop(
     }
 
     // Run phase
-    let output = await phase.run(context, phaseInput!);
+    let output = await phase.run(context, phaseInput);
 
     // afterPhase hook — extension hooks first, then runtime hooks
     if (config.afterPhase) {
@@ -765,6 +770,10 @@ function createPhaseContext(
         if (!handler?.buildPrompt) {
           throw new Error(`Phase "${phase.id}" does not have a buildPrompt method.`);
         }
+        // Allow extensions to transform PhaseInput before buildPrompt
+        if (loopContext.config.beforePrompt) {
+          input.input = await loopContext.config.beforePrompt(phase.id, input.input);
+        }
         const request = handler.buildPrompt(input.input, { toolResults: input.toolResults });
         request.model = loopContext.config.model;
         // Ensure tools are always available in the request when configured
@@ -779,7 +788,7 @@ function createPhaseContext(
           context: loopContext,
           message: messageManager,
           events: loopContext.config.stream(request, { signal: loopContext.signal }),
-          metadataPhase: input.phase,
+          metadataPhase: phase.id,
           scope: input.scope,
         });
       },

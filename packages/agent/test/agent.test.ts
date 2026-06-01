@@ -54,15 +54,6 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
           id: "echo",
           name: "Echo",
           description: "Echo extension phase.",
-          buildInput(context) {
-            return {
-              phase: "echo",
-              systemPrompt: context.state.agentState.systemPrompt,
-              messages: context.messages.visible(),
-              tools: [],
-              skills: context.skills,
-            };
-          },
           createOutcome(output) {
             return { id: "out_echo", passed: true, message: output.message };
           },
