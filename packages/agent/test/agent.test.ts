@@ -6,7 +6,7 @@ import { Agent } from "../src/agent";
 import type { AgentEventListener, LlmRequest, StreamFn } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
-import { buildTestPartial, scriptedStream } from "./support/scripted-stream";
+import { buildTestPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -63,8 +63,9 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
 
     const stream: StreamFn = async function* routeToEcho(request) {
       expect(detectPhase(request.messages)).toBe("chat");
-      const text = JSON.stringify({ route: "echo", message: "Routing to extension." });
+      const text = "Routing to extension.";
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall("echo", text);
       yield { type: "done" };
     };
 

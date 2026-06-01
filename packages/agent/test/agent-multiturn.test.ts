@@ -4,7 +4,7 @@ import type { LlmRequest } from "../src/types";
 import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
-import { buildTestPartial, buildToolCallPartial, scriptedStream } from "./support/scripted-stream";
+import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -26,8 +26,9 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
     const sawFirstAnswer = request.messages.some((message) => (message.content as string).includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
     yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
-    const text = JSON.stringify({ route: "direct", message });
+    const text = message;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield* yieldRouteToolCall("stop", message);
     yield { type: "done" };
   };
   const agent = new Agent({
@@ -120,12 +121,13 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
       // Extract current user request from the phase prompt, not the full prompt
       const lastUserMsg = (request.messages.filter((m) => m.role === "user").pop()?.content ?? "") as string;
       const currentRequest = lastUserMsg.match(/Current user request:\s*\n"([^"]+)"/)?.[1] ?? "";
-      const route = currentRequest.includes("trigger failure") || hasFailedOutcome ? "plan" : "direct";
-      const message = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
+      const route = currentRequest.includes("trigger failure") || hasFailedOutcome ? "plan" : "stop";
+      const reason = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 
       yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
-      const text = JSON.stringify({ route, message });
+      const text = reason;
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall(route, reason);
       yield { type: "done" };
       return;
     }
@@ -142,19 +144,23 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
         attempts: 0,
       });
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall("execute", "Task planned.");
       yield { type: "done" };
       return;
     }
 
     if (phase === "execute") {
-      const text = JSON.stringify({ message: "No tool output.", route: "verify" });
+      const text = "No tool output.";
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall("verify", text);
       yield { type: "done" };
       return;
     }
 
-    const text = JSON.stringify({ passed: false, message: "Missing some functions to finish the task", route: "execute" });
+    const reason = "Missing some functions to finish the task";
+    const text = reason;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield* yieldRouteToolCall("stop", reason);
     yield { type: "done" };
   };
   const agent = new Agent({

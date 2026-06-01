@@ -145,14 +145,14 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
         };
       }
 
-      const handler: ExtensionPhaseHandler = { buildPrompt };
       const definition: PhaseDefinition = {
         id: registration.id,
         name: registration.name,
         description: registration.description,
         run: registration.run,
+        buildPrompt,
       };
-      extension.phases.set(registration.id, { definition, handler, source: { extensionPath: extension.path } });
+      extension.phases.set(registration.id, { definition, handler: { buildPrompt }, source: { extensionPath: extension.path } });
     },
 
     addEventHandler(extension, event, handler) {
@@ -258,7 +258,6 @@ export class ExtensionRunner {
     return createPhaseRegistry({
       entryPhaseId: input.entryPhaseId,
       phases: [...registered.values()].map((p) => p.definition),
-      phaseHandlers: new Map([...registered].map(([id, p]) => [id, p.handler])),
     });
   }
 

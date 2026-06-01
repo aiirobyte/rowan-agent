@@ -18,6 +18,16 @@ export function buildToolCallPartial(toolId: string, toolName: string, toolArgs:
   };
 }
 
+/** Yield events for a route tool call */
+export function* yieldRouteToolCall(route: string, reason?: string): Generator<any> {
+  const toolId = createId("route");
+  const toolArgs = JSON.stringify({ route, reason });
+  const partial = buildToolCallPartial(toolId, "route", toolArgs);
+  yield { type: "tool_call_start", id: toolId, name: "route", partial };
+  yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+  yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial };
+}
+
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
@@ -81,23 +91,51 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
   const userRequest = extractUserRequest(request.messages);
 
   if (phase === "chat") {
-    const route = wantsEcho(userRequest) ? "plan" : "direct";
-    const message = route === "plan" ? "Routing to task execution." : `Direct response: ${userRequest}`;
+    const route = wantsEcho(userRequest) ? "plan" : "stop";
+    const reason = route === "plan" ? "Routing to task execution." : `Direct response: ${userRequest}`;
     yield {
       type: "model_requested",
       model: request.model,
       usage: { inputMessages: request.messages.length },
     };
-    const text = JSON.stringify({ message, route });
+    // Output text message
+    const text = reason;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    // Output route tool call
+    const toolId = createId("route");
+    const toolArgs = JSON.stringify({ route, reason });
+    const withRoute: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [
+        { type: "text", text },
+        { type: "tool_call", id: toolId, name: "route", args: toolArgs },
+      ],
+    };
+    yield { type: "tool_call_start", id: toolId, name: "route", partial: withRoute };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: withRoute };
+    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: withRoute };
     yield { type: "done" };
     return;
   }
 
   if (phase === "plan") {
     const input = userRequest || "hello";
-    const text = JSON.stringify({ message: "Planning task...", task: createScriptedTask(input, []) });
+    const task = createScriptedTask(input, []);
+    const text = JSON.stringify(task);
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    // Output route tool call to execute
+    const toolId = createId("route");
+    const toolArgs = JSON.stringify({ route: "execute", reason: "Task planned." });
+    const withRoute: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [
+        { type: "text", text },
+        { type: "tool_call", id: toolId, name: "route", args: toolArgs },
+      ],
+    };
+    yield { type: "tool_call_start", id: toolId, name: "route", partial: withRoute };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: withRoute };
+    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: withRoute };
     yield { type: "done" };
     return;
   }
@@ -107,14 +145,26 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
     const toolId = createId("call");
     const toolName = "echo";
     const toolArgs = JSON.stringify({ message: userRequest || "echo" });
-    const textPartial = buildTestPartial("");
     const withTool: AssistantMessagePartial = {
       role: "assistant",
       contentBlocks: [{ type: "tool_call", id: toolId, name: toolName, args: toolArgs }],
     };
-    yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...withTool, contentBlocks: [...withTool.contentBlocks] } };
-    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...withTool, contentBlocks: [...withTool.contentBlocks] } };
-    yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...withTool, contentBlocks: [...withTool.contentBlocks] } };
+    yield { type: "tool_call_start", id: toolId, name: toolName, partial: withTool };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: withTool };
+    yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: withTool };
+    // Output route tool call to verify
+    const routeId = createId("route");
+    const routeArgs = JSON.stringify({ route: "verify", reason: "Execution complete." });
+    const withRoute: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [
+        { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
+        { type: "tool_call", id: routeId, name: "route", args: routeArgs },
+      ],
+    };
+    yield { type: "tool_call_start", id: routeId, name: "route", partial: withRoute };
+    yield { type: "tool_call_delta", id: routeId, arguments: routeArgs, partial: withRoute };
+    yield { type: "tool_call_end", id: routeId, name: "route", arguments: routeArgs, partial: withRoute };
     yield { type: "done" };
     return;
   }
@@ -126,11 +176,24 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
     const passed = requiresEcho ? hasEchoEvidence : true;
     const taskTitleMatch = lastUserMsg.match(/"title"\s*:\s*"([^"]+)"/);
     const taskTitle = taskTitleMatch?.[1] ?? (userRequest || "task");
-    const message = passed
+    const reason = passed
       ? `Task passed: ${taskTitle}`
       : `Task failed: missing required echo evidence for ${taskTitle}`;
-    const text = message;
+    const text = reason;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    // Output route tool call
+    const toolId = createId("route");
+    const toolArgs = JSON.stringify({ route: "stop", reason });
+    const withRoute: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [
+        { type: "text", text },
+        { type: "tool_call", id: toolId, name: "route", args: toolArgs },
+      ],
+    };
+    yield { type: "tool_call_start", id: toolId, name: "route", partial: withRoute };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: withRoute };
+    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: withRoute };
     yield { type: "done" };
   }
 };

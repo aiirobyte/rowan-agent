@@ -9,7 +9,7 @@ import { resolvePhaseEntry } from "../src/loop/phases";
 const builtinPhaseRegistry = createBuiltinPhaseRegistry();
 
 function requireBuiltinPhase(id: string): PhaseDefinition {
-  return resolvePhaseEntry(builtinPhaseRegistry, id).phase;
+  return resolvePhaseEntry(builtinPhaseRegistry, id);
 }
 
 const chatPhase = requireBuiltinPhase("chat");
@@ -73,6 +73,7 @@ function createTestContext(state: AgentRunState): PhaseContext {
     turn: async (fn) => fn(),
     incrementAttempt: () => {},
     availablePhases: [],
+    routeDecision: () => undefined,
   };
 }
 

@@ -7,7 +7,6 @@ export {
   DEFAULT_PHASE_ID,
   type PhaseRegistry,
   type PhaseRegistryInput,
-  type PhaseHandler,
   type PhaseManifest,
   type PhaseContext,
   type PhaseDefinition,

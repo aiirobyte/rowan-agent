@@ -13,8 +13,8 @@ export const verifyPhaseExtension = defineExtension((rowan) => {
           "Phase: verify",
           "",
           "Review the task output against the acceptance criteria.",
-          "If the criteria are met, respond with a confirmation.",
-          "If more work is needed, call tools to fix issues.",
+          "If the criteria are met, confirm and call the 'route' tool to stop or proceed.",
+          "If more work is needed, call tools to fix issues, then call the 'route' tool.",
           "Do NOT output JSON.",
         ]},
         { type: "task" },
@@ -23,56 +23,65 @@ export const verifyPhaseExtension = defineExtension((rowan) => {
     },
 
     async run(context, input) {
-      const maxAttempts = context.maxAttempts ?? 2;
       const task = (input.yield as Record<string, unknown> | undefined)?.task;
+      const maxAttempts = context.maxAttempts ?? 2;
 
       let collected;
       try {
         collected = await context.turn(() => context.model.collect({ input }));
       } catch (error) {
-        if (context.state.attempt >= maxAttempts) {
+        // Model errors - check if we should retry
+        if (context.state.attempt < maxAttempts) {
           return {
-            message: "Verification error, no retries remaining.",
-            route: "stop",
+            message: "Verification error, retrying.",
+            route: "execute",
             yield: { task },
           };
         }
         return {
-          message: "Verification error, retrying.",
-          route: "execute",
+          message: "Verification error, no retries remaining.",
+          route: "stop",
           yield: { task },
         };
       }
 
-      // If model called tools, route to execute for rework
-      if (collected.toolCalls.length > 0) {
-        if (context.state.attempt >= maxAttempts) {
-          return { message: collected.text || "Verification fix attempted.", route: "stop", yield: { task } };
+      // Check for route tool call
+      const routeDecision = context.routeDecision(collected.toolCalls);
+
+      // If model called non-route tools, execute them
+      const nonRouteToolCalls = collected.toolCalls.filter(t => t.name !== "route");
+      if (nonRouteToolCalls.length > 0) {
+        // If route tool was also called, use that route
+        if (routeDecision) {
+          return {
+            message: routeDecision.reason ?? (collected.text || "Fixing issues."),
+            route: routeDecision.route,
+            yield: { task },
+          };
         }
-        return { message: collected.text || "Fixing issues.", route: "execute", yield: { task } };
+        // No route tool - model should have called it, default to stop
+        return {
+          message: collected.text || "Verification with fixes attempted.",
+          route: "stop",
+          yield: { task },
+        };
       }
 
-      // Try to parse JSON routing (for models that output structured verify results)
-      let message = collected.text.trim();
-      let passed = !/fail|error|issue|fix|retry/i.test(message);
-      let route = passed ? "stop" : "execute";
-
-      try {
-        const parsed = JSON.parse(collected.text);
-        if (parsed && typeof parsed === "object") {
-          if (typeof parsed.passed === "boolean") passed = parsed.passed;
-          if (typeof parsed.message === "string" && parsed.message.trim()) message = parsed.message.trim();
-          if (typeof parsed.route === "string") route = parsed.route;
-        }
-      } catch {
-        // Plain text — use heuristic above
+      // Use route decision if available
+      if (routeDecision) {
+        return {
+          message: routeDecision.reason ?? collected.text.trim(),
+          route: routeDecision.route,
+          yield: { task },
+        };
       }
 
-      if (route === "execute" && context.state.attempt >= maxAttempts) {
-        route = "stop";
-      }
-
-      return { message, route, yield: { task } };
+      // No route tool call and no other tools - default to stop
+      return {
+        message: collected.text.trim() || "Verification complete.",
+        route: "stop",
+        yield: { task },
+      };
     },
   });
 });

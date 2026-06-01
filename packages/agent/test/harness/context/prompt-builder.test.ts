@@ -20,11 +20,11 @@ function buildRequest(input: {
   context: PhaseInput;
   toolResults?: ToolResult[];
 }) {
-  const { handler } = resolvePhaseEntry(builtinPhaseRegistry, input.context.phase);
-  if (!handler?.buildPrompt) {
+  const phase = resolvePhaseEntry(builtinPhaseRegistry, input.context.phase);
+  if (!phase.buildPrompt) {
     throw new Error(`Missing buildPrompt for phase "${input.context.phase}".`);
   }
-  return handler.buildPrompt(input.context, { toolResults: input.toolResults });
+  return phase.buildPrompt(input.context, { toolResults: input.toolResults });
 }
 
 const echoTool: Tool<{ message: string }> = {

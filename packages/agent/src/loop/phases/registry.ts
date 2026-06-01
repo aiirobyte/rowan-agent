@@ -38,9 +38,6 @@ export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<Pha
 
 export type PhaseDefinition = PhaseManifest & {
   run?: PhaseRun;
-};
-
-export type PhaseHandler = {
   buildPrompt?(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
 };
 
@@ -108,18 +105,18 @@ export type PhaseContext = {
   maxAttempts?: number;
   incrementAttempt(): void;
   availablePhases: Array<{ id: string; name: string; description: string }>;
+  /** Extract route decision from tool calls. Returns undefined if no route tool call found. */
+  routeDecision(toolCalls: ToolCall[]): { route: string; reason?: string } | undefined;
 };
 
 export type PhaseRegistry = {
   entryPhaseId: string;
   phases: PhaseDefinition[];
-  phaseHandlers: Map<string, PhaseHandler>;
 };
 
 export type PhaseRegistryInput = {
   entryPhaseId?: string;
   phases?: PhaseDefinition[];
-  phaseHandlers?: Map<string, PhaseHandler>;
 };
 
 export function definePhase(
@@ -155,32 +152,25 @@ function validatePhaseRegistry(registry: PhaseRegistry): void {
 
 export function createPhaseRegistry(input: PhaseRegistryInput): PhaseRegistry {
   const phases: PhaseDefinition[] = [...(input.phases ?? [])];
-  const phaseHandlers = new Map<string, PhaseHandler>();
-
-  for (const [id, handler] of input.phaseHandlers ?? []) {
-    phaseHandlers.set(id, handler);
-  }
 
   const registry: PhaseRegistry = {
     entryPhaseId: input.entryPhaseId ?? phases[0]?.id ?? "",
     phases,
-    phaseHandlers,
   };
   validatePhaseRegistry(registry);
   return registry;
 }
 
-/** Look up a phase definition and its handler by id; throws if not found. */
+/** Look up a phase definition by id; throws if not found. */
 export function resolvePhaseEntry(
   registry: PhaseRegistry,
   phaseId: string,
-): { phase: PhaseDefinition; handler: PhaseHandler | undefined } {
+): PhaseDefinition {
   const phase = registry.phases.find((p) => p.id === phaseId);
   if (!phase) {
     throw new Error(`Phase "${phaseId}" is not defined in the phase registry.`);
   }
-  const handler = registry.phaseHandlers.get(phaseId);
-  return { phase, handler };
+  return phase;
 }
 
 /** Validate and return a phase registry — idempotent, safe for externally-provided registries. */

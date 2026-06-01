@@ -26,7 +26,6 @@ import {
   ensurePhaseRegistry,
   type PhaseContext,
   type PhaseDefinition,
-  type PhaseHandler,
   type PhaseInput,
   type PhaseOutput,
 } from "./loop/phases";
@@ -40,6 +39,8 @@ import {
   snapshotMessages,
 } from "./loop/state";
 import type { AgentLoopConfig, AgentRunState } from "./loop/types";
+import { createRouteTool, extractRouteCall } from "./loop/phases/route-tool";
+import type { PhaseManifest } from "./loop/phases/registry";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -232,11 +233,14 @@ function completeRun(
 function createAgentLoopContext(
   config: AgentLoopConfig,
   state: AgentRunState,
+  availablePhases: PhaseManifest[],
 ): AgentLoopContext {
+  const routeTool = createRouteTool(availablePhases);
+
   return {
     systemPrompt: state.agentState.systemPrompt,
     messages: snapshotMessages(state.agentState.messages),
-    tools: config.tools,
+    tools: [...config.tools, routeTool],
     skills: state.agentState.skills.slice(),
     config,
     state,
@@ -407,11 +411,11 @@ async function runLoop(
       return completeRun(config, state, createOutcome.aborted());
     }
 
-    const { phase, handler } = resolvePhaseEntry(phaseConfig, currentPhaseId);
+    const phase = resolvePhaseEntry(phaseConfig, currentPhaseId);
     state.currentPhase = currentPhaseId;
 
-    const loopContext = createAgentLoopContext(config, state);
-    const context = createPhaseContext(config, state, phase, handler, loopContext, availablePhases);
+    const loopContext = createAgentLoopContext(config, state, availablePhases);
+    const context = createPhaseContext(config, state, phase, loopContext, availablePhases);
 
     // Build unified input — framework handles data preparation
     let phaseInput: PhaseInput = {
@@ -691,7 +695,6 @@ function createPhaseContext(
   config: AgentLoopConfig,
   state: AgentRunState,
   phase: PhaseDefinition,
-  handler: PhaseHandler | undefined,
   loopContext: AgentLoopContext,
   availablePhases: PhaseContext["availablePhases"],
 ): PhaseContext {
@@ -777,14 +780,14 @@ function createPhaseContext(
     },
     model: {
       collect: async (input) => {
-        if (!handler?.buildPrompt) {
+        if (!phase.buildPrompt) {
           throw new Error(`Phase "${phase.id}" does not have a buildPrompt method.`);
         }
         // Allow extensions to transform PhaseInput before buildPrompt
         if (loopContext.config.beforePrompt) {
           input.input = await loopContext.config.beforePrompt(phase.id, input.input);
         }
-        const request = handler.buildPrompt(input.input, { toolResults: input.toolResults });
+        const request = phase.buildPrompt(input.input, { toolResults: input.toolResults });
         request.model = loopContext.config.model;
         // Ensure tools are always available in the request when configured
         if (!request.tools && loopContext.tools.length > 0) {
@@ -829,5 +832,8 @@ function createPhaseContext(
       loopContext.state.attempt = state.attempt;
     },
     availablePhases,
+    routeDecision(toolCalls) {
+      return extractRouteCall(toolCalls);
+    },
   };
 }

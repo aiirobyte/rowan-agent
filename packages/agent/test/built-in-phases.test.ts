@@ -27,29 +27,24 @@ function createState(input: Parameters<typeof createBaseAgentState>[0]) {
 
 function requireBuiltinPhase(id: string) {
   const registry = createBuiltinPhaseRegistry();
-  const { phase } = resolvePhaseEntry(registry, id);
+  const phase = resolvePhaseEntry(registry, id);
   return phase;
 }
 
 function builtinPhaseRegistryFor(ids: string[]) {
   const builtinRegistry = createBuiltinPhaseRegistry();
   const phases = ids.map((id) => {
-    return resolvePhaseEntry(builtinRegistry, id).phase;
+    return resolvePhaseEntry(builtinRegistry, id);
   });
-  const phaseHandlers = new Map(ids.map((id) => {
-    return [id, resolvePhaseEntry(builtinRegistry, id).handler!] as const;
-  }));
 
   return createPhaseRegistry({
     entryPhaseId: ids[0],
     phases,
-    phaseHandlers,
   });
 }
 
 test("built-in phase metadata uses package.json rowan phase manifest", () => {
   const chatPhase = requireBuiltinPhase("chat");
-  const { handler: chatHandler } = resolvePhaseEntry(createBuiltinPhaseRegistry(), "chat");
 
   expect(chatPackage.rowan.extensions).toEqual(["./index.ts"]);
   expect(chatPackage.rowan.phase).toMatchObject({
@@ -61,7 +56,7 @@ test("built-in phase metadata uses package.json rowan phase manifest", () => {
     name: "Chat",
     description: "Decide whether to answer directly or transition to another available phase.",
   });
-  expect(chatHandler?.buildPrompt).toBeFunction();
+  expect(chatPhase.buildPrompt).toBeFunction();
 });
 
 test("default config preserves direct answer behavior", async () => {
@@ -181,14 +176,24 @@ test("default config preserves execute/verify retry behavior", async () => {
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      const text = JSON.stringify({ route: "plan", message: "Create task." });
+      const text = "Create task.";
+      const toolId = createId("route");
+      const toolArgs = JSON.stringify({ route: "plan", reason: text });
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
       const text = JSON.stringify(task);
+      const toolId = createId("route");
+      const toolArgs = JSON.stringify({ route: "execute", reason: "Task planned." });
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
       yield { type: "done" };
       return;
     }
@@ -200,19 +205,29 @@ test("default config preserves execute/verify retry behavior", async () => {
       yield { type: "tool_call_start", id: toolId, name: toolName, partial };
       yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
       yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      // Route to verify
+      const routeId = createId("route");
+      const routeArgs = JSON.stringify({ route: "verify", reason: "Execution complete." });
+      yield { type: "tool_call_start", id: routeId, name: "route", partial: buildToolCallPartial(routeId, "route", routeArgs) };
+      yield { type: "tool_call_delta", id: routeId, arguments: routeArgs, partial: buildToolCallPartial(routeId, "route", routeArgs) };
+      yield { type: "tool_call_end", id: routeId, name: "route", arguments: routeArgs, partial: buildToolCallPartial(routeId, "route", routeArgs) };
       yield { type: "done" };
       return;
     }
 
     verifyCalls += 1;
     yield { type: "model_requested", model: request.model, usage: { inputMessages: 1 } };
-    if (verifyCalls === 1) {
-      const text = JSON.stringify({ passed: false, message: "Missing echo evidence.", route: "execute" });
-      yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    } else {
-      const text = JSON.stringify({ passed: true, message: "Verified. All acceptance criteria met.", route: "stop" });
-      yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    }
+    const reason = verifyCalls === 1
+      ? "Missing echo evidence."
+      : "Verified. All acceptance criteria met.";
+    const route = verifyCalls === 1 ? "execute" : "stop";
+    const text = reason;
+    const toolId = createId("route");
+    const toolArgs = JSON.stringify({ route, reason });
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
     yield { type: "done" };
   };
 
@@ -248,14 +263,24 @@ test("default config preserves max attempt exhaustion", async () => {
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      const text = JSON.stringify({ route: "plan", message: "Create task." });
+      const text = "Create task.";
+      const toolId = createId("route");
+      const toolArgs = JSON.stringify({ route: "plan", reason: text });
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
       const text = JSON.stringify(task);
+      const toolId = createId("route");
+      const toolArgs = JSON.stringify({ route: "execute", reason: "Task planned." });
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+      yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
       yield { type: "done" };
       return;
     }
@@ -267,12 +292,24 @@ test("default config preserves max attempt exhaustion", async () => {
       yield { type: "tool_call_start", id: toolId, name: toolName, partial };
       yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
       yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      // Route to verify
+      const routeId = createId("route");
+      const routeArgs = JSON.stringify({ route: "verify", reason: "Execution complete." });
+      yield { type: "tool_call_start", id: routeId, name: "route", partial: buildToolCallPartial(routeId, "route", routeArgs) };
+      yield { type: "tool_call_delta", id: routeId, arguments: routeArgs, partial: buildToolCallPartial(routeId, "route", routeArgs) };
+      yield { type: "tool_call_end", id: routeId, name: "route", arguments: routeArgs, partial: buildToolCallPartial(routeId, "route", routeArgs) };
       yield { type: "done" };
       return;
     }
 
-    const text = "Always fails. Error in verification.";
+    const reason = "Always fails. Error in verification.";
+    const text = reason;
+    const toolId = createId("route");
+    const toolArgs = JSON.stringify({ route: "stop", reason });
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
     yield { type: "done" };
   };
 

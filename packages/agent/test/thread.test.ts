@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
+import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { createSession } from "@rowan-agent/agent";
 import { Agent } from "../src/agent";
 import { runAgentLoop } from "../src/agent-loop";
@@ -7,7 +8,7 @@ import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
-import { scriptedStream, buildTestPartial, buildToolCallPartial } from "./support/scripted-stream";
+import { scriptedStream, buildTestPartial, buildToolCallPartial, yieldRouteToolCall } from "./support/scripted-stream";
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -132,8 +133,9 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
     const phase = detectPhase(request.messages);
 
     if (phase === "chat") {
-      const text = JSON.stringify({ route: "plan", message: "Start a nested thread." });
+      const text = "Start a nested thread.";
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall("plan", text);
       yield { type: "done" };
       return;
     }
@@ -150,6 +152,7 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
         attempts: 0,
       });
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall("execute", "Task planned.");
       yield { type: "done" };
       return;
     }
@@ -158,17 +161,37 @@ test("tools can launch threads and return outcomes as tool evidence", async () =
       const toolId = createId("call");
       const toolName = "delegate";
       const toolArgs = JSON.stringify({ prompt: "use echo tool" });
-      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
-      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+      // Accumulate tool calls in partial
+      const withTool: AssistantMessagePartial = {
+        role: "assistant",
+        contentBlocks: [
+          { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
+        ],
+      };
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial: withTool };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: withTool };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: withTool };
+      // Add route tool call
+      const routeId = createId("route");
+      const routeArgs = JSON.stringify({ route: "verify", reason: "Execution complete." });
+      const withRoute: AssistantMessagePartial = {
+        role: "assistant",
+        contentBlocks: [
+          { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
+          { type: "tool_call", id: routeId, name: "route", args: routeArgs },
+        ],
+      };
+      yield { type: "tool_call_start", id: routeId, name: "route", partial: withRoute };
+      yield { type: "tool_call_delta", id: routeId, arguments: routeArgs, partial: withRoute };
+      yield { type: "tool_call_end", id: routeId, name: "route", arguments: routeArgs, partial: withRoute };
       yield { type: "done" };
       return;
     }
 
     // verify phase - assume passed since delegate tool returns nested outcome
-    const text = JSON.stringify({ passed: true, message: "Nested thread outcome was returned.", route: "stop" });
+    const text = "Nested thread outcome was returned.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield* yieldRouteToolCall("stop", text);
     yield { type: "done" };
   };
   const events: AgentEvent[] = [];

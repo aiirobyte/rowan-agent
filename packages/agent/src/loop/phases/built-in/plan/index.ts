@@ -45,6 +45,7 @@ export const planPhaseExtension = defineExtension((rowan) => {
           "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
           'Prefer setting task.status to "pending" and task.attempts to 0.',
           "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
+          "After outputting the task JSON, call the 'route' tool to indicate the next phase.",
         ]},
         { type: "userRequest" },
         { type: "tools" },
@@ -54,11 +55,20 @@ export const planPhaseExtension = defineExtension((rowan) => {
     async run(context, input) {
       const collected = await context.turn(() => context.model.collect({ input }));
 
-      // Plan phase still uses JSON for structured task data
+      // Plan phase uses JSON for structured task data
       let raw: Record<string, unknown> | undefined;
       try {
         raw = JSON.parse(collected.text) as Record<string, unknown>;
       } catch {
+        // If no valid JSON, check for route tool call and return empty task
+        const routeDecision = context.routeDecision(collected.toolCalls);
+        if (routeDecision) {
+          return {
+            message: routeDecision.reason ?? "",
+            route: routeDecision.route,
+            yield: { task: null },
+          };
+        }
         throw new Error("Planner did not produce valid JSON.");
       }
 
@@ -70,9 +80,21 @@ export const planPhaseExtension = defineExtension((rowan) => {
       const task = normalizeTask(rawTask);
       const message = (raw?.message as string) ?? "";
 
+      // Check for route tool call
+      const routeDecision = context.routeDecision(collected.toolCalls);
+      if (routeDecision) {
+        return {
+          message: routeDecision.reason ?? message,
+          route: routeDecision.route,
+          yield: { task },
+        };
+      }
+
+      // Default: no route tool call, but task was produced
+      // The model should have called route tool, but if not, default to stop
       return {
         message,
-        route: "execute",
+        route: "stop",
         yield: { task },
       };
     },
