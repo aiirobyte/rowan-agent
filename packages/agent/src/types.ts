@@ -1,5 +1,5 @@
 import Type from "typebox";
-import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth } from "./loop/types";
+import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth, BeforePhaseHook, AfterPhaseHook } from "./loop/types";
 import type { PhaseRegistry, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
@@ -23,7 +23,9 @@ export type {
   AgentLoopConfig,
   AgentRunState,
   AgentRuntimePort,
+  AfterPhaseHook,
   AfterPhaseResult,
+  BeforePhaseHook,
   BeforePhaseResult,
   PhaseResult,
   ToolRunner,
@@ -126,6 +128,8 @@ type AgentRunCommonConfig = {
   runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
+  beforePhase?: BeforePhaseHook;
+  afterPhase?: AfterPhaseHook;
   emit?: AgentEventListener;
 };
 
@@ -188,12 +192,11 @@ export type RunThread = (
 
 export type AgentEvent =
   // Agent lifecycle
-  | { type: "agent_start"; ts: string }
-  | { type: "agent_end"; messages: AgentMessage[]; ts: string }
+  | { type: "agent_start"; sessionId: string; ts: string }
+  | { type: "agent_end"; sessionId: string; messages: AgentMessage[]; ts: string }
   // Turn lifecycle
   | {
       type: "turn_start";
-      sessionId: string;
       content: AgentMessage[];
       parentSessionId?: string;
       prompt?: string;
@@ -203,7 +206,6 @@ export type AgentEvent =
     }
   | {
       type: "turn_end";
-      sessionId: string;
       content: AgentMessage[];
       outcome?: Outcome;
       threadDepth?: number;

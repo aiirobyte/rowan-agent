@@ -109,7 +109,15 @@ export {
   type RegisteredPhase,
   type BeforePhaseHookContext,
   type AfterPhaseHookContext,
+  type BeforeToolCallContext,
+  type AfterToolCallContext,
+  type PendingProviderAction,
+  type PendingProviderRegistration,
+  type PendingProviderUnregistration,
 } from "./extensions";
+
+// Re-export ExtensionRunnerRef from agent
+export type { ExtensionRunnerRef } from "./agent";
 
 // ── phases ─────────────────────────────────────────────────────
 export {

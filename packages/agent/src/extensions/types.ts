@@ -3,10 +3,14 @@ import type {
   PhaseHandler,
   PhaseInput,
   PhaseManifest,
+  PhaseOutput,
   PhaseRun,
 } from "../loop/phases/registry";
 import type { SerializableTool } from "../harness/context/prompt-builder";
+import type { ProviderConfig } from "@rowan-agent/models";
+import type { Outcome, Tool, ToolResult } from "../types";
 export type { PhaseManifest } from "../loop/phases/registry";
+export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
 
 export type ExtensionHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
@@ -69,6 +73,22 @@ export type ExecResult = {
 };
 
 // ---------------------------------------------------------------------------
+// Provider pending queue — used during the load phase
+// ---------------------------------------------------------------------------
+
+export type PendingProviderRegistration = {
+  kind: "register";
+  config: ProviderConfig;
+};
+
+export type PendingProviderUnregistration = {
+  kind: "unregister";
+  name: string;
+};
+
+export type PendingProviderAction = PendingProviderRegistration | PendingProviderUnregistration;
+
+// ---------------------------------------------------------------------------
 // Extension Runtime — shared singleton for all implementations
 // ---------------------------------------------------------------------------
 
@@ -91,6 +111,13 @@ export type ExtensionRuntime = {
   // Command execution
   exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
+  // Provider registration — phase-aware
+  registerProvider(config: ProviderConfig): void;
+  unregisterProvider(name: string): void;
+
+  // Lifecycle transition — flushes pending queue, switches to immediate mode
+  bind(): void;
+
   // ID generation
   id: {
     create(prefix: string): string;
@@ -110,29 +137,66 @@ export type ExtensionRuntime = {
 };
 
 // ---------------------------------------------------------------------------
+// Tool call interception types
+// ---------------------------------------------------------------------------
+
+export type BeforeToolCallContext = {
+  tool: Tool;
+  args: unknown;
+  allow: boolean;
+  reason?: string;
+};
+
+export type AfterToolCallContext = {
+  tool: Tool;
+  result: ToolResult;
+};
+
+// ---------------------------------------------------------------------------
 // Extension API — passed to factory functions, delegates to runtime
 // ---------------------------------------------------------------------------
 
-export type BeforePhaseHookContext = { phaseId: string };
-export type AfterPhaseHookContext = { phaseId: string };
+export type BeforePhaseHookContext = { phaseId: string; input?: PhaseInput };
+export type AfterPhaseHookContext = { phaseId: string; output: PhaseOutput };
+
+/** Aggregated result from all extension beforePhase hooks. */
+export type BeforePhaseHookResult = {
+  abort?: Outcome;
+  skip?: { route: string; message: string };
+  input?: PhaseInput;
+};
+
+/** Aggregated result from all extension afterPhase hooks. */
+export type AfterPhaseHookResult = {
+  abort?: Outcome;
+  retry?: PhaseInput;
+  output?: PhaseOutput;
+};
 
 export type ExtensionAPI = {
-  // Registration methods — delegate to runtime
-  registerPhase(registration: PhaseRegistration): void;
+  // Event subscription
   on(event: string, handler: ExtensionHandler): void;
+
+  // Phase registration
+  registerPhase(registration: PhaseRegistration): void;
   beforePhase(hook: (ctx: BeforePhaseHookContext) => void | Promise<void>): void;
   afterPhase(hook: (ctx: AfterPhaseHookContext) => void | Promise<void>): void;
 
-  // Action methods — delegate to runtime
+  // Tool call interception
+  beforeToolCall(hook: (ctx: BeforeToolCallContext) => void | Promise<void>): void;
+  afterToolCall(hook: (ctx: AfterToolCallContext) => void | Promise<void>): void;
+
+  // Provider registration
+  registerProvider(config: ProviderConfig): void;
+  unregisterProvider(name: string): void;
+
+  // Command execution
   exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
-  // Utility methods — delegate to runtime
+  // Utilities
   id: ExtensionRuntime["id"];
   format: ExtensionRuntime["format"];
   input: ExtensionRuntime["input"];
-
-  // Runtime reference — for future action methods
-  runtime: ExtensionRuntime;
 };
 
 // ---------------------------------------------------------------------------

@@ -99,6 +99,8 @@ export function createLoopLifecycle(
     runtime: input.runtime,
     beforeToolCall: input.beforeToolCall,
     afterToolCall: input.afterToolCall,
+    beforePhase: input.beforePhase,
+    afterPhase: input.afterPhase,
     runThread: "runThread" in input ? input.runThread : undefined,
     emit: input.emit,
     phaseConfig: "phaseConfig" in input ? input.phaseConfig : undefined,
@@ -147,7 +149,6 @@ function emitTurn(
 
   emit(state, emitFn, {
     type,
-    sessionId: state.agentState.id,
     content: snapshotMessages(state.transcript),
     ...threadMeta,
     ...extra,
@@ -348,7 +349,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<RunResult> {
   config.runThread ??= createLoopThread(config, state);
   const emitFn = config.emit;
 
-  emit(state, emitFn, { type: "agent_start", ts: createTimestamp() });
+  emit(state, emitFn, { type: "agent_start", sessionId: state.agentState.id, ts: createTimestamp() });
 
   try {
     if (config.kind === "thread" && state.depth.threadDepth > state.depth.maxThreadDepth) {
@@ -369,6 +370,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<RunResult> {
   } finally {
     emit(state, emitFn, {
       type: "agent_end",
+      sessionId: state.agentState.id,
       messages: snapshotMessages(state.agentState.messages),
       ts: createTimestamp(),
     });
@@ -418,7 +420,30 @@ async function runLoop(
     // Emit phase_start
     emit(state, config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
 
-    // beforePhase hook
+    // beforePhase hook — extension hooks first, then runtime hooks
+    if (config.beforePhase) {
+      const extBefore = await config.beforePhase(currentPhaseId, phaseInput!);
+      if (extBefore.abort) {
+        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        return completeRun(config, state, extBefore.abort);
+      }
+      if (extBefore.skip) {
+        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        if (extBefore.skip.route === "stop") {
+          return completeRun(config, state, {
+            id: "skip",
+            passed: true,
+            message: extBefore.skip.message || "Skipped.",
+          });
+        }
+        currentPhaseId = extBefore.skip.route;
+        continue;
+      }
+      if (extBefore.input) {
+        phaseInput = extBefore.input;
+      }
+    }
+
     if (config.runtime?.beforePhase) {
       const before = await config.runtime.beforePhase(
         loopContext,
@@ -451,7 +476,21 @@ async function runLoop(
     // Run phase
     let output = await phase.run(context, phaseInput!);
 
-    // afterPhase hook
+    // afterPhase hook — extension hooks first, then runtime hooks
+    if (config.afterPhase) {
+      const extAfter = await config.afterPhase(currentPhaseId, output);
+      if (extAfter.abort) {
+        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        return completeRun(config, state, extAfter.abort);
+      }
+      if (extAfter.retry) {
+        output = await phase.run(context, extAfter.retry);
+      }
+      if (extAfter.output) {
+        output = extAfter.output;
+      }
+    }
+
     if (config.runtime?.afterPhase) {
       let retries = 0;
 
@@ -652,7 +691,8 @@ function createPhaseContext(
   // Track active messages for streaming lifecycle
   const activeMessages = new Map<string, AgentMessage>();
 
-  const messageManager = {
+  const messageManager: import("./loop/phases/registry").PhaseMessageManager = {
+    visible: () => [...state.transcript],
     start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>) {
       const msg = createMessage(role, content, metadata);
       activeMessages.set(msg.id, msg);
@@ -687,12 +727,7 @@ function createPhaseContext(
   return {
     phaseId: phase.id,
     state: loopContext.state,
-    messages: {
-      visible: () => [...state.transcript],
-      append: (message) => appendMessage(state, message),
-      appendState: (message) => appendMessage(state, message, true),
-    },
-    message: messageManager,
+    messages: messageManager,
     toolExecution: {
       async start(toolCallId, toolName, args) {
         emit(state, config.emit, {
@@ -764,11 +799,10 @@ function createPhaseContext(
         });
       },
     },
-    runs: {
+    threads: {
       create: async (input) => config.runThread!(input),
     },
     skills: state.agentState.skills.slice(),
-    emit: (event) => emit(state, config.emit, event),
     turn: async (fn) => {
       emitTurn(config, state, config.emit, "turn_start");
       try {
@@ -782,10 +816,6 @@ function createPhaseContext(
       state.attempt += 1;
       loopContext.state.attempt = state.attempt;
     },
-    setLastExecuteText(text) {
-      state.lastExecuteText = text;
-    },
     availablePhases,
-    ...(config.signal ? { signal: config.signal } : {}),
   };
 }

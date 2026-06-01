@@ -38,14 +38,23 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 function jitiAliases(): Record<string, string> {
   return {
     "@rowan-agent/agent": fileURLToPath(new URL("../index.ts", import.meta.url)),
+    "@rowan-agent/models": fileURLToPath(new URL("../../../models/src/index.ts", import.meta.url)),
   };
 }
 
-async function loadExtensionModule(extensionPath: string): Promise<ExtensionFactory | undefined> {
-  const jiti = createJiti(import.meta.url, {
+/** Shared jiti instance — created once, reused across all extension loads. */
+let sharedJiti: ReturnType<typeof createJiti> | undefined;
+
+function getJiti(): ReturnType<typeof createJiti> {
+  sharedJiti ??= createJiti(import.meta.url, {
     moduleCache: false,
     alias: jitiAliases(),
   });
+  return sharedJiti;
+}
+
+async function loadExtensionModule(extensionPath: string): Promise<ExtensionFactory | undefined> {
+  const jiti = getJiti();
   const module = await jiti.import(extensionPath, { default: true });
   return typeof module === "function" ? module as ExtensionFactory : undefined;
 }

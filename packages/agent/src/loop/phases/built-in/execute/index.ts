@@ -40,12 +40,12 @@ export const executePhaseExtension = defineExtension((rowan) => {
 
         await context.toolExecution.end(result.toolCallId, result.toolName, result, !result.ok);
 
-        const toolMsgId = context.message.start("tool", JSON.stringify(result), {
+        const toolMsgId = context.messages.start("tool", JSON.stringify(result), {
           toolCallId: result.toolCallId,
           toolName: result.toolName,
           scope: "execution",
         });
-        await context.message.end(toolMsgId);
+        await context.messages.end(toolMsgId);
       }
 
       return { message: collected.text ?? "", route: "verify", yield: { ...inputYield, toolResults } };
@@ -84,10 +84,8 @@ export const executePhaseExtension = defineExtension((rowan) => {
       ].join("\n");
     },
 
-    finalize(context, output) {
-      if (output.message.trim().length > 0) {
-        context.setLastExecuteText(output.message);
-      }
+    finalize(_context, _output) {
+      // Reserved for future side effects
     },
 
     createOutcome(output) {

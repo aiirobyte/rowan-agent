@@ -20,16 +20,26 @@ export function isBuiltinPhaseOverride(phaseId: string, extensionPath: string): 
   return BUILTIN_PHASE_IDS.has(phaseId) && !isBuiltinSource(extensionPath);
 }
 
-// Shared runtime for built-in extensions
-const builtinRuntime = createExtensionRuntime();
+// ---------------------------------------------------------------------------
+// Lazy built-in initialization — deferred until first access
+// ---------------------------------------------------------------------------
 
-const builtinExtensions = builtinPhases.map((factory, index) =>
-  loadExtensionFromFactorySync(factory, builtinRuntime, process.cwd(), builtinExtensionPaths[index] ?? "<builtin:phase:unknown>")
-);
+let _builtinState: { runtime: ExtensionRuntime; extensions: Extension[]; runner: ExtensionRunner } | undefined;
 
-const builtinRunner = new ExtensionRunner(builtinExtensions, {
-  validatePhaseOverride: isBuiltinPhaseOverride,
-});
+function ensureBuiltin(): NonNullable<typeof _builtinState> {
+  if (!_builtinState) {
+    const runtime = createExtensionRuntime();
+    const extensions = builtinPhases.map((factory, index) =>
+      loadExtensionFromFactorySync(factory, runtime, process.cwd(), builtinExtensionPaths[index] ?? "<builtin:phase:unknown>")
+    );
+    const runner = new ExtensionRunner(extensions, {
+      validatePhaseOverride: isBuiltinPhaseOverride,
+    });
+    runtime.bind();
+    _builtinState = { runtime, extensions, runner };
+  }
+  return _builtinState;
+}
 
 export type CreateDefaultPhaseRegistryOptions = {
   cwd?: string;
@@ -38,15 +48,15 @@ export type CreateDefaultPhaseRegistryOptions = {
 };
 
 export function getBuiltinExtensions(): Extension[] {
-  return [...builtinExtensions];
+  return [...ensureBuiltin().extensions];
 }
 
 export function getBuiltinRuntime(): ExtensionRuntime {
-  return builtinRuntime;
+  return ensureBuiltin().runtime;
 }
 
 export function createBuiltinPhaseRegistry(input: { entryPhaseId?: string } = {}): PhaseRegistry {
-  return builtinRunner.createPhaseRegistry({ entryPhaseId: input.entryPhaseId ?? DEFAULT_PHASE_ID });
+  return ensureBuiltin().runner.createPhaseRegistry({ entryPhaseId: input.entryPhaseId ?? DEFAULT_PHASE_ID });
 }
 
 export async function createDefaultPhaseRegistry(
@@ -60,6 +70,8 @@ export async function createDefaultPhaseRegistry(
     const details = result.errors.map((error) => `${error.path}: ${error.error}`).join("; ");
     throw new Error(`Failed to load Rowan extensions: ${details}`);
   }
+
+  runtime.bind();
 
   const runner = new ExtensionRunner([
     ...getBuiltinExtensions(),

@@ -14,7 +14,8 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { PhaseRegistry } from "./phases/registry";
+import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./phases/registry";
+import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions/types";
 
 export type AgentRunLimits = {
   maxThreadDepth?: number;
@@ -24,6 +25,9 @@ export type RuntimeDepth = {
   threadDepth: number;
   maxThreadDepth: number;
 };
+
+export type BeforePhaseHook = (phaseId: string, input: PhaseInput) => Promise<BeforePhaseHookResult>;
+export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;
 
 export type AgentLoopConfig = {
   kind?: "run" | "thread";
@@ -36,6 +40,8 @@ export type AgentLoopConfig = {
   runtime?: AgentRuntimePort;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
+  beforePhase?: BeforePhaseHook;
+  afterPhase?: AfterPhaseHook;
   runThread?: RunThread;
   emit?: AgentEventListener;
   phaseConfig?: PhaseRegistry;
@@ -49,7 +55,6 @@ export type AgentRunState = {
     threadDepth: number;
     maxThreadDepth: number;
   };
-  lastExecuteText?: string;
   transcript: AgentMessage[];
 };
 
@@ -77,8 +82,6 @@ export type AgentEffect =
   | { type: "event"; event: AgentEvent }
   | { type: "event_message"; message: AgentMessageSnapshot }
   | { type: "agent_state_message"; message: AgentMessageSnapshot };
-
-import type { PhaseInput, PhaseOutput } from "./phases/registry";
 
 export type PhaseResult =
   | { action: "continue"; output: PhaseOutput; effects?: AgentEffect[] }

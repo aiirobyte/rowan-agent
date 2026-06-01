@@ -31,4 +31,11 @@ export type {
   RegisteredPhase,
   BeforePhaseHookContext,
   AfterPhaseHookContext,
+  BeforePhaseHookResult,
+  AfterPhaseHookResult,
+  BeforeToolCallContext,
+  AfterToolCallContext,
+  PendingProviderAction,
+  PendingProviderRegistration,
+  PendingProviderUnregistration,
 } from "./types";

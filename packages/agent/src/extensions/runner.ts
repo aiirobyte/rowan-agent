@@ -2,6 +2,9 @@ import { execFile } from "node:child_process";
 import { createPhaseRegistry, type PhaseRegistry, type PhaseDefinition } from "../loop/phases/registry";
 import { serializeSkills, serializeTools, latestUserInput } from "../harness/context/prompt-builder";
 import { createId, createJson } from "../utils";
+import type { ProviderConfig } from "@rowan-agent/models";
+import { registerModel, unregisterProviderModels } from "@rowan-agent/models";
+import { registerApiProvider } from "@rowan-agent/models";
 import type {
   ExecOptions,
   ExecResult,
@@ -10,8 +13,15 @@ import type {
   ExtensionHandler,
   ExtensionPhaseHandler,
   ExtensionRuntime,
+  PendingProviderAction,
   RegisteredPhase,
+  BeforeToolCallContext,
+  AfterToolCallContext,
+  BeforePhaseHookResult,
+  AfterPhaseHookResult,
 } from "./types";
+import type { AgentEvent, Tool, ToolResult } from "../types";
+import type { PhaseInput, PhaseOutput } from "../loop/phases/registry";
 
 // ---------------------------------------------------------------------------
 // Command execution
@@ -60,13 +70,56 @@ async function execCommand(
 
 export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRuntime {
   const cwd = options?.cwd ?? process.cwd();
-  const state: { staleMessage?: string } = {};
+  const state: { staleMessage?: string; bound: boolean } = { bound: false };
+
+  // Pending provider registrations — only used before bind()
+  const pending: PendingProviderAction[] = [];
 
   const assertActive = () => {
     if (state.staleMessage) {
       throw new Error(state.staleMessage);
     }
   };
+
+  // --- Internal helpers ---
+
+  function applyProviderRegistration(config: ProviderConfig): void {
+    if (config.streamSimple) {
+      registerApiProvider({ api: config.api, stream: config.streamSimple });
+    }
+    for (const modelConfig of config.models) {
+      registerModel({
+        id: modelConfig.id,
+        name: modelConfig.name,
+        api: config.api,
+        provider: config.name,
+        baseUrl: config.baseUrl,
+        reasoning: modelConfig.reasoning,
+        input: modelConfig.input,
+        cost: modelConfig.cost,
+        contextWindow: modelConfig.contextWindow,
+        maxTokens: modelConfig.maxTokens,
+        ...(config.headers ? { headers: config.headers } : {}),
+      });
+    }
+  }
+
+  function applyProviderUnregistration(name: string): void {
+    unregisterProviderModels(name);
+  }
+
+  function flushPending(): void {
+    for (const action of pending) {
+      if (action.kind === "register") {
+        applyProviderRegistration(action.config);
+      } else {
+        applyProviderUnregistration(action.name);
+      }
+    }
+    pending.length = 0;
+  }
+
+  // --- Public API ---
 
   return {
     assertActive,
@@ -106,6 +159,30 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
       return execCommand(command, args, cwd, options);
     },
 
+    registerProvider(config: ProviderConfig): void {
+      assertActive();
+      if (state.bound) {
+        applyProviderRegistration(config);
+      } else {
+        pending.push({ kind: "register", config });
+      }
+    },
+
+    unregisterProvider(name: string): void {
+      assertActive();
+      if (state.bound) {
+        applyProviderUnregistration(name);
+      } else {
+        pending.push({ kind: "unregister", name });
+      }
+    },
+
+    bind(): void {
+      if (state.bound) return;
+      state.bound = true;
+      flushPending();
+    },
+
     id: { create: createId },
     format: { json: createJson.stringify, tools: serializeTools, skills: serializeSkills },
     input: { latestUserMessage: latestUserInput },
@@ -118,15 +195,18 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
 
 export function createExtensionAPI(extension: Extension, runtime: ExtensionRuntime): ExtensionAPI {
   return {
-    registerPhase(registration) { runtime.registerPhase(extension, registration); },
     on(event, handler) { runtime.addEventHandler(extension, event, handler); },
+    registerPhase(registration) { runtime.registerPhase(extension, registration); },
     beforePhase(hook) { runtime.addEventHandler(extension, "before_phase", hook as ExtensionHandler); },
     afterPhase(hook) { runtime.addEventHandler(extension, "after_phase", hook as ExtensionHandler); },
+    beforeToolCall(hook) { runtime.addEventHandler(extension, "before_tool_call", hook as ExtensionHandler); },
+    afterToolCall(hook) { runtime.addEventHandler(extension, "after_tool_call", hook as ExtensionHandler); },
     exec(command, args, options) { return runtime.exec(command, args, options); },
+    registerProvider(config) { runtime.registerProvider(config); },
+    unregisterProvider(name) { runtime.unregisterProvider(name); },
     id: runtime.id,
     format: runtime.format,
     input: runtime.input,
-    runtime,
   };
 }
 
@@ -141,6 +221,7 @@ export type ExtensionRunnerOptions = {
 
 export class ExtensionRunner {
   private readonly validatePhaseOverride?: (phaseId: string, extensionPath: string) => boolean;
+  private _phaseCache: Map<string, RegisteredPhase> | null = null;
 
   constructor(
     private readonly extensions: Extension[],
@@ -170,11 +251,123 @@ export class ExtensionRunner {
     });
   }
 
+  /**
+   * Emit an event to all registered extension handlers for that event type.
+   * Handlers within each extension run concurrently; extensions are processed in registration order.
+   */
+  async emit(event: AgentEvent): Promise<void> {
+    for (const extension of this.extensions) {
+      const handlers = extension.eventHandlers.get(event.type);
+      if (!handlers?.length) continue;
+      const results = await Promise.allSettled(handlers.map((h) => h(event)));
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.error(
+            `[extension] handler error for "${event.type}" in ${extension.path}:`,
+            result.reason,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Invoke all extension-registered before_phase handlers and aggregate results.
+   * Returns the combined result: abort takes priority, then skip, then input replacement.
+   */
+  async emitBeforePhase(phaseId: string, input: PhaseInput): Promise<BeforePhaseHookResult> {
+    const result: BeforePhaseHookResult = {};
+    for (const extension of this.extensions) {
+      const handlers = extension.eventHandlers.get("before_phase");
+      if (!handlers?.length) continue;
+      for (const handler of handlers) {
+        try {
+          const ctx = { phaseId, input };
+          await handler(ctx);
+          // Check for abort/skip/input mutations via the mutable context pattern
+          const hookResult = ctx as unknown as BeforePhaseHookResult;
+          if (hookResult.abort) { result.abort = hookResult.abort; return result; }
+          if (hookResult.skip) { result.skip = hookResult.skip; }
+          if (hookResult.input) { result.input = hookResult.input; }
+        } catch (error) {
+          console.error(`[extension] before_phase handler error in ${extension.path}:`, error);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Invoke all extension-registered after_phase handlers and aggregate results.
+   * Returns the combined result: abort takes priority, then retry, then output replacement.
+   */
+  async emitAfterPhase(phaseId: string, output: PhaseOutput): Promise<AfterPhaseHookResult> {
+    const result: AfterPhaseHookResult = {};
+    for (const extension of this.extensions) {
+      const handlers = extension.eventHandlers.get("after_phase");
+      if (!handlers?.length) continue;
+      for (const handler of handlers) {
+        try {
+          const ctx = { phaseId, output };
+          await handler(ctx);
+          const hookResult = ctx as unknown as AfterPhaseHookResult;
+          if (hookResult.abort) { result.abort = hookResult.abort; return result; }
+          if (hookResult.retry) { result.retry = hookResult.retry; }
+          if (hookResult.output) { result.output = hookResult.output; }
+        } catch (error) {
+          console.error(`[extension] after_phase handler error in ${extension.path}:`, error);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Invoke before_tool_call handlers. Returns whether the call should be blocked.
+   * Short-circuits as soon as any handler sets allow=false.
+   */
+  async emitBeforeToolCall(tool: Tool, args: unknown): Promise<{ allow: boolean; reason?: string }> {
+    const ctx: BeforeToolCallContext = { tool, args, allow: true };
+    for (const extension of this.extensions) {
+      const handlers = extension.eventHandlers.get("before_tool_call");
+      if (!handlers?.length) continue;
+      for (const handler of handlers) {
+        try {
+          await handler(ctx);
+        } catch (error) {
+          console.error(`[extension] before_tool_call handler error in ${extension.path}:`, error);
+        }
+        if (!ctx.allow) return { allow: false, reason: ctx.reason };
+      }
+    }
+    return { allow: ctx.allow, reason: ctx.reason };
+  }
+
+  /**
+   * Invoke after_tool_call handlers. Handlers can mutate the result.
+   */
+  async emitAfterToolCall(tool: Tool, result: ToolResult): Promise<ToolResult> {
+    const ctx: AfterToolCallContext = { tool, result };
+    for (const extension of this.extensions) {
+      const handlers = extension.eventHandlers.get("after_tool_call");
+      if (!handlers?.length) continue;
+      for (const handler of handlers) {
+        try {
+          await handler(ctx);
+        } catch (error) {
+          console.error(`[extension] after_tool_call handler error in ${extension.path}:`, error);
+        }
+      }
+    }
+    return ctx.result;
+  }
+
   private getRegisteredPhase(id: string): RegisteredPhase | undefined {
     return this.collectRegisteredPhases().get(id);
   }
 
   private collectRegisteredPhases(): Map<string, RegisteredPhase> {
+    if (this._phaseCache) return this._phaseCache;
     const phases = new Map<string, RegisteredPhase>();
     for (const extension of this.extensions) {
       for (const [id, phase] of extension.phases) {
@@ -187,6 +380,7 @@ export class ExtensionRunner {
         phases.set(id, phase);
       }
     }
+    this._phaseCache = phases;
     return phases;
   }
 }

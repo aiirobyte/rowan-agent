@@ -1,6 +1,7 @@
 import { runAgentLoop } from "./agent-loop";
-import { createDefaultPhaseRegistry } from "./extensions";
-import type { PhaseRegistry } from "./loop/phases";
+import { createDefaultPhaseRegistry, ExtensionRunner } from "./extensions";
+import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions/types";
+import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./loop/phases";
 import type {
   AgentMessage,
   LlmModelRef,
@@ -14,7 +15,10 @@ import type {
   AgentContext,
   AgentEventListener,
   Unsubscribe,
+  ToolResult,
 } from "./types";
+
+export type ExtensionRunnerRef = { current?: ExtensionRunner };
 
 export type AgentOptions = {
   context: AgentContext;
@@ -22,6 +26,7 @@ export type AgentOptions = {
   stream: StreamFn;
   cwd?: string;
   phaseConfig?: PhaseRegistry;
+  extensionRunnerRef?: ExtensionRunnerRef;
   sessionId?: string;
   maxAttempts?: number;
   limits?: AgentRunLimits;
@@ -125,6 +130,49 @@ export class Agent {
 
     // Notify listeners
     this.emitToListeners(event);
+
+    // Dispatch to extension runner via ref
+    this.options.extensionRunnerRef?.current?.emit(event);
+  }
+
+  /**
+   * Hook for before_tool_call — called before a tool executes.
+   * Extensions can block execution by setting allow=false.
+   */
+  private async handleBeforeToolCall(tool: Tool, args: unknown): Promise<{ allow: boolean; reason?: string }> {
+    const runner = this.options.extensionRunnerRef?.current;
+    if (!runner) return { allow: true };
+    return runner.emitBeforeToolCall(tool, args);
+  }
+
+  /**
+   * Hook for after_tool_call — called after a tool executes.
+   * Extensions can mutate the result.
+   */
+  private async handleAfterToolCall(tool: Tool, result: ToolResult): Promise<ToolResult> {
+    const runner = this.options.extensionRunnerRef?.current;
+    if (!runner) return result;
+    return runner.emitAfterToolCall(tool, result);
+  }
+
+  /**
+   * Hook for before_phase — called before a phase executes.
+   * Extensions can abort, skip, or replace the phase input.
+   */
+  private async handleBeforePhase(phaseId: string, input: PhaseInput): Promise<BeforePhaseHookResult> {
+    const runner = this.options.extensionRunnerRef?.current;
+    if (!runner) return {};
+    return runner.emitBeforePhase(phaseId, input);
+  }
+
+  /**
+   * Hook for after_phase — called after a phase executes.
+   * Extensions can abort, retry, or replace the output.
+   */
+  private async handleAfterPhase(phaseId: string, output: PhaseOutput): Promise<AfterPhaseHookResult> {
+    const runner = this.options.extensionRunnerRef?.current;
+    if (!runner) return {};
+    return runner.emitAfterPhase(phaseId, output);
   }
 
   private handleRunFailure(error: unknown, aborted: boolean): void {
@@ -189,6 +237,31 @@ export class Agent {
         cwd: resolved.cwd ?? process.cwd(),
       });
 
+      // Combine user-provided hooks with extension hooks
+      const beforeToolCall: BeforeToolCall = async (input) => {
+        // User-provided hook first
+        if (resolved.beforeToolCall) {
+          const userResult = await resolved.beforeToolCall(input);
+          if (!userResult.allow) return userResult;
+        }
+        // Extension hooks
+        const extResult = await this.handleBeforeToolCall(input.tool, input.args);
+        if (!extResult.allow) {
+          return { allow: false, reason: extResult.reason ?? "Blocked by extension" };
+        }
+        return { allow: true };
+      };
+
+      const afterToolCall: AfterToolCall = async (input) => {
+        let result = input.result;
+        // User-provided hook first
+        if (resolved.afterToolCall) {
+          result = await resolved.afterToolCall({ tool: input.tool, result });
+        }
+        // Extension hooks
+        return this.handleAfterToolCall(input.tool, result);
+      };
+
       const result = await runAgentLoop({
         kind: "run",
         context: resolved.context,
@@ -199,8 +272,10 @@ export class Agent {
         limits: resolved.limits,
         threadDepth: 0,
         signal,
-        beforeToolCall: resolved.beforeToolCall,
-        afterToolCall: resolved.afterToolCall,
+        beforeToolCall,
+        afterToolCall,
+        beforePhase: (phaseId: string, input: PhaseInput) => this.handleBeforePhase(phaseId, input),
+        afterPhase: (phaseId: string, output: PhaseOutput) => this.handleAfterPhase(phaseId, output),
         phaseConfig,
         emit,
       });

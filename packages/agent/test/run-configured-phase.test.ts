@@ -47,10 +47,6 @@ function createTestContext(state: AgentRunState): PhaseContext {
     },
     messages: {
       visible: () => [],
-      append: () => {},
-      appendState: () => {},
-    },
-    message: {
       start: () => "msg_1",
       update: async () => {},
       end: async () => {},
@@ -66,16 +62,14 @@ function createTestContext(state: AgentRunState): PhaseContext {
     tools: {
       execute: async () => ({ toolCallId: "tc", toolName: "t", ok: true, content: null }),
     },
-    runs: {
+    threads: {
       create: async () => {
         throw new Error("not implemented");
       },
     },
     skills: [],
-    emit: () => {},
     turn: async (fn) => fn(),
     incrementAttempt: () => {},
-    setLastExecuteText: () => {},
     availablePhases: [],
   };
 }
@@ -166,42 +160,24 @@ describe("runPhase contract", () => {
     expect(receivedContext).toBeDefined();
     expect(receivedContext).toHaveProperty("phaseId");
     expect(receivedContext).toHaveProperty("messages");
-    expect(receivedContext).toHaveProperty("message");
     expect(receivedContext).toHaveProperty("toolExecution");
     expect(receivedContext).toHaveProperty("model");
     expect(receivedContext).toHaveProperty("tools");
-    expect(receivedContext).toHaveProperty("emit");
     expect(receivedContext).not.toHaveProperty("agentState");
     expect(receivedContext).not.toHaveProperty("currentTask");
     expect(receivedContext).not.toHaveProperty("attempt");
   });
 
-  test("runPhase provides runs.create through PhaseContext", async () => {
+  test("runPhase provides messages with visible, start, update, end", async () => {
     const { state } = createTestLifecycle();
-    const customCreateRun = async () => {
-      return {
-        kind: "thread" as const,
-        parentSessionId: "parent",
-        sessionId: "child",
-        messages: [],
-        outcome: { id: "out", passed: true, message: "ok" },
-        limitUsage: { modelCalls: 0, toolCalls: 0 },
-        depth: { threadDepth: 1, maxThreadDepth: 4 },
-        prompt: "test",
-      };
-    };
+    const context = createTestContext(state);
 
-    const context: PhaseContext = {
-      ...createTestContext(state),
-      runs: { create: customCreateRun },
-    };
-
-    let receivedCreateRun: unknown;
+    let receivedMessages: unknown;
 
     const definition = testPhase({
       id: "test",
       run: async (ctx) => {
-        receivedCreateRun = ctx.runs.create;
+        receivedMessages = ctx.messages;
         return { message: "", route: "stop" };
       },
     });
@@ -214,7 +190,10 @@ describe("runPhase contract", () => {
       skills: [],
     });
 
-    expect(receivedCreateRun).toBe(customCreateRun);
+    expect(receivedMessages).toHaveProperty("visible");
+    expect(receivedMessages).toHaveProperty("start");
+    expect(receivedMessages).toHaveProperty("update");
+    expect(receivedMessages).toHaveProperty("end");
   });
 });
 

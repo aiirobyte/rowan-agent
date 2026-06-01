@@ -1,5 +1,4 @@
 import type {
-  AgentEvent,
   AgentMessage,
   AgentState,
   Outcome,
@@ -66,6 +65,8 @@ export type ModelCollectInput = {
 
 /** Message lifecycle manager for streaming updates */
 export type PhaseMessageManager = {
+  /** Get all visible messages in the transcript */
+  visible(): AgentMessage[];
   /** Start a new message stream, returns message id */
   start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>): string;
   /** Stream a text delta */
@@ -87,12 +88,7 @@ export type PhaseToolExecutionManager = {
 export type PhaseContext = {
   phaseId: string;
   state: AgentRunState;
-  messages: {
-    visible(): AgentMessage[];
-    append(message: AgentMessage): void;
-    appendState(message: AgentMessage): void;
-  };
-  message: PhaseMessageManager;
+  messages: PhaseMessageManager;
   toolExecution: PhaseToolExecutionManager;
   model: {
     collect(input: ModelCollectInput): Promise<ModelCollectedOutput>;
@@ -100,16 +96,13 @@ export type PhaseContext = {
   tools: {
     execute(input: { toolCall: ToolCall }): Promise<ToolResult>;
   };
-  runs: {
+  threads: {
     create: RunThread;
   };
   skills: AgentState["skills"];
-  emit(event: AgentEvent): void;
   turn<T>(fn: () => Promise<T>): Promise<T>;
   maxAttempts?: number;
-  signal?: AbortSignal;
   incrementAttempt(): void;
-  setLastExecuteText(text: string): void;
   availablePhases: Array<{ id: string; name: string; description: string }>;
 };
 
@@ -172,8 +165,6 @@ export function createPhaseRegistry(input: PhaseRegistryInput): PhaseRegistry {
   validatePhaseRegistry(registry);
   return registry;
 }
-
-
 
 /** Look up a phase definition and its handler by id; throws if not found. */
 export function resolvePhaseEntry(
