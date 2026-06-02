@@ -1,11 +1,8 @@
 import { defineExtension } from "../../../../extensions/types";
-import packageJson from "./package.json";
 
-const manifestJson = packageJson.rowan.phase;
-
-export const executePhaseExtension = defineExtension((rowan) => {
+export default defineExtension((rowan) => {
   rowan.registerPhase({
-    ...manifestJson,
+    ...rowan.manifest.phase!,
 
     prompt: {
       instructions: [

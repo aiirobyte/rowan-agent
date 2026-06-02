@@ -1,7 +1,4 @@
 import { defineExtension } from "../../../../extensions/types";
-import packageJson from "./package.json";
-
-const manifestJson = packageJson.rowan.phase;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -31,9 +28,9 @@ function normalizeTask(value: unknown): Record<string, unknown> {
   };
 }
 
-export const planPhaseExtension = defineExtension((rowan) => {
+export default defineExtension((rowan) => {
   rowan.registerPhase({
-    ...manifestJson,
+    ...rowan.manifest.phase!,
 
     prompt: {
       instructions: [

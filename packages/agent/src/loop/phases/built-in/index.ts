@@ -1,18 +1,18 @@
-import { chatPhaseExtension } from "./chat";
-import { executePhaseExtension } from "./execute";
-import { planPhaseExtension } from "./plan";
-import { verifyPhaseExtension } from "./verify";
+import chatPhase from "./chat";
+import executePhase from "./execute";
+import planPhase from "./plan";
+import verifyPhase from "./verify";
 
 export const builtinPhases = [
-  chatPhaseExtension,
-  planPhaseExtension,
-  executePhaseExtension,
-  verifyPhaseExtension,
+  chatPhase,
+  planPhase,
+  executePhase,
+  verifyPhase,
 ];
 
 export {
-  chatPhaseExtension,
-  planPhaseExtension,
-  executePhaseExtension,
-  verifyPhaseExtension,
+  chatPhase,
+  planPhase,
+  executePhase,
+  verifyPhase,
 };

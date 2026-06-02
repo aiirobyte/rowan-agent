@@ -27,7 +27,7 @@ export type PhasePromptConfig = {
   instructions?: string[];
 };
 
-export type PhaseRegistration = PhaseManifest & {
+export type PhaseRegistration = Partial<PhaseManifest> & {
   /** Optional execution override — takes over model invocation at step 4 */
   run?: PhaseRun;
   /** Declarative prompt config — framework generates buildPrompt from this */
@@ -192,6 +192,9 @@ export type AfterPhaseHookResult = {
 };
 
 export type ExtensionAPI = {
+  // Extension manifest from package.json (always present, phase is required)
+  manifest: NonNullable<ExtensionPackageManifest["rowan"]>;
+
   // Event subscription
   on(event: string, handler: ExtensionHandler): void;
 

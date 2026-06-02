@@ -114,6 +114,20 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
   return paths;
 }
 
+function readPackageManifestSync(dir: string): NonNullable<ExtensionPackageManifest["rowan"]> {
+  const path = join(dir, "package.json");
+  if (!existsSync(path)) {
+    return {};
+  }
+  try {
+    const content = require("node:fs").readFileSync(path, "utf8");
+    const manifest = JSON.parse(content) as ExtensionPackageManifest;
+    return manifest.rowan ?? {};
+  } catch {
+    return {};
+  }
+}
+
 function createExtensionFromFactory(
   factory: ExtensionFactory,
   runtime: ExtensionRuntime,
@@ -123,7 +137,10 @@ function createExtensionFromFactory(
   const resolvedCwd = resolve(cwd);
   const resolvedPath = isSyntheticPath(extensionPath) ? extensionPath : resolve(resolvedCwd, extensionPath);
   const extension = createExtension(extensionPath, resolvedPath);
-  const rowan = createExtensionAPI(extension, runtime);
+  // Read manifest from package.json in extension directory
+  const manifestDir = isSyntheticPath(extensionPath) ? resolvedCwd : dirname(resolvedPath);
+  const manifest = readPackageManifestSync(manifestDir);
+  const rowan = createExtensionAPI(extension, runtime, manifest);
   const result = factory(rowan);
   return { extension, result };
 }

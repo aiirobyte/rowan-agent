@@ -18,7 +18,6 @@ import {
   type Outcome,
 } from "@rowan-agent/agent";
 import {
-  consoleAgentEventLogger,
   pinoAgentEventLogger,
   type AgentEventLogLevel,
 } from "@rowan-agent/logging";
@@ -34,7 +33,7 @@ import {
   resolveInWorkspace,
   resolveWorkspacePaths,
 } from "@rowan-agent/agent";
-import { formatJsonOutput, formatOutcomeOutput } from "./output";
+import { formatJsonOutput } from "./output";
 
 type CliCommand = "config" | "list";
 
@@ -556,9 +555,9 @@ async function promptWithLog(input: {
         }
       }
 
-      if (event.type === "message_start" && event.message.role === "assistant" && event.message.content) {
+      if (event.type === "message_start" && event.message.role === "assistant") {
         currentStreamableMessage = event.message.metadata?.scope === "conversation";
-        if (currentStreamableMessage) {
+        if (currentStreamableMessage && event.message.content) {
           process.stdout.write(event.message.content);
           streamedContent = true;
         }
@@ -683,13 +682,9 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       });
       sessionManager = run.sessionManager;
       printRunHeader();
-      const replayLogger = consoleAgentEventLogger({ level: logLevel });
-      for (const event of run.pendingConsoleEvents) {
-        replayLogger(event);
-      }
-      await replayLogger.flush();
+      // Console event replay removed - logs only written to file
       if (!run.streamedContent) {
-        console.log(formatOutcomeOutput(run.outcome));
+        console.log(run.outcome.message);
       }
       // Print loop metrics
       const m = run.metrics;

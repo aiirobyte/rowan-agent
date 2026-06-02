@@ -1,22 +1,8 @@
 import { defineExtension } from "../../../../extensions/types";
-import manifest from "./package.json";
 
-const manifestObject = manifest.rowan.phase;
-
-export const chatPhaseExtension = defineExtension((rowan) => {
+export default defineExtension((rowan) => {
   rowan.registerPhase({
-    ...manifestObject,
-
-    prompt: {
-      instructions: [
-        "Phase: chat",
-        "",
-        "Answer the user's question directly in natural language.",
-        "If the request requires tool access, call the available tools.",
-        "When you have completed the response, call the 'route' tool to indicate the next phase or stop.",
-        "Do NOT output JSON. Respond in the user's language.",
-      ],
-    },
+    ...rowan.manifest.phase!,
 
     async run(context, input) {
       const collected = await context.turn(() => context.model.invoke({ input }));

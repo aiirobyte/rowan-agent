@@ -11,6 +11,7 @@ import type {
   Extension,
   ExtensionAPI,
   ExtensionHandler,
+  ExtensionPackageManifest,
   ExtensionPhaseHandler,
   ExtensionRuntime,
   PendingProviderAction,
@@ -131,13 +132,18 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
     registerPhase(extension, registration) {
       assertActive();
 
+      // id is required for phase registration
+      if (!registration.id) {
+        throw new Error(`Phase registration requires an "id" field. Check that manifest.phase.id is defined in package.json or provide it directly.`);
+      }
+
       // Generate buildPrompt from prompt config if not provided
       let buildPrompt = registration.buildPrompt;
-      if (!buildPrompt && registration.prompt) {
+      if (!buildPrompt) {
         const promptConfig = registration.prompt;
         buildPrompt = (input) => {
           const req = buildModelRequest(input);
-          if (promptConfig.instructions?.length) {
+          if (promptConfig?.instructions?.length) {
             req.messages.push({
               role: "user",
               content: promptConfig.instructions.join("\n"),
@@ -149,8 +155,8 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
 
       const definition: PhaseDefinition = {
         id: registration.id,
-        name: registration.name,
-        description: registration.description,
+        name: registration.name ?? registration.id,
+        description: registration.description ?? "",
         run: registration.run,
         buildPrompt,
       };
@@ -204,8 +210,9 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
 // Extension API creation
 // ---------------------------------------------------------------------------
 
-export function createExtensionAPI(extension: Extension, runtime: ExtensionRuntime): ExtensionAPI {
+export function createExtensionAPI(extension: Extension, runtime: ExtensionRuntime, manifest: NonNullable<ExtensionPackageManifest["rowan"]>): ExtensionAPI {
   return {
+    manifest,
     on(event, handler) { runtime.addEventHandler(extension, event, handler); },
     registerPhase(registration) { runtime.registerPhase(extension, registration); },
     beforePhase(hook) { runtime.addEventHandler(extension, "before_phase", hook as ExtensionHandler); },

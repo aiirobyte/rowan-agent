@@ -693,7 +693,7 @@ async function collectStructured(input: {
         activeMessageId = input.message.start("assistant", "", {
           kind: "model_message",
           phase: input.metadataPhase,
-          scope: input.scope ?? "execution",
+          scope: input.scope ?? "conversation",
         });
       }
     }
@@ -705,7 +705,7 @@ async function collectStructured(input: {
         activeMessageId = input.message.start("assistant", event.text, {
           kind: "model_message",
           phase: input.metadataPhase,
-          scope: input.scope ?? "execution",
+          scope: input.scope ?? "conversation",
         });
       } else {
         await input.message.update(activeMessageId, event.text);
@@ -732,7 +732,7 @@ async function collectStructured(input: {
         activeMessageId = input.message.start("assistant", "", {
           kind: "model_message",
           phase: input.metadataPhase,
-          scope: input.scope ?? "execution",
+          scope: input.scope ?? "conversation",
           toolCalls: toolCallBlocks.map(tc => ({ id: tc.id, name: tc.name, args: tc.args })),
         });
       }
@@ -906,14 +906,11 @@ function createPhaseContext(
     },
     model: {
       invoke: async (input) => {
-        if (!phase.buildPrompt) {
-          throw new Error(`Phase "${phase.id}" does not have a buildPrompt method.`);
-        }
         // Allow extensions to transform PhaseInput before buildPrompt
         if (loopContext.config.beforePrompt) {
           input.input = await loopContext.config.beforePrompt(phase.id, input.input);
         }
-        const request = phase.buildPrompt(input.input);
+        const request = phase.buildPrompt!(input.input);
         request.model = loopContext.config.model;
         // Ensure tools are available when phase has tools configured
         // Use phaseTools (filtered) instead of tools (all)
