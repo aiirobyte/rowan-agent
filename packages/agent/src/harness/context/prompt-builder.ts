@@ -93,6 +93,7 @@ export function buildModelRequest(
   options?: { model?: LlmModelRef },
 ): LlmRequest {
   // Pass tool metadata to system prompt builder for rich snippets and guidelines
+  // Use input.tools (all tools) for systemPrompt display (cache-friendly)
   const toolMeta = input.tools.map((t) => ({
     name: t.name,
     description: t.description,
@@ -110,7 +111,8 @@ export function buildModelRequest(
 
   const messages: LlmMessage[] = [...conversationMessages(input.messages)];
 
-  const tools = input.tools.map((t) => ({
+  // Use phaseTools (filtered) for LlmRequest.tools
+  const modelTools = (input.phaseTools ?? input.tools).map((t) => ({
     name: t.name,
     description: t.description,
     parameters: t.parameters,
@@ -120,6 +122,6 @@ export function buildModelRequest(
     model: options?.model ?? { provider: "", name: "" },
     system: systemText,
     messages,
-    tools: tools.length > 0 ? tools : undefined,
+    tools: modelTools.length > 0 ? modelTools : undefined,
   };
 }

@@ -49,7 +49,7 @@ export const planPhaseExtension = defineExtension((rowan) => {
     },
 
     async run(context, input) {
-      const collected = await context.turn(() => context.model.collect({ input }));
+      const collected = await context.turn(() => context.model.invoke({ input }));
 
       // Plan phase uses JSON for structured task data
       let raw: Record<string, unknown> | undefined;

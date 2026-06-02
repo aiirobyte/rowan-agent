@@ -19,7 +19,7 @@ export const chatPhaseExtension = defineExtension((rowan) => {
     },
 
     async run(context, input) {
-      const collected = await context.turn(() => context.model.collect({ input }));
+      const collected = await context.turn(() => context.model.invoke({ input }));
 
       // Check if collection was stopped due to abort
       if (collected.stopReason === "aborted") {

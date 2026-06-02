@@ -22,8 +22,14 @@ export type PhaseInput = {
   phase: string;
   systemPrompt: string;
   messages: AgentMessage[];
+  /** All tools (for systemPrompt display, cache-friendly) */
   tools: Tool[];
+  /** All skills (for systemPrompt display) */
   skills: Skill[];
+  /** Phase-specific filtered tools (for LlmRequest.tools) */
+  phaseTools?: Tool[];
+  /** Phase-specific filtered skills */
+  phaseSkills?: Skill[];
   /** Data from the previous phase's output.yield */
   yield?: unknown;
   /** Additional guideline bullets appended to the system prompt. */
@@ -36,6 +42,10 @@ export type PhaseManifest = {
   id: string;
   name: string;
   description: string;
+  /** Tools available in this phase. If omitted, all tools are available. */
+  tools?: string[];
+  /** Skills available in this phase. If omitted, all skills are available. */
+  skills?: string[];
 };
 
 export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
@@ -45,14 +55,14 @@ export type PhaseDefinition = PhaseManifest & {
   buildPrompt?(input: PhaseInput): LlmRequest;
 };
 
-export type ModelCollectedOutput = {
+export type ModelInvokeOutput = {
   text: string;
   contentBlocks: ContentBlock[];
   toolCalls: ToolCall[];
   stopReason?: string;
 };
 
-export type ModelCollectInput = {
+export type ModelInvokeInput = {
   input: PhaseInput;
   scope?: "conversation" | "execution";
 };
@@ -95,7 +105,7 @@ export type PhaseContext = {
   messages: PhaseMessageManager;
   toolExecution: PhaseToolExecutionManager;
   model: {
-    collect(input: ModelCollectInput): Promise<ModelCollectedOutput>;
+    invoke(input: ModelInvokeInput): Promise<ModelInvokeOutput>;
   };
   tools: {
     execute(input: { toolCall: ToolCall }): Promise<ToolResult>;

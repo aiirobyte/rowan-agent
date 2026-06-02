@@ -24,7 +24,7 @@ export const verifyPhaseExtension = defineExtension((rowan) => {
 
       let collected;
       try {
-        collected = await context.turn(() => context.model.collect({ input }));
+        collected = await context.turn(() => context.model.invoke({ input }));
       } catch (error) {
         // Model errors - check if we should retry
         if (context.state.attempt < maxAttempts) {

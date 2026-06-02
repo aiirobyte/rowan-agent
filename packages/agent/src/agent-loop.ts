@@ -395,6 +395,9 @@ async function runLoop(
   let lastYield: unknown;
 
   const maxIterations = config.limits?.maxIterations ?? 50;
+  const maxPhaseRounds = config.limits?.maxPhaseRounds ?? 10;
+  let phaseRounds = 0;
+  let isContinuing = false;
 
   while (currentPhaseId) {
     const abortResult = LoopGuard.checkAbort(config.signal);
@@ -442,18 +445,31 @@ async function runLoop(
     const loopContext = createAgentLoopContext(config, state, availablePhases);
     const context = createPhaseContext(config, state, phase, loopContext, availablePhases);
 
+    // Filter tools and skills based on phase configuration
+    const phaseTools = phase.tools
+      ? loopContext.tools.filter(t => phase.tools!.includes(t.name))
+      : loopContext.tools;
+    const phaseSkills = phase.skills
+      ? state.agentState.skills.filter(s => phase.skills!.includes(s.name))
+      : state.agentState.skills;
+
     // Build unified input — framework handles data preparation
     let phaseInput: PhaseInput = {
       phase: currentPhaseId,
-      systemPrompt: state.agentState.systemPrompt,
+      systemPrompt: loopContext.systemPrompt,
       messages: context.messages.visible(),
-      tools: [],
-      skills: context.skills,
+      tools: loopContext.tools,      // All tools (for systemPrompt, cache-friendly)
+      skills: loopContext.skills,    // All skills (for systemPrompt)
+      phaseTools,                    // Phase-filtered tools (for LlmRequest.tools)
+      phaseSkills,                   // Phase-filtered skills
       yield: lastYield,
     };
 
-    // Emit phase_start
-    emit(state, config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
+    // Emit phase_start only when entering a new phase (not on continue)
+    if (!isContinuing) {
+      emit(state, config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
+    }
+    isContinuing = false;
 
     // beforePhase hook — extension hooks first, then runtime hooks
     if (config.beforePhase) {
@@ -478,13 +494,13 @@ async function runLoop(
       }
     }
 
-    // Step 4: Run phase — if run is provided, it takes over; otherwise framework calls model.collect
+    // Step 4: Run phase — if run is provided, it takes over; otherwise framework calls model.invoke
     let output: PhaseOutput;
     if (phase.run) {
       output = resolvePhaseOutput(await phase.run(context, phaseInput), state);
     } else {
-      // Default: call model.collect
-      const collected = await context.turn(() => context.model.collect({ input: phaseInput }));
+      // Default: call model.invoke
+      const collected = await context.turn(() => context.model.invoke({ input: phaseInput }));
       output = {
         message: collected.text,
         route: "stop",
@@ -505,6 +521,24 @@ async function runLoop(
         output = extAfter.output;
       }
     }
+
+    // Handle "continue" — re-execute current phase without phase transition events
+    if (output.route === "continue") {
+      phaseRounds++;
+      if (phaseRounds > maxPhaseRounds) {
+        // Force transition to chat to avoid infinite loop
+        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        phaseRounds = 0;
+        currentPhaseId = "chat";
+        continue;
+      }
+      isContinuing = true;
+      state.metrics.iterations++;
+      continue;
+    }
+
+    // Reset phase rounds counter on non-continue routes
+    phaseRounds = 0;
 
     // Emit phase_end
     emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
@@ -652,6 +686,18 @@ async function collectStructured(input: {
       throw event.error;
     }
 
+    // ---- Start: create assistant message immediately (even for tool-call-only responses) ----
+    if (event.type === "start") {
+      lastPartial = event.partial;
+      if (!activeMessageId) {
+        activeMessageId = input.message.start("assistant", "", {
+          kind: "model_message",
+          phase: input.metadataPhase,
+          scope: input.scope ?? "execution",
+        });
+      }
+    }
+
     // ---- Text: stream to UI ----
     if (event.type === "text_delta") {
       lastPartial = event.partial;
@@ -679,6 +725,18 @@ async function collectStructured(input: {
     // ---- Done: finalize ----
     if (event.type === "done") {
       stopReason = event.response?.stopReason;
+
+      // Fallback: ensure assistant message exists if there are tool calls
+      const toolCallBlocks = lastPartial?.contentBlocks?.filter(b => b.type === "tool_call") ?? [];
+      if (!activeMessageId && toolCallBlocks.length > 0) {
+        activeMessageId = input.message.start("assistant", "", {
+          kind: "model_message",
+          phase: input.metadataPhase,
+          scope: input.scope ?? "execution",
+          toolCalls: toolCallBlocks.map(tc => ({ id: tc.id, name: tc.name, args: tc.args })),
+        });
+      }
+
       if (activeMessageId) {
         await input.message.end(activeMessageId);
         activeMessageId = undefined;
@@ -847,7 +905,7 @@ function createPhaseContext(
       },
     },
     model: {
-      collect: async (input) => {
+      invoke: async (input) => {
         if (!phase.buildPrompt) {
           throw new Error(`Phase "${phase.id}" does not have a buildPrompt method.`);
         }
@@ -857,13 +915,17 @@ function createPhaseContext(
         }
         const request = phase.buildPrompt(input.input);
         request.model = loopContext.config.model;
-        // Ensure tools are always available in the request when configured
-        if (!request.tools && loopContext.tools.length > 0) {
-          request.tools = loopContext.tools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-          }));
+        // Ensure tools are available when phase has tools configured
+        // Use phaseTools (filtered) instead of tools (all)
+        if (!request.tools) {
+          const modelTools = input.input.phaseTools ?? input.input.tools;
+          if (modelTools.length > 0) {
+            request.tools = modelTools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            }));
+          }
         }
         // Retry with exponential backoff for transient model errors
         return withRetry(

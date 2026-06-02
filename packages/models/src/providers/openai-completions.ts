@@ -349,6 +349,7 @@ async function* streamChatCompletions(
 
       yield { type: "model_requested", model: request.model, usage: { ...requestUsage } };
 
+      // Non-streaming response
       if (!response.headers.get("content-type")?.includes("text/event-stream")) {
         const data = await response.json() as ChatCompletionResponse;
         const choice = data.choices?.[0];
@@ -358,6 +359,9 @@ async function* streamChatCompletions(
           role: "assistant",
           contentBlocks: [],
         };
+
+        yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+
         if (content) {
           partial.contentBlocks.push({ type: "text", text: content });
           yield { type: "text_delta", text: content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
@@ -413,6 +417,8 @@ async function* streamChatCompletions(
           });
         }
       }
+
+      yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
 
       for await (const sse of iterateSseMessages(response.body, signal)) {
         if (sse.data === "[DONE]") break;

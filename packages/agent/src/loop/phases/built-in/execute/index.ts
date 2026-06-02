@@ -25,7 +25,7 @@ export const executePhaseExtension = defineExtension((rowan) => {
 
       let collected;
       try {
-        collected = await context.turn(() => context.model.collect({ input }));
+        collected = await context.turn(() => context.model.invoke({ input }));
       } catch (error) {
         // Model errors - check if we should retry
         if (context.state.attempt < maxAttempts) {
@@ -83,7 +83,7 @@ export const executePhaseExtension = defineExtension((rowan) => {
         await context.messages.end(toolMsgId);
       }
 
-      // Use route decision if available
+      // Use route decision if available (after executing tools)
       if (routeDecision) {
         return {
           message: routeDecision.reason ?? collected.text ?? "",
@@ -91,7 +91,12 @@ export const executePhaseExtension = defineExtension((rowan) => {
         };
       }
 
-      // Default: route back to chat so model can generate response based on tool results
+      // If tools were executed, continue in execute phase
+      if (nonRouteToolCalls.length > 0) {
+        return { message: collected.text ?? "", route: "continue" };
+      }
+
+      // No tools called and no route - execution complete, go to chat for final response
       return { message: collected.text ?? "", route: "chat" };
     },
   });

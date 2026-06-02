@@ -65,6 +65,8 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 
   let prompt = `${systemPrompt}
 
+**Important:** Tool and skill availability varies by phase. Only use tools that are available in your current phase context.
+
 Available tools:
 ${toolsList}
 

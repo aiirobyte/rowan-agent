@@ -20,6 +20,8 @@ export type AgentRunLimits = {
   maxThreadDepth?: number;
   /** Maximum number of phase iterations before forcing stop. Default: 50. */
   maxIterations?: number;
+  /** Maximum consecutive "continue" rounds within a single phase before forcing transition. Default: 10. */
+  maxPhaseRounds?: number;
 };
 
 export type RuntimeDepth = {

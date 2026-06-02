@@ -323,6 +323,8 @@ async function* streamResponses(
         }
       }
 
+      yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+
       for await (const sse of iterateSseMessages(response.body, signal)) {
         let event: ResponsesStreamEvent;
         try { event = JSON.parse(sse.data) as ResponsesStreamEvent; } catch { continue; }

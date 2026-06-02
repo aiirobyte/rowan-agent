@@ -67,7 +67,7 @@ function createTestContext(state: AgentRunState): PhaseContext {
       end: async () => {},
     },
     model: {
-      collect: async () => ({ text: "", contentBlocks: [], toolCalls: [] }),
+      invoke: async () => ({ text: "", contentBlocks: [], toolCalls: [] }),
     },
     tools: {
       execute: async () => ({ toolCallId: "tc", toolName: "t", ok: true, content: null }),

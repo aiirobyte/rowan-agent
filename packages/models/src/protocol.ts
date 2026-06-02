@@ -230,6 +230,7 @@ export type AssistantMessagePartial = {
 // ---------------------------------------------------------------------------
 
 export type LlmStreamEvent =
+  | { type: "start"; partial: AssistantMessagePartial }
   | { type: "text_delta"; text: string; partial: AssistantMessagePartial }
   | { type: "thinking_delta"; thinking: string; partial: AssistantMessagePartial }
   | { type: "tool_call_start"; id: string; name: string; partial: AssistantMessagePartial }

@@ -80,6 +80,7 @@ export function isConversationMessage(message: { metadata?: { scope?: unknown } 
 /** Unified phase output — model decides routing via route. */
 export type PhaseOutput = {
   message: string;
+  /** Route to next phase, or "continue" to re-execute current phase, or "stop" to end */
   route: string;
   /** Phase-specific data for the next phase */
   yield?: unknown;
