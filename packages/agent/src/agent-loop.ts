@@ -743,11 +743,34 @@ function createPhaseContext(
   // Track active messages for streaming lifecycle
   const activeMessages = new Map<string, AgentMessage>();
 
+  // Turn depth tracking: explicit turn() calls and auto-turn for event-emitting APIs
+  let turnDepth = 0;
+  let autoTurnCount = 0;
+
+  function beginAutoTurn() {
+    if (turnDepth === 0) {
+      autoTurnCount++;
+      if (autoTurnCount === 1) {
+        emitTurn(config, state, config.emit, "turn_start");
+      }
+    }
+  }
+
+  function endAutoTurn() {
+    if (turnDepth === 0 && autoTurnCount > 0) {
+      autoTurnCount--;
+      if (autoTurnCount === 0) {
+        emitTurn(config, state, config.emit, "turn_end");
+      }
+    }
+  }
+
   const messageManager: import("./loop/phases/registry").PhaseMessageManager = {
     visible: () => [...state.transcript],
     start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>) {
       const msg = createMessage(role, content, metadata);
       activeMessages.set(msg.id, msg);
+      beginAutoTurn();
       emit(state, config.emit, { type: "message_start", message: snapshotMessage(msg), ts: createTimestamp() });
       return msg.id;
     },
@@ -773,6 +796,7 @@ function createPhaseContext(
         state.agentState.messages.push(msg);
       }
       emit(state, config.emit, { type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
+      endAutoTurn();
     },
     snapshot() {
       return {
@@ -798,6 +822,7 @@ function createPhaseContext(
     messages: messageManager,
     toolExecution: {
       async start(toolCallId, toolName, args) {
+        beginAutoTurn();
         emit(state, config.emit, {
           type: "tool_execution_start",
           toolCallId,
@@ -818,6 +843,7 @@ function createPhaseContext(
           isError,
           ts: createTimestamp(),
         });
+        endAutoTurn();
       },
     },
     model: {
@@ -882,10 +908,12 @@ function createPhaseContext(
     },
     skills: state.agentState.skills.slice(),
     turn: async (fn) => {
+      turnDepth++;
       emitTurn(config, state, config.emit, "turn_start");
       try {
         return await fn();
       } finally {
+        turnDepth--;
         emitTurn(config, state, config.emit, "turn_end");
       }
     },
