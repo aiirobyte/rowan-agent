@@ -122,8 +122,8 @@ test("loadSkill reads SKILL.md and infers id from parent directory", async () =>
     skills: [skill],
   });
 
-  expect(skill.id).toBe("example");
-  expect(session.skills[0]?.content).toContain("Use echo.");
+  expect(skill.name).toBe("example");
+  expect(session.skills[0]?.name).toBe("example");
   expect(session.messages.some((message) => message.content.includes("Use echo."))).toBe(false);
 });
 
@@ -131,7 +131,7 @@ test("loadSkill resolves skill ids from the workspace skills directory", async (
   const root = await mkdtemp(join(tmpdir(), "rowan-workspace-skill-"));
   const skillDir = join(root, ".rowan", "skills", "example");
   await mkdir(skillDir, { recursive: true });
-  await writeFile(join(skillDir, "SKILL.md"), "# Example\n\nUse workspace skill.");
+  await writeFile(join(skillDir, "SKILL.md"), "---\ndescription: Use workspace skill.\n---\n\n# Example\n\nUse workspace skill.");
 
   const workspace = {
     mode: "source" as const,
@@ -142,9 +142,9 @@ test("loadSkill resolves skill ids from the workspace skills directory", async (
   expect(resolveSkillPath("example", workspace)).toBe(join(skillDir, "SKILL.md"));
 
   const skill = await loadSkill("example", workspace);
-  expect(skill.id).toBe("example");
-  expect(skill.path).toBe(join(skillDir, "SKILL.md"));
-  expect(skill.content).toContain("Use workspace skill.");
+  expect(skill.name).toBe("example");
+  expect(skill.filePath).toBe(join(skillDir, "SKILL.md"));
+  expect(skill.description).toBeTruthy();
 });
 
 test("core tools expose read, write, edit, and bash", async () => {

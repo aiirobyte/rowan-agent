@@ -1,5 +1,5 @@
 import Type from "typebox";
-import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth, BeforePhaseHook, AfterPhaseHook, BeforePromptHook } from "./loop/types";
+import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth, BeforePhaseHook, AfterPhaseHook, BeforePromptHook, LoopMetrics } from "./loop/types";
 import type { PhaseRegistry, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
@@ -27,6 +27,7 @@ export type {
   AgentRuntimePort,
   AfterPhaseHook,
   BeforePhaseHook,
+  LoopMetrics,
   PhaseResult,
   ToolRunner,
   ToolRunnerInput,
@@ -89,10 +90,18 @@ export type ToolContext = {
   runThread?: RunThread;
 };
 
+export type ToolExecutionMode = "sequential" | "parallel";
+
 export type Tool<TArgs = unknown> = {
   name: string;
   description: string;
   parameters: Type.TSchema;
+  /** One-line snippet shown in the system prompt tool list. */
+  promptSnippet?: string;
+  /** Additional guidelines appended to the system prompt when this tool is active. */
+  promptGuidelines?: string[];
+  /** Whether this tool can run concurrently with others. Default: "parallel". */
+  executionMode?: ToolExecutionMode;
   execute(args: TArgs, context: ToolContext, signal?: AbortSignal): Promise<ToolResult>;
 };
 
@@ -160,6 +169,7 @@ export type RunResult =
       messages: AgentMessage[];
       outcome: Outcome;
       depth: RuntimeDepth;
+      metrics: LoopMetrics;
     }
   | {
       kind: "thread";
@@ -169,6 +179,7 @@ export type RunResult =
       outcome: Outcome;
       depth: RuntimeDepth;
       prompt: string;
+      metrics: LoopMetrics;
     };
 
 type AgentThreadStartConfig =

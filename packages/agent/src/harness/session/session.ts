@@ -45,10 +45,11 @@ export const messageScope = messageScopeImpl;
 export const isConversationMessage = isConversationMessageImpl;
 
 export const SkillSchema = Type.Object({
-  id: Type.String(),
-  path: Type.String(),
-  content: Type.String(),
-  toolNames: Type.Optional(Type.Array(Type.String())),
+  name: Type.String(),
+  description: Type.String(),
+  filePath: Type.String(),
+  baseDir: Type.String(),
+  disableModelInvocation: Type.Boolean(),
 });
 
 export type Skill = Type.Static<typeof SkillSchema>;

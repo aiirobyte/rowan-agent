@@ -308,6 +308,11 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
     name: "read",
     description: "Reads a text file within the workspace.",
     parameters: ReadArgsSchema,
+    promptSnippet: "Read a text file (max 64KB default).",
+    promptGuidelines: [
+      "Always read a file before editing or writing to understand its current content.",
+      "Use maxBytes to limit output for large files.",
+    ],
     async execute(args: ReadArgs, toolContext: ToolContext): Promise<ToolResult> {
       const parsed = ReadArgsValidator.Parse(args);
       const resolved = resolveCoreToolPath(context, parsed.path);
@@ -356,6 +361,11 @@ export function createWriteTool(context: NormalizedCoreToolContext): Tool<WriteA
     name: "write",
     description: "Writes provided text content to a workspace file, creating parent directories as needed.",
     parameters: WriteArgsSchema,
+    promptSnippet: "Write content to a file (creates parent dirs automatically).",
+    promptGuidelines: [
+      "Use write for new files or full file rewrites.",
+      "For partial edits, prefer the edit tool to avoid overwriting unchanged content.",
+    ],
     async execute(args: WriteArgs, toolContext: ToolContext): Promise<ToolResult> {
       const parsed = WriteArgsValidator.Parse(args);
       const resolved = resolveCoreToolPath(context, parsed.path);
@@ -380,6 +390,12 @@ export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArg
     name: "edit",
     description: "Edits a workspace text file by replacing exact oldText with newText.",
     parameters: EditArgsSchema,
+    promptSnippet: "Replace exact text in a file (oldText → newText).",
+    promptGuidelines: [
+      "Read the file first to get the exact oldText to replace.",
+      "oldText must be an exact match including whitespace and indentation.",
+      "If oldText appears multiple times, set replaceAll=true or provide more surrounding context.",
+    ],
     async execute(args: EditArgs, toolContext: ToolContext): Promise<ToolResult> {
       const parsed = EditArgsValidator.Parse(args);
       if (!parsed.oldText) {
@@ -440,6 +456,12 @@ export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArg
     name: "bash",
     description: "Runs a bash command within the workspace.",
     parameters: BashArgsSchema,
+    promptSnippet: "Execute a bash command (30s timeout, 64KB output limit).",
+    promptGuidelines: [
+      "Use bash for build commands, tests, git operations, and system tools.",
+      "Prefer dedicated tools (read/write/edit) for file operations.",
+      "Set timeoutMs for long-running commands.",
+    ],
     async execute(args: BashArgs, toolContext: ToolContext, signal?: AbortSignal): Promise<ToolResult> {
       const parsed = BashArgsValidator.Parse(args);
       const timeoutMs = parsed.timeoutMs ?? context.bashTimeoutMs;

@@ -311,10 +311,11 @@ export type AgentContextMessage = {
 };
 
 export type AgentContextSkill = {
-  id: string;
-  path: string;
-  content: string;
-  toolNames?: string[];
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  disableModelInvocation: boolean;
 };
 
 export type Outcome = {

@@ -489,7 +489,11 @@ async function createConfiguredAgent(
       ...(args.skills.length > 0 ? { skills } : {}),
     })
     : {
-      systemPrompt: "You are Rowan, a minimal agent kernel.",
+      systemPrompt: [
+        "You are Rowan, a helpful assistant that can assist users with a wide variety of tasks.",
+        "",
+        "You operate as an agent — you can read and write files, execute commands, and use various tools to accomplish tasks on behalf of the user.",
+      ].join("\n"),
       messages: [],
       tools,
       skills,
@@ -521,7 +525,7 @@ async function promptWithLog(input: {
   logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
-}): Promise<{ outcome: Outcome; sessionManager: LocalJsonlSessionManager; streamedContent: boolean; pendingConsoleEvents: AgentEvent[] }> {
+}): Promise<{ outcome: Outcome; metrics: import("@rowan-agent/agent").LoopMetrics; sessionManager: LocalJsonlSessionManager; streamedContent: boolean; pendingConsoleEvents: AgentEvent[] }> {
   let sessionManager = input.sessionManager;
   let unsubscribe: (() => void) | undefined;
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
@@ -571,7 +575,8 @@ async function promptWithLog(input: {
       }
 
       if (event.type === "tool_execution_start") {
-        const argsPreview = JSON.stringify(event.args).slice(0, 60);
+        const argsStr = JSON.stringify(event.args);
+        const argsPreview = argsStr.length > 60 ? argsStr.slice(0, 60) + "..." : argsStr;
         process.stderr.write(`  ⚙ ${event.toolName}(${argsPreview})\n`);
       }
       if (event.type === "tool_execution_end") {
@@ -602,7 +607,7 @@ async function promptWithLog(input: {
       }
     }
     await sessionManager.appendOutcome(result.outcome);
-    return { outcome: result.outcome, sessionManager, streamedContent, pendingConsoleEvents };
+    return { outcome: result.outcome, metrics: result.metrics, sessionManager, streamedContent, pendingConsoleEvents };
   } finally {
     try {
       await input.agent.flushEvents();
@@ -685,6 +690,20 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       await replayLogger.flush();
       if (!run.streamedContent) {
         console.log(formatOutcomeOutput(run.outcome));
+      }
+      // Print loop metrics
+      const m = run.metrics;
+      if (m.iterations > 1 || m.compactionCount > 0 || m.retryCount > 0) {
+        const parts: string[] = [];
+        parts.push(`${m.iterations} iterations`);
+        if (m.phaseTransitions.length > 0) {
+          const path = [m.phaseTransitions[0].from, ...m.phaseTransitions.map((t) => t.to)].join(" → ");
+          parts.push(`path: ${path}`);
+        }
+        if (m.compactionCount > 0) parts.push(`${m.compactionCount} compactions`);
+        if (m.retryCount > 0) parts.push(`${m.retryCount} retries`);
+        if (m.durationMs !== undefined) parts.push(`${m.durationMs}ms`);
+        console.error(`  Loop: ${parts.join(", ")}`);
       }
     } catch (error) {
       printRunHeader();

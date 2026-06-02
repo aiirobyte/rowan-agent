@@ -34,10 +34,11 @@ function asThreadResult(result: Awaited<ReturnType<typeof runAgentLoop>>): Threa
 test("runAgentLoop creates a thread session with explicit tools and skills", async () => {
   const events: AgentEvent[] = [];
   const skill = {
-    id: "session-skill",
-    path: "skills/session/SKILL.md",
-    content: "Use the echo tool when asked for evidence.",
-    toolNames: ["echo"],
+    name: "session-skill",
+    description: "Use the echo tool when asked for evidence.",
+    filePath: "skills/session/SKILL.md",
+    baseDir: "skills/session",
+    disableModelInvocation: false,
   };
 
   const result = asThreadResult(await runAgentLoop({

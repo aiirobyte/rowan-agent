@@ -4,7 +4,7 @@ import type { PhaseInput } from "../../loop/phases/registry";
 import type { LlmRequest, LlmMessage, LlmModelRef, LlmContentPart } from "@rowan-agent/models";
 import {
   buildSystemPrompt,
-} from "./prompt";
+} from "./system-prompt";
 
 export type PromptTool = { name: string; description: string; parameters: unknown };
 
@@ -18,17 +18,15 @@ export type SerializableTool = {
 // Internal utilities
 // ---------------------------------------------------------------------------
 
-function summarizeText(text: string, maxLength = 700): string {
-  const compact = text.trim().replace(/\s+/g, " ");
-  return compact.length > maxLength ? `${compact.slice(0, maxLength - 3)}...` : compact;
-}
-
-export function serializeSkills(skills: AgentContextSkill[]): unknown[] {
+export function serializeSkills(skills: AgentContextSkill[]): Array<{
+  name: string;
+  description: string;
+  filePath: string;
+}> {
   return skills.map((skill) => ({
-    id: skill.id,
-    path: skill.path,
-    toolNames: skill.toolNames ?? [],
-    summary: summarizeText(skill.content),
+    name: skill.name,
+    description: skill.description,
+    filePath: skill.filePath,
   }));
 }
 
@@ -94,11 +92,21 @@ export function buildModelRequest(
   input: PhaseInput,
   options?: { model?: LlmModelRef },
 ): LlmRequest {
-  let systemText = buildSystemPrompt({ systemPrompt: input.systemPrompt });
+  // Pass tool metadata to system prompt builder for rich snippets and guidelines
+  const toolMeta = input.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    promptSnippet: t.promptSnippet,
+    promptGuidelines: t.promptGuidelines,
+  }));
 
-  if (input.skills.length > 0) {
-    systemText += "\n\nLoaded skills:\n" + JSON.stringify(serializeSkills(input.skills));
-  }
+  let systemText = buildSystemPrompt({
+    systemPrompt: input.systemPrompt,
+    tools: toolMeta,
+    skills: input.skills.length > 0 ? serializeSkills(input.skills) : undefined,
+    promptGuidelines: input.promptGuidelines,
+    appendSystemPrompt: input.appendSystemPrompt,
+  });
 
   const messages: LlmMessage[] = [...conversationMessages(input.messages)];
 

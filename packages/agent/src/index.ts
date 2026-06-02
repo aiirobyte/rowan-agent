@@ -21,6 +21,7 @@ export type {
   CreateAgentStateInput,
   AgentContext,
   Tool,
+  ToolExecutionMode,
   BeforeToolCall,
   AfterToolCall,
   AgentEvent,
@@ -30,6 +31,7 @@ export type {
   LlmModelRef,
   StreamFn,
   AgentRunLimits,
+  LoopMetrics,
 } from "./types";
 
 export { EventStream, AgentEventStream } from "./event-stream";

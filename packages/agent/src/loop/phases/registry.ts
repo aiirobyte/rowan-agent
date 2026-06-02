@@ -26,6 +26,10 @@ export type PhaseInput = {
   skills: Skill[];
   /** Data from the previous phase's output.yield */
   yield?: unknown;
+  /** Additional guideline bullets appended to the system prompt. */
+  promptGuidelines?: string[];
+  /** Text to append after the system prompt. */
+  appendSystemPrompt?: string;
 };
 
 export type PhaseManifest = {

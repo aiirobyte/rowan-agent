@@ -76,7 +76,7 @@ test("buildModelRequest returns a valid LlmRequest with system, messages, and to
   const req = buildModelRequest(input);
 
   expect(req.system).toContain("Test system");
-  expect(req.system).toContain("You are the Rowan runtime");
+  expect(req.system).toContain("Available tools:");
   expect(req.messages.length).toBeGreaterThanOrEqual(1);
   expect(req.tools).toHaveLength(1);
   expect(req.tools![0].name).toBe("echo");
@@ -84,11 +84,11 @@ test("buildModelRequest returns a valid LlmRequest with system, messages, and to
 
 test("buildModelRequest includes skills in system prompt when present", () => {
   const input = createTestInput({
-    skills: [{ id: "writer", path: "/skills/writer/SKILL.md", content: "Write concise plans.", toolNames: ["echo"] }],
+    skills: [{ name: "writer", description: "Write concise plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", disableModelInvocation: false }],
   });
   const req = buildModelRequest(input);
 
-  expect(req.system).toContain("Loaded skills");
+  expect(req.system).toContain("<available_skills>");
   expect(req.system).toContain("writer");
 });
 
@@ -119,7 +119,7 @@ test("plan phase buildPrompt includes instructions", () => {
     phase: "plan",
     input: "Plan with echo.",
     tools: [echoTool],
-    skills: [{ id: "writer", path: "/skills/writer/SKILL.md", content: "Write plans.", toolNames: ["echo"] }],
+    skills: [{ name: "writer", description: "Write plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", disableModelInvocation: false }],
   });
   const req = buildRequest({ context: input });
 

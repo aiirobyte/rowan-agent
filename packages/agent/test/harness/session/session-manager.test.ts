@@ -22,7 +22,7 @@ test("InMemorySessionManager appends entries and rebuilds conversation context",
   const manager = InMemorySessionManager.create({
     systemPrompt: "Test system",
     input: "hello",
-    skills: [{ id: "skill", path: "SKILL.md", content: "Use the skill." }],
+    skills: [{ name: "skill", description: "Use the skill.", filePath: "SKILL.md", baseDir: ".", disableModelInvocation: false }],
   });
 
   await manager.appendMessage(createMessage("user", "hello", { scope: "conversation" }));
@@ -33,7 +33,7 @@ test("InMemorySessionManager appends entries and rebuilds conversation context",
   const context = await manager.buildAgentContext();
 
   expect(context.systemPrompt).toBe("Test system");
-  expect(context.skills.map((skill) => skill.id)).toEqual(["skill"]);
+  expect(context.skills.map((skill) => skill.name)).toEqual(["skill"]);
   expect(context.messages.map((message) => message.content)).toEqual(["hello", "visible answer"]);
   expect((await manager.listEntries()).map((entry) => entry.type)).toEqual([
     "message",

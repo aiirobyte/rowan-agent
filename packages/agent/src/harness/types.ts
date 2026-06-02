@@ -52,6 +52,8 @@ export type ToolContext<
   runThread?: RuntimeRunThread<TThreadInput, TThreadResult>;
 };
 
+export type ToolExecutionMode = "sequential" | "parallel";
+
 export type Tool<
   TArgs = unknown,
   TThreadResult = unknown,
@@ -60,6 +62,12 @@ export type Tool<
   name: string;
   description: string;
   parameters: Type.TSchema;
+  /** One-line snippet shown in the system prompt tool list. */
+  promptSnippet?: string;
+  /** Additional guidelines appended to the system prompt when this tool is active. */
+  promptGuidelines?: string[];
+  /** Whether this tool can run concurrently with others. Default: "parallel". */
+  executionMode?: ToolExecutionMode;
   execute(
     args: TArgs,
     context: ToolContext<TThreadResult, TThreadInput>,

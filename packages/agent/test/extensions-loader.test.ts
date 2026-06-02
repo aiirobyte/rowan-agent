@@ -67,10 +67,11 @@ test("loadExtensionFromFactory exposes host utilities on the Rowan API", async (
       },
     }],
     skills: [{
-      id: "writer",
-      path: "/skills/writer/SKILL.md",
-      content: "Write concise plans.",
-      toolNames: ["echo"],
+      name: "writer",
+      description: "Write concise plans.",
+      filePath: "/skills/writer/SKILL.md",
+      baseDir: "/skills/writer",
+      disableModelInvocation: false,
     }],
   });
 

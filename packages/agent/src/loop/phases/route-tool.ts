@@ -1,6 +1,7 @@
 import Type from "typebox";
 import type { Tool } from "../../types";
 import type { PhaseManifest } from "./registry";
+import { escapeXml } from "../../harness/context/structured";
 
 export const PhaseRouteTool = "route";
 
@@ -8,15 +9,6 @@ export type RouteToolArgs = {
   route: string;
   reason?: string;
 };
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
 
 function buildRouteDescription(availablePhases: PhaseManifest[]): string {
   const lines = [
