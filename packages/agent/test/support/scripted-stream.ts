@@ -30,9 +30,12 @@ export function* yieldRouteToolCall(route: string, reason?: string): Generator<a
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
-    if (match) {
-      return match[1];
+    const content = messages[i].content;
+    if (typeof content === "string") {
+      const match = content.match(/^Phase:\s*(\w+)/);
+      if (match) {
+        return match[1];
+      }
     }
   }
   return "chat";
@@ -43,13 +46,12 @@ function wantsEcho(input: string): boolean {
 }
 
 function extractUserRequest(messages: LlmRequest["messages"]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "user") {
-      const match = (msg.content as string).match(/Current user request:\s*\n"([^"]+)"/);
-      if (match) {
-        return match[1];
-      }
+  // Find the first user message (the actual user input, not phase instructions)
+  for (const msg of messages) {
+    if (msg.role === "user" && typeof msg.content === "string") {
+      // Skip phase instruction messages (they start with "Phase:")
+      if (msg.content.startsWith("Phase:")) continue;
+      return msg.content;
     }
   }
   return "";
@@ -170,11 +172,37 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
   }
 
   if (phase === "verify") {
-    const lastUserMsg = (request.messages.filter((m) => m.role === "user").pop()?.content ?? "") as string;
-    const requiresEcho = lastUserMsg.includes("echo") && lastUserMsg.includes("acceptanceCriteria");
-    const hasEchoEvidence = /"toolName"\s*:\s*"echo"/.test(lastUserMsg) && /"ok"\s*:\s*true/.test(lastUserMsg);
+    // Check for task info in messages (could be in yield or conversation)
+    const allContent = request.messages.map(m => {
+      if (typeof m.content === "string") return m.content;
+      if (Array.isArray(m.content)) {
+        return m.content.map(b => {
+          if (b.type === "text") return b.text;
+          if (b.type === "tool_result") return b.content;
+          return "";
+        }).join(" ");
+      }
+      return "";
+    }).join("\n");
+    const requiresEcho = allContent.includes("echo") && allContent.includes("acceptanceCriteria");
+    // Check for successful echo tool execution in tool messages
+    const hasEchoEvidence = request.messages.some(m => {
+      if (m.role !== "tool") return false;
+      // Check string content for successful echo result
+      if (typeof m.content === "string") {
+        return m.content.includes('"ok":true') && m.content.includes('"toolName":"echo"');
+      }
+      // Check content blocks for tool_result with echo evidence
+      if (Array.isArray(m.content)) {
+        return m.content.some(b => {
+          if (b.type !== "tool_result") return false;
+          return b.content.includes('"ok":true') && b.content.includes('"toolName":"echo"');
+        });
+      }
+      return false;
+    });
     const passed = requiresEcho ? hasEchoEvidence : true;
-    const taskTitleMatch = lastUserMsg.match(/"title"\s*:\s*"([^"]+)"/);
+    const taskTitleMatch = allContent.match(/"title"\s*:\s*"([^"]+)"/);
     const taskTitle = taskTitleMatch?.[1] ?? (userRequest || "task");
     const reason = passed
       ? `Task passed: ${taskTitle}`

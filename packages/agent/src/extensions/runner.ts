@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createPhaseRegistry, type PhaseRegistry, type PhaseDefinition } from "../loop/phases/registry";
-import { latestUserInput, buildModelRequest, buildPhaseContent } from "../harness/context/prompt-builder";
+import { latestUserInput, buildModelRequest } from "../harness/context/prompt-builder";
 import { createId, createJson } from "../utils";
 import type { ProviderConfig } from "@rowan-agent/models";
 import { registerModel, unregisterProviderModels } from "@rowan-agent/models";
@@ -135,12 +135,14 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
       let buildPrompt = registration.buildPrompt;
       if (!buildPrompt && registration.prompt) {
         const promptConfig = registration.prompt;
-        buildPrompt = (input, options) => {
-          const req = buildModelRequest(input, { toolResults: promptConfig.withToolResults ? options?.toolResults : undefined });
-          req.messages.push({
-            role: "user",
-            content: buildPhaseContent(input, promptConfig.sections),
-          });
+        buildPrompt = (input) => {
+          const req = buildModelRequest(input);
+          if (promptConfig.instructions?.length) {
+            req.messages.push({
+              role: "user",
+              content: promptConfig.instructions.join("\n"),
+            });
+          }
           return req;
         };
       }
@@ -194,7 +196,7 @@ export function createExtensionRuntime(options?: { cwd?: string }): ExtensionRun
     id: { create: createId },
     format: { json: createJson.stringify },
     input: { latestUserMessage: latestUserInput },
-    prompt: { buildModelRequest, buildPhaseContent },
+    prompt: { buildModelRequest },
   };
 }
 

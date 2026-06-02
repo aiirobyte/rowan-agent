@@ -16,6 +16,14 @@ export type AgentContextMessage = {
     kind?: string;
     phase?: string;
     scope?: ContextScope;
+    /** Tool calls made by assistant (for native tool_use content blocks) */
+    toolCalls?: Array<{ id: string; name: string; args: unknown }>;
+    /** Tool call ID for tool result messages */
+    toolCallId?: string;
+    /** Tool name for tool result messages */
+    toolName?: string;
+    /** Whether the tool execution failed */
+    isError?: boolean;
   };
 };
 

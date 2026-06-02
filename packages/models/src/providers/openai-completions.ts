@@ -10,6 +10,7 @@ import type {
   StreamFn,
   ApiStreamFn,
   AssistantMessagePartial,
+  LlmContentPart,
 } from "../protocol";
 import { iterateSseMessages } from "../sse";
 import {
@@ -166,11 +167,36 @@ function convertMessages(messages: LlmMessage[]): OpenAIChatMessage[] {
       if (typeof msg.content === "string") {
         result.push({ role: "assistant", content: msg.content });
       } else {
-        let text = "";
-        for (const part of msg.content) {
-          if (part.type === "text") text += part.text;
+        // Check for tool_use blocks
+        const toolUseBlocks = msg.content.filter((p) => p.type === "tool_use");
+        const textBlocks = msg.content.filter((p): p is { type: "text"; text: string } => p.type === "text");
+        const text = textBlocks.map((p) => p.text).join("") || null;
+
+        if (toolUseBlocks.length > 0) {
+          const toolCalls = toolUseBlocks.map((p) => ({
+            id: p.id,
+            type: "function" as const,
+            function: {
+              name: p.name,
+              arguments: typeof p.input === "string" ? p.input : JSON.stringify(p.input),
+            },
+          }));
+          result.push({ role: "assistant", content: text, tool_calls: toolCalls });
+        } else {
+          result.push({ role: "assistant", content: text });
         }
-        result.push({ role: "assistant", content: text || null });
+      }
+    } else if (msg.role === "tool") {
+      // OpenAI expects tool results as {role: "tool", content, tool_call_id}
+      if (typeof msg.content === "string") {
+        result.push({ role: "tool", content: msg.content, tool_call_id: "" });
+      } else {
+        // Extract tool_result content blocks
+        for (const part of msg.content) {
+          if (part.type === "tool_result") {
+            result.push({ role: "tool", content: part.content, tool_call_id: part.toolUseId });
+          }
+        }
       }
     }
   }

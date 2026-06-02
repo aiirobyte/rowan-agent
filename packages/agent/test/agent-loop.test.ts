@@ -10,16 +10,23 @@ import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolC
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
-    if (match) return match[1];
+    const content = messages[i].content;
+    if (typeof content === "string") {
+      const match = content.match(/^Phase:\s*(\w+)/);
+      if (match) return match[1];
+    }
   }
   return "chat";
 }
 
 function extractUserRequest(messages: LlmRequest["messages"]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const match = (messages[i].content as string).match(/Current user request:\s*\n"([^"]+)"/);
-    if (match) return match[1];
+  // Find the first user message (the actual user input, not phase instructions)
+  for (const msg of messages) {
+    if (msg.role === "user" && typeof msg.content === "string") {
+      // Skip phase instruction messages (they start with "Phase:")
+      if (msg.content.startsWith("Phase:")) continue;
+      return msg.content;
+    }
   }
   return "";
 }
@@ -135,6 +142,7 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
   expect(events).toContain("tool_execution_end");
   expect(events).toContain("phase_end");
+  // Tool messages are execution-scoped (not persisted to agentState.messages)
   expect(session.messages.some((message) => message.role === "tool")).toBe(false);
   expect(events.length).toBeGreaterThan(0);
 });

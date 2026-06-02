@@ -10,6 +10,7 @@ import type {
   StreamFn,
   ApiStreamFn,
   AssistantMessagePartial,
+  LlmContentPart,
 } from "../protocol";
 import { iterateSseMessages } from "../sse";
 import {
@@ -117,7 +118,9 @@ function normalizeHttpError(
 
 type ResponsesInputMessage =
   | { role: "user"; content: string }
-  | { role: "assistant"; content: string };
+  | { role: "assistant"; content: string }
+  | { type: "function_call"; id: string; name: string; arguments: string }
+  | { type: "function_call_output"; call_id: string; output: string };
 
 function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
   const result: ResponsesInputMessage[] = [];
@@ -136,11 +139,39 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
       if (typeof msg.content === "string") {
         result.push({ role: "assistant", content: msg.content });
       } else {
+        // Emit text content
         const text = msg.content
           .filter((p): p is { type: "text"; text: string } => p.type === "text")
           .map((p) => p.text)
           .join("\n");
         if (text) result.push({ role: "assistant", content: text });
+
+        // Emit function_call items for tool_use blocks
+        for (const part of msg.content) {
+          if (part.type === "tool_use") {
+            result.push({
+              type: "function_call",
+              id: part.id,
+              name: part.name,
+              arguments: typeof part.input === "string" ? part.input : JSON.stringify(part.input),
+            });
+          }
+        }
+      }
+    } else if (msg.role === "tool") {
+      // Emit function_call_output items for tool_result blocks
+      if (typeof msg.content === "string") {
+        result.push({ type: "function_call_output", call_id: "", output: msg.content });
+      } else {
+        for (const part of msg.content) {
+          if (part.type === "tool_result") {
+            result.push({
+              type: "function_call_output",
+              call_id: part.toolUseId,
+              output: part.content,
+            });
+          }
+        }
       }
     }
   }

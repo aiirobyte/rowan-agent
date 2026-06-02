@@ -126,8 +126,8 @@ type AnthropicMessage =
   | { role: "assistant"; content: string | AnthropicContentBlock[] };
 
 function convertContentParts(parts: LlmContentPart[]): string | AnthropicContentBlock[] {
-  const hasImages = parts.some((p) => p.type === "image");
-  if (!hasImages) {
+  const hasNonText = parts.some((p) => p.type !== "text");
+  if (!hasNonText) {
     return parts
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
@@ -143,6 +143,10 @@ function convertContentParts(parts: LlmContentPart[]): string | AnthropicContent
         type: "image",
         source: { type: "base64", media_type: part.mimeType, data: part.data },
       });
+    } else if (part.type === "tool_use") {
+      blocks.push({ type: "tool_use", id: part.id, name: part.name, input: part.input });
+    } else if (part.type === "tool_result") {
+      blocks.push({ type: "tool_result", tool_use_id: part.toolUseId, content: part.content, is_error: part.isError });
     }
   }
   return blocks;
@@ -161,10 +165,23 @@ function convertMessages(messages: LlmMessage[]): AnthropicMessage[] {
       if (typeof msg.content === "string") {
         result.push({ role: "assistant", content: msg.content });
       } else {
-        const texts = msg.content
-          .filter((p): p is { type: "text"; text: string } => p.type === "text")
-          .map((p) => p.text);
-        result.push({ role: "assistant", content: texts.join("\n") });
+        // Check for tool_use blocks - if present, use content blocks directly
+        const hasToolUse = msg.content.some((p) => p.type === "tool_use");
+        if (hasToolUse) {
+          result.push({ role: "assistant", content: convertContentParts(msg.content) });
+        } else {
+          const texts = msg.content
+            .filter((p): p is { type: "text"; text: string } => p.type === "text")
+            .map((p) => p.text);
+          result.push({ role: "assistant", content: texts.join("\n") });
+        }
+      }
+    } else if (msg.role === "tool") {
+      // Anthropic requires tool_result blocks inside a user message
+      if (typeof msg.content === "string") {
+        result.push({ role: "user", content: msg.content });
+      } else {
+        result.push({ role: "user", content: convertContentParts(msg.content) });
       }
     }
   }

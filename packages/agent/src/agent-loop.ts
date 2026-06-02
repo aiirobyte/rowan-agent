@@ -787,7 +787,7 @@ function createPhaseContext(
         if (loopContext.config.beforePrompt) {
           input.input = await loopContext.config.beforePrompt(phase.id, input.input);
         }
-        const request = phase.buildPrompt(input.input, { toolResults: input.toolResults });
+        const request = phase.buildPrompt(input.input);
         request.model = loopContext.config.model;
         // Ensure tools are always available in the request when configured
         if (!request.tools && loopContext.tools.length > 0) {

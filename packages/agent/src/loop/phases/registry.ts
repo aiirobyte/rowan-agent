@@ -38,7 +38,7 @@ export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<Pha
 
 export type PhaseDefinition = PhaseManifest & {
   run?: PhaseRun;
-  buildPrompt?(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
+  buildPrompt?(input: PhaseInput): LlmRequest;
 };
 
 export type ModelCollectedOutput = {
@@ -50,7 +50,6 @@ export type ModelCollectedOutput = {
 
 export type ModelCollectInput = {
   input: PhaseInput;
-  toolResults?: ToolResult[];
   scope?: "conversation" | "execution";
 };
 

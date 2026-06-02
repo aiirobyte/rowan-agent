@@ -128,14 +128,28 @@ export type LlmThinkingContent = {
   signature?: string;
 };
 
-export type LlmContentPart = LlmTextContent | LlmImageContent | LlmThinkingContent;
+export type LlmToolUseContent = {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: unknown;
+};
+
+export type LlmToolResultContent = {
+  type: "tool_result";
+  toolUseId: string;
+  content: string;
+  isError?: boolean;
+};
+
+export type LlmContentPart = LlmTextContent | LlmImageContent | LlmThinkingContent | LlmToolUseContent | LlmToolResultContent;
 
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
 export type LlmMessage = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   content: string | LlmContentPart[];
 };
 

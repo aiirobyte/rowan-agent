@@ -498,7 +498,12 @@ test("CLI writes a default log without --log", async () => {
   const responses = [
     {
       message: "Hello from model",
-      route: "direct",
+      toolCalls: [
+        {
+          name: "route",
+          args: { route: "stop", reason: "Hello from model" },
+        },
+      ],
     },
   ];
   let requestCount = 0;
@@ -681,10 +686,17 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-bash-"));
   const responses = [
     {
-      message: "Use bash to check the current date: $(date)",
-      route: "plan",
+      message: "Planning bash execution.",
+      toolCalls: [
+        {
+          name: "route",
+          args: { route: "plan", reason: "Planning bash execution." },
+        },
+      ],
     },
     {
+      // Plan phase expects JSON output with task
+      // The openAIResponse function will serialize this as the content field
       task: {
         title: "Run bash",
         instruction: "run a bash command",
@@ -694,6 +706,13 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
         status: "pending",
         attempts: 0,
       },
+      message: "Task planned.",
+      toolCalls: [
+        {
+          name: "route",
+          args: { route: "execute", reason: "Task planned." },
+        },
+      ],
     },
     {
       message: "Running bash.",
@@ -705,8 +724,22 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
       ],
     },
     {
-      passed: true,
-      message: "cli-bash-ok",
+      message: "Execution complete.",
+      toolCalls: [
+        {
+          name: "route",
+          args: { route: "verify", reason: "Execution complete." },
+        },
+      ],
+    },
+    {
+      message: "Task passed: Run bash",
+      toolCalls: [
+        {
+          name: "route",
+          args: { route: "stop", reason: "Task passed: Run bash" },
+        },
+      ],
     },
   ];
   const requests: Array<{ messages?: Array<{ content?: string }>; tools?: Array<{ function: { name: string } }> }> = [];
@@ -1014,7 +1047,8 @@ test("CLI treats chat as a prompt instead of a command", async () => {
     expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
     expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.messages?.map((message) => message.content).join("\n")).toContain("\"chat\"");
+    // With native tool_call format, phase instructions appear as user message
+    expect(requests[0]?.messages?.map((message) => message.content).join("\n")).toContain("Phase: chat");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

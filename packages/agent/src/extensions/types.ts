@@ -6,7 +6,6 @@ import type {
   PhaseRun,
 } from "../loop/phases/registry";
 import type { LlmRequest, ProviderConfig } from "@rowan-agent/models";
-import type { PhaseSection } from "../harness/context/prompt-builder";
 import type { Outcome, Tool, ToolResult } from "../types";
 export type { PhaseManifest } from "../loop/phases/registry";
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
@@ -19,15 +18,13 @@ export type ExtensionHandler = (...args: unknown[]) => unknown | Promise<unknown
 
 /** PhaseHandler only contains buildPrompt — other hooks removed in ADR-0015 refactor. */
 export type ExtensionPhaseHandler = {
-  buildPrompt?(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
+  buildPrompt?(input: PhaseInput): LlmRequest;
 };
 
 /** Declarative prompt configuration — alternative to implementing buildPrompt. */
 export type PhasePromptConfig = {
-  /** Sections to include in the prompt. */
-  sections: PhaseSection[];
-  /** Whether to pass accumulated toolResults to buildModelRequest. */
-  withToolResults?: boolean;
+  /** Lines to append as a user message with phase instructions. */
+  instructions?: string[];
 };
 
 export type PhaseRegistration = PhaseManifest & {
@@ -150,8 +147,7 @@ export type ExtensionRuntime = {
 
   // Prompt building
   prompt: {
-    buildModelRequest(input: PhaseInput, options?: { toolResults?: ToolResult[] }): LlmRequest;
-    buildPhaseContent(input: PhaseInput, sections: PhaseSection[]): string;
+    buildModelRequest(input: PhaseInput): LlmRequest;
   };
 };
 

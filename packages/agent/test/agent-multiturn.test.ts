@@ -88,7 +88,8 @@ test("Agent keeps conversation messages separate from execution steps", async ()
       "use echo tool again",
     ]),
   );
-  expect(agent.state.context.messages.some((message) => message.content === "Task passed: Use echo tool")).toBe(true);
+  // With native tool_call format, task title falls back to user request (lowercase)
+  expect(agent.state.context.messages.some((message) => message.content === "Task passed: use echo tool")).toBe(true);
   expect(
     agent.state.context.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "routing_decision",
@@ -114,13 +115,14 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
 
     if (phase === "chat") {
       const outcomeMessages = request.messages
-        .filter((message) => message.role === "assistant" && (message.content as string).includes("Missing some functions"))
-        .map((message) => message.content as string);
+        .filter((message) => message.role === "assistant" && typeof message.content === "string" && message.content.includes("Missing some functions"))
+        .map((message) => typeof message.content === "string" ? message.content : "");
       routeOutcomeContexts.push(outcomeMessages);
       const hasFailedOutcome = outcomeMessages.some((m) => m.includes("Missing some functions to finish the task"));
-      // Extract current user request from the phase prompt, not the full prompt
-      const lastUserMsg = (request.messages.filter((m) => m.role === "user").pop()?.content ?? "") as string;
-      const currentRequest = lastUserMsg.match(/Current user request:\s*\n"([^"]+)"/)?.[1] ?? "";
+      // Extract current user request from conversation messages (first non-instruction user message)
+      const userMessages = request.messages.filter((m) => m.role === "user" && typeof m.content === "string" && !m.content.startsWith("Phase:"));
+      const lastUser = userMessages.length > 0 ? userMessages[userMessages.length - 1] : undefined;
+      const currentRequest = lastUser && typeof lastUser.content === "string" ? lastUser.content : "";
       const route = currentRequest.includes("trigger failure") || hasFailedOutcome ? "plan" : "stop";
       const reason = hasFailedOutcome ? "Polluted by failed outcome." : "Recovered direct answer.";
 

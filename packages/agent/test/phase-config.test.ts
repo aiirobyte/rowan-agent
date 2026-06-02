@@ -142,9 +142,7 @@ test("ExtensionRunner creates phase registry with registered handlers", async ()
       name: "Custom",
       description: "Custom phase.",
       prompt: {
-        sections: [
-          { type: "instructions", lines: ["Custom prompt"] },
-        ],
+        instructions: ["Custom prompt"],
       },
       async run() {
         return { message: "custom done", route: "stop" };

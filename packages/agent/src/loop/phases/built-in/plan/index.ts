@@ -36,19 +36,15 @@ export const planPhaseExtension = defineExtension((rowan) => {
     ...manifestJson,
 
     prompt: {
-      sections: [
-        { type: "instructions", lines: [
-          "Phase: plan",
-          "",
-          "Analyze the user's request and create a task plan.",
-          'Output a JSON object: { "task": { ... }, "message": "explanation" }',
-          "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
-          'Prefer setting task.status to "pending" and task.attempts to 0.',
-          "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
-          "After outputting the task JSON, call the 'route' tool to indicate the next phase.",
-        ]},
-        { type: "userRequest" },
-        { type: "tools" },
+      instructions: [
+        "Phase: plan",
+        "",
+        "Analyze the user's request and create a task plan.",
+        'Output a JSON object: { "task": { ... }, "message": "explanation" }',
+        "Task fields: title, instruction, acceptanceCriteria, toolNames, skillIds, status, attempts.",
+        'Prefer setting task.status to "pending" and task.attempts to 0.',
+        "Use toolNames only from the available tools. Use skillIds only from the loaded skills.",
+        "After outputting the task JSON, call the 'route' tool to indicate the next phase.",
       ],
     },
 

@@ -2,8 +2,6 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import {
   buildModelRequest,
-  buildPhaseContent,
-  type PhaseSection,
 } from "../../../src/harness/context/prompt-builder";
 import {
   createBuiltinPhaseRegistry,
@@ -12,19 +10,18 @@ import {
   resolvePhaseEntry,
 } from "../../../src/loop/phases";
 import { createId, createMessage, createAgentState } from "@rowan-agent/agent";
-import type { PhaseInput, Tool, ToolResult } from "@rowan-agent/agent";
+import type { PhaseInput, Tool } from "@rowan-agent/agent";
 
 const builtinPhaseRegistry = createBuiltinPhaseRegistry();
 
 function buildRequest(input: {
   context: PhaseInput;
-  toolResults?: ToolResult[];
 }) {
   const phase = resolvePhaseEntry(builtinPhaseRegistry, input.context.phase);
   if (!phase.buildPrompt) {
     throw new Error(`Missing buildPrompt for phase "${input.context.phase}".`);
   }
-  return phase.buildPrompt(input.context, { toolResults: input.toolResults });
+  return phase.buildPrompt(input.context);
 }
 
 const echoTool: Tool<{ message: string }> = {
@@ -102,85 +99,11 @@ test("buildModelRequest omits tools when empty", () => {
   expect(req.tools).toBeUndefined();
 });
 
-test("buildModelRequest includes toolResults as a user message", () => {
-  const input = createTestInput();
-  const toolResults: ToolResult[] = [{
-    toolCallId: "call_1",
-    toolName: "echo",
-    ok: true,
-    content: "evidence",
-  }];
-  const req = buildModelRequest(input, { toolResults });
-
-  const lastMsg = req.messages.at(-1);
-  expect(lastMsg?.role).toBe("user");
-  expect(lastMsg?.content).toContain("Previous tool results");
-  expect(lastMsg?.content).toContain("evidence");
-});
-
-// ---------------------------------------------------------------------------
-// buildPhaseContent
-// ---------------------------------------------------------------------------
-
-test("buildPhaseContent instructions section", () => {
-  const input = createTestInput();
-  const content = buildPhaseContent(input, [
-    { type: "instructions", lines: ["Phase: chat", "Do something."] },
-  ]);
-
-  expect(content).toBe("Phase: chat\nDo something.");
-});
-
-test("buildPhaseContent userRequest section", () => {
-  const input = createTestInput({ input: "What is 2+2?" });
-  const content = buildPhaseContent(input, [{ type: "userRequest" }]);
-
-  expect(content).toContain("Current user request:");
-  expect(content).toContain('"What is 2+2?"');
-});
-
-test("buildPhaseContent task section extracts from yield", () => {
-  const task = createTestTask();
-  const input = createTestInput({ yield: { task } });
-  const content = buildPhaseContent(input, [{ type: "task" }]);
-
-  expect(content).toContain("Task:");
-  expect(content).toContain("Echo task");
-});
-
-test("buildPhaseContent tools section", () => {
-  const input = createTestInput({ tools: [echoTool] });
-  const content = buildPhaseContent(input, [{ type: "tools" }]);
-
-  expect(content).toContain("Available tools");
-  expect(content).toContain("echo");
-  expect(content).toContain("Returns the input message.");
-});
-
-test("buildPhaseContent taskOutput section", () => {
-  const toolResults = [{ toolCallId: "call_1", toolName: "echo", ok: true, content: "result" }];
-  const input = createTestInput({ yield: { task: createTestTask(), toolResults } });
-  const content = buildPhaseContent(input, [{ type: "taskOutput" }]);
-
-  expect(content).toContain("Task output:");
-  expect(content).toContain("result");
-});
-
-test("buildPhaseContent joins multiple sections with blank lines", () => {
-  const input = createTestInput({ input: "Hello" });
-  const content = buildPhaseContent(input, [
-    { type: "instructions", lines: ["Phase: test"] },
-    { type: "userRequest" },
-  ]);
-
-  expect(content).toBe("Phase: test\n\nCurrent user request:\n\"Hello\"");
-});
-
 // ---------------------------------------------------------------------------
 // Phase buildPrompt integration
 // ---------------------------------------------------------------------------
 
-test("chat phase buildPrompt returns LlmRequest with phase content", () => {
+test("chat phase buildPrompt returns LlmRequest with phase instructions", () => {
   const input = createTestInput({ phase: "chat", input: "What is 2 + 2?" });
   const req = buildRequest({ context: input });
 
@@ -189,10 +112,9 @@ test("chat phase buildPrompt returns LlmRequest with phase content", () => {
   const phaseMsg = req.messages.at(-1);
   expect(phaseMsg?.role).toBe("user");
   expect(phaseMsg?.content).toContain("Phase: chat");
-  expect(phaseMsg?.content).toContain('"What is 2 + 2?"');
 });
 
-test("plan phase buildPrompt includes tools and skills", () => {
+test("plan phase buildPrompt includes instructions", () => {
   const input = createTestInput({
     phase: "plan",
     input: "Plan with echo.",
@@ -205,10 +127,9 @@ test("plan phase buildPrompt includes tools and skills", () => {
   expect(req.system).toContain("writer");
   const phaseMsg = req.messages.at(-1);
   expect(phaseMsg?.content).toContain("Phase: plan");
-  expect(phaseMsg?.content).toContain("echo");
 });
 
-test("execute phase buildPrompt includes toolResults", () => {
+test("execute phase buildPrompt includes instructions", () => {
   const task = createTestTask();
   const input = createTestInput({
     phase: "execute",
@@ -216,34 +137,24 @@ test("execute phase buildPrompt includes toolResults", () => {
     tools: [echoTool],
     yield: { task },
   });
-  const toolResults: ToolResult[] = [{
-    toolCallId: "call_prev",
-    toolName: "echo",
-    ok: true,
-    content: "previous evidence",
-  }];
-  const req = buildRequest({ context: input, toolResults });
+  const req = buildRequest({ context: input });
 
   expect(req.tools).toHaveLength(1);
-  const toolResultsMsg = req.messages.find(m => typeof m.content === "string" && m.content.includes("Previous tool results"));
-  expect(toolResultsMsg).toBeDefined();
   const phaseMsg = req.messages.at(-1);
   expect(phaseMsg?.content).toContain("Phase: execute");
 });
 
-test("verify phase buildPrompt includes task and taskOutput sections", () => {
+test("verify phase buildPrompt includes instructions", () => {
   const task = createTestTask();
   const input = createTestInput({
     phase: "verify",
     input: "Verify echo.",
-    yield: { task, toolResults: [{ toolCallId: "c1", toolName: "echo", ok: true, content: "evidence" }] },
+    yield: { task },
   });
   const req = buildRequest({ context: input });
 
   const phaseMsg = req.messages.at(-1);
   expect(phaseMsg?.content).toContain("Phase: verify");
-  expect(phaseMsg?.content).toContain("Task:");
-  expect(phaseMsg?.content).toContain("Task output:");
 });
 
 test("prompt builder excludes execution-scoped messages from conversation", () => {
@@ -255,6 +166,7 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
     }),
     createMessage("tool", "{\"ok\":true,\"content\":\"tool evidence\"}", {
       toolName: "echo",
+      scope: "execution",
     }),
   );
 
@@ -267,9 +179,66 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
   };
 
   const req = buildModelRequest(testInput);
-  const allContent = req.messages.map(m => m.content).join("\n");
+  const extractText = (m: { content: string | Array<{ type: string; text?: string; content?: string }> }) => {
+    if (typeof m.content === "string") return m.content;
+    return m.content.map(b => b.type === "text" ? (b.text ?? "") : b.type === "tool_result" ? (b.content ?? "") : "").join(" ");
+  };
+  const allContent = req.messages.map(extractText).join("\n");
 
   expect(allContent).toContain("Use echo.");
-  expect(allContent).not.toContain("tool evidence");
+  // Execution-scoped tool messages are now included for native tool_call format
+  expect(allContent).toContain("tool evidence");
+  // Routing decisions (non-tool execution messages) are still excluded
   expect(allContent).not.toContain("Creating.");
+});
+
+test("prompt builder includes execution-scoped tool messages as native tool_result", () => {
+  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
+  state.messages.push(
+    createMessage("assistant", "", {
+      scope: "execution",
+      toolCalls: [{ id: "call_1", name: "echo", args: { message: "hello" } }],
+    }),
+    createMessage("tool", "hello", {
+      toolCallId: "call_1",
+      toolName: "echo",
+      scope: "execution",
+    }),
+  );
+
+  const testInput: PhaseInput = {
+    phase: "chat",
+    systemPrompt: state.systemPrompt,
+    messages: state.messages,
+    tools: [],
+    skills: [],
+  };
+
+  const req = buildModelRequest(testInput);
+  // Should have: user msg, assistant msg with tool_use, tool msg with tool_result
+  expect(req.messages.length).toBeGreaterThanOrEqual(3);
+
+  // Check assistant message has tool_use content blocks
+  const assistantMsg = req.messages.find(m => m.role === "assistant");
+  expect(assistantMsg).toBeDefined();
+  if (Array.isArray(assistantMsg?.content)) {
+    const toolUse = assistantMsg.content.find(b => b.type === "tool_use");
+    expect(toolUse).toBeDefined();
+    if (toolUse?.type === "tool_use") {
+      expect(toolUse.id).toBe("call_1");
+      expect(toolUse.name).toBe("echo");
+    }
+  }
+
+  // Check tool message has tool_result content blocks
+  const toolMsg = req.messages.find(m => m.role === "tool");
+  expect(toolMsg).toBeDefined();
+  if (Array.isArray(toolMsg?.content)) {
+    const toolResult = toolMsg.content.find(b => b.type === "tool_result");
+    expect(toolResult).toBeDefined();
+    if (toolResult?.type === "tool_result") {
+      expect(toolResult.toolUseId).toBe("call_1");
+      expect(toolResult.content).toBe("hello");
+    }
+  }
 });

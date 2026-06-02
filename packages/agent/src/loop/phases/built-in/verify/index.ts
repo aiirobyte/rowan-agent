@@ -8,17 +8,13 @@ export const verifyPhaseExtension = defineExtension((rowan) => {
     ...manifestJson,
 
     prompt: {
-      sections: [
-        { type: "instructions", lines: [
-          "Phase: verify",
-          "",
-          "Review the task output against the acceptance criteria.",
-          "If the criteria are met, confirm and call the 'route' tool to stop or proceed.",
-          "If more work is needed, call tools to fix issues, then call the 'route' tool.",
-          "Do NOT output JSON.",
-        ]},
-        { type: "task" },
-        { type: "taskOutput" },
+      instructions: [
+        "Phase: verify",
+        "",
+        "Review the task output against the acceptance criteria.",
+        "If the criteria are met, confirm and call the 'route' tool to stop or proceed.",
+        "If more work is needed, call tools to fix issues, then call the 'route' tool.",
+        "Do NOT output JSON.",
       ],
     },
 

@@ -1,6 +1,6 @@
-import type { AgentContextMessage, AgentContextSkill, ToolResult } from "../../protocol";
+import type { AgentContextMessage, AgentContextSkill } from "../../protocol";
 import type { PhaseInput } from "../../loop/phases/registry";
-import type { LlmRequest, LlmMessage, LlmModelRef } from "@rowan-agent/models";
+import type { LlmRequest, LlmMessage, LlmModelRef, LlmContentPart } from "@rowan-agent/models";
 import {
   buildSystemPrompt,
 } from "./prompt";
@@ -14,33 +14,12 @@ export type SerializableTool = {
 };
 
 // ---------------------------------------------------------------------------
-// Section types for buildPhaseContent
-// ---------------------------------------------------------------------------
-
-export type PhaseSection =
-  | { type: "instructions"; lines: string[] }
-  | { type: "userRequest" }
-  | { type: "task" }
-  | { type: "taskOutput" }
-  | { type: "tools" }
-  | { type: "skills" }
-  | { type: "custom"; text: string };
-
-// ---------------------------------------------------------------------------
 // Internal utilities
 // ---------------------------------------------------------------------------
 
 function summarizeText(text: string, maxLength = 700): string {
   const compact = text.trim().replace(/\s+/g, " ");
   return compact.length > maxLength ? `${compact.slice(0, maxLength - 3)}...` : compact;
-}
-
-export function serializeTools(tools: PromptTool[] = []): SerializableTool[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  }));
 }
 
 export function serializeSkills(skills: AgentContextSkill[]): unknown[] {
@@ -68,10 +47,45 @@ export function latestUserInput(input: PhaseInput): string {
 }
 
 export function conversationMessages(messages: AgentContextMessage[]): LlmMessage[] {
-  return messages.filter(isConversationMessage).flatMap((message) => {
-    if (message.role !== "user" && message.role !== "assistant") return [];
-    if (!isConversationMessage(message)) return [];
-    return [{ role: message.role, content: message.content }];
+  return messages.flatMap((message): LlmMessage[] => {
+    // Conversation-scoped user messages
+    if (message.role === "user" && isConversationMessage(message)) {
+      return [{ role: "user", content: message.content }];
+    }
+
+    // Conversation-scoped assistant messages (without tool calls)
+    if (message.role === "assistant" && isConversationMessage(message)) {
+      const toolCalls = message.metadata?.toolCalls as Array<{ id: string; name: string; args: unknown }> | undefined;
+      if (!toolCalls?.length) {
+        return [{ role: "assistant", content: message.content }];
+      }
+      // Fall through to tool message handling below
+    }
+
+    // Tool-related messages (any scope) — include for native tool_call format
+    if (message.role === "assistant" && Array.isArray(message.metadata?.toolCalls)) {
+      const toolCalls = message.metadata.toolCalls as Array<{ id: string; name: string; args: unknown }>;
+      const content: LlmContentPart[] = [];
+      if (message.content) {
+        content.push({ type: "text", text: message.content });
+      }
+      for (const tc of toolCalls) {
+        content.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.args });
+      }
+      return [{ role: "assistant", content }];
+    }
+
+    if (message.role === "tool") {
+      const toolCallId = (message.metadata?.toolCallId as string) ?? "";
+      const isError = message.metadata?.isError as boolean | undefined;
+      const content: LlmContentPart[] = [
+        { type: "tool_result", toolUseId: toolCallId, content: message.content, isError },
+      ];
+      return [{ role: "tool", content }];
+    }
+
+    // Skip execution-scoped non-tool messages (model messages, routing decisions, etc.)
+    return [];
   });
 }
 
@@ -81,7 +95,7 @@ export function conversationMessages(messages: AgentContextMessage[]): LlmMessag
 
 export function buildModelRequest(
   input: PhaseInput,
-  options?: { toolResults?: ToolResult[]; model?: LlmModelRef },
+  options?: { model?: LlmModelRef },
 ): LlmRequest {
   let systemText = buildSystemPrompt({ systemPrompt: input.systemPrompt });
 
@@ -90,13 +104,6 @@ export function buildModelRequest(
   }
 
   const messages: LlmMessage[] = [...conversationMessages(input.messages)];
-
-  if (options?.toolResults?.length) {
-    messages.push({
-      role: "user",
-      content: `Previous tool results:\n${JSON.stringify(options.toolResults, null, 2)}`,
-    });
-  }
 
   const tools = input.tools.map((t) => ({
     name: t.name,
@@ -110,49 +117,4 @@ export function buildModelRequest(
     messages,
     tools: tools.length > 0 ? tools : undefined,
   };
-}
-
-// ---------------------------------------------------------------------------
-// buildPhaseContent — assembles phase-specific content from sections
-// ---------------------------------------------------------------------------
-
-export function buildPhaseContent(input: PhaseInput, sections: PhaseSection[]): string {
-  const parts: string[] = [];
-
-  for (const section of sections) {
-    switch (section.type) {
-      case "instructions":
-        parts.push(...section.lines);
-        break;
-      case "userRequest":
-        parts.push("Current user request:", JSON.stringify(latestUserInput(input)));
-        break;
-      case "task": {
-        const task = (input.yield as Record<string, unknown>)?.task;
-        parts.push("Task:", JSON.stringify(task ?? null, null, 2));
-        break;
-      }
-      case "taskOutput": {
-        const yield_ = input.yield as Record<string, unknown> | undefined;
-        const toolResults = (yield_?.toolResults as unknown[]) ?? [];
-        parts.push("Task output:", JSON.stringify({ kind: "tools", toolResults }, null, 2));
-        break;
-      }
-      case "tools":
-        parts.push(
-          "Available tools with name, description, and parameters:",
-          JSON.stringify(serializeTools(input.tools), null, 2),
-        );
-        break;
-      case "skills":
-        parts.push("Skills:", JSON.stringify(serializeSkills(input.skills), null, 2));
-        break;
-      case "custom":
-        parts.push(section.text);
-        break;
-    }
-    parts.push("");
-  }
-
-  return parts.join("\n").trimEnd();
 }
