@@ -1,4 +1,5 @@
 import type { AgentContextMessage, AgentContextSkill } from "../../protocol";
+import { isConversationMessage } from "../../protocol/context";
 import type { PhaseInput } from "../../loop/phases/registry";
 import type { LlmRequest, LlmMessage, LlmModelRef, LlmContentPart } from "@rowan-agent/models";
 import {
@@ -29,10 +30,6 @@ export function serializeSkills(skills: AgentContextSkill[]): unknown[] {
     toolNames: skill.toolNames ?? [],
     summary: summarizeText(skill.content),
   }));
-}
-
-function isConversationMessage(message: AgentContextMessage): boolean {
-  return message.metadata?.scope === "conversation";
 }
 
 export function latestUserInput(input: PhaseInput): string {

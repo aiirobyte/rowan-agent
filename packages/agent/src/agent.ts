@@ -1,6 +1,7 @@
 import { runAgentLoop } from "./agent-loop";
 import { createDefaultPhaseRegistry, ExtensionRunner } from "./extensions";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions/types";
+import { snapshotMessage, snapshotMessages } from "./loop/state";
 import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./loop/phases";
 import type {
   AgentMessage,
@@ -294,7 +295,7 @@ export class Agent {
       this.state.sessionId = result.sessionId;
       this.state.context = {
         ...cloneAgentContext(resolved.context),
-        messages: cloneMessages(result.messages),
+        messages: snapshotMessages(result.messages),
       };
       this.state.currentResult = result;
       this.options = {
@@ -334,21 +335,10 @@ export class Agent {
 
 }
 
-function cloneMessage(message: AgentMessage): AgentMessage {
-  return {
-    ...message,
-    ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
-  };
-}
-
-function cloneMessages(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map(cloneMessage);
-}
-
 function cloneAgentContext(context: AgentContext): AgentContext {
   return {
     systemPrompt: context.systemPrompt,
-    messages: cloneMessages(context.messages),
+    messages: snapshotMessages(context.messages),
     ...(context.tools ? { tools: context.tools.slice() } : {}),
     ...(context.skills ? { skills: context.skills.slice() } : {}),
   };

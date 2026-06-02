@@ -7,7 +7,6 @@ import type {
   RunResult,
   AgentState,
   LlmStreamEvent,
-  LoopPhase,
   Outcome,
   RunThread,
   Tool,
@@ -41,30 +40,6 @@ import {
 import type { AgentLoopConfig, AgentRunState } from "./loop/types";
 import { createRouteTool, extractRouteCall } from "./loop/phases/route-tool";
 import type { PhaseManifest } from "./loop/phases/registry";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasAbort(value: unknown): value is { abort: Outcome } {
-  return isRecord(value) && isRecord(value.abort);
-}
-
-function hasSkip(value: unknown): value is { skip: unknown } {
-  return isRecord(value) && "skip" in value;
-}
-
-function hasInput(value: unknown): value is { input: unknown } {
-  return isRecord(value) && "input" in value;
-}
-
-function hasOutput(value: unknown): value is { output: unknown } {
-  return isRecord(value) && "output" in value;
-}
-
-function hasRetry(value: unknown): value is { retry: unknown } {
-  return isRecord(value) && "retry" in value;
-}
 
 /** Execute phase run and handle void return by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(
@@ -453,34 +428,6 @@ async function runLoop(
       }
     }
 
-    if (config.runtime?.beforePhase) {
-      const before = await config.runtime.beforePhase(
-        loopContext,
-        phase.id as LoopPhase,
-        phaseInput as never,
-      );
-      if (hasAbort(before)) {
-        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-        return completeRun(config, state, before.abort);
-      }
-      if (hasSkip(before)) {
-        // Skip: use the skip output's route
-        const skipOutput = before.skip as { route: string; message: string };
-        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-        if (skipOutput.route === "stop") {
-          return completeRun(config, state, {
-            id: "skip",
-            message: skipOutput.message || "Skipped.",
-          });
-        }
-        currentPhaseId = skipOutput.route;
-        continue;
-      }
-      if (hasInput(before) && before.input) {
-        phaseInput = before.input as PhaseInput;
-      }
-    }
-
     // Step 4: Run phase — if run is provided, it takes over; otherwise framework calls model.collect
     let output: PhaseOutput;
     if (phase.run) {
@@ -506,35 +453,6 @@ async function runLoop(
       }
       if (extAfter.output) {
         output = extAfter.output;
-      }
-    }
-
-    if (config.runtime?.afterPhase) {
-      let retries = 0;
-
-      while (true) {
-        const after = await config.runtime.afterPhase(
-          loopContext,
-          phase.id as LoopPhase,
-          output as never,
-        );
-        if (hasAbort(after)) {
-          emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-          return completeRun(config, state, after.abort);
-        }
-        if (hasRetry(after) && after.retry && phase.run) {
-          retries += 1;
-          if (retries > 3) {
-            emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-            return completeRun(config, state, createOutcome.error(`Runtime requested too many ${currentPhaseId} phase retries.`));
-          }
-          output = resolvePhaseOutput(await phase.run(context, after.retry as PhaseInput), state);
-          continue;
-        }
-        if (hasOutput(after) && after.output) {
-          output = after.output as PhaseOutput;
-        }
-        break;
       }
     }
 

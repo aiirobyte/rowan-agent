@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@rowan-agent/agent";
+import type { AgentEvent } from "@rowan-agent/models";
 
 export type AgentEventLogLevel = "debug" | "info" | "warn" | "error" | "silent";
 export type WritableAgentEventLogLevel = Exclude<AgentEventLogLevel, "silent">;

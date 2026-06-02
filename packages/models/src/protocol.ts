@@ -284,3 +284,89 @@ export type ApiStreamFn = (
   request: LlmRequest,
   options: LlmStreamOptions,
 ) => AsyncIterable<LlmStreamEvent>;
+
+// ---------------------------------------------------------------------------
+// Agent runtime shared types
+// These live in @rowan-agent/models so that @rowan-agent/logging can import
+// them without depending on @rowan-agent/agent (which would be a reverse
+// dependency).  The agent package re-exports them for backward compat.
+// ---------------------------------------------------------------------------
+
+export type ContextScope = "conversation" | "execution" | "diagnostic";
+
+export type AgentContextMessage = {
+  id: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  createdAt: string;
+  metadata?: Record<string, unknown> & {
+    kind?: string;
+    phase?: string;
+    scope?: ContextScope;
+    toolCalls?: Array<{ id: string; name: string; args: unknown }>;
+    toolCallId?: string;
+    toolName?: string;
+    isError?: boolean;
+  };
+};
+
+export type AgentContextSkill = {
+  id: string;
+  path: string;
+  content: string;
+  toolNames?: string[];
+};
+
+export type Outcome = {
+  id: string;
+  taskId?: string;
+  message: string;
+};
+
+export type ToolCall = {
+  id: string;
+  name: string;
+  args: unknown;
+};
+
+export type ToolResult = {
+  toolCallId: string;
+  toolName: string;
+  ok: boolean;
+  content: unknown;
+  error?: string;
+};
+
+export type AgentEvent =
+  | { type: "agent_start"; sessionId: string; ts: string }
+  | { type: "agent_end"; sessionId: string; messages: AgentContextMessage[]; ts: string }
+  | {
+      type: "turn_start";
+      content: AgentContextMessage[];
+      parentSessionId?: string;
+      prompt?: string;
+      threadDepth?: number;
+      maxThreadDepth?: number;
+      ts: string;
+    }
+  | {
+      type: "turn_end";
+      content: AgentContextMessage[];
+      outcome?: Outcome;
+      threadDepth?: number;
+      maxThreadDepth?: number;
+      ts: string;
+    }
+  | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage; ts: string }
+  | { type: "phase_start"; phase: string; ts: string }
+  | { type: "phase_end"; phase: string; ts: string }
+  | { type: "message_start"; message: AgentContextMessage; ts: string }
+  | { type: "message_update"; message: AgentContextMessage; delta: string; ts: string }
+  | { type: "message_end"; message: AgentContextMessage; ts: string }
+  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; ts: string }
+  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; ts: string }
+  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean; ts: string };
+
+export type AgentEventListener = ((event: AgentEvent) => void | Promise<void>) & {
+  flush?: () => void | Promise<void>;
+};

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
-import type { AgentEvent, AgentRuntimePort, LlmRequest, StreamFn, Tool } from "../src/types";
+import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createAgentState as createBaseAgentState, createMessage } from "../src/types";
 import { createId } from "../src/utils";
 import { echoTool } from "./support/echo-tool";
@@ -39,20 +39,7 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
   const seenContexts: Array<{
     systemPrompt: string;
     messages: string[];
-    tools: string[];
   }> = [];
-  const runtime: AgentRuntimePort = {
-    async beforePhase(context, phase) {
-      if (phase !== "chat") {
-        return;
-      }
-      seenContexts.push({
-        systemPrompt: context.systemPrompt,
-        messages: context.messages.map((message) => message.content),
-        tools: context.tools.map((tool) => tool.name),
-      });
-    },
-  };
 
   await runAgentLoop({
     kind: "run",
@@ -65,14 +52,22 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
     },
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    runtime,
+    beforePhase: async (phaseId, input) => {
+      if (phaseId !== "chat") {
+        return {};
+      }
+      seenContexts.push({
+        systemPrompt: input.systemPrompt,
+        messages: input.messages.map((message) => message.content),
+      });
+      return {};
+    },
   });
 
   expect(seenContexts).toEqual([
     {
       systemPrompt: "Test system",
       messages: ["hello"],
-      tools: expect.arrayContaining(["echo", "route"]),
     },
   ]);
 });
@@ -663,7 +658,7 @@ test("invalid tool args do not execute tool", async () => {
   expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
 });
 
-test("runtime beforePhase can adjust phase input", async () => {
+test("beforePhase hook can adjust phase input", async () => {
   const session = createState({
     systemPrompt: "Test system",
     input: "adjust route input",
@@ -679,19 +674,6 @@ test("runtime beforePhase can adjust phase input", async () => {
     yield* yieldRouteToolCall("stop", text);
     yield { type: "done" };
   };
-  const runtime: AgentRuntimePort = {
-    async beforePhase(_context, phase, input) {
-      if (phase !== "chat") {
-        return;
-      }
-
-      return {
-        input: {
-          ...input,
-        },
-      };
-    },
-  };
 
   const outcome = await runAgentLoop({
     kind: "run",
@@ -699,13 +681,18 @@ test("runtime beforePhase can adjust phase input", async () => {
     model: { provider: "test", name: "runtime-adjust-input" },
     stream,
     tools: [],
-    runtime,
+    beforePhase: async (phaseId, input) => {
+      if (phaseId !== "chat") {
+        return {};
+      }
+      return { input: { ...input } };
+    },
   });
 
   expect(outcome.outcome.message).toBe("Adjusted route input.");
 });
 
-test("runtime afterPhase can adjust phase output", async () => {
+test("afterPhase hook can adjust phase output", async () => {
   const session = createState({
     systemPrompt: "Test system",
     input: "adjust route output",
@@ -728,27 +715,23 @@ test("runtime afterPhase can adjust phase output", async () => {
     model: { provider: "test", name: "runtime-adjust-output" },
     stream,
     tools: [],
-    runtime: {
-      async afterPhase(_context, phase, output) {
-        if (phase !== "chat") {
-          return;
-        }
-
-        return {
-          output: {
-            ...output,
-            message: "Adjusted route output.",
-            text: "Adjusted route output.",
-          },
-        };
-      },
+    afterPhase: async (phaseId, output) => {
+      if (phaseId !== "chat") {
+        return {};
+      }
+      return {
+        output: {
+          ...output,
+          message: "Adjusted route output.",
+        },
+      };
     },
   });
 
   expect(outcome.outcome.message).toBe("Adjusted route output.");
 });
 
-test("runtime beforePhase can skip a phase", async () => {
+test("beforePhase hook can skip a phase", async () => {
   const session = createState({
     systemPrompt: "Test system",
     input: "skip route",
@@ -764,19 +747,16 @@ test("runtime beforePhase can skip a phase", async () => {
     model: { provider: "test", name: "runtime-skip" },
     stream,
     tools: [],
-    runtime: {
-      async beforePhase(_context, phase) {
-        if (phase !== "chat") {
-          return;
-        }
-
-        return {
-          skip: {
-            route: "stop",
-            message: "Skipped route phase.",
-          },
-        };
-      },
+    beforePhase: async (phaseId) => {
+      if (phaseId !== "chat") {
+        return {};
+      }
+      return {
+        skip: {
+          route: "stop",
+          message: "Skipped route phase.",
+        },
+      };
     },
   });
 
@@ -784,7 +764,7 @@ test("runtime beforePhase can skip a phase", async () => {
   expect(outcome.outcome.message).toBe("Skipped route phase.");
 });
 
-test("runtime afterPhase can retry a phase with adjusted input", async () => {
+test("afterPhase hook can retry a phase with adjusted input", async () => {
   const session = createState({
     systemPrompt: "Test system",
     input: "retry route",
@@ -810,22 +790,19 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
     model: { provider: "test", name: "runtime-retry" },
     stream,
     tools: [],
-    runtime: {
-      async afterPhase(_context, phase, output) {
-        if (phase !== "chat" || !("message" in output) || output.message !== "Needs retry.") {
-          return;
-        }
-
-        return {
-          retry: {
-            phase: phase as string,
-            systemPrompt: session.systemPrompt,
-            messages: session.messages,
-            tools: [],
-            skills: session.skills,
-          },
-        };
-      },
+    afterPhase: async (phaseId, output) => {
+      if (phaseId !== "chat" || output.message !== "Needs retry.") {
+        return {};
+      }
+      return {
+        retry: {
+          phase: phaseId,
+          systemPrompt: session.systemPrompt,
+          messages: session.messages,
+          tools: [],
+          skills: session.skills,
+        },
+      };
     },
   });
 
@@ -833,7 +810,7 @@ test("runtime afterPhase can retry a phase with adjusted input", async () => {
   expect(outcome.outcome.message).toBe("Retried with adjusted input.");
 });
 
-test("runtime phase port can abort with an outcome", async () => {
+test("beforePhase hook can abort with an outcome", async () => {
   const session = createState({
     systemPrompt: "Test system",
     input: "abort during plan",
@@ -858,20 +835,17 @@ test("runtime phase port can abort with an outcome", async () => {
     emit: (event) => {
       events.push(event);
     },
-    runtime: {
-      async beforePhase(_context, phase) {
-        if (phase !== "plan") {
-          return;
-        }
-
-        return {
-          abort: {
-            id: createId("out"),
-            passed: false,
-            message: "Aborted by runtime.",
-          },
-        };
-      },
+    beforePhase: async (phaseId) => {
+      if (phaseId !== "plan") {
+        return {};
+      }
+      return {
+        abort: {
+          id: createId("out"),
+          passed: false,
+          message: "Aborted by runtime.",
+        },
+      };
     },
   });
 

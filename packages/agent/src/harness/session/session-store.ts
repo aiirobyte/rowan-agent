@@ -8,6 +8,7 @@ import {
   type AgentMessage,
   type Session,
 } from "./session";
+import { snapshotMessage } from "../../loop/state";
 
 export const PersistedSessionSchema = Type.Object({
   version: Type.String(),
@@ -43,13 +44,6 @@ export type SessionStore<TSession extends Session<unknown> = Session<unknown>> =
 
 const PersistedSessionValidator = Schema.Compile(PersistedSessionSchema);
 
-function cloneMessage(message: AgentMessage): AgentMessage {
-  return {
-    ...message,
-    ...(message.metadata ? { metadata: { ...message.metadata } } : {}),
-  };
-}
-
 export function toPersistedSession(session: Session<unknown>): PersistedSession {
   return PersistedSessionValidator.Parse({
     version: SESSION_SCHEMA_VERSION,
@@ -57,7 +51,7 @@ export function toPersistedSession(session: Session<unknown>): PersistedSession 
     ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     systemPrompt: session.systemPrompt,
     input: session.input,
-    messages: session.messages.filter(isConversationMessage).map(cloneMessage),
+    messages: session.messages.filter(isConversationMessage).map(snapshotMessage),
     skills: session.skills,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -81,7 +75,7 @@ export function sessionFromPersisted<TLogEvent = never>(value: unknown): Session
     ...(parsed.parentSessionId ? { parentSessionId: parsed.parentSessionId } : {}),
     systemPrompt: parsed.systemPrompt,
     input: parsed.input,
-    messages: parsed.messages.map(cloneMessage),
+    messages: parsed.messages.map(snapshotMessage),
     log: [],
     skills: parsed.skills,
     createdAt: parsed.createdAt,

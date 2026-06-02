@@ -5,7 +5,6 @@ import type {
   AgentState,
   AfterToolCall,
   BeforeToolCall,
-  LoopPhase,
   LlmModelRef,
   Outcome,
   RunThread,
@@ -91,16 +90,6 @@ export type PhaseResult =
   | { action: "retry"; input?: PhaseInput; reason?: string }
   | { action: "abort"; outcome: Outcome; reason?: string };
 
-export type BeforePhaseResult =
-  | { input?: PhaseInput }
-  | { skip: PhaseOutput }
-  | { abort: Outcome };
-
-export type AfterPhaseResult =
-  | { output?: PhaseOutput }
-  | { retry?: PhaseInput }
-  | { abort: Outcome };
-
 export type ToolRunnerInput = {
   context: AgentLoopContext;
   toolCall: ToolCall;
@@ -109,15 +98,5 @@ export type ToolRunnerInput = {
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
 
 export type AgentRuntimePort = {
-  beforePhase?(
-    context: AgentLoopContext,
-    phase: LoopPhase,
-    input: PhaseInput,
-  ): Promise<BeforePhaseResult | void>;
-  afterPhase?(
-    context: AgentLoopContext,
-    phase: LoopPhase,
-    output: PhaseOutput,
-  ): Promise<AfterPhaseResult | void>;
   tools?: ToolRunner;
 };

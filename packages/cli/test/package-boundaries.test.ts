@@ -26,7 +26,7 @@ test("packages follow Rowan dependency direction", async () => {
   const rules: Record<string, Set<string>> = {
     models: new Set(),
     agent: new Set(["models"]),
-    logging: new Set(["agent"]),
+    logging: new Set(["models"]),
     cli: new Set(["agent", "models", "logging"]),
   };
   const violations: string[] = [];

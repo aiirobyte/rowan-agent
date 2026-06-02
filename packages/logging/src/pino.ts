@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import pino from "pino";
-import type { AgentEvent, AgentEventListener } from "@rowan-agent/agent";
+import type { AgentEvent, AgentEventListener } from "@rowan-agent/models";
 import { redactSecrets } from "./redact";
 import {
   createAgentEventLogFields,

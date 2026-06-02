@@ -15,6 +15,8 @@ import type {
   StreamFn,
   ToolResult,
 } from "./protocol";
+import type { AgentEvent, AgentEventListener } from "@rowan-agent/models";
+import { isContextScope, defaultScopeForMessage, isConversationMessage } from "./protocol/context";
 import { createId, createTimestamp, createJson } from "./utils";
 
 export type {
@@ -24,9 +26,7 @@ export type {
   AgentRunState,
   AgentRuntimePort,
   AfterPhaseHook,
-  AfterPhaseResult,
   BeforePhaseHook,
-  BeforePhaseResult,
   PhaseResult,
   ToolRunner,
   ToolRunnerInput,
@@ -51,10 +51,11 @@ export type {
   ToolResult,
 } from "./protocol";
 
-export const DEFAULT_MAX_THREAD_DEPTH = 4;
-export const AGENT_STATE_SCHEMA_VERSION = "0.4.6";
+export type { AgentEvent, AgentEventListener };
+export { isContextScope, messageScope, isConversationMessage } from "./protocol/context";
 
-const CONTEXT_SCOPES = ["conversation", "execution", "diagnostic"] as const;
+export const DEFAULT_MAX_THREAD_DEPTH = 4;
+export const AGENT_STATE_SCHEMA_VERSION = "0.4.4";
 
 export type AgentMessage = AgentContextMessage;
 export type Skill = AgentContextSkill;
@@ -191,44 +192,6 @@ export type RunThread = (
   input: AgentThreadStartConfig,
 ) => Promise<Extract<RunResult, { kind: "thread" }>>;
 
-export type AgentEvent =
-  // Agent lifecycle
-  | { type: "agent_start"; sessionId: string; ts: string }
-  | { type: "agent_end"; sessionId: string; messages: AgentMessage[]; ts: string }
-  // Turn lifecycle
-  | {
-      type: "turn_start";
-      content: AgentMessage[];
-      parentSessionId?: string;
-      prompt?: string;
-      threadDepth?: number;
-      maxThreadDepth?: number;
-      ts: string;
-    }
-  | {
-      type: "turn_end";
-      content: AgentMessage[];
-      outcome?: Outcome;
-      threadDepth?: number;
-      maxThreadDepth?: number;
-      ts: string;
-    }
-  | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage; ts: string }
-  // Phase lifecycle
-  | { type: "phase_start"; phase: string; ts: string }
-  | { type: "phase_end"; phase: string; ts: string }
-  // Message lifecycle
-  | { type: "message_start"; message: AgentMessage; ts: string }
-  | { type: "message_update"; message: AgentMessage; delta: string; ts: string }
-  | { type: "message_end"; message: AgentMessage; ts: string }
-  // Tool execution lifecycle
-  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; ts: string }
-  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; ts: string }
-  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean; ts: string };
-
-export type AgentEventListener = ((event: AgentEvent) => void | Promise<void>) & {
-  flush?: () => void | Promise<void>;
-};
 export type Unsubscribe = () => void;
 
 export type AgentLoopInput = AgentLoopRunConfig | AgentThreadRunConfig;
@@ -241,44 +204,12 @@ export function resolveMaxThreadDepth(limits?: AgentRunLimits): number {
   return value;
 }
 
-export function isContextScope(value: unknown): value is ContextScope {
-  return CONTEXT_SCOPES.some((scope) => scope === value);
-}
-
-function defaultScopeForMessage(
-  role: AgentMessage["role"],
-  metadata?: Record<string, unknown>,
-): ContextScope | undefined {
-  if (
-    metadata?.kind === "phase_prompt" ||
-    metadata?.kind === "routing_decision" ||
-    metadata?.kind === "model_message" ||
-    metadata?.kind === "thread_output"
-  ) {
-    return "execution";
-  }
-
-  if (metadata?.kind === "error" || metadata?.kind === "limit_exceeded") {
-    return "diagnostic";
-  }
-
-  if (role === "user" || role === "assistant") {
-    return "conversation";
-  }
-
-  if (role === "tool") {
-    return "execution";
-  }
-
-  return undefined;
-}
-
 export function createMessage(
   role: AgentMessage["role"],
   content: string,
   metadata?: Record<string, unknown>,
 ): AgentMessage {
-  const scope = isContextScope(metadata?.scope) ? metadata.scope : defaultScopeForMessage(role, metadata);
+  const scope = isContextScope(metadata?.scope) ? metadata!.scope : defaultScopeForMessage(role, metadata);
   const normalizedMetadata = scope === undefined
     ? metadata
     : { ...metadata, scope };
@@ -290,15 +221,6 @@ export function createMessage(
     createdAt: createTimestamp(),
     ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
   };
-}
-
-export function messageScope(message: AgentMessage): ContextScope | undefined {
-  const scope = message.metadata?.scope;
-  return isContextScope(scope) ? scope : undefined;
-}
-
-export function isConversationMessage(message: AgentMessage): boolean {
-  return messageScope(message) === "conversation";
 }
 
 export function createAgentState(input: CreateAgentStateInput): AgentState {

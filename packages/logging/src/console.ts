@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentEventListener } from "@rowan-agent/agent";
+import type { AgentEvent, AgentEventListener } from "@rowan-agent/models";
 import {
   AGENT_EVENT_LOG_LEVEL_VALUES,
   createAgentEventLogFields,

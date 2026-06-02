@@ -8,7 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/agent": "workspace:*",
+    "@rowan-agent/models": "workspace:*",
     "pino": "^10.3.1"
   }
 }

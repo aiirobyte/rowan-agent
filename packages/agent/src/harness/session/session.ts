@@ -1,6 +1,12 @@
 import Type from "typebox";
+import {
+  isContextScope as isContextScopeImpl,
+  defaultScopeForMessage,
+  messageScope as messageScopeImpl,
+  isConversationMessage as isConversationMessageImpl,
+} from "../../protocol/context";
 
-export const SESSION_SCHEMA_VERSION = "0.3.3";
+export const SESSION_SCHEMA_VERSION = "0.4.4";
 
 export const CONTEXT_SCOPES = ["conversation", "execution", "diagnostic"] as const;
 
@@ -12,13 +18,7 @@ export const ContextScopeSchema = Type.Union([
   Type.Literal("diagnostic"),
 ]);
 
-export function isContextScope(value: unknown): value is ContextScope {
-  return (
-    value === "conversation" ||
-    value === "execution" ||
-    value === "diagnostic"
-  );
-}
+export const isContextScope = isContextScopeImpl;
 
 export type AgentMessageMetadata = Record<string, unknown> & {
   kind?: string;
@@ -41,42 +41,8 @@ export const AgentMessageSchema = Type.Object({
 
 export type AgentMessage = Type.Static<typeof AgentMessageSchema>;
 
-function defaultScopeForMessage(
-  role: AgentMessage["role"],
-  metadata?: Record<string, unknown>,
-): ContextScope | undefined {
-  if (
-    metadata?.kind === "phase_prompt" ||
-    metadata?.kind === "routing_decision" ||
-    metadata?.kind === "model_message" ||
-    metadata?.kind === "thread_output"
-  ) {
-    return "execution";
-  }
-
-  if (metadata?.kind === "error" || metadata?.kind === "limit_exceeded") {
-    return "diagnostic";
-  }
-
-  if (role === "user" || role === "assistant") {
-    return "conversation";
-  }
-
-  if (role === "tool") {
-    return "execution";
-  }
-
-  return undefined;
-}
-
-export function messageScope(message: AgentMessage): ContextScope | undefined {
-  const metadata = message.metadata as AgentMessageMetadata | undefined;
-  return isContextScope(metadata?.scope) ? metadata.scope : undefined;
-}
-
-export function isConversationMessage(message: AgentMessage): boolean {
-  return messageScope(message) === "conversation";
-}
+export const messageScope = messageScopeImpl;
+export const isConversationMessage = isConversationMessageImpl;
 
 export const SkillSchema = Type.Object({
   id: Type.String(),
@@ -138,7 +104,7 @@ export function createMessage(
   content: string,
   metadata?: Record<string, unknown>,
 ): AgentMessage {
-  const scope = isContextScope(metadata?.scope) ? metadata.scope : defaultScopeForMessage(role, metadata);
+  const scope = isContextScope(metadata?.scope) ? metadata!.scope : defaultScopeForMessage(role, metadata);
   const normalizedMetadata = scope === undefined
     ? metadata
     : { ...metadata, scope };
