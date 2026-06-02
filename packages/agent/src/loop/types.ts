@@ -18,6 +18,8 @@ import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions/
 
 export type AgentRunLimits = {
   maxThreadDepth?: number;
+  /** Maximum number of phase iterations before forcing stop. Default: 50. */
+  maxIterations?: number;
 };
 
 export type RuntimeDepth = {
@@ -48,6 +50,25 @@ export type AgentLoopConfig = {
   phaseConfig?: PhaseRegistry;
 };
 
+export type LoopMetrics = {
+  /** Number of phase iterations executed. */
+  iterations: number;
+  /** Phase transition history. */
+  phaseTransitions: Array<{ from: string; to: string; ts: string }>;
+  /** Number of times compaction was triggered. */
+  compactionCount: number;
+  /** Number of retry attempts due to transient errors. */
+  retryCount: number;
+  /** Loop start timestamp. */
+  startedAt: string;
+  /** Loop start time as epoch ms (for duration calculation). */
+  startedAtMs: number;
+  /** Loop end timestamp (set on completion). */
+  endedAt?: string;
+  /** Total wall-clock duration in ms. */
+  durationMs?: number;
+};
+
 export type AgentRunState = {
   agentState: AgentState;
   currentPhase: string;
@@ -57,6 +78,8 @@ export type AgentRunState = {
     maxThreadDepth: number;
   };
   transcript: AgentMessage[];
+  /** Loop execution metrics. */
+  metrics: LoopMetrics;
 };
 
 export type AgentMessageSnapshot = AgentMessage;

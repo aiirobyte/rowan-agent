@@ -40,6 +40,7 @@ import {
 import type { AgentLoopConfig, AgentRunState } from "./loop/types";
 import { createRouteTool, extractRouteCall } from "./loop/phases/route-tool";
 import type { PhaseManifest } from "./loop/phases/registry";
+import { compactMessages, needsCompaction } from "./loop/compaction";
 
 /** Execute phase run and handle void return by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(
@@ -102,6 +103,14 @@ export function createLoopLifecycle(
       maxThreadDepth: resolveMaxThreadDepth(input.limits),
     },
     transcript: snapshotMessages(agentState.messages),
+    metrics: {
+      iterations: 0,
+      phaseTransitions: [],
+      compactionCount: 0,
+      retryCount: 0,
+      startedAt: createTimestamp(),
+      startedAtMs: Date.now(),
+    },
   };
 
   return { config, state };
@@ -172,6 +181,7 @@ function createRunResult(
     messages: snapshotMessages(state.agentState.messages),
     outcome,
     depth: runtimeDepth(state.depth),
+    metrics: state.metrics,
   };
 
   if (config.kind === "thread") {
@@ -198,6 +208,10 @@ function completeRun(
   state: AgentRunState,
   outcome: Outcome,
 ): RunResult {
+  // Finalize metrics
+  state.metrics.endedAt = createTimestamp();
+  state.metrics.durationMs = Date.now() - state.metrics.startedAtMs;
+
   return createRunResult(config, state, outcome);
 }
 
@@ -380,10 +394,46 @@ async function runLoop(
   let currentPhaseId = phaseConfig.entryPhaseId;
   let lastYield: unknown;
 
+  const maxIterations = config.limits?.maxIterations ?? 50;
+
   while (currentPhaseId) {
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
       return completeRun(config, state, createOutcome.aborted());
+    }
+
+    // Track iteration
+    state.metrics.iterations++;
+
+    // Guard against infinite loops
+    if (state.metrics.iterations > maxIterations) {
+      return completeRun(config, state, {
+        id: "max_iterations",
+        message: `Loop exceeded maximum iterations (${maxIterations}). Stopping to prevent infinite loop.`,
+      });
+    }
+
+    // Auto-compact when transcript grows too long
+    if (needsCompaction(state.transcript)) {
+      const compacted = compactMessages(state.transcript);
+      if (compacted.compacted) {
+        state.transcript = compacted.messages;
+        state.agentState.messages = compacted.messages.filter(
+          (m) => m.metadata?.scope === "conversation" && m.metadata?.kind !== "model_message",
+        );
+        state.metrics.compactionCount++;
+        emit(state, config.emit, {
+          type: "message_start",
+          message: {
+            id: "compaction",
+            role: "assistant",
+            content: `[Compacted ${compacted.summarizedCount} older messages to stay within context limits]`,
+            createdAt: createTimestamp(),
+            metadata: { scope: "diagnostic", kind: "compaction_notice" },
+          },
+          ts: createTimestamp(),
+        });
+      }
     }
 
     const phase = resolvePhaseEntry(phaseConfig, currentPhaseId);
@@ -481,12 +531,86 @@ async function runLoop(
       return completeRun(config, state, createOutcome.phase());
     }
 
+    // Track phase transition
+    state.metrics.phaseTransitions.push({
+      from: currentPhaseId,
+      to: output.route,
+      ts: createTimestamp(),
+    });
+
     // Pass yield to next phase
     lastYield = output.yield;
     currentPhaseId = output.route;
   }
 
   throw new Error("Phase machine exited without a stop or abort transition.");
+}
+
+// ============================================================================
+// Retry Logic
+// ============================================================================
+
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_DELAY_MS = 1_000;
+const DEFAULT_MAX_DELAY_MS = 30_000;
+
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  // Check for rate limit / overloaded / server error patterns
+  if (message.includes("rate limit") || message.includes("429")) return true;
+  if (message.includes("overloaded") || message.includes("529")) return true;
+  if (message.includes("server error") || message.includes("500")) return true;
+  if (message.includes("bad gateway") || message.includes("502")) return true;
+  if (message.includes("service unavailable") || message.includes("503")) return true;
+  if (message.includes("gateway timeout") || message.includes("504")) return true;
+  if (message.includes("econnreset") || message.includes("econnrefused")) return true;
+  // Do NOT retry user-configured timeouts — those are intentional limits
+  return false;
+}
+
+function getRetryDelay(attempt: number, baseMs: number, maxMs: number): number {
+  const exponential = baseMs * Math.pow(2, attempt);
+  const jitter = exponential * (0.5 + Math.random() * 0.5);
+  return Math.min(jitter, maxMs);
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: {
+    maxRetries?: number;
+    baseDelayMs?: number;
+    maxDelayMs?: number;
+    signal?: AbortSignal;
+    onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
+  } = {},
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxRetries || !isRetryableError(error)) {
+        throw error;
+      }
+      if (options.signal?.aborted) {
+        throw error;
+      }
+      const delayMs = getRetryDelay(attempt, baseDelayMs, maxDelayMs);
+      options.onRetry?.(attempt, error, delayMs);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (options.signal?.aborted) {
+        throw lastError;
+      }
+    }
+  }
+  throw lastError;
 }
 
 // ============================================================================
@@ -715,13 +839,34 @@ function createPhaseContext(
             parameters: t.parameters,
           }));
         }
-        return collectStructured({
-          context: loopContext,
-          message: messageManager,
-          events: loopContext.config.stream(request, { signal: loopContext.signal }),
-          metadataPhase: phase.id,
-          scope: input.scope,
-        });
+        // Retry with exponential backoff for transient model errors
+        return withRetry(
+          () => collectStructured({
+            context: loopContext,
+            message: messageManager,
+            events: loopContext.config.stream(request, { signal: loopContext.signal }),
+            metadataPhase: phase.id,
+            scope: input.scope,
+          }),
+          {
+            signal: loopContext.signal,
+            onRetry: (attempt, error, delayMs) => {
+              state.metrics.retryCount++;
+              const errMsg = error instanceof Error ? error.message : String(error);
+              loopContext.emit({
+                type: "message_start",
+                message: {
+                  id: `retry_${attempt}`,
+                  role: "assistant",
+                  content: `[Retry ${attempt + 1}/${DEFAULT_MAX_RETRIES}] Transient error: ${errMsg}. Retrying in ${Math.round(delayMs)}ms...`,
+                  createdAt: createTimestamp(),
+                  metadata: { scope: "diagnostic", kind: "retry_notice" },
+                },
+                ts: createTimestamp(),
+              });
+            },
+          },
+        );
       },
     },
     tools: {

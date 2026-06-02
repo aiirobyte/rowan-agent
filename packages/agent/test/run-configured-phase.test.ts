@@ -44,6 +44,14 @@ function createTestContext(state: AgentRunState): PhaseContext {
       attempt: 0,
       depth: { threadDepth: 0, maxThreadDepth: 4 },
       transcript: [],
+      metrics: {
+        iterations: 0,
+        phaseTransitions: [],
+        compactionCount: 0,
+        retryCount: 0,
+        startedAt: new Date().toISOString(),
+        startedAtMs: Date.now(),
+      },
     },
     messages: {
       visible: () => [],
