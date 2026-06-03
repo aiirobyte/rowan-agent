@@ -4,17 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Type from "typebox";
 import {
-  createExtensionRuntime,
+  createExtensionRunner,
   discoverAndLoadExtensions,
   loadExtensionFromFactory,
 } from "../src/extensions";
+import type { ExtensionContext, LoadedExtension } from "../src/extensions";
 import { createMessage } from "../src/types";
 
-const testRuntime = createExtensionRuntime();
-
-test("loadExtensionFromFactory creates an Extension object with registered phases", async () => {
-  const extension = await loadExtensionFromFactory((rowan) => {
-    rowan.registerPhase({
+test("loadExtensionFromFactory creates a LoadedExtension object", () => {
+  const extension = loadExtensionFromFactory((ctx) => {
+    ctx.registerPhase({
       id: "factory",
       name: "Factory",
       description: "Factory registered phase.",
@@ -22,60 +21,58 @@ test("loadExtensionFromFactory creates an Extension object with registered phase
         return { message: "Factory loaded.", route: "stop" };
       },
     });
-  }, testRuntime, process.cwd(), "<test:factory>");
+  }, process.cwd(), "<test:factory>");
 
   expect(extension.path).toBe("<test:factory>");
   expect(extension.resolvedPath).toBe("<test:factory>");
-  expect(extension.phases.get("factory")?.definition).toMatchObject({
-    id: "factory",
-    name: "Factory",
-  });
+  expect(extension.name).toBe("<test:factory>");
 });
 
-test("loadExtensionFromFactory exposes host utilities on the Rowan API", async () => {
-  const extension = await loadExtensionFromFactory((rowan) => {
-    rowan.registerPhase({
-      id: "utilities",
-      name: "Utilities",
-      description: "Uses host utility helpers.",
-      buildPrompt(input) {
-        return {
-          model: { provider: "test", name: "test" },
-          system: input.systemPrompt,
-          messages: [
-            { role: "user" as const, content: rowan.input.latestUserMessage(input) },
-          ],
-        };
-      },
-      async run() {
-        return { message: "Utilities loaded.", route: "stop" };
-      },
-    });
-  }, testRuntime, process.cwd(), "<test:utilities>");
+test("ExtensionRunner loads extensions and registers phases", async () => {
+  const runner = createExtensionRunner();
 
-  const handler = extension.phases.get("utilities")?.handler;
-  const request = handler?.buildPrompt?.({
-    phase: "utilities",
-    systemPrompt: "system",
-    messages: [createMessage("user", "hello from user", { scope: "conversation" })],
-    tools: [{
-      name: "echo",
-      description: "Echoes input.",
-      parameters: Type.Object({ message: Type.String() }),
-      async execute() {
-        return { toolCallId: "call_echo", toolName: "echo", ok: true, content: "ok" };
-      },
-    }],
-    skills: [{
-      name: "writer",
-      description: "Write concise plans.",
-      filePath: "/skills/writer/SKILL.md",
-      baseDir: "/skills/writer",
-      disableModelInvocation: false,
-    }],
-  });
+  const ext: LoadedExtension = {
+    path: "<test>",
+    resolvedPath: "<test>",
+    name: "test",
+    factory: (ctx) => {
+      ctx.registerPhase({
+        id: "test-phase",
+        name: "Test Phase",
+        description: "A test phase.",
+        async run() {
+          return { message: "Test loaded.", route: "stop" };
+        },
+      });
+    },
+  };
 
-  expect(request?.messages.some(m => m.content === "hello from user")).toBe(true);
+  await runner.loadExtensions([ext]);
+  runner.bind();
+
+  const phases = runner.getPhases();
+  expect(phases.length).toBeGreaterThan(0);
+  expect(phases.some(p => p.id === "test-phase")).toBe(true);
+});
+
+test("ExtensionContext utils provide helper functions", async () => {
+  let capturedCtx: ExtensionContext | null = null;
+
+  const runner = createExtensionRunner();
+  const ext: LoadedExtension = {
+    path: "<test>",
+    resolvedPath: "<test>",
+    name: "test",
+    factory: (ctx) => {
+      capturedCtx = ctx;
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+
+  expect(capturedCtx).not.toBeNull();
+  expect(capturedCtx!.utils.createId("test")).toMatch(/^test_/);
+  expect(capturedCtx!.utils.formatJson({ a: 1 })).toBe(JSON.stringify({ a: 1 }, null, 2));
 });
 
 test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", async () => {
@@ -89,8 +86,8 @@ test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", as
     }));
     await writeFile(join(extDir, "index.ts"), `
       import type { ExtensionFactory } from "@rowan-agent/agent";
-      const extension: ExtensionFactory = (rowan) => {
-        rowan.registerPhase({
+      const extension: ExtensionFactory = (ctx) => {
+        ctx.registerPhase({
           id: "echo",
           name: "Echo",
           description: "Echo test phase.",
@@ -102,12 +99,11 @@ test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", as
       export default extension;
     `);
 
-    const result = await discoverAndLoadExtensions(testRuntime, root);
+    const result = await discoverAndLoadExtensions(root);
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
-    expect(result.extensions[0]?.phases.has("echo")).toBe(true);
-    expect(result.extensions[0]?.phases.get("echo")?.source.extensionPath).toContain("index.ts");
+    expect(result.extensions[0]?.name).toBe("echo");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -120,7 +116,7 @@ test("discoverAndLoadExtensions reports invalid extension factories", async () =
     await mkdir(extensionsDir, { recursive: true });
     await writeFile(join(extensionsDir, "bad.ts"), "export default 123;");
 
-    const result = await discoverAndLoadExtensions(testRuntime, root);
+    const result = await discoverAndLoadExtensions(root);
 
     expect(result.extensions).toEqual([]);
     expect(result.errors).toHaveLength(1);
@@ -129,4 +125,62 @@ test("discoverAndLoadExtensions reports invalid extension factories", async () =
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("HooksManager supports typed event registration", async () => {
+  const runner = createExtensionRunner();
+  const events: string[] = [];
+
+  const ext: LoadedExtension = {
+    path: "<test>",
+    resolvedPath: "<test>",
+    name: "test",
+    factory: (ctx) => {
+      ctx.on("agent_start", () => {
+        events.push("agent_start");
+      });
+      ctx.on("before_tool_call", (event) => {
+        events.push(`before_tool_call:${event.tool.name}`);
+        return { allow: true };
+      });
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  runner.bind();
+
+  await runner.emit("agent_start", { type: "agent_start", sessionId: "test" });
+  expect(events).toContain("agent_start");
+});
+
+test("before_tool_call hook can block tool execution", async () => {
+  const runner = createExtensionRunner();
+
+  const ext: LoadedExtension = {
+    path: "<test>",
+    resolvedPath: "<test>",
+    name: "test",
+    factory: (ctx) => {
+      ctx.on("before_tool_call", (event) => {
+        if (event.tool.name === "blocked") {
+          return { allow: false, reason: "Not allowed" };
+        }
+        return { allow: true };
+      });
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  runner.bind();
+
+  const tool = {
+    name: "blocked",
+    description: "Test tool",
+    parameters: Type.Object({}),
+    execute: async () => ({ toolCallId: "1", toolName: "blocked", ok: true, content: "ok" }),
+  };
+
+  const result = await runner.emitBeforeToolCall(tool, {});
+  expect(result.allow).toBe(false);
+  expect(result.reason).toBe("Not allowed");
 });

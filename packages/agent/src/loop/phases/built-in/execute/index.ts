@@ -1,8 +1,9 @@
-import { defineExtension } from "../../../../extensions/types";
+import { defineExtension } from "../../../../extensions/context";
 
-export default defineExtension((rowan) => {
-  rowan.registerPhase({
-    ...rowan.manifest.phase!,
+export default defineExtension((ctx) => {
+  ctx.registerPhase({
+    ...ctx.manifest?.phase,
+    id: "execute",
 
     prompt: {
       instructions: [

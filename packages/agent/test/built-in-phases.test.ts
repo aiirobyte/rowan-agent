@@ -25,14 +25,14 @@ function createState(input: Parameters<typeof createBaseAgentState>[0]) {
   return createBaseAgentState(input);
 }
 
-function requireBuiltinPhase(id: string) {
-  const registry = createBuiltinPhaseRegistry();
+async function requireBuiltinPhase(id: string) {
+  const registry = await createBuiltinPhaseRegistry();
   const phase = resolvePhaseEntry(registry, id);
   return phase;
 }
 
-function builtinPhaseRegistryFor(ids: string[]) {
-  const builtinRegistry = createBuiltinPhaseRegistry();
+async function builtinPhaseRegistryFor(ids: string[]) {
+  const builtinRegistry = await createBuiltinPhaseRegistry();
   const phases = ids.map((id) => {
     return resolvePhaseEntry(builtinRegistry, id);
   });
@@ -43,8 +43,8 @@ function builtinPhaseRegistryFor(ids: string[]) {
   });
 }
 
-test("built-in phase metadata uses package.json rowan phase manifest", () => {
-  const chatPhase = requireBuiltinPhase("chat");
+test("built-in phase metadata uses package.json rowan phase manifest", async () => {
+  const chatPhase = await requireBuiltinPhase("chat");
 
   expect(chatPackage.rowan.extensions).toEqual(["./index.ts"]);
   expect(chatPackage.rowan.phase).toMatchObject({
@@ -106,13 +106,14 @@ test("custom phase config without verify phase skips verification", async () => 
   });
   const events: string[] = [];
 
+  const phaseConfig = await builtinPhaseRegistryFor(["chat", "plan", "execute"]);
   const outcome = await runAgentLoop({
     kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
     tools: [echoTool],
-    phaseConfig: builtinPhaseRegistryFor(["chat", "plan", "execute"]),
+    phaseConfig,
     emit: (event) => {
       events.push(event.type);
     },

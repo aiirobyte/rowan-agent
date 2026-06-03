@@ -1,4 +1,4 @@
-import { defineExtension } from "../../../../extensions/types";
+import { defineExtension } from "../../../../extensions/context";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -28,9 +28,10 @@ function normalizeTask(value: unknown): Record<string, unknown> {
   };
 }
 
-export default defineExtension((rowan) => {
-  rowan.registerPhase({
-    ...rowan.manifest.phase!,
+export default defineExtension((ctx) => {
+  ctx.registerPhase({
+    ...ctx.manifest?.phase,
+    id: "plan",
 
     prompt: {
       instructions: [
@@ -84,7 +85,6 @@ export default defineExtension((rowan) => {
       }
 
       // Default: no route tool call, but task was produced
-      // The model should have called route tool, but if not, default to stop
       return {
         message,
         route: "stop",

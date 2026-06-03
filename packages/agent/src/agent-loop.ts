@@ -385,7 +385,7 @@ async function runLoop(
   config: AgentLoopConfig,
   state: AgentRunState,
 ): Promise<RunResult> {
-  const phaseConfig = config.phaseConfig ?? createBuiltinPhaseRegistry();
+  const phaseConfig = config.phaseConfig ?? await createBuiltinPhaseRegistry();
   if (config.phaseConfig) ensurePhaseRegistry(phaseConfig);
   config.phaseConfig = phaseConfig;
 

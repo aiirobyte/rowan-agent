@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test, beforeAll } from "bun:test";
 import Type from "typebox";
 import {
   buildModelRequest,
@@ -10,9 +10,13 @@ import {
   resolvePhaseEntry,
 } from "../../../src/loop/phases";
 import { createId, createMessage, createAgentState } from "@rowan-agent/agent";
-import type { PhaseInput, Tool } from "@rowan-agent/agent";
+import type { PhaseInput, PhaseRegistry, Tool } from "@rowan-agent/agent";
 
-const builtinPhaseRegistry = createBuiltinPhaseRegistry();
+let builtinPhaseRegistry: PhaseRegistry;
+
+beforeAll(async () => {
+  builtinPhaseRegistry = await createBuiltinPhaseRegistry();
+});
 
 function buildRequest(input: {
   context: PhaseInput;
@@ -103,15 +107,15 @@ test("buildModelRequest omits tools when empty", () => {
 // Phase buildPrompt integration
 // ---------------------------------------------------------------------------
 
-test("chat phase buildPrompt returns LlmRequest with phase instructions", () => {
+test("chat phase buildPrompt returns LlmRequest without extra instructions", () => {
   const input = createTestInput({ phase: "chat", input: "What is 2 + 2?" });
   const req = buildRequest({ context: input });
 
   expect(req.system).toContain("Test system");
-  expect(req.messages.length).toBeGreaterThanOrEqual(2);
-  const phaseMsg = req.messages.at(-1);
-  expect(phaseMsg?.role).toBe("user");
-  expect(phaseMsg?.content).toContain("Phase: chat");
+  expect(req.messages.length).toBeGreaterThanOrEqual(1);
+  // Chat phase doesn't add extra instructions
+  const userMsg = req.messages.find(m => m.role === "user");
+  expect(userMsg?.content).toBe("What is 2 + 2?");
 });
 
 test("plan phase buildPrompt includes instructions", () => {

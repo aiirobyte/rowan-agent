@@ -106,7 +106,8 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   expect(request.model).toEqual({ provider: "test-provider", name: "test-model" });
   expect(request.system).toContain("Test system");
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
-  expect(request.messages?.at(-1)?.content).toContain("Phase: chat");
+  // Chat phase no longer adds explicit instructions - it's a simple conversational phase
+  expect(request.messages?.at(-1)?.content).toBe("hello");
   expect(request.tools).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ name: "echo", description: echoTool.description }),

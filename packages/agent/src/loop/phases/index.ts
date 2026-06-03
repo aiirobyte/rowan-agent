@@ -20,15 +20,15 @@ export {
   type PhaseMessageManager,
   type PhaseToolExecutionManager,
 } from "./registry";
+
+// Extension types (new API)
 export {
   ExtensionRunner,
+  createExtensionRunner,
   loadExtensionFromFactory,
   loadExtensionFromFactorySync,
 } from "../../extensions";
 export type {
-  ExtensionAPI,
+  ExtensionContext,
   ExtensionFactory,
-  ExtensionPhaseHandler,
-  BeforePhaseHookContext,
-  AfterPhaseHookContext,
-} from "../../extensions";
+} from "../../extensions/context";

@@ -1,18 +1,16 @@
-import { existsSync, type Dirent } from "node:fs";
+/**
+ * Extension loader — discovers and loads extensions from the filesystem.
+ *
+ * Uses the new LoadedExtension type that works with ExtensionRunner.
+ */
+
+import { existsSync, readFileSync, type Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, resolve } from "node:path";
 import { createJiti } from "jiti";
-import type {
-  Extension,
-  ExtensionFactory,
-  ExtensionHandler,
-  ExtensionPackageManifest,
-  ExtensionRuntime,
-  LoadExtensionsResult,
-  RegisteredPhase,
-} from "./types";
-import { createExtensionAPI } from "./runner";
+import type { ExtensionFactory, ExtensionManifest, LoadedExtension } from "./context";
+import type { ExtensionPackageManifest } from "./types";
 
 const ROWAN_DIR = ".rowan";
 const EXTENSIONS_DIR = "extensions";
@@ -26,13 +24,48 @@ function isSyntheticPath(path: string): boolean {
   return path.startsWith("<") && path.endsWith(">");
 }
 
-function createExtension(extensionPath: string, resolvedPath: string): Extension {
-  return {
-    path: extensionPath,
-    resolvedPath,
-    phases: new Map<string, RegisteredPhase>(),
-    eventHandlers: new Map<string, ExtensionHandler[]>(),
-  };
+/**
+ * Read extension manifest from package.json (sync).
+ */
+function readManifestSync(dir: string): ExtensionManifest | undefined {
+  const manifestPath = join(dir, "package.json");
+  if (!existsSync(manifestPath)) {
+    return undefined;
+  }
+  try {
+    const content = readFileSync(manifestPath, "utf8");
+    const pkg = JSON.parse(content) as ExtensionPackageManifest;
+    const rowan = pkg.rowan;
+    if (!rowan) return undefined;
+    return {
+      entry: rowan.extensions?.[0],
+      phase: rowan.phase,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read extension manifest from package.json (async).
+ */
+async function readManifest(dir: string): Promise<ExtensionManifest | undefined> {
+  const manifestPath = join(dir, "package.json");
+  if (!existsSync(manifestPath)) {
+    return undefined;
+  }
+  try {
+    const content = await readFile(manifestPath, "utf8");
+    const pkg = JSON.parse(content) as ExtensionPackageManifest;
+    const rowan = pkg.rowan;
+    if (!rowan) return undefined;
+    return {
+      entry: rowan.extensions?.[0],
+      phase: rowan.phase,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function jitiAliases(): Record<string, string> {
@@ -56,7 +89,7 @@ function getJiti(): ReturnType<typeof createJiti> {
 async function loadExtensionModule(extensionPath: string): Promise<ExtensionFactory | undefined> {
   const jiti = getJiti();
   const module = await jiti.import(extensionPath, { default: true });
-  return typeof module === "function" ? module as ExtensionFactory : undefined;
+  return typeof module === "function" ? (module as ExtensionFactory) : undefined;
 }
 
 async function readPackageManifest(path: string): Promise<ExtensionPackageManifest | undefined> {
@@ -101,7 +134,9 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
     }
 
     if (entry.isDirectory() || entry.isSymbolicLink()) {
-      const info = entry.isSymbolicLink() ? await stat(entryPath).catch(() => undefined) : undefined;
+      const info = entry.isSymbolicLink()
+        ? await stat(entryPath).catch(() => undefined)
+        : undefined;
       if (entry.isDirectory() || info?.isDirectory()) {
         const resolvedEntries = await resolveExtensionEntries(entryPath);
         if (resolvedEntries) {
@@ -114,67 +149,48 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
   return paths;
 }
 
-function readPackageManifestSync(dir: string): NonNullable<ExtensionPackageManifest["rowan"]> {
-  const path = join(dir, "package.json");
-  if (!existsSync(path)) {
-    return {};
-  }
-  try {
-    const content = require("node:fs").readFileSync(path, "utf8");
-    const manifest = JSON.parse(content) as ExtensionPackageManifest;
-    return manifest.rowan ?? {};
-  } catch {
-    return {};
-  }
-}
-
-function createExtensionFromFactory(
+/**
+ * Load a single extension from a factory function.
+ */
+export function loadExtensionFromFactory(
   factory: ExtensionFactory,
-  runtime: ExtensionRuntime,
   cwd: string,
   extensionPath = "<inline>",
-): { extension: Extension; result: void | Promise<void> } {
+): LoadedExtension {
   const resolvedCwd = resolve(cwd);
-  const resolvedPath = isSyntheticPath(extensionPath) ? extensionPath : resolve(resolvedCwd, extensionPath);
-  const extension = createExtension(extensionPath, resolvedPath);
+  const resolvedPath = isSyntheticPath(extensionPath)
+    ? extensionPath
+    : resolve(resolvedCwd, extensionPath);
+
+  // Extract name from path
+  const name = isSyntheticPath(extensionPath)
+    ? extensionPath
+    : dirname(resolvedPath).split("/").pop() ?? "unknown";
+
   // Read manifest from package.json in extension directory
   const manifestDir = isSyntheticPath(extensionPath) ? resolvedCwd : dirname(resolvedPath);
-  const manifest = readPackageManifestSync(manifestDir);
-  const rowan = createExtensionAPI(extension, runtime, manifest);
-  const result = factory(rowan);
-  return { extension, result };
+  const manifest = readManifestSync(manifestDir);
+
+  return {
+    path: extensionPath,
+    resolvedPath,
+    name,
+    factory,
+    manifest,
+  };
 }
 
-export function loadExtensionFromFactorySync(
-  factory: ExtensionFactory,
-  runtime: ExtensionRuntime,
-  cwd: string,
-  extensionPath = "<inline>",
-): Extension {
-  const { extension, result } = createExtensionFromFactory(factory, runtime, cwd, extensionPath);
-  if (result && typeof (result as Promise<void>).then === "function") {
-    throw new Error("loadExtensionFromFactorySync does not support async factories.");
-  }
-  return extension;
-}
+// Keep old name as alias for compatibility
+export const loadExtensionFromFactorySync = loadExtensionFromFactory;
 
-export async function loadExtensionFromFactory(
-  factory: ExtensionFactory,
-  runtime: ExtensionRuntime,
-  cwd: string,
-  extensionPath = "<inline>",
-): Promise<Extension> {
-  const { extension, result } = createExtensionFromFactory(factory, runtime, cwd, extensionPath);
-  await result;
-  return extension;
-}
-
+/**
+ * Load extensions from file paths.
+ */
 export async function loadExtensions(
   paths: string[],
-  runtime: ExtensionRuntime,
   cwd: string,
-): Promise<LoadExtensionsResult> {
-  const extensions: Extension[] = [];
+): Promise<{ extensions: LoadedExtension[]; errors: Array<{ path: string; error: string }> }> {
+  const extensions: LoadedExtension[] = [];
   const errors: Array<{ path: string; error: string }> = [];
   const resolvedCwd = resolve(cwd);
 
@@ -183,10 +199,13 @@ export async function loadExtensions(
     try {
       const factory = await loadExtensionModule(resolvedPath);
       if (!factory) {
-        errors.push({ path: resolvedPath, error: `Extension does not export a valid factory function: ${path}` });
+        errors.push({
+          path: resolvedPath,
+          error: `Extension does not export a valid factory function: ${path}`,
+        });
         continue;
       }
-      extensions.push(await loadExtensionFromFactory(factory, runtime, resolvedCwd, resolvedPath));
+      extensions.push(loadExtensionFromFactory(factory, resolvedCwd, resolvedPath));
     } catch (error) {
       errors.push({
         path: resolvedPath,
@@ -198,11 +217,13 @@ export async function loadExtensions(
   return { extensions, errors };
 }
 
+/**
+ * Discover and load extensions from .rowan/extensions directory.
+ */
 export async function discoverAndLoadExtensions(
-  runtime: ExtensionRuntime,
   cwd: string,
-): Promise<LoadExtensionsResult> {
+): Promise<{ extensions: LoadedExtension[]; errors: Array<{ path: string; error: string }> }> {
   const extensionsDir = join(resolve(cwd), ROWAN_DIR, EXTENSIONS_DIR);
   const paths = await discoverExtensionsInDir(extensionsDir);
-  return loadExtensions(paths, runtime, cwd);
+  return loadExtensions(paths, cwd);
 }

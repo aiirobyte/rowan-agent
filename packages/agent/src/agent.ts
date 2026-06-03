@@ -133,7 +133,7 @@ export class Agent {
     this.emitToListeners(event);
 
     // Dispatch to extension runner via ref
-    this.options.extensionRunnerRef?.current?.emit(event);
+    this.options.extensionRunnerRef?.current?.emitAgentEvent(event);
   }
 
   /**

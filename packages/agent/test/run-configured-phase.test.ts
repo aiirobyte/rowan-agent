@@ -1,21 +1,24 @@
-import { expect, test, describe } from "bun:test";
-import type { PhaseContext, PhaseDefinition } from "../src/loop/phases";
+import { expect, test, describe, beforeAll } from "bun:test";
+import type { PhaseContext, PhaseDefinition, PhaseRegistry } from "../src/loop/phases";
 import type { AgentLoopConfig, AgentRunState } from "../src/loop/types";
 import { createLoopLifecycle } from "../src/agent-loop";
 import { createMessage } from "../src/types";
 import { createBuiltinPhaseRegistry } from "../src/extensions";
 import { resolvePhaseEntry } from "../src/loop/phases";
 
-const builtinPhaseRegistry = createBuiltinPhaseRegistry();
+let builtinPhaseRegistry: PhaseRegistry;
+let chatPhase: PhaseDefinition;
+let planPhase: PhaseDefinition;
+let executePhase: PhaseDefinition;
+let verifyPhase: PhaseDefinition;
 
-function requireBuiltinPhase(id: string): PhaseDefinition {
-  return resolvePhaseEntry(builtinPhaseRegistry, id);
-}
-
-const chatPhase = requireBuiltinPhase("chat");
-const planPhase = requireBuiltinPhase("plan");
-const executePhase = requireBuiltinPhase("execute");
-const verifyPhase = requireBuiltinPhase("verify");
+beforeAll(async () => {
+  builtinPhaseRegistry = await createBuiltinPhaseRegistry();
+  chatPhase = resolvePhaseEntry(builtinPhaseRegistry, "chat");
+  planPhase = resolvePhaseEntry(builtinPhaseRegistry, "plan");
+  executePhase = resolvePhaseEntry(builtinPhaseRegistry, "execute");
+  verifyPhase = resolvePhaseEntry(builtinPhaseRegistry, "verify");
+});
 
 // ============================================================================
 // Test Helpers

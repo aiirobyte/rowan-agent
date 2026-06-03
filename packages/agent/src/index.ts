@@ -84,39 +84,62 @@ export {
 } from "./harness/env";
 
 // ── extensions ─────────────────────────────────────────────────
+// Hooks API
+export {
+  HooksManager,
+  getGlobalHooks,
+  resetGlobalHooks,
+  type HookEvent,
+  type HookEventType,
+  type HookHandler,
+  type HookResultMap,
+  HookError,
+} from "./extensions/hooks";
+
+// Context API
+export {
+  defineExtension,
+  type ExtensionContext,
+  type ExtensionFactory,
+  type ExtensionUtils,
+  type ExtensionManifest,
+  type LoadedExtension,
+} from "./extensions/context";
+
+// Runner
+export {
+  ExtensionRunner,
+  createExtensionRunner,
+  type ExtensionRunnerOptions,
+} from "./extensions/runner";
+
+// Builtin extensions
 export {
   createBuiltinPhaseRegistry,
   createDefaultPhaseRegistry,
-  createExtensionRuntime,
-  defineExtension,
-  discoverAndLoadExtensions,
-  ExtensionRunner,
   getBuiltinExtensions,
-  getBuiltinRuntime,
+  getBuiltinRunner,
+  isBuiltinPhaseOverride,
+  isBuiltinSource,
+  type CreateDefaultPhaseRegistryOptions,
+} from "./extensions/builtin";
+
+// Loader
+export {
+  discoverAndLoadExtensions,
   loadExtensionFromFactory,
   loadExtensionFromFactorySync,
   loadExtensions,
-  type CreateDefaultPhaseRegistryOptions,
-  type ExecOptions,
-  type ExecResult,
-  type Extension,
-  type ExtensionAPI,
-  type ExtensionFactory,
-  type ExtensionHandler,
-  type ExtensionPackageManifest,
-  type ExtensionPhaseHandler,
-  type ExtensionRuntime,
-  type LoadExtensionsResult,
-  type PhaseRegistration,
-  type RegisteredPhase,
-  type BeforePhaseHookContext,
-  type AfterPhaseHookContext,
-  type BeforeToolCallContext,
-  type AfterToolCallContext,
-  type PendingProviderAction,
-  type PendingProviderRegistration,
-  type PendingProviderUnregistration,
-} from "./extensions";
+} from "./extensions/loader";
+
+// Types
+export type {
+  ExecOptions,
+  ExecResult,
+  ExtensionPackageManifest,
+  PhaseRegistration,
+  RegisteredPhase,
+} from "./extensions/types";
 
 // Re-export ExtensionRunnerRef from agent
 export type { ExtensionRunnerRef } from "./agent";
