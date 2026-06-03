@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PhaseRegistry } from "../loop/phases/registry";
 import { DEFAULT_PHASE_ID } from "../loop/phases/registry";
 import { builtinPhases } from "../loop/phases/built-in";
@@ -8,7 +9,16 @@ import type { Extension, ExtensionRuntime } from "./types";
 
 const BUILTIN_PHASE_IDS = new Set(["chat", "plan", "execute", "verify"]);
 
-const builtinExtensionPaths = ["<builtin:phase:chat>", "<builtin:phase:plan>", "<builtin:phase:execute>", "<builtin:phase:verify>"];
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const builtinPhaseDirs = [
+  resolve(__dirname, "../loop/phases/built-in/chat"),
+  resolve(__dirname, "../loop/phases/built-in/plan"),
+  resolve(__dirname, "../loop/phases/built-in/execute"),
+  resolve(__dirname, "../loop/phases/built-in/verify"),
+];
+
+const builtinExtensionPaths = builtinPhaseDirs.map((_, i) => `<builtin:phase:${["chat", "plan", "execute", "verify"][i]}>`);
 
 /** Check if a path is a built-in extension source (synthetic path). */
 export function isBuiltinSource(path: string): boolean {
@@ -30,7 +40,7 @@ function ensureBuiltin(): NonNullable<typeof _builtinState> {
   if (!_builtinState) {
     const runtime = createExtensionRuntime();
     const extensions = builtinPhases.map((factory, index) =>
-      loadExtensionFromFactorySync(factory, runtime, process.cwd(), builtinExtensionPaths[index] ?? "<builtin:phase:unknown>")
+      loadExtensionFromFactorySync(factory, runtime, builtinPhaseDirs[index]!, builtinExtensionPaths[index] ?? "<builtin:phase:unknown>")
     );
     const runner = new ExtensionRunner(extensions, {
       validatePhaseOverride: isBuiltinPhaseOverride,
