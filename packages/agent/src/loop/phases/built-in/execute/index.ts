@@ -11,7 +11,6 @@ export default defineExtension((rowan) => {
         "Execute the task by calling the appropriate tools.",
         "If more tool calls are needed, continue calling tools.",
         "If execution is complete, respond with a brief summary and call the 'route' tool.",
-        "Do NOT output JSON. Use the provided tools directly.",
       ],
     },
 

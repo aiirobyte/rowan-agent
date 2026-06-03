@@ -698,7 +698,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         if (m.compactionCount > 0) parts.push(`${m.compactionCount} compactions`);
         if (m.retryCount > 0) parts.push(`${m.retryCount} retries`);
         if (m.durationMs !== undefined) parts.push(`${m.durationMs}ms`);
-        console.error(`  Loop: ${parts.join(", ")}`);
+        console.error(`∞ Loop: ${parts.join(", ")}`);
       }
     } catch (error) {
       printRunHeader();

@@ -11,7 +11,6 @@ export default defineExtension((rowan) => {
         "Review the task output against the acceptance criteria.",
         "If the criteria are met, confirm and call the 'route' tool to stop or proceed.",
         "If more work is needed, call tools to fix issues, then call the 'route' tool.",
-        "Do NOT output JSON.",
       ],
     },
 
