@@ -1,10 +1,12 @@
 /**
  * Extension runner — manages extension loading and hook execution.
  *
- * Architecture reference: PI's AgentHarness
+ * Architecture reference: PI's ExtensionRunner
+ * - Per-extension tracking via Extension objects
+ * - Shared ExtensionRuntime with invalidate/assertActive
  * - Direct `on()` API for hook registration
- * - Unified `emitHook()` for result collection
- * - ExtensionContext delegates to runner's hooks
+ * - Error listener pattern for structured error handling
+ * - Tool registration support
  */
 
 import { execFile } from "node:child_process";
@@ -23,9 +25,16 @@ import {
 import type {
   ExecOptions,
   ExecResult,
+  Extension,
+  ExtensionError,
+  ExtensionErrorListener,
+  ExtensionRuntime,
   PhaseRegistration,
   RegisteredPhase,
+  RegisteredTool,
+  ToolDefinition,
 } from "./types";
+import { createExtension, createExtensionRuntime } from "./types";
 import type { Tool, ToolResult } from "../types";
 import type { PhaseInput, PhaseOutput } from "../loop/phases/registry";
 import { HooksManager } from "./hooks";
@@ -35,11 +44,14 @@ import type {
   HookResultMap,
 } from "./hooks";
 import {
-  createExtensionContext,
+  createExtensionAPI,
+  type ExtensionAPI,
   type ExtensionContext,
   type ExtensionManifest,
   type LoadedExtension,
 } from "./context";
+import { createSourceInfo } from "./types";
+import { createEventBus, type EventBus } from "./context";
 
 // ---------------------------------------------------------------------------
 // Command execution
@@ -128,7 +140,15 @@ export type ExtensionRunnerOptions = {
 /**
  * Manages extensions and provides hooks for the agent loop.
  *
- * Direct API (like PI's AgentHarness):
+ * Features:
+ * - Per-extension tracking (handlers, tools, phases)
+ * - Shared runtime with lifecycle protection (invalidate/assertActive)
+ * - Error listener pattern for structured error handling
+ * - Direct hook API and extension-loaded hook API
+ * - Tool registration for LLM-callable tools
+ * - EventBus for inter-extension communication
+ *
+ * @example
  * ```ts
  * const runner = createExtensionRunner();
  *
@@ -137,26 +157,31 @@ export type ExtensionRunnerOptions = {
  *   return { allow: false, reason: "Blocked" };
  * });
  *
- * // Cancel subscription
- * unsub();
- * ```
+ * // Error handling
+ * runner.onError((error) => {
+ *   console.error(`Extension error in ${error.extensionPath}:`, error.error);
+ * });
  *
- * Extension API:
- * ```ts
- * runner.loadExtensions([{
- *   factory: (ctx) => {
- *     ctx.on("before_tool_call", handler);
- *   }
- * }]);
+ * // Load extensions
+ * await runner.loadExtensions(extensions);
+ * runner.bind();
  * ```
  */
 export class ExtensionRunner {
   readonly hooks: HooksManager;
+  readonly runtime: ExtensionRuntime;
+  readonly events: EventBus;
+
   private readonly validatePhaseOverride?: (
     phaseId: string,
     extensionPath: string,
   ) => boolean;
   private readonly cwd: string;
+  private readonly abortController = new AbortController();
+  private _idle = true;
+
+  // Per-extension tracking
+  private readonly extensions: Extension[] = [];
 
   // Phase management
   private readonly phases = new Map<string, RegisteredPhase>();
@@ -169,17 +194,83 @@ export class ExtensionRunner {
   > = [];
   private bound = false;
 
-  // Loaded extensions
-  private readonly extensions: LoadedExtension[] = [];
+  // Error listeners
+  private readonly errorListeners = new Set<ExtensionErrorListener>();
+
+  // Loaded extension metadata (pre-initialization form)
+  private readonly loadedExtensions: LoadedExtension[] = [];
 
   constructor(options?: ExtensionRunnerOptions) {
     this.hooks = new HooksManager();
+    this.runtime = createExtensionRuntime();
+    this.events = createEventBus();
     this.validatePhaseOverride = options?.validatePhaseOverride;
     this.cwd = options?.cwd ?? process.cwd();
   }
 
+  /** Whether the agent is currently idle (not streaming). */
+  get isIdle(): boolean {
+    return this._idle;
+  }
+
+  /** Set idle state — called by the agent loop. */
+  setIdle(idle: boolean): void {
+    this._idle = idle;
+  }
+
+  /** Abort signal for the current runner instance. */
+  get signal(): AbortSignal {
+    return this.abortController.signal;
+  }
+
+  /** Abort the current runner operation. */
+  abort(): void {
+    this.abortController.abort();
+  }
+
   // ---------------------------------------------------------------------------
-  // Direct hook API (like PI's AgentHarness.on)
+  // Error handling
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Register an error listener.
+   * Returns an unsubscribe function.
+   */
+  onError(listener: ExtensionErrorListener): () => void {
+    this.errorListeners.add(listener);
+    return () => this.errorListeners.delete(listener);
+  }
+
+  /**
+   * Emit a structured extension error to all listeners.
+   */
+  emitError(error: ExtensionError): void {
+    for (const listener of this.errorListeners) {
+      try {
+        listener(error);
+      } catch (err) {
+        console.error("[extension-runner] Error listener failed:", err);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle: invalidate / assertActive
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Mark all extension contexts as stale.
+   * After calling this, any captured ExtensionAPI or ExtensionContext will throw
+   * on use. Used during session replacement or reload.
+   */
+  invalidate(
+    message?: string,
+  ): void {
+    this.runtime.invalidate(message);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Direct hook API
   // ---------------------------------------------------------------------------
 
   /**
@@ -216,7 +307,6 @@ export class ExtensionRunner {
   subscribe(
     listener: (event: { type: HookEventType }) => void,
   ): () => void {
-    // Use a wrapper handler for each event type
     const handlers = new Map<HookEventType, Function>();
 
     for (const eventType of this.getAllEventTypes()) {
@@ -250,18 +340,82 @@ export class ExtensionRunner {
 
   /**
    * Load and initialize extensions.
+   * Creates Extension tracking objects and calls each factory with an ExtensionAPI.
    */
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
       try {
-        const ctx = this.createContext(ext.path, ext.manifest);
-        await ext.factory(ctx);
-        this.extensions.push(ext);
+        const sourceInfo = createSourceInfo(ext.path, {
+          source: ext.path.startsWith("<builtin:") ? "builtin" : "local",
+          baseDir: ext.resolvedPath.startsWith("<") ? undefined : ext.resolvedPath,
+        });
+        const extension = createExtension(ext.path, ext.resolvedPath, sourceInfo);
+
+        const api = this.createExtensionAPI(extension, ext.manifest);
+        await ext.factory(api);
+
+        this.extensions.push(extension);
+        this.loadedExtensions.push(ext);
+        this._phaseCache = null;
       } catch (error) {
-        console.error(`[extension] Failed to load ${ext.name}:`, error);
+        const message = error instanceof Error ? error.message : String(error);
+        this.emitError({
+          extensionPath: ext.path,
+          event: "load",
+          error: message,
+          stack: error instanceof Error ? error.stack : undefined,
+        });
         throw error;
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tool management
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get all registered tools from all extensions (first registration per name wins).
+   */
+  getAllRegisteredTools(): RegisteredTool[] {
+    const toolsByName = new Map<string, RegisteredTool>();
+    for (const ext of this.extensions) {
+      for (const tool of ext.tools.values()) {
+        if (!toolsByName.has(tool.definition.name)) {
+          toolsByName.set(tool.definition.name, tool);
+        }
+      }
+    }
+    return Array.from(toolsByName.values());
+  }
+
+  /**
+   * Get a tool definition by name. Returns undefined if not found.
+   */
+  getToolDefinition(toolName: string): RegisteredTool["definition"] | undefined {
+    for (const ext of this.extensions) {
+      const tool = ext.tools.get(toolName);
+      if (tool) return tool.definition;
+    }
+    return undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Handler queries
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check if there are handlers registered for specified event type.
+   */
+  hasHandlers(eventType: HookEventType): boolean {
+    return this.hooks.has(eventType);
+  }
+
+  /**
+   * Get the number of handlers for specified event type.
+   */
+  handlerCount(eventType: HookEventType): number {
+    return this.hooks.count(eventType);
   }
 
   // ---------------------------------------------------------------------------
@@ -297,16 +451,25 @@ export class ExtensionRunner {
   // ---------------------------------------------------------------------------
 
   /**
-   * Bind the runner — flushes pending provider registrations.
+   * Bind the runner — flushes pending provider registrations and
+   * replaces runtime stubs with real implementations.
    */
   bind(): void {
     if (this.bound) return;
     this.bound = true;
     this.flushPendingProviders();
+
+    // Replace runtime provider registration with direct calls
+    this.runtime.registerProvider = (_name, config) => {
+      applyProviderRegistration(config);
+    };
+    this.runtime.unregisterProvider = (_name) => {
+      applyProviderUnregistration(_name);
+    };
   }
 
   // ---------------------------------------------------------------------------
-  // Unified hook emission (like PI's emitHook)
+  // Unified hook emission
   // ---------------------------------------------------------------------------
 
   /**
@@ -320,12 +483,7 @@ export class ExtensionRunner {
   }
 
   /**
-   * Unified hook emission — returns the last non-undefined result.
-   *
-   * Like PI's AgentHarness.emitHook():
-   * - Runs all handlers sequentially
-   * - Returns the last non-undefined result
-   * - Throws on handler errors
+   * Unified hook emission — returns the first non-undefined result.
    */
   private async emitHook<K extends HookEventType>(
     type: K,
@@ -338,10 +496,6 @@ export class ExtensionRunner {
   // Phase hooks (with inline processing)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Emit before_phase hook.
-   * Returns the hook result for caller to process.
-   */
   async emitBeforePhase(
     phaseId: string,
     input: PhaseInput,
@@ -354,10 +508,6 @@ export class ExtensionRunner {
     return result ?? {};
   }
 
-  /**
-   * Emit after_phase hook.
-   * Returns the hook result for caller to process.
-   */
   async emitAfterPhase(
     phaseId: string,
     output: PhaseOutput,
@@ -370,10 +520,6 @@ export class ExtensionRunner {
     return result ?? {};
   }
 
-  /**
-   * Emit before_prompt hook.
-   * Returns modified input or original if no hook.
-   */
   async emitBeforePrompt(
     phaseId: string,
     input: PhaseInput,
@@ -386,10 +532,6 @@ export class ExtensionRunner {
     return result?.input ?? input;
   }
 
-  /**
-   * Emit before_tool_call hook.
-   * Returns { allow, reason } decision.
-   */
   async emitBeforeToolCall(
     tool: Tool,
     args: unknown,
@@ -402,10 +544,6 @@ export class ExtensionRunner {
     return result ?? { allow: true };
   }
 
-  /**
-   * Emit after_tool_call hook.
-   * Returns modified result or original.
-   */
   async emitAfterToolCall(
     tool: Tool,
     result: ToolResult,
@@ -534,25 +672,64 @@ export class ExtensionRunner {
   // Internal helpers
   // ---------------------------------------------------------------------------
 
-  private createContext(extensionPath: string, manifest?: ExtensionManifest): ExtensionContext {
-    return createExtensionContext(this.hooks, extensionPath, {
+  /**
+   * Create an ExtensionAPI for a specific extension.
+   * Registration methods write to the extension tracking object.
+   * Action methods delegate to the shared runtime.
+   */
+  private createExtensionAPI(extension: Extension, manifest?: ExtensionManifest): ExtensionAPI {
+    const runner = this;
+    const extContext: ExtensionContext = {
+      get cwd() { return runner.cwd; },
+      get signal() { return runner.abortController.signal; },
+      isIdle() { return runner._idle; },
+      abort() { runner.abortController.abort(); },
+      exec(command, args, options) {
+        return execCommand(command, args, runner.cwd, options);
+      },
+      manifest,
+    };
+
+    return createExtensionAPI(this.hooks, extension.path, {
       registerPhase: (registration) =>
-        this.registerPhase(extensionPath, registration),
+        this.registerPhase(extension, registration),
       registerProvider: (config) => this.registerProvider(config),
       unregisterProvider: (name) => this.unregisterProvider(name),
+      registerTool: (tool) => this.registerTool(extension, tool),
+      context: extContext,
       manifest,
+    }, this.runtime, this.events);
+  }
+
+  private registerTool(extension: Extension, tool: ToolDefinition): void {
+    // Check for duplicate tool names across extensions
+    for (const ext of this.extensions) {
+      if (ext.tools.has(tool.name)) {
+        this.emitError({
+          extensionPath: extension.path,
+          event: "register_tool",
+          error: `Tool "${tool.name}" is already registered by extension ${ext.path}`,
+        });
+        return;
+      }
+    }
+
+    const sourceInfo = createSourceInfo(extension.path);
+    extension.tools.set(tool.name, {
+      definition: tool,
+      sourceInfo,
     });
   }
 
   private registerPhase(
-    extensionPath: string,
+    extension: Extension,
     registration: PhaseRegistration,
   ): void {
     if (!registration.id) {
       throw new Error(`Phase registration requires an "id" field.`);
     }
 
-    if (this.validatePhaseOverride?.(registration.id, extensionPath)) {
+    if (this.validatePhaseOverride?.(registration.id, extension.path)) {
       throw new Error(
         `External extension cannot override built-in phase: ${registration.id}`,
       );
@@ -590,8 +767,16 @@ export class ExtensionRunner {
     this.phases.set(registration.id, {
       definition,
       handler: { buildPrompt },
-      source: { extensionPath },
+      source: { extensionPath: extension.path },
     });
+
+    // Track in extension object
+    extension.phases.set(registration.id, {
+      definition,
+      handler: { buildPrompt },
+      source: { extensionPath: extension.path },
+    });
+
     this._phaseCache = null;
   }
 

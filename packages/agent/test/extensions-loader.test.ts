@@ -5,10 +5,11 @@ import { join } from "node:path";
 import Type from "typebox";
 import {
   createExtensionRunner,
+  createEventBus,
   discoverAndLoadExtensions,
   loadExtensionFromFactory,
 } from "../src/extensions";
-import type { ExtensionContext, LoadedExtension } from "../src/extensions";
+import type { ExtensionAPI, LoadedExtension } from "../src/extensions";
 import { createMessage } from "../src/types";
 
 test("loadExtensionFromFactory creates a LoadedExtension object", () => {
@@ -55,8 +56,8 @@ test("ExtensionRunner loads extensions and registers phases", async () => {
   expect(phases.some(p => p.id === "test-phase")).toBe(true);
 });
 
-test("ExtensionContext utils provide helper functions", async () => {
-  let capturedCtx: ExtensionContext | null = null;
+test("ExtensionAPI utils provide helper functions", async () => {
+  let capturedCtx: ExtensionAPI | null = null;
 
   const runner = createExtensionRunner();
   const ext: LoadedExtension = {
@@ -183,4 +184,169 @@ test("before_tool_call hook can block tool execution", async () => {
   const result = await runner.emitBeforeToolCall(tool, {});
   expect(result.allow).toBe(false);
   expect(result.reason).toBe("Not allowed");
+});
+
+test("ExtensionAPI registerTool registers LLM-callable tools", async () => {
+  const runner = createExtensionRunner();
+
+  const ext: LoadedExtension = {
+    path: "<test:tool>",
+    resolvedPath: "<test:tool>",
+    name: "test-tool",
+    factory: (ctx) => {
+      ctx.registerTool({
+        name: "search_docs",
+        description: "Search documentation",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+        execute: async (args) => {
+          return { content: [{ type: "text", text: "result" }] };
+        },
+      });
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  runner.bind();
+
+  const tools = runner.getAllRegisteredTools();
+  expect(tools).toHaveLength(1);
+  expect(tools[0]!.definition.name).toBe("search_docs");
+  expect(tools[0]!.definition.description).toBe("Search documentation");
+
+  const toolDef = runner.getToolDefinition("search_docs");
+  expect(toolDef).toBeDefined();
+  expect(toolDef!.name).toBe("search_docs");
+
+  expect(runner.getToolDefinition("nonexistent")).toBeUndefined();
+});
+
+test("EventBus supports pub/sub communication", () => {
+  const bus = createEventBus();
+  const received: unknown[] = [];
+
+  const unsub = bus.on("test:event", (data) => {
+    received.push(data);
+  });
+
+  bus.emit("test:event", { value: 42 });
+  bus.emit("test:event", "hello");
+
+  expect(received).toEqual([{ value: 42 }, "hello"]);
+  expect(bus.has("test:event")).toBe(true);
+  expect(bus.count("test:event")).toBe(1);
+
+  unsub();
+  expect(bus.has("test:event")).toBe(false);
+  expect(bus.count("test:event")).toBe(0);
+});
+
+test("EventBus is shared across extensions via api.events", async () => {
+  const runner = createExtensionRunner();
+  const received: string[] = [];
+
+  const ext1: LoadedExtension = {
+    path: "<test:ext1>",
+    resolvedPath: "<test:ext1>",
+    name: "ext1",
+    factory: (ctx) => {
+      ctx.events.on("custom:event", (msg) => {
+        received.push(`ext1:${msg}`);
+      });
+    },
+  };
+
+  const ext2: LoadedExtension = {
+    path: "<test:ext2>",
+    resolvedPath: "<test:ext2>",
+    name: "ext2",
+    factory: (ctx) => {
+      ctx.events.emit("custom:event", "hello");
+    },
+  };
+
+  await runner.loadExtensions([ext1, ext2]);
+
+  expect(received).toEqual(["ext1:hello"]);
+});
+
+test("ExtensionRunner.onError collects structured errors", async () => {
+  const runner = createExtensionRunner();
+  const errors: Array<{ extensionPath: string; event: string; error: string }> = [];
+
+  runner.onError((err) => {
+    errors.push({ extensionPath: err.extensionPath, event: err.event, error: err.error });
+  });
+
+  runner.emitError({
+    extensionPath: "<test>",
+    event: "test_event",
+    error: "Something went wrong",
+  });
+
+  expect(errors).toHaveLength(1);
+  expect(errors[0]!.extensionPath).toBe("<test>");
+  expect(errors[0]!.event).toBe("test_event");
+  expect(errors[0]!.error).toBe("Something went wrong");
+});
+
+test("ExtensionRunner.invalidate makes contexts stale", async () => {
+  const runner = createExtensionRunner();
+  let capturedApi: ExtensionAPI | null = null;
+
+  const ext: LoadedExtension = {
+    path: "<test>",
+    resolvedPath: "<test>",
+    name: "test",
+    factory: (ctx) => {
+      capturedApi = ctx;
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+
+  // Before invalidate, API works
+  expect(() => capturedApi!.on("agent_start", () => {})).not.toThrow();
+
+  // After invalidate, API calls throw
+  runner.invalidate("Test invalidation");
+  expect(() => capturedApi!.on("agent_start", () => {})).toThrow("Test invalidation");
+});
+
+test("ExtensionRunner hasHandlers queries handler registration", async () => {
+  const runner = createExtensionRunner();
+
+  expect(runner.hasHandlers("agent_start")).toBe(false);
+
+  const ext: LoadedExtension = {
+    path: "<test>",
+    resolvedPath: "<test>",
+    name: "test",
+    factory: (ctx) => {
+      ctx.on("agent_start", () => {});
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+
+  expect(runner.hasHandlers("agent_start")).toBe(true);
+  expect(runner.hasHandlers("agent_end")).toBe(false);
+  expect(runner.handlerCount("agent_start")).toBe(1);
+});
+
+test("ExtensionRunner direct on() API works without extensions", async () => {
+  const runner = createExtensionRunner();
+  const events: string[] = [];
+
+  const unsub = runner.on("agent_start", (event) => {
+    events.push(`direct:${event.sessionId}`);
+  });
+
+  await runner.emit("agent_start", { type: "agent_start", sessionId: "test" });
+  expect(events).toEqual(["direct:test"]);
+
+  unsub();
+  events.length = 0;
+
+  await runner.emit("agent_start", { type: "agent_start", sessionId: "test2" });
+  expect(events).toEqual([]);
 });

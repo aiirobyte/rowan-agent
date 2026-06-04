@@ -1,8 +1,8 @@
-import { defineExtension } from "../../../../extensions/context";
+import type { ExtensionAPI } from "../../../../extensions";
 
-export default defineExtension((ctx) => {
-  ctx.registerPhase({
-    ...ctx.manifest?.phase,
+export default function(api: ExtensionAPI) {
+  api.registerPhase({
+    ...api.manifest?.phase,
     id: "execute",
 
     prompt: {
@@ -97,4 +97,4 @@ export default defineExtension((ctx) => {
       return { message: collected.text ?? "", route: "chat" };
     },
   });
-});
+}

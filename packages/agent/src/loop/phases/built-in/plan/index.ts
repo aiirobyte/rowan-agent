@@ -1,4 +1,4 @@
-import { defineExtension } from "../../../../extensions/context";
+import type { ExtensionAPI } from "../../../../extensions";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -28,9 +28,9 @@ function normalizeTask(value: unknown): Record<string, unknown> {
   };
 }
 
-export default defineExtension((ctx) => {
-  ctx.registerPhase({
-    ...ctx.manifest?.phase,
+export default function(api: ExtensionAPI) {
+  api.registerPhase({
+    ...api.manifest?.phase,
     id: "plan",
 
     prompt: {
@@ -92,4 +92,4 @@ export default defineExtension((ctx) => {
       };
     },
   });
-});
+}

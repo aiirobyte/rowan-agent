@@ -29,6 +29,7 @@ export {
   loadExtensionFromFactorySync,
 } from "../../extensions";
 export type {
+  ExtensionAPI,
   ExtensionContext,
   ExtensionFactory,
-} from "../../extensions/context";
+} from "../../extensions";

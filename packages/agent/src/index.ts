@@ -84,62 +84,7 @@ export {
 } from "./harness/env";
 
 // ── extensions ─────────────────────────────────────────────────
-// Hooks API
-export {
-  HooksManager,
-  getGlobalHooks,
-  resetGlobalHooks,
-  type HookEvent,
-  type HookEventType,
-  type HookHandler,
-  type HookResultMap,
-  HookError,
-} from "./extensions/hooks";
-
-// Context API
-export {
-  defineExtension,
-  type ExtensionContext,
-  type ExtensionFactory,
-  type ExtensionUtils,
-  type ExtensionManifest,
-  type LoadedExtension,
-} from "./extensions/context";
-
-// Runner
-export {
-  ExtensionRunner,
-  createExtensionRunner,
-  type ExtensionRunnerOptions,
-} from "./extensions/runner";
-
-// Builtin extensions
-export {
-  createBuiltinPhaseRegistry,
-  createDefaultPhaseRegistry,
-  getBuiltinExtensions,
-  getBuiltinRunner,
-  isBuiltinPhaseOverride,
-  isBuiltinSource,
-  type CreateDefaultPhaseRegistryOptions,
-} from "./extensions/builtin";
-
-// Loader
-export {
-  discoverAndLoadExtensions,
-  loadExtensionFromFactory,
-  loadExtensionFromFactorySync,
-  loadExtensions,
-} from "./extensions/loader";
-
-// Types
-export type {
-  ExecOptions,
-  ExecResult,
-  ExtensionPackageManifest,
-  PhaseRegistration,
-  RegisteredPhase,
-} from "./extensions/types";
+export * from "./extensions";
 
 // Re-export ExtensionRunnerRef from agent
 export type { ExtensionRunnerRef } from "./agent";

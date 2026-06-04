@@ -1,6 +1,6 @@
 import { runAgentLoop } from "./agent-loop";
 import { createDefaultPhaseRegistry, ExtensionRunner } from "./extensions";
-import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions/types";
+import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
 import { snapshotMessage, snapshotMessages } from "./loop/state";
 import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./loop/phases";
 import type {

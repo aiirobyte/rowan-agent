@@ -14,7 +14,7 @@ import type {
   ToolResult,
 } from "../types";
 import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./phases/registry";
-import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions/types";
+import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
 export type AgentRunLimits = {
   maxThreadDepth?: number;

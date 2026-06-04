@@ -41,11 +41,11 @@
  * ## Usage Example
  *
  * ```typescript
- * import { defineExtension } from "@rowan-agent/agent";
+ * import type { ExtensionAPI } from "@rowan-agent/agent";
  *
- * export default defineExtension((ctx) => {
+ * export default function(api: ExtensionAPI) {
  *   // Block dangerous tools
- *   ctx.on("before_tool_call", (event) => {
+ *   api.on("before_tool_call", (event) => {
  *     if (event.tool.name === "bash") {
  *       const cmd = (event.args as any).command;
  *       if (cmd.includes("rm -rf")) {
@@ -56,7 +56,7 @@
  *   });
  *
  *   // Inject context
- *   ctx.on("before_prompt", (event) => {
+ *   api.on("before_prompt", (event) => {
  *     return {
  *       input: {
  *         ...event.input,
@@ -66,10 +66,10 @@
  *   });
  *
  *   // Log tool calls
- *   ctx.on("tool_execution_end", (event) => {
+ *   api.on("tool_execution_end", (event) => {
  *     console.log(`Tool ${event.toolName}: ${event.result.ok ? "success" : "failed"}`);
  *   });
- * });
+ * }
  * ```
  */
 

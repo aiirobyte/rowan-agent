@@ -1,3 +1,40 @@
+/**
+ * @module extensions
+ *
+ * Unified extension system — re-exports all extension APIs, hooks, runner,
+ * loader, and built-in helpers.
+ *
+ * Extension typically only need the types from `./context`:
+ *
+ * ```typescript
+ * import type { ExtensionAPI } from "@rowan-agent/agent";
+ *
+ * export default function(api: ExtensionAPI) {
+ *   api.on("before_tool_call", (event) => {
+ *     return { allow: true };
+ *   });
+ *
+ *   api.registerPhase({
+ *     id: "review",
+ *     name: "Code Review",
+ *     run: async (context, input) => {
+ *       return { message: "Done", route: "stop" };
+ *     },
+ *   });
+ * }
+ * ```
+ */
+
+// Unified API for extension
+export type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionFactory,
+  ExtensionManifest,
+  ExtensionUtils,
+  LoadedExtension,
+} from "./context";
+
 // Hook-based API
 export { HooksManager, getGlobalHooks, resetGlobalHooks } from "./hooks";
 export type {
@@ -34,16 +71,6 @@ export type {
   AfterToolCallResult,
 } from "./hooks";
 
-// Context API
-export { defineExtension } from "./context";
-export type {
-  ExtensionContext,
-  ExtensionFactory,
-  ExtensionUtils,
-  ExtensionManifest,
-  LoadedExtension,
-} from "./context";
-
 // Runner
 export { ExtensionRunner, createExtensionRunner } from "./runner";
 export type { ExtensionRunnerOptions } from "./runner";
@@ -67,6 +94,14 @@ export {
   loadExtensions,
 } from "./loader";
 
+// EventBus
+export { createEventBus } from "./event-bus";
+export type { EventBus } from "./event-bus";
+
+// Source info
+export { createSourceInfo } from "./source-info";
+export type { SourceInfo } from "./source-info";
+
 // Types
 export type {
   ExecOptions,
@@ -75,4 +110,15 @@ export type {
   PhaseManifest,
   PhaseRegistration,
   RegisteredPhase,
+  ToolDefinition,
+  ToolExecutionResult,
+  RegisteredTool,
+  ExtensionError,
+  ExtensionErrorListener,
+  Extension,
+  ExtensionRuntime,
+  BeforePhaseHookResult,
+  AfterPhaseHookResult,
+  LoadExtensionsResult,
 } from "./types";
+export { createExtension, createExtensionRuntime } from "./types";

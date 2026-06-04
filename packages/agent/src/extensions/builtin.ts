@@ -5,7 +5,7 @@ import { DEFAULT_PHASE_ID } from "../loop/phases/registry";
 import { builtinPhases } from "../loop/phases/built-in";
 import { discoverAndLoadExtensions, loadExtensionFromFactory } from "./loader";
 import { ExtensionRunner, createExtensionRunner } from "./runner";
-import type { LoadedExtension } from "./context";
+import type { LoadedExtension } from "./types";
 
 const BUILTIN_PHASE_IDS = new Set(["chat", "plan", "execute", "verify"]);
 

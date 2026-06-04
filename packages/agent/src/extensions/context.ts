@@ -1,37 +1,52 @@
 /**
  * @module extensions/context
  *
- * ExtensionContext - Main API for extension developers
+ * ExtensionAPI - Main API for extension developers
  *
  * ## Quick Start
  *
  * ```typescript
- * import { defineExtension } from "@rowan-agent/agent";
+ * import type { ExtensionAPI } from "@rowan-agent/agent";
  *
- * export default defineExtension((ctx) => {
+ * export default function(api: ExtensionAPI) {
  *   // 1. Subscribe to hooks
- *   ctx.on("before_tool_call", (event) => {
+ *   api.on("before_tool_call", (event) => {
  *     console.log(`Tool: ${event.tool.name}`);
  *     return { allow: true };
  *   });
  *
- *   // 2. Register custom phase
- *   ctx.registerPhase({
- *     ...ctx.manifest?.phase,  // Read metadata from package.json
+ *   // 2. Register custom tool
+ *   api.registerTool({
+ *     name: "search_docs",
+ *     description: "Search documentation",
+ *     parameters: { type: "object", properties: { query: { type: "string" } } },
+ *     execute: async (args) => {
+ *       return { content: [{ type: "text", text: "result" }] };
+ *     },
+ *   });
+ *
+ *   // 3. Register custom phase
+ *   api.registerPhase({
+ *     ...api.manifest?.phase,  // Read metadata from package.json
  *     id: "my-phase",
  *     run: async (context, input) => {
  *       return { message: "Done", route: "stop" };
  *     },
  *   });
  *
- *   // 3. Register model provider
- *   ctx.registerProvider({
+ *   // 4. Register model provider
+ *   api.registerProvider({
  *     name: "custom",
  *     baseUrl: "https://api.example.com",
  *     api: "openai-completions",
  *     models: [...],
  *   });
- * });
+ *
+ *   // 5. Inter-extension communication
+ *   api.events.on("other-plugin:ready", (data) => {
+ *     console.log("Plugin ready:", data);
+ *   });
+ * }
  * ```
  *
  * ## Available Hooks
@@ -50,27 +65,40 @@
  */
 
 import type { ProviderConfig } from "@rowan-agent/models";
-import type { PhaseRegistration } from "./types";
+import type {
+  PhaseRegistration,
+  ExecOptions,
+  ExecResult,
+  ToolDefinition,
+  ExtensionRuntime,
+  LoadedExtension,
+  ExtensionManifest,
+} from "./types";
+import type { EventBus } from "./event-bus";
+export { createEventBus } from "./event-bus";
+
+export type { LoadedExtension, ExtensionManifest } from "./types";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
+import type { EventBus } from "./event-bus";
 import type { LlmRequest } from "@rowan-agent/models";
 import type { PhaseInput } from "../loop/phases/registry";
 import { buildModelRequest } from "../harness/context/prompt-builder";
 
 // ---------------------------------------------------------------------------
-// ExtensionContext - Main API for extension developers
+// ExtensionAPI - Main API for extension developers
 // ---------------------------------------------------------------------------
 
 /**
- * Extension context object passed to extension factory function.
+ * Extension API object passed to extension factory function.
  *
  * @example
  * ```typescript
- * export default defineExtension((ctx) => {
- *   // ctx provides all extension APIs
- * });
+ * export default function(api: ExtensionAPI) {
+ *   // api provides all extension APIs
+ * }
  * ```
  */
-export interface ExtensionContext {
+export interface ExtensionAPI {
   /**
    * Subscribe to a hook event.
    *
@@ -94,6 +122,30 @@ export interface ExtensionContext {
    * Unsubscribe from a hook event.
    */
   off<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
+
+  /**
+   * Register a custom LLM-callable tool.
+   *
+   * @param tool - Tool definition with name, description, parameters, and execute function
+   *
+   * @example
+   * ```typescript
+   * api.registerTool({
+   *   name: "search_docs",
+   *   description: "Search project documentation",
+   *   parameters: {
+   *     type: "object",
+   *     properties: { query: { type: "string" } },
+   *     required: ["query"],
+   *   },
+   *   execute: async (args, signal) => {
+   *     const query = (args as any).query;
+   *     return { content: [{ type: "text", text: `Results for: ${query}` }] };
+   *   },
+   * });
+   * ```
+   */
+  registerTool(tool: ToolDefinition): void;
 
   /**
    * Register a custom phase.
@@ -175,50 +227,90 @@ export interface ExtensionContext {
    * Utility functions.
    */
   utils: ExtensionUtils;
+
+  /**
+   * Runtime context — provides access to agent state, cwd, and utilities.
+   *
+   * Available after extension loading completes. Use for runtime operations
+   * like executing shell commands or checking agent state.
+   */
+  context: ExtensionContext;
+
+  /**
+   * Shared event bus for inter-extension communication.
+   *
+   * Extensions can emit and subscribe to arbitrary events to coordinate
+   * without direct coupling.
+   *
+   * @example
+   * ```typescript
+   * // Extension A
+   * api.events.on("my-plugin:ready", (data) => {
+   *   console.log("Plugin ready:", data);
+   * });
+   *
+   * // Extension B
+   * api.events.emit("my-plugin:ready", { version: "1.0" });
+   * ```
+   */
+  events: EventBus;
 }
 
+// ExtensionManifest is re-exported from ./types.ts
+
 // ---------------------------------------------------------------------------
-// ExtensionManifest - rowan field in package.json
+// ExtensionContext - Runtime context for event handlers
 // ---------------------------------------------------------------------------
 
 /**
- * Extension manifest defined in package.json `rowan` field.
+ * Runtime context available to extensions during event handler execution.
+ *
+ * Provides access to agent state, working directory, and utility methods.
+ * Values are resolved lazily via getters, so changes via `runner.bind()` are
+ * reflected immediately without recreating the context.
+ *
+ * This is distinct from ExtensionAPI (which is for registration) —
+ * ExtensionContext gives runtime state during hook execution.
  *
  * @example
- * ```json
- * {
- *   "name": "my-extension",
- *   "rowan": {
- *     "extensions": ["./index.ts"],
- *     "phase": {
- *       "id": "review",
- *       "name": "Code Review",
- *       "description": "Review code changes",
- *       "tools": ["read", "bash"],
- *       "skills": ["code-review"]
- *     }
- *   }
- * }
+ * ```typescript
+ * api.on("before_tool_call", (event, ctx) => {
+ *   console.log(`cwd: ${ctx.cwd}`);
+ *   if (ctx.isIdle()) { ... }
+ * });
  * ```
  */
-export interface ExtensionManifest {
-  /** Extension entry file path */
-  entry?: string;
-  /** Extension name (for logging) */
-  name?: string;
-  /** Phase manifest */
-  phase?: {
-    /** Phase ID */
-    id?: string;
-    /** Phase name */
-    name?: string;
-    /** Phase description */
-    description?: string;
-    /** Tools available in this phase. Omit to use all tools. */
-    tools?: string[];
-    /** Skills available in this phase. Omit to use all skills. */
-    skills?: string[];
-  };
+export interface ExtensionContext {
+  /** Current working directory */
+  cwd: string;
+
+  /** Abort signal — fires when the agent operation is cancelled */
+  signal: AbortSignal | undefined;
+
+  /** Whether the agent is currently idle (not streaming) */
+  isIdle(): boolean;
+
+  /** Abort the current agent operation */
+  abort(): void;
+
+  /**
+   * Execute a shell command.
+   *
+   * @param command - The command to run
+   * @param args - Command arguments
+   * @param options - Execution options (cwd, env, timeout, signal)
+   * @returns Execution result with exitCode, stdout, stderr
+   */
+  exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
+
+  /** Extension manifest from package.json `rowan` field */
+  manifest?: ExtensionManifest;
+
+  /** Current model ID, if available */
+  modelId?: string;
+
+  /** Get current system prompt */
+  getSystemPrompt?(): string;
 }
 
 // ---------------------------------------------------------------------------
@@ -278,77 +370,49 @@ export interface ExtensionUtils {
 
 /**
  * Extension factory function.
- * Receives ExtensionContext for registering hooks, phases, and providers.
+ * Receives ExtensionAPI for registering hooks, phases, and providers.
  *
- * @param ctx - Extension context
+ * @param api - Extension API
  *
  * @example
  * ```typescript
- * const factory: ExtensionFactory = (ctx) => {
- *   ctx.on("before_tool_call", handler);
+ * const factory: ExtensionFactory = (api) => {
+ *   api.on("before_tool_call", handler);
  * };
  * ```
  */
-export type ExtensionFactory = (ctx: ExtensionContext) => void | Promise<void>;
+export type ExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
 
-/**
- * Helper function to define an extension with type inference.
- *
- * @param factory - Extension factory function
- * @returns Factory function (returns as-is)
- *
- * @example
- * ```typescript
- * export default defineExtension((ctx) => {
- *   ctx.on("before_tool_call", (event) => {
- *     // event type is automatically inferred
- *     return { allow: true };
- *   });
- * });
- * ```
- */
-export function defineExtension(factory: ExtensionFactory): ExtensionFactory {
-  return factory;
-}
+// LoadedExtension is re-exported from ./types.ts
 
 // ---------------------------------------------------------------------------
-// LoadedExtension - Loaded extension object
-// ---------------------------------------------------------------------------
-
-/**
- * Loaded extension object containing factory function and manifest.
- */
-export interface LoadedExtension {
-  /** Extension path (may be synthetic like `<builtin:phase:chat>`) */
-  path: string;
-  /** Resolved absolute path */
-  resolvedPath: string;
-  /** Extension name (from manifest or directory name) */
-  name: string;
-  /** Extension factory function */
-  factory: ExtensionFactory;
-  /** Extension manifest (from package.json) */
-  manifest?: ExtensionManifest;
-}
-
-// ---------------------------------------------------------------------------
-// Internal: Create ExtensionContext instance
+// Internal: Create ExtensionAPI instance
 // ---------------------------------------------------------------------------
 
 /**
  * @internal
- * Create ExtensionContext instance.
+ * Create ExtensionAPI instance.
+ *
+ * @param hooks - HooksManager for event subscription
+ * @param extensionPath - Path of this extension (for error attribution)
+ * @param options - Registration callbacks and context
+ * @param runtime - Shared ExtensionRuntime for lifecycle protection
+ * @param eventBus - Shared EventBus for inter-extension communication
  */
-export function createExtensionContext(
+export function createExtensionAPI(
   hooks: HooksManager,
   _extensionPath: string,
   options: {
     registerPhase: (registration: PhaseRegistration) => void;
     registerProvider: (config: ProviderConfig) => void;
     unregisterProvider: (name: string) => void;
+    registerTool: (tool: ToolDefinition) => void;
+    context: ExtensionContext;
     manifest?: ExtensionManifest;
   },
-): ExtensionContext {
+  runtime: ExtensionRuntime,
+  eventBus: EventBus,
+): ExtensionAPI {
   let idCounter = 0;
   const createId = (prefix: string): string => {
     idCounter++;
@@ -377,11 +441,30 @@ export function createExtensionContext(
   };
 
   return {
-    on: (eventType, handler) => hooks.on(eventType, handler),
-    off: (eventType, handler) => hooks.off(eventType, handler),
-    registerPhase: options.registerPhase,
-    registerProvider: options.registerProvider,
-    unregisterProvider: options.unregisterProvider,
+    on: (eventType, handler) => {
+      runtime.assertActive();
+      hooks.on(eventType, handler);
+    },
+    off: (eventType, handler) => {
+      runtime.assertActive();
+      hooks.off(eventType, handler);
+    },
+    registerTool: (tool) => {
+      runtime.assertActive();
+      options.registerTool(tool);
+    },
+    registerPhase: (registration) => {
+      runtime.assertActive();
+      options.registerPhase(registration);
+    },
+    registerProvider: (config) => {
+      runtime.assertActive();
+      options.registerProvider(config);
+    },
+    unregisterProvider: (name) => {
+      runtime.assertActive();
+      options.unregisterProvider(name);
+    },
     manifest: options.manifest,
     utils: {
       createId,
@@ -389,5 +472,7 @@ export function createExtensionContext(
       buildModelRequest,
       createPromptBuilder,
     },
+    context: options.context,
+    events: eventBus,
   };
 }
