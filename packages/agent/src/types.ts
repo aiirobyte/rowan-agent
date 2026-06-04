@@ -1,5 +1,5 @@
 import Type from "typebox";
-import type { AgentRuntimePort, AgentRunLimits, RuntimeDepth, BeforePhaseHook, AfterPhaseHook, BeforePromptHook, LoopMetrics } from "./loop/types";
+import type { AgentRuntimePort, AgentRunLimits, BeforePhaseHook, AfterPhaseHook, BeforePromptHook, LoopMetrics } from "./loop/types";
 import type { PhaseRegistry, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
@@ -36,7 +36,6 @@ export type { PhaseInput, PhaseOutput } from "./loop/phases";
 
 export type {
   AgentRunLimits,
-  RuntimeDepth,
 } from "./loop/types";
 
 export type {
@@ -55,7 +54,6 @@ export type {
 export type { AgentEvent, AgentEventListener };
 export { isContextScope, messageScope, isConversationMessage } from "./protocol/context";
 
-export const DEFAULT_MAX_THREAD_DEPTH = 4;
 export const AGENT_STATE_SCHEMA_VERSION = "0.4.4";
 
 export type AgentMessage = AgentContextMessage;
@@ -87,7 +85,6 @@ export type CreateAgentStateInput = {
 export type ToolContext = {
   state: AgentState;
   toolCallId: string;
-  runThread?: RunThread;
 };
 
 export type ToolExecutionMode = "sequential" | "parallel";
@@ -145,75 +142,21 @@ type AgentRunCommonConfig = {
 };
 
 export type AgentLoopRunConfig = AgentRunCommonConfig & {
-  kind: "run";
   sessionId?: string;
   state?: AgentState;
-  threadDepth?: number;
-  runThread?: RunThread;
   phaseConfig?: PhaseRegistry;
 };
 
-export type AgentThreadRunConfig = AgentRunCommonConfig & {
-  kind: "thread";
-  parentSessionId: string;
-  systemPrompt: string;
-  prompt: string;
-  skills?: Skill[];
-  threadDepth?: number;
+export type RunResult = {
+  sessionId: string;
+  messages: AgentMessage[];
+  outcome: Outcome;
+  metrics: LoopMetrics;
 };
-
-export type RunResult =
-  | {
-      kind: "run";
-      sessionId: string;
-      messages: AgentMessage[];
-      outcome: Outcome;
-      depth: RuntimeDepth;
-      metrics: LoopMetrics;
-    }
-  | {
-      kind: "thread";
-      parentSessionId: string;
-      sessionId: string;
-      messages: AgentMessage[];
-      outcome: Outcome;
-      depth: RuntimeDepth;
-      prompt: string;
-      metrics: LoopMetrics;
-    };
-
-type AgentThreadStartConfig =
-  Omit<
-    AgentThreadRunConfig,
-    | "kind"
-    | "parentSessionId"
-    | "systemPrompt"
-    | "model"
-    | "stream"
-    | "signal"
-    | "runtime"
-    | "beforeToolCall"
-    | "afterToolCall"
-    | "emit"
-  > & {
-    parentSessionId?: string;
-  };
-
-export type RunThread = (
-  input: AgentThreadStartConfig,
-) => Promise<Extract<RunResult, { kind: "thread" }>>;
 
 export type Unsubscribe = () => void;
 
-export type AgentLoopInput = AgentLoopRunConfig | AgentThreadRunConfig;
-
-export function resolveMaxThreadDepth(limits?: AgentRunLimits): number {
-  const value = limits?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH;
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error("maxThreadDepth must be a non-negative integer.");
-  }
-  return value;
-}
+export type AgentLoopInput = AgentLoopRunConfig;
 
 export function createMessage(
   role: AgentMessage["role"],

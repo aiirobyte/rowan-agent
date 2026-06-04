@@ -8,7 +8,6 @@ import type {
   AgentState,
   LlmStreamEvent,
   Outcome,
-  RunThread,
   Tool,
   ToolCall,
   ToolResult,
@@ -17,7 +16,6 @@ import type { ContentBlock, AssistantMessagePartial, TextBlock, ToolCallBlock } 
 import {
   createAgentState,
   createMessage,
-  resolveMaxThreadDepth,
 } from "./types";
 import { createTimestamp } from "./utils";
 import {
@@ -33,12 +31,12 @@ import { executeRuntimeToolCall } from "./harness/tools";
 import { LoopGuard } from "./loop/errors";
 import { createOutcome } from "./loop/outcomes";
 import {
-  runtimeDepth,
   snapshotMessage,
   snapshotMessages,
 } from "./loop/state";
 import type { AgentLoopConfig, AgentRunState } from "./loop/types";
-import { createRouteTool, extractRouteCall } from "./loop/phases/route-tool";
+import { createRouteTool, extractRouteCall } from "./harness/tools/route-tool";
+import { createThreadTool } from "./harness/tools/thread-tool";
 import type { PhaseManifest } from "./loop/phases/registry";
 import { compactMessages, needsCompaction } from "./loop/compaction";
 
@@ -61,23 +59,17 @@ function resolvePhaseOutput(
 export function createLoopLifecycle(
   input: AgentLoopInput,
 ): { config: AgentLoopConfig; state: AgentRunState } {
-  const context = input.kind === "run"
-    ? contextFromLoopInput(input)
-    : contextFromLoopThreadInput(input);
+  const context = contextFromLoopInput(input);
 
   if (!context) {
     throw new Error("Agent loop runs require either context or state.");
   }
 
-  const agentState = input.kind === "run" && input.state
+  const agentState = input.state
     ? syncStateFromContext(input.state, context)
-    : createStateFromContext(context, input.kind === "thread" ? {
-        input: input.prompt,
-        parentSessionId: input.parentSessionId,
-      } : { id: "sessionId" in input ? input.sessionId : undefined });
+    : createStateFromContext(context, { id: input.sessionId });
 
   const config: AgentLoopConfig = {
-    kind: input.kind,
     model: input.model,
     stream: input.stream,
     tools: input.tools ?? context.tools ?? [],
@@ -89,19 +81,14 @@ export function createLoopLifecycle(
     afterToolCall: input.afterToolCall,
     beforePhase: input.beforePhase,
     afterPhase: input.afterPhase,
-    runThread: "runThread" in input ? input.runThread : undefined,
     emit: input.emit,
-    phaseConfig: "phaseConfig" in input ? input.phaseConfig : undefined,
+    phaseConfig: input.phaseConfig,
   };
 
   const state: AgentRunState = {
     agentState,
     currentPhase: "",
     attempt: 0,
-    depth: {
-      threadDepth: input.threadDepth ?? (input.kind === "thread" ? 1 : 0),
-      maxThreadDepth: resolveMaxThreadDepth(input.limits),
-    },
     transcript: snapshotMessages(agentState.messages),
     metrics: {
       iterations: 0,
@@ -130,23 +117,14 @@ function emit(
 }
 
 function emitTurn(
-  config: Pick<AgentLoopConfig, "kind">,
   state: AgentRunState,
   emitFn: ((event: AgentEvent) => void) | undefined,
   type: "turn_start" | "turn_end",
   extra?: { outcome?: Outcome },
 ): void {
-  const threadMeta = config.kind === "thread" ? {
-    parentSessionId: state.agentState.parentSessionId,
-    prompt: state.agentState.input,
-    threadDepth: state.depth.threadDepth,
-    maxThreadDepth: state.depth.maxThreadDepth,
-  } : {};
-
   emit(state, emitFn, {
     type,
     content: snapshotMessages(state.transcript),
-    ...threadMeta,
     ...extra,
     ts: createTimestamp(),
   });
@@ -172,31 +150,15 @@ function appendMessage(
 // ============================================================================
 
 function createRunResult(
-  config: Pick<AgentLoopConfig, "kind">,
   state: AgentRunState,
   outcome: Outcome,
 ): RunResult {
-  const base = {
+  return {
     sessionId: state.agentState.id,
     messages: snapshotMessages(state.agentState.messages),
     outcome,
-    depth: runtimeDepth(state.depth),
     metrics: state.metrics,
   };
-
-  if (config.kind === "thread") {
-    if (!state.agentState.parentSessionId || !state.agentState.input) {
-      throw new Error("Thread run is missing parent state or prompt metadata.");
-    }
-    return {
-      kind: "thread",
-      parentSessionId: state.agentState.parentSessionId,
-      prompt: state.agentState.input,
-      ...base,
-    };
-  }
-
-  return { kind: "run", ...base };
 }
 
 // ============================================================================
@@ -204,7 +166,6 @@ function createRunResult(
 // ============================================================================
 
 function completeRun(
-  config: AgentLoopConfig,
   state: AgentRunState,
   outcome: Outcome,
 ): RunResult {
@@ -212,7 +173,7 @@ function completeRun(
   state.metrics.endedAt = createTimestamp();
   state.metrics.durationMs = Date.now() - state.metrics.startedAtMs;
 
-  return createRunResult(config, state, outcome);
+  return createRunResult(state, outcome);
 }
 
 // ============================================================================
@@ -225,11 +186,35 @@ function createAgentLoopContext(
   availablePhases: PhaseManifest[],
 ): AgentLoopContext {
   const routeTool = createRouteTool(availablePhases);
+  const threadTool = createThreadTool(state.agentState.skills, async (input) => {
+    const result = await runAgentLoop({
+      context: {
+        systemPrompt: state.agentState.systemPrompt,
+        messages: [createMessage("user", input.prompt, { scope: "conversation" })],
+        tools: config.tools.slice(),
+        skills: input.skills?.slice() ?? state.agentState.skills.slice(),
+      },
+      model: config.model,
+      stream: config.stream,
+      maxAttempts: config.maxAttempts,
+      limits: input.limits ?? config.limits,
+      signal: config.signal,
+      runtime: config.runtime,
+      beforeToolCall: config.beforeToolCall,
+      afterToolCall: config.afterToolCall,
+      beforePhase: config.beforePhase,
+      afterPhase: config.afterPhase,
+      beforePrompt: config.beforePrompt,
+      emit: config.emit,
+      phaseConfig: config.phaseConfig,
+    });
+    return result;
+  });
 
   return {
     systemPrompt: state.agentState.systemPrompt,
     messages: snapshotMessages(state.agentState.messages),
-    tools: [...config.tools, routeTool],
+    tools: [...config.tools, routeTool, threadTool],
     skills: state.agentState.skills.slice(),
     config,
     state,
@@ -237,38 +222,6 @@ function createAgentLoopContext(
     emit: (event) => emit(state, config.emit, event),
     appendMessage: (message) => appendMessage(state, message),
     appendStateMessage: (message) => appendMessage(state, message, true),
-    ...(config.runThread ? { runThread: config.runThread } : {}),
-  };
-}
-
-// ============================================================================
-// Thread Creation
-// ============================================================================
-
-function createLoopThread(
-  parentConfig: AgentLoopConfig,
-  parentState: AgentRunState,
-): RunThread {
-  return async (input) => {
-    const result = await runAgentLoop({
-      kind: "thread",
-      ...input,
-      parentSessionId: input.parentSessionId ?? parentState.agentState.id,
-      systemPrompt: parentState.agentState.systemPrompt,
-      model: parentConfig.model,
-      stream: parentConfig.stream,
-      signal: parentConfig.signal,
-      limits: input.limits ?? parentConfig.limits,
-      threadDepth: input.threadDepth ?? parentState.depth.threadDepth + 1,
-      runtime: parentConfig.runtime,
-      beforeToolCall: parentConfig.beforeToolCall,
-      afterToolCall: parentConfig.afterToolCall,
-      emit: parentConfig.emit,
-    });
-    if (result.kind !== "thread") {
-      throw new Error("Nested thread runner returned a non-thread result.");
-    }
-    return result;
   };
 }
 
@@ -294,20 +247,10 @@ function contextFromState(state: AgentState, tools?: Tool[]): AgentRunContext {
   };
 }
 
-function contextFromLoopInput(input: Extract<AgentLoopInput, { kind: "run" }>): AgentRunContext | undefined {
+function contextFromLoopInput(input: AgentLoopInput): AgentRunContext | undefined {
   if (input.context) return cloneContext(input.context);
   if (input.state) return contextFromState(input.state, input.tools);
   return undefined;
-}
-
-function contextFromLoopThreadInput(input: Extract<AgentLoopInput, { kind: "thread" }>): AgentRunContext {
-  if (input.context) return cloneContext(input.context);
-  return {
-    systemPrompt: input.systemPrompt,
-    messages: [createMessage("user", input.prompt, { scope: "conversation" })],
-    tools: input.tools?.slice() ?? [],
-    skills: input.skills?.slice() ?? [],
-  };
 }
 
 function createStateFromContext(
@@ -350,23 +293,14 @@ function syncStateFromContext(state: AgentState, context: AgentRunContext): Agen
 export async function runAgentLoop(input: AgentLoopInput): Promise<RunResult> {
   const { config: initialConfig, state } = createLoopLifecycle(input);
   const config = { ...initialConfig };
-  config.runThread ??= createLoopThread(config, state);
   const emitFn = config.emit;
 
   emit(state, emitFn, { type: "agent_start", sessionId: state.agentState.id, ts: createTimestamp() });
 
   try {
-    if (config.kind === "thread" && state.depth.threadDepth > state.depth.maxThreadDepth) {
-      const outcome = createOutcome.threadDepthLimit({
-        threadDepth: state.depth.threadDepth,
-        maxThreadDepth: state.depth.maxThreadDepth,
-      });
-      return completeRun(config, state, outcome);
-    }
-
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
-      return completeRun(config, state, createOutcome.aborted());
+      return completeRun(state, createOutcome.aborted());
     }
 
     const result = await runLoop(config, state);
@@ -402,7 +336,7 @@ async function runLoop(
   while (currentPhaseId) {
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
-      return completeRun(config, state, createOutcome.aborted());
+      return completeRun(state, createOutcome.aborted());
     }
 
     // Track iteration
@@ -410,7 +344,7 @@ async function runLoop(
 
     // Guard against infinite loops
     if (state.metrics.iterations > maxIterations) {
-      return completeRun(config, state, {
+      return completeRun(state, {
         id: "max_iterations",
         message: `Loop exceeded maximum iterations (${maxIterations}). Stopping to prevent infinite loop.`,
       });
@@ -476,12 +410,12 @@ async function runLoop(
       const extBefore = await config.beforePhase(currentPhaseId, phaseInput);
       if (extBefore.abort) {
         emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-        return completeRun(config, state, extBefore.abort);
+        return completeRun(state, extBefore.abort);
       }
       if (extBefore.skip) {
         emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         if (extBefore.skip.route === "stop") {
-          return completeRun(config, state, {
+          return completeRun(state, {
             id: "skip",
             message: extBefore.skip.message || "Skipped.",
           });
@@ -512,7 +446,7 @@ async function runLoop(
       const extAfter = await config.afterPhase(currentPhaseId, output);
       if (extAfter.abort) {
         emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-        return completeRun(config, state, extAfter.abort);
+        return completeRun(state, extAfter.abort);
       }
       if (extAfter.retry && phase.run) {
         output = resolvePhaseOutput(await phase.run(context, extAfter.retry), state);
@@ -557,12 +491,12 @@ async function runLoop(
       }
 
       const outcome = createOutcome.default(output);
-      return completeRun(config, state, outcome);
+      return completeRun(state, outcome);
     }
 
     // Validate route target exists
     if (!phaseConfig.phases.some((p) => p.id === output.route)) {
-      return completeRun(config, state, createOutcome.phase());
+      return completeRun(state, createOutcome.phase());
     }
 
     // Track phase transition
@@ -779,10 +713,9 @@ async function executeToolCall(input: {
   const toolContext = {
     state: input.context.state.agentState,
     toolCallId: input.toolCall.id,
-    ...(input.context.runThread ? { runThread: input.context.runThread } : {}),
   };
   return executeRuntimeToolCall({
-    tools: input.context.config.tools,
+    tools: input.context.tools,
     toolCall: input.toolCall,
     toolContext,
     beforeToolCall: input.context.config.beforeToolCall,
@@ -809,7 +742,7 @@ function createPhaseContext(
     if (turnDepth === 0) {
       autoTurnCount++;
       if (autoTurnCount === 1) {
-        emitTurn(config, state, config.emit, "turn_start");
+        emitTurn(state, config.emit, "turn_start");
       }
     }
   }
@@ -818,7 +751,7 @@ function createPhaseContext(
     if (turnDepth === 0 && autoTurnCount > 0) {
       autoTurnCount--;
       if (autoTurnCount === 0) {
-        emitTurn(config, state, config.emit, "turn_end");
+        emitTurn(state, config.emit, "turn_end");
       }
     }
   }
@@ -962,18 +895,15 @@ function createPhaseContext(
         });
       },
     },
-    threads: {
-      create: async (input) => config.runThread!(input),
-    },
     skills: state.agentState.skills.slice(),
     turn: async (fn) => {
       turnDepth++;
-      emitTurn(config, state, config.emit, "turn_start");
+      emitTurn(state, config.emit, "turn_start");
       try {
         return await fn();
       } finally {
         turnDepth--;
-        emitTurn(config, state, config.emit, "turn_end");
+        emitTurn(state, config.emit, "turn_end");
       }
     },
     maxAttempts: config.maxAttempts,

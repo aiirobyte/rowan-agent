@@ -7,7 +7,6 @@ import type {
   BeforeToolCall,
   LlmModelRef,
   Outcome,
-  RunThread,
   StreamFn,
   Tool,
   ToolCall,
@@ -17,16 +16,10 @@ import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./phases/registry";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
 export type AgentRunLimits = {
-  maxThreadDepth?: number;
   /** Maximum number of phase iterations before forcing stop. Default: 50. */
   maxIterations?: number;
   /** Maximum consecutive "continue" rounds within a single phase before forcing transition. Default: 10. */
   maxPhaseRounds?: number;
-};
-
-export type RuntimeDepth = {
-  threadDepth: number;
-  maxThreadDepth: number;
 };
 
 export type BeforePhaseHook = (phaseId: string, input: PhaseInput) => Promise<BeforePhaseHookResult>;
@@ -34,7 +27,6 @@ export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<A
 export type BeforePromptHook = (phaseId: string, input: PhaseInput) => Promise<PhaseInput>;
 
 export type AgentLoopConfig = {
-  kind?: "run" | "thread";
   model: LlmModelRef;
   stream: StreamFn;
   tools: Tool[];
@@ -47,7 +39,6 @@ export type AgentLoopConfig = {
   beforePhase?: BeforePhaseHook;
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
-  runThread?: RunThread;
   emit?: AgentEventListener;
   phaseConfig?: PhaseRegistry;
 };
@@ -75,10 +66,6 @@ export type AgentRunState = {
   agentState: AgentState;
   currentPhase: string;
   attempt: number;
-  depth: {
-    threadDepth: number;
-    maxThreadDepth: number;
-  };
   transcript: AgentMessage[];
   /** Loop execution metrics. */
   metrics: LoopMetrics;
@@ -101,7 +88,6 @@ export type AgentLoopContext = {
   emit(event: AgentEvent): void;
   appendMessage(message: AgentMessageSnapshot): void;
   appendStateMessage(message: AgentMessageSnapshot): void;
-  runThread?: RunThread;
 };
 
 export type AgentEffect =

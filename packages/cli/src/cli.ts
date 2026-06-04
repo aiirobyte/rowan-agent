@@ -8,7 +8,6 @@ import {
 } from "@rowan-agent/models";
 import {
   Agent,
-  DEFAULT_MAX_THREAD_DEPTH,
   createMessage,
   createTimestamp,
   isConversationMessage,
@@ -47,7 +46,6 @@ type CliArgs = {
   apiKey?: string;
   model?: string;
   timeoutMs?: number;
-  maxThreadDepth?: number;
   prompt?: string;
 };
 
@@ -250,11 +248,6 @@ function parseOptionalTimeoutMs(value: string | undefined): number | undefined {
   return normalized ? parsePositiveInteger(normalized, "ROWAN_OPENAI_TIMEOUT_MS") : undefined;
 }
 
-function parseOptionalMaxThreadDepth(value: string | undefined): number | undefined {
-  const normalized = value?.trim();
-  return normalized ? parseNonNegativeInteger(normalized, "ROWAN_MAX_THREAD_DEPTH") : undefined;
-}
-
 function parseLogLevel(value: string, source: string): AgentEventLogLevel {
   const normalized = value.trim().toLowerCase();
   if ((LOG_LEVELS as readonly string[]).includes(normalized)) {
@@ -329,12 +322,6 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
-    if (next === "--max-thread-depth") {
-      const value = readOptionValue(args, "--max-thread-depth");
-      parsed.maxThreadDepth = parseNonNegativeInteger(value, "--max-thread-depth");
-      continue;
-    }
-
     if (next.startsWith("--")) {
       throw new Error(`Unknown option: ${next}`);
     }
@@ -379,10 +366,6 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
     args.timeoutMs ??
     parseOptionalTimeoutMs(env.ROWAN_OPENAI_TIMEOUT_MS) ??
     DEFAULT_OPENAI_TIMEOUT_MS;
-  const maxThreadDepth =
-    args.maxThreadDepth ??
-    parseOptionalMaxThreadDepth(env.ROWAN_MAX_THREAD_DEPTH) ??
-    DEFAULT_MAX_THREAD_DEPTH;
   const logPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args);
   const tools = createCoreTools({ root: workspace.cwd });
@@ -414,15 +397,6 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
     session: {
       id: args.sessionId ?? null,
       source: args.sessionId ? "flag" : "new",
-    },
-    agent: {
-      maxThreadDepth,
-      maxThreadDepthSource:
-        args.maxThreadDepth !== undefined
-          ? "flag"
-          : nonEmpty(env.ROWAN_MAX_THREAD_DEPTH)
-            ? "env"
-            : "default",
     },
     logging: {
       automatic: !logPath,
@@ -503,12 +477,6 @@ async function createConfiguredAgent(
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompletionsStream(config),
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
-    limits: {
-      maxThreadDepth:
-        args.maxThreadDepth ??
-        parseOptionalMaxThreadDepth(process.env.ROWAN_MAX_THREAD_DEPTH) ??
-        DEFAULT_MAX_THREAD_DEPTH,
-    },
   });
 
   return { agent, sessionManager };

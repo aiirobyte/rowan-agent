@@ -274,14 +274,12 @@ export class Agent {
       };
 
       const result = await runAgentLoop({
-        kind: "run",
         context: resolved.context,
         ...(sessionId ? { sessionId } : {}),
         model: resolved.model,
         stream: resolved.stream,
         maxAttempts: resolved.maxAttempts,
         limits: resolved.limits,
-        threadDepth: 0,
         signal,
         beforeToolCall,
         afterToolCall,

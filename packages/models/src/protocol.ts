@@ -345,18 +345,12 @@ export type AgentEvent =
   | {
       type: "turn_start";
       content: AgentContextMessage[];
-      parentSessionId?: string;
-      prompt?: string;
-      threadDepth?: number;
-      maxThreadDepth?: number;
       ts: string;
     }
   | {
       type: "turn_end";
       content: AgentContextMessage[];
       outcome?: Outcome;
-      threadDepth?: number;
-      maxThreadDepth?: number;
       ts: string;
     }
   | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage; ts: string }

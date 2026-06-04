@@ -3,7 +3,6 @@ export { Agent } from "./agent";
 export type { AgentOptions, RunOptions, AgentStatus } from "./agent";
 
 export {
-  DEFAULT_MAX_THREAD_DEPTH,
   AGENT_STATE_SCHEMA_VERSION,
   createMessage,
   isConversationMessage,

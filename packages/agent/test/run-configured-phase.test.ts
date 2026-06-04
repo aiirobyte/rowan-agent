@@ -45,7 +45,6 @@ function createTestContext(state: AgentRunState): PhaseContext {
       agentState: state.agentState,
       currentPhase: "test",
       attempt: 0,
-      depth: { threadDepth: 0, maxThreadDepth: 4 },
       transcript: [],
       metrics: {
         iterations: 0,
@@ -74,11 +73,6 @@ function createTestContext(state: AgentRunState): PhaseContext {
     },
     tools: {
       execute: async () => ({ toolCallId: "tc", toolName: "t", ok: true, content: null }),
-    },
-    threads: {
-      create: async () => {
-        throw new Error("not implemented");
-      },
     },
     skills: [],
     turn: async (fn) => fn(),

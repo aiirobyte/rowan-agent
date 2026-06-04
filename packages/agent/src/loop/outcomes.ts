@@ -13,10 +13,6 @@ export const createOutcome = {
     return createOutcome.error(result.message);
   },
 
-  threadDepthLimit(input: { threadDepth: number; maxThreadDepth: number }): Outcome {
-    return { id: createId("out"), message: `Thread depth limit exceeded (${input.threadDepth}/${input.maxThreadDepth}).` };
-  },
-
   phase(): Outcome {
     return { id: "default", message: "Phase completed." };
   },

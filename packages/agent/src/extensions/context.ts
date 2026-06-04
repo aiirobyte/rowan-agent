@@ -79,7 +79,6 @@ export { createEventBus } from "./event-bus";
 
 export type { LoadedExtension, ExtensionManifest } from "./types";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
-import type { EventBus } from "./event-bus";
 import type { LlmRequest } from "@rowan-agent/models";
 import type { PhaseInput } from "../loop/phases/registry";
 import { buildModelRequest } from "../harness/context/prompt-builder";

@@ -2,7 +2,6 @@ import type {
   AgentMessage,
   AgentState,
   Outcome,
-  RunThread,
   Skill,
   Tool,
 } from "../../types";
@@ -109,9 +108,6 @@ export type PhaseContext = {
   };
   tools: {
     execute(input: { toolCall: ToolCall }): Promise<ToolResult>;
-  };
-  threads: {
-    create: RunThread;
   };
   skills: AgentState["skills"];
   turn<T>(fn: () => Promise<T>): Promise<T>;

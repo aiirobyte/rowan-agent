@@ -1,7 +1,6 @@
 import Type from "typebox";
 import type {
   AgentContextState,
-  AgentContextSkill,
   ToolResult,
 } from "../protocol";
 import type { AgentRunLimits } from "../loop/types";
@@ -9,7 +8,6 @@ import type { AgentRunLimits } from "../loop/types";
 export { createId } from "../utils";
 export type {
   AgentRunLimits,
-  RuntimeDepth,
 } from "../loop/types";
 export type {
   LlmModelRef,
@@ -27,38 +25,14 @@ export type {
   ToolResult,
 } from "../protocol";
 
-export type RuntimeThreadInput = {
-  parentSessionId?: string;
-  prompt: string;
-  tools: Tool[];
-  skills?: AgentContextSkill[];
-  maxAttempts?: number;
-  limits?: AgentRunLimits;
-  threadDepth?: number;
-  verify?: boolean;
-};
-
-export type RuntimeRunThread<
-  TInput extends RuntimeThreadInput = RuntimeThreadInput,
-  TResult = unknown,
-> = (input: TInput) => Promise<TResult>;
-
-export type ToolContext<
-  TThreadResult = unknown,
-  TThreadInput extends RuntimeThreadInput = RuntimeThreadInput,
-> = {
+export type ToolContext = {
   state: AgentContextState;
   toolCallId: string;
-  runThread?: RuntimeRunThread<TThreadInput, TThreadResult>;
 };
 
 export type ToolExecutionMode = "sequential" | "parallel";
 
-export type Tool<
-  TArgs = unknown,
-  TThreadResult = unknown,
-  TThreadInput extends RuntimeThreadInput = RuntimeThreadInput,
-> = {
+export type Tool<TArgs = unknown> = {
   name: string;
   description: string;
   parameters: Type.TSchema;
@@ -70,7 +44,7 @@ export type Tool<
   executionMode?: ToolExecutionMode;
   execute(
     args: TArgs,
-    context: ToolContext<TThreadResult, TThreadInput>,
+    context: ToolContext,
     signal?: AbortSignal,
   ): Promise<ToolResult>;
 };

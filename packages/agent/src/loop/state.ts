@@ -1,7 +1,4 @@
-import type {
-  AgentMessage,
-  RuntimeDepth,
-} from "../types";
+import type { AgentMessage } from "../types";
 
 export function snapshotMessage(message: AgentMessage): AgentMessage {
   return {
@@ -12,14 +9,4 @@ export function snapshotMessage(message: AgentMessage): AgentMessage {
 
 export function snapshotMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map(snapshotMessage);
-}
-
-export function runtimeDepth(input: {
-  threadDepth: number;
-  maxThreadDepth: number;
-}): RuntimeDepth {
-  return {
-    threadDepth: input.threadDepth,
-    maxThreadDepth: input.maxThreadDepth,
-  };
 }

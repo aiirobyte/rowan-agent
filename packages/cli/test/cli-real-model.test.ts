@@ -229,10 +229,6 @@ test("CLI config shows missing and default configuration without requiring model
         timeoutMs?: number;
         timeoutMsSource?: string;
       };
-      agent?: {
-        maxThreadDepth?: number;
-        maxThreadDepthSource?: string;
-      };
       logging?: Record<string, unknown>;
     };
 
@@ -249,10 +245,6 @@ test("CLI config shows missing and default configuration without requiring model
       modelSource: "missing",
       timeoutMs: 60000,
       timeoutMsSource: "default",
-    });
-    expect(config.agent).toMatchObject({
-      maxThreadDepth: 4,
-      maxThreadDepthSource: "default",
     });
     expect(config.logging).toEqual({
       automatic: true,
@@ -318,10 +310,6 @@ test("CLI config reports resolved flags without exposing API key material", asyn
       modelSource: "flag",
       timeoutMs: 1234,
       timeoutMsSource: "flag",
-    });
-    expect(config.agent).toMatchObject({
-      maxThreadDepth: 7,
-      maxThreadDepthSource: "flag",
     });
     expect(config.session).toEqual({ id: "ses_example", source: "flag" });
     expect(config.logging).toEqual({

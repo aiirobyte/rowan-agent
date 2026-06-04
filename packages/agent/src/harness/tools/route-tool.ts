@@ -1,7 +1,7 @@
 import Type from "typebox";
-import type { Tool } from "../../types";
-import type { PhaseManifest } from "./registry";
-import { escapeXml } from "../../harness/context/structured";
+import type { Tool } from "../types";
+import type { PhaseManifest } from "../../loop/phases/registry";
+import { buildStructuredSection } from "../context/structured";
 
 export const PhaseRouteTool = "route";
 
@@ -11,32 +11,24 @@ export type RouteToolArgs = {
 };
 
 function buildRouteDescription(availablePhases: PhaseManifest[]): string {
-  const lines = [
+  const phasesBlock = buildStructuredSection("phase", [
+    ...availablePhases.map(p => ({ id: p.id, description: p.description })),
+    { id: "stop", description: "End execution and return the result to the user" },
+  ]);
+
+  return [
     "Decide the next step in the workflow by routing to a specific phase.",
     "",
     "You MUST call this tool when you have completed the current phase's work",
     "and are ready to hand off to the next phase or end execution.",
     "",
     "<available_phases>",
-  ];
-
-  for (const phase of availablePhases) {
-    lines.push("  <phase>");
-    lines.push(`    <id>${escapeXml(phase.id)}</id>`);
-    lines.push(`    <description>${escapeXml(phase.description)}</description>`);
-    lines.push("  </phase>");
-  }
-
-  lines.push("  <phase>");
-  lines.push("    <id>stop</id>");
-  lines.push("    <description>End execution and return the result to the user</description>");
-  lines.push("  </phase>");
-  lines.push("</available_phases>");
-  lines.push("");
-  lines.push("Choose the phase that best matches what needs to happen next.");
-  lines.push("Use the 'reason' field to briefly explain your routing decision.");
-
-  return lines.join("\n");
+    phasesBlock,
+    "</available_phases>",
+    "",
+    "Choose the phase that best matches what needs to happen next.",
+    "Use the 'reason' field to briefly explain your routing decision.",
+  ].join("\n");
 }
 
 /**
