@@ -5,9 +5,6 @@ export type { AgentOptions, RunOptions, AgentStatus } from "./agent";
 export {
   AGENT_STATE_SCHEMA_VERSION,
   createMessage,
-  isConversationMessage,
-  messageScope,
-  isContextScope,
   createAgentState,
 } from "./types";
 
@@ -38,14 +35,11 @@ export { EventStream, AgentEventStream } from "./event-stream";
 // ── session ────────────────────────────────────────────────────
 export {
   SESSION_SCHEMA_VERSION,
-  CONTEXT_SCOPES,
-  ContextScopeSchema,
   AgentMessageSchema,
   SkillSchema,
   createSession,
   appendUserTurn,
   type Session,
-  type ContextScope,
   type AgentMessageMetadata,
   type SessionListItem,
   LocalJsonlSessionManager,

@@ -1,5 +1,4 @@
 import type { AgentContextMessage, AgentContextSkill } from "../../protocol";
-import { isConversationMessage } from "../../protocol/context";
 import type { PhaseInput } from "../../loop/phases/registry";
 import type { LlmRequest, LlmMessage, LlmModelRef, LlmContentPart } from "@rowan-agent/models";
 import {
@@ -33,7 +32,7 @@ export function serializeSkills(skills: AgentContextSkill[]): Array<{
 export function latestUserInput(input: PhaseInput): string {
   for (let index = input.messages.length - 1; index >= 0; index -= 1) {
     const message = input.messages[index];
-    if (message.role === "user" && isConversationMessage(message)) {
+    if (message.role === "user") {
       return message.content;
     }
   }
@@ -43,13 +42,13 @@ export function latestUserInput(input: PhaseInput): string {
 
 export function conversationMessages(messages: AgentContextMessage[]): LlmMessage[] {
   return messages.flatMap((message): LlmMessage[] => {
-    // Conversation-scoped user messages
-    if (message.role === "user" && isConversationMessage(message)) {
+    // User messages
+    if (message.role === "user") {
       return [{ role: "user", content: message.content }];
     }
 
-    // Conversation-scoped assistant messages (without tool calls)
-    if (message.role === "assistant" && isConversationMessage(message)) {
+    // Assistant messages (without tool calls)
+    if (message.role === "assistant") {
       const toolCalls = message.metadata?.toolCalls as Array<{ id: string; name: string; args: unknown }> | undefined;
       if (!toolCalls?.length) {
         return [{ role: "assistant", content: message.content }];
@@ -57,7 +56,7 @@ export function conversationMessages(messages: AgentContextMessage[]): LlmMessag
       // Fall through to tool message handling below
     }
 
-    // Tool-related messages (any scope) — include for native tool_call format
+    // Tool-related messages — include for native tool_call format
     if (message.role === "assistant" && Array.isArray(message.metadata?.toolCalls)) {
       const toolCalls = message.metadata.toolCalls as Array<{ id: string; name: string; args: unknown }>;
       const content: LlmContentPart[] = [];
@@ -79,7 +78,7 @@ export function conversationMessages(messages: AgentContextMessage[]): LlmMessag
       return [{ role: "tool", content }];
     }
 
-    // Skip execution-scoped non-tool messages (model messages, routing decisions, etc.)
+    // Skip non-tool assistant messages (model messages, routing decisions, etc.)
     return [];
   });
 }

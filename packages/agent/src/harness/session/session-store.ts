@@ -4,7 +4,6 @@ import {
   AgentMessageSchema,
   SESSION_SCHEMA_VERSION,
   SkillSchema,
-  isConversationMessage,
   type AgentMessage,
   type Session,
 } from "./session";
@@ -51,7 +50,7 @@ export function toPersistedSession(session: Session<unknown>): PersistedSession 
     ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
     systemPrompt: session.systemPrompt,
     input: session.input,
-    messages: session.messages.filter(isConversationMessage).map(snapshotMessage),
+    messages: session.messages.map(snapshotMessage),
     skills: session.skills,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

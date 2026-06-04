@@ -1,7 +1,6 @@
 import type { ExecutionTurn, Outcome, StepFilter } from "../../protocol";
 import {
   createId,
-  isConversationMessage,
   nowIso,
   type AgentMessage,
   type Skill,
@@ -160,7 +159,6 @@ function filterExecutionTurns(steps: readonly ExecutionTurn[], filter: StepFilte
   return steps
     .filter((step) => {
       if (filter.phase && step.phase !== filter.phase) return false;
-      if (filter.scope && step.scope !== filter.scope) return false;
       if (filter.afterMs !== undefined && step.requestedAtMs < filter.afterMs) return false;
       return true;
     })
@@ -256,7 +254,6 @@ export class InMemorySessionManager implements SessionManager {
       messages: entries
         .filter((entry): entry is MessageSessionEntry => entry.type === "message")
         .map((entry) => entry.message)
-        .filter(isConversationMessage)
         .map(clone),
       tools: input.tools?.slice() ?? [],
       skills: input.skills?.map(clone) ?? this.header.skills.map(clone),
@@ -331,8 +328,7 @@ export function summarizeSessionManagerRecords(records: readonly SessionRecord[]
   }
   const messages = entries
     .filter((entry): entry is MessageSessionEntry => entry.type === "message")
-    .map((entry) => entry.message)
-    .filter(isConversationMessage);
+    .map((entry) => entry.message);
   const latestMessage = messages.at(-1)?.content;
 
   return {

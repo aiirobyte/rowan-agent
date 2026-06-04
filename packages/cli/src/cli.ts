@@ -10,7 +10,6 @@ import {
   Agent,
   createMessage,
   createTimestamp,
-  isConversationMessage,
   type AgentEvent,
   type AgentEventListener,
   type AgentMessage,
@@ -569,7 +568,7 @@ async function promptWithLog(input: {
     });
     const newMessages = result.messages.slice(context.messages.length);
     for (const message of newMessages) {
-      if (message.role !== "user" && isConversationMessage(message)) {
+      if (message.role !== "user") {
         await sessionManager.appendMessage(message);
       }
     }

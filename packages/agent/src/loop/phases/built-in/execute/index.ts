@@ -22,7 +22,11 @@ export default function(api: ExtensionAPI) {
 
       let collected;
       try {
-        collected = await context.turn(() => context.model.invoke({ input }));
+        collected = await context.turn(() => context.model.invoke({
+          input,
+          autoExecuteTools: true,
+          excludeTools: ["route"],
+        }));
       } catch (error) {
         // Model errors - check if we should retry
         if (context.state.attempt < maxAttempts) {
@@ -42,46 +46,13 @@ export default function(api: ExtensionAPI) {
         return { message: collected.text, route: "stop", toolCalls: collected.toolCalls };
       }
 
-      // Execute non-route tool calls and store results (execution-scoped)
-      const nonRouteToolCalls = collected.toolCalls.filter(t => t.name !== "route");
-      if (nonRouteToolCalls.length > 0) {
-        // Store assistant message with tool calls (execution-scoped, not streamed to CLI)
-        const assistantMsgId = context.messages.start("assistant", collected.text || "", {
-          kind: "model_message",
-          phase: "execute",
-          scope: "execution",
-          toolCalls: nonRouteToolCalls.map(tc => ({ id: tc.id, name: tc.name, args: tc.args })),
-        });
-        await context.messages.end(assistantMsgId);
-
-        for (const toolCall of nonRouteToolCalls) {
-          await context.toolExecution.start(toolCall.id, toolCall.name, toolCall.args);
-
-          const result = await context.tools.execute({ toolCall });
-
-          await context.toolExecution.end(result.toolCallId, result.toolName, result, !result.ok);
-
-          const toolResultContent = JSON.stringify({
-            toolName: result.toolName,
-            ok: result.ok,
-            content: result.content,
-            ...(result.error ? { error: result.error } : {}),
-          });
-          const toolMsgId = context.messages.start("tool", toolResultContent, {
-            toolCallId: result.toolCallId,
-            toolName: result.toolName,
-            scope: "execution",
-            isError: !result.ok,
-          });
-          await context.messages.end(toolMsgId);
-        }
-
-        // Tools were executed, continue in execute phase
-        return { message: collected.text ?? "", route: "continue", toolCalls: collected.toolCalls };
+      // If there are tool calls (including route), return them for framework route extraction
+      if (collected.toolCalls.length > 0) {
+        return { message: collected.text ?? "", route: "stop", toolCalls: collected.toolCalls };
       }
 
-      // No tools called - execution complete, return toolCalls for framework route extraction
-      return { message: collected.text ?? "", route: "chat", toolCalls: collected.toolCalls };
+      // No tools called - execution complete
+      return { message: collected.text ?? "", route: "chat" };
     },
   });
 }

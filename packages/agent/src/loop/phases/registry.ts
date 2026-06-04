@@ -64,7 +64,12 @@ export type ModelInvokeOutput = {
 
 export type ModelInvokeInput = {
   input: PhaseInput;
-  scope?: "conversation" | "execution";
+  /** Auto-execute tools and record results to message history */
+  autoExecuteTools?: boolean;
+  /** Max tool execution rounds (default: 10) */
+  maxToolRounds?: number;
+  /** Tool names to exclude from auto-execution (e.g. ["route"]) */
+  excludeTools?: string[];
 };
 
 /** Message lifecycle manager for streaming updates */
@@ -83,6 +88,12 @@ export type PhaseMessageManager = {
   update(messageId: string, delta: string): Promise<void>;
   /** End the message stream, appends to transcript */
   end(messageId: string): Promise<void>;
+  /** Delete a single message by id or index */
+  delete(target: string | number): void;
+  /** Insert a message before a target (by id or index) */
+  insert(target: string | number, message: AgentMessage): void;
+  /** Clear all messages from transcript and state */
+  clear(): void;
   /** Capture current message state for later restore */
   snapshot(): MessageSnapshot;
   /** Restore message state to a previous snapshot, discarding messages added after it */

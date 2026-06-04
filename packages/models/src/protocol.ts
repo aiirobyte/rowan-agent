@@ -296,17 +296,13 @@ export type ApiStreamFn = (
 // dependency).  The agent package re-exports them for backward compat.
 // ---------------------------------------------------------------------------
 
-export type ContextScope = "conversation" | "execution" | "diagnostic";
-
 export type AgentContextMessage = {
   id: string;
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   createdAt: string;
   metadata?: Record<string, unknown> & {
-    kind?: string;
     phase?: string;
-    scope?: ContextScope;
     toolCalls?: Array<{ id: string; name: string; args: unknown }>;
     toolCallId?: string;
     toolName?: string;

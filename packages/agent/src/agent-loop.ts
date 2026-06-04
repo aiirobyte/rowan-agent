@@ -26,7 +26,10 @@ import {
   type PhaseContext,
   type PhaseDefinition,
   type PhaseInput,
+  type PhaseMessageManager,
   type PhaseOutput,
+  type PhaseToolExecutionManager,
+  type ModelInvokeOutput,
 } from "./loop/phases";
 import { createBuiltinPhaseRegistry } from "./extensions";
 import { executeRuntimeToolCall } from "./harness/tools";
@@ -188,7 +191,7 @@ function createAgentLoopContext(
     const result = await runAgentLoop({
       context: {
         systemPrompt: state.agentState.systemPrompt,
-        messages: [createMessage("user", input.prompt, { scope: "conversation" })],
+        messages: [createMessage("user", input.prompt)],
         tools: input.tools?.slice() ?? config.tools.slice(),
         skills: input.skills?.slice() ?? state.agentState.skills.slice(),
       },
@@ -352,9 +355,7 @@ async function runLoop(
       const compacted = compactMessages(state.transcript);
       if (compacted.compacted) {
         state.transcript = compacted.messages;
-        state.agentState.messages = compacted.messages.filter(
-          (m) => m.metadata?.scope === "conversation" && m.metadata?.kind !== "model_message",
-        );
+        state.agentState.messages = compacted.messages;
         state.metrics.compactionCount++;
         emit(state, config.emit, {
           type: "message_start",
@@ -363,7 +364,7 @@ async function runLoop(
             role: "assistant",
             content: `[Compacted ${compacted.summarizedCount} older messages to stay within context limits]`,
             createdAt: createTimestamp(),
-            metadata: { scope: "diagnostic", kind: "compaction_notice" },
+            metadata: { type: "compaction_notice" },
           },
           ts: createTimestamp(),
         });
@@ -509,17 +510,6 @@ async function runLoop(
 
     // Read route — main loop contains no phase-specific routing logic
     if (output.route === "stop") {
-      // Persist outcome message to session without emitting message events
-      if (output.message?.trim()) {
-        const outcomeMsg = createMessage("assistant", output.message, {
-          kind: "outcome",
-          phase: currentPhaseId,
-          scope: "conversation",
-        });
-        state.agentState.messages.push(outcomeMsg);
-        state.transcript.push(outcomeMsg);
-      }
-
       const outcome = createOutcome.default(output);
       return completeRun(state, outcome);
     }
@@ -618,7 +608,6 @@ async function collectStructured(input: {
   message: import("./loop/phases/registry").PhaseMessageManager;
   events: AsyncIterable<LlmStreamEvent>;
   metadataPhase: string;
-  scope?: "conversation" | "execution";
 }): Promise<{
   text: string;
   contentBlocks: ContentBlock[];
@@ -653,9 +642,7 @@ async function collectStructured(input: {
       lastPartial = event.partial;
       if (!activeMessageId) {
         activeMessageId = input.message.start("assistant", "", {
-          kind: "model_message",
           phase: input.metadataPhase,
-          scope: input.scope ?? "conversation",
         });
       }
     }
@@ -665,9 +652,7 @@ async function collectStructured(input: {
       lastPartial = event.partial;
       if (!activeMessageId) {
         activeMessageId = input.message.start("assistant", event.text, {
-          kind: "model_message",
           phase: input.metadataPhase,
-          scope: input.scope ?? "conversation",
         });
       } else {
         await input.message.update(activeMessageId, event.text);
@@ -692,9 +677,7 @@ async function collectStructured(input: {
       const toolCallBlocks = lastPartial?.contentBlocks?.filter(b => b.type === "tool_call") ?? [];
       if (!activeMessageId && toolCallBlocks.length > 0) {
         activeMessageId = input.message.start("assistant", "", {
-          kind: "model_message",
           phase: input.metadataPhase,
-          scope: input.scope ?? "conversation",
           toolCalls: toolCallBlocks.map(tc => ({ id: tc.id, name: tc.name, args: tc.args })),
         });
       }
@@ -784,7 +767,7 @@ function createPhaseContext(
     }
   }
 
-  const messageManager: import("./loop/phases/registry").PhaseMessageManager = {
+  const messageManager: PhaseMessageManager = {
     visible: () => [...state.transcript],
     start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>) {
       const msg = createMessage(role, content, metadata);
@@ -809,11 +792,7 @@ function createPhaseContext(
       if (!msg) return;
       activeMessages.delete(messageId);
       state.transcript.push(msg);
-      // Only persist conversation-scoped messages to agent state,
-      // but skip model_message kind (raw model output) — phases create their own outcome messages
-      if (msg.metadata?.scope === "conversation" && msg.metadata?.kind !== "model_message") {
-        state.agentState.messages.push(msg);
-      }
+      state.agentState.messages.push(msg);
       emit(state, config.emit, { type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
       endAutoTurn();
     },
@@ -826,12 +805,62 @@ function createPhaseContext(
     restore(snap) {
       state.transcript.length = snap.transcriptLength;
       state.agentState.messages.length = snap.stateMessagesLength;
-      // Discard any in-flight messages that started after the snapshot
-      for (const [id, msg] of activeMessages) {
-        if (msg.metadata?.scope !== "conversation") {
-          activeMessages.delete(id);
+      // Discard all in-flight messages that started after the snapshot
+      activeMessages.clear();
+    },
+    delete(target: string | number) {
+      const transcriptIdx = typeof target === "number"
+        ? target
+        : state.transcript.findIndex(m => m.id === target);
+      if (transcriptIdx >= 0 && transcriptIdx < state.transcript.length) {
+        const msg = state.transcript[transcriptIdx];
+        state.transcript.splice(transcriptIdx, 1);
+        const stateIdx = state.agentState.messages.findIndex(m => m.id === msg.id);
+        if (stateIdx !== -1) {
+          state.agentState.messages.splice(stateIdx, 1);
         }
+        activeMessages.delete(msg.id);
       }
+    },
+    insert(target: string | number, message: AgentMessage) {
+      const idx = typeof target === "number"
+        ? target
+        : state.transcript.findIndex(m => m.id === target);
+      const insertIdx = idx >= 0 ? idx : state.transcript.length;
+      state.transcript.splice(insertIdx, 0, message);
+      state.agentState.messages.push(message);
+    },
+    clear() {
+      state.transcript.length = 0;
+      state.agentState.messages.length = 0;
+      activeMessages.clear();
+    },
+  };
+
+  const toolExecutionManager: PhaseToolExecutionManager = {
+    async start(toolCallId, toolName, args) {
+      beginAutoTurn();
+      emit(state, config.emit, {
+        type: "tool_execution_start",
+        toolCallId,
+        toolName,
+        args,
+        ts: createTimestamp(),
+      });
+    },
+    async update(_toolCallId, _partialResult) {
+      // tool_execution_update — reserved for future use
+    },
+    async end(toolCallId, toolName, result, isError) {
+      emit(state, config.emit, {
+        type: "tool_execution_end",
+        toolCallId,
+        toolName,
+        result,
+        isError,
+        ts: createTimestamp(),
+      });
+      endAutoTurn();
     },
   };
 
@@ -839,84 +868,117 @@ function createPhaseContext(
     phaseId: phase.id,
     state: loopContext.state,
     messages: messageManager,
-    toolExecution: {
-      async start(toolCallId, toolName, args) {
-        beginAutoTurn();
-        emit(state, config.emit, {
-          type: "tool_execution_start",
-          toolCallId,
-          toolName,
-          args,
-          ts: createTimestamp(),
-        });
-      },
-      async update(_toolCallId, _partialResult) {
-        // tool_execution_update — reserved for future use
-      },
-      async end(toolCallId, toolName, result, isError) {
-        emit(state, config.emit, {
-          type: "tool_execution_end",
-          toolCallId,
-          toolName,
-          result,
-          isError,
-          ts: createTimestamp(),
-        });
-        endAutoTurn();
-      },
-    },
+    toolExecution: toolExecutionManager,
     model: {
       invoke: async (input) => {
-        // Allow extensions to transform PhaseInput before buildPrompt
-        if (loopContext.config.beforePrompt) {
-          input.input = await loopContext.config.beforePrompt(phase.id, input.input);
-        }
-        const request = phase.buildPrompt!(input.input);
-        request.model = loopContext.config.model;
-        // Ensure tools are available when phase has tools configured
-        // Use phaseTools (filtered) instead of tools (all)
-        if (!request.tools) {
-          const modelTools = input.input.phaseTools ?? input.input.tools;
-          if (modelTools.length > 0) {
-            request.tools = modelTools.map((t) => ({
-              name: t.name,
-              description: t.description,
-              parameters: t.parameters,
-            }));
+        const { autoExecuteTools, maxToolRounds = 10, excludeTools = [] } = input;
+
+        // Single invoke call helper
+        const invokeOnce = async (phaseInput: PhaseInput): Promise<ModelInvokeOutput> => {
+          // Allow extensions to transform PhaseInput before buildPrompt
+          if (loopContext.config.beforePrompt) {
+            phaseInput = await loopContext.config.beforePrompt(phase.id, phaseInput);
           }
-        }
-        // Pass toolChoice from phase input to request
-        if (input.input.toolChoice && !request.toolChoice) {
-          request.toolChoice = input.input.toolChoice;
-        }
-        // Retry with exponential backoff for transient model errors
-        return withRetry(
-          () => collectStructured({
-            context: loopContext,
-            message: messageManager,
-            events: loopContext.config.stream(request, { signal: loopContext.signal }),
-            metadataPhase: phase.id,
-            scope: input.scope,
-          }),
-          {
-            signal: loopContext.signal,
-            onRetry: (attempt, error, delayMs) => {
-              state.metrics.retryCount++;
-              const errMsg = error instanceof Error ? error.message : String(error);
-              loopContext.emit({
-                type: "message_start",
-                message: {
-                  id: `retry_${attempt}`,
-                  role: "assistant",
-                  content: `[Retry ${attempt + 1}/${DEFAULT_MAX_RETRIES}] Transient error: ${errMsg}. Retrying in ${Math.round(delayMs)}ms...`,
-                  createdAt: createTimestamp(),
-                  metadata: { scope: "diagnostic", kind: "retry_notice" },
-                },
-                ts: createTimestamp(),
-              });
+          const request = phase.buildPrompt!(phaseInput);
+          request.model = loopContext.config.model;
+          // Ensure tools are available when phase has tools configured
+          // Use phaseTools (filtered) instead of tools (all)
+          if (!request.tools) {
+            const modelTools = phaseInput.phaseTools ?? phaseInput.tools;
+            if (modelTools.length > 0) {
+              request.tools = modelTools.map((t) => ({
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+              }));
+            }
+          }
+          // Pass toolChoice from phase input to request
+          if (phaseInput.toolChoice && !request.toolChoice) {
+            request.toolChoice = phaseInput.toolChoice;
+          }
+          // Retry with exponential backoff for transient model errors
+          return withRetry(
+            () => collectStructured({
+              context: loopContext,
+              message: messageManager,
+              events: loopContext.config.stream(request, { signal: loopContext.signal }),
+              metadataPhase: phase.id,
+            }),
+            {
+              signal: loopContext.signal,
+              onRetry: (attempt, error, delayMs) => {
+                state.metrics.retryCount++;
+                const errMsg = error instanceof Error ? error.message : String(error);
+                loopContext.emit({
+                  type: "message_start",
+                  message: {
+                    id: `retry_${attempt}`,
+                    role: "assistant",
+                    content: `[Retry ${attempt + 1}/${DEFAULT_MAX_RETRIES}] Transient error: ${errMsg}. Retrying in ${Math.round(delayMs)}ms...`,
+                    createdAt: createTimestamp(),
+                    metadata: { type: "retry_notice" },
+                  },
+                  ts: createTimestamp(),
+                });
+              },
             },
-          },
-        );
+          );
+        };
+
+        // If auto-execute is disabled, just do a single invoke
+        if (!autoExecuteTools) {
+          return invokeOnce(input.input);
+        }
+
+        // Auto-execute loop: invoke → execute tools → repeat until no tool calls
+        let currentInput = input.input;
+        let lastResult: ModelInvokeOutput | undefined;
+
+        for (let round = 0; round < maxToolRounds; round++) {
+          lastResult = await invokeOnce(currentInput);
+
+          // Filter out excluded tool calls
+          const executableToolCalls = lastResult.toolCalls.filter(
+            tc => !excludeTools.includes(tc.name)
+          );
+
+          // If no executable tool calls, we're done
+          if (executableToolCalls.length === 0) {
+            break;
+          }
+
+          // Execute each tool and record results
+          for (const toolCall of executableToolCalls) {
+            await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
+
+            const result = await executeToolCall({ context: loopContext, toolCall });
+
+            await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
+
+            // Record tool result to message history
+            const toolResultContent = JSON.stringify({
+              toolName: result.toolName,
+              ok: result.ok,
+              content: result.content,
+              ...(result.error ? { error: result.error } : {}),
+            });
+            const toolMsgId = messageManager.start("tool", toolResultContent, {
+              toolCallId: result.toolCallId,
+              toolName: result.toolName,
+              isError: !result.ok,
+            });
+            await messageManager.end(toolMsgId);
+          }
+
+          // Update input with current messages for next round
+          currentInput = {
+            ...currentInput,
+            messages: messageManager.visible(),
+          };
+        }
+
+        return lastResult!;
       },
     },
     tools: {

@@ -1,29 +1,9 @@
 import Type from "typebox";
-import {
-  isContextScope as isContextScopeImpl,
-  defaultScopeForMessage,
-  messageScope as messageScopeImpl,
-  isConversationMessage as isConversationMessageImpl,
-} from "../../protocol/context";
 
 export const SESSION_SCHEMA_VERSION = "0.4.4";
 
-export const CONTEXT_SCOPES = ["conversation", "execution", "diagnostic"] as const;
-
-export type ContextScope = (typeof CONTEXT_SCOPES)[number];
-
-export const ContextScopeSchema = Type.Union([
-  Type.Literal("conversation"),
-  Type.Literal("execution"),
-  Type.Literal("diagnostic"),
-]);
-
-export const isContextScope = isContextScopeImpl;
-
 export type AgentMessageMetadata = Record<string, unknown> & {
-  kind?: string;
   phase?: string;
-  scope?: ContextScope;
 };
 
 export const AgentMessageSchema = Type.Object({
@@ -40,9 +20,6 @@ export const AgentMessageSchema = Type.Object({
 });
 
 export type AgentMessage = Type.Static<typeof AgentMessageSchema>;
-
-export const messageScope = messageScopeImpl;
-export const isConversationMessage = isConversationMessageImpl;
 
 export const SkillSchema = Type.Object({
   name: Type.String(),
@@ -105,17 +82,12 @@ export function createMessage(
   content: string,
   metadata?: Record<string, unknown>,
 ): AgentMessage {
-  const scope = isContextScope(metadata?.scope) ? metadata!.scope : defaultScopeForMessage(role, metadata);
-  const normalizedMetadata = scope === undefined
-    ? metadata
-    : { ...metadata, scope };
-
   return {
     id: createId("msg"),
     role,
     content,
     createdAt: nowIso(),
-    ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -129,7 +101,7 @@ export function createSession<TLogEvent = never>(input: {
 }): Session<TLogEvent> {
   const createdAt = nowIso();
   const messages = [
-    createMessage("user", input.input, { scope: "conversation" }),
+    createMessage("user", input.input),
   ];
 
   return {
@@ -148,7 +120,7 @@ export function createSession<TLogEvent = never>(input: {
 }
 
 export function appendUserTurn<TLogEvent>(session: Session<TLogEvent>, input: string): Session<TLogEvent> {
-  session.messages.push(createMessage("user", input, { scope: "conversation" }));
+  session.messages.push(createMessage("user", input));
   session.updatedAt = nowIso();
   return session;
 }
@@ -156,7 +128,7 @@ export function appendUserTurn<TLogEvent>(session: Session<TLogEvent>, input: st
 export function latestUserInput(session: Session<unknown>): string {
   for (let index = session.messages.length - 1; index >= 0; index -= 1) {
     const message = session.messages[index];
-    if (message.role === "user" && isConversationMessage(message)) {
+    if (message.role === "user") {
       return message.content;
     }
   }

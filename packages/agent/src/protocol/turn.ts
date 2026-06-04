@@ -1,4 +1,4 @@
-import type { AgentContextMessage, ContextScope } from "./context";
+import type { AgentContextMessage } from "./context";
 import type { LlmModelUsage, LlmModelRef } from "./model";
 import type { LoopPhase } from "./phase";
 import type { ToolCall, ToolResult } from "./tool";
@@ -18,12 +18,10 @@ export type ExecutionTurn = {
   completedAtMs: number;
   model: LlmModelRef;
   usage?: LlmModelUsage;
-  scope: ContextScope;
   entries: ExecutionTurnEntry[];
 };
 
 export type StepFilter = {
   phase?: LoopPhase;
   afterMs?: number;
-  scope?: ExecutionTurn["scope"];
 };

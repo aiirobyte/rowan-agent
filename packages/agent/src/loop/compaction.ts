@@ -65,10 +65,6 @@ function buildSummary(messages: AgentMessage[]): string {
       flush();
       currentRole = msg.role;
     }
-    // Skip diagnostic/execution messages in summary
-    if (msg.metadata?.scope === "diagnostic" || msg.metadata?.scope === "execution") {
-      continue;
-    }
     currentContent.push(msg.content);
   }
   flush();
@@ -96,9 +92,9 @@ export function compactMessages(
   const keepRecent = options.keepRecent ?? 10;
   const minCompact = options.minCompact ?? 20;
 
-  // Find the first conversation-scoped user message (keep it)
+  // Find the first user message (keep it)
   const firstUserIdx = messages.findIndex(
-    (m) => m.role === "user" && m.metadata?.scope === "conversation",
+    (m) => m.role === "user",
   );
 
   // Calculate boundaries
@@ -124,8 +120,7 @@ export function compactMessages(
   // Add summary as an assistant message
   result.push(
     createMessage("assistant", `[Context compaction summary]\n\n${summary}`, {
-      scope: "conversation",
-      kind: "compaction_summary",
+      type: "compaction_summary",
       compactedCount: oldMessages.length,
     }),
   );

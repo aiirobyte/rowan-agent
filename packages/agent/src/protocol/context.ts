@@ -1,12 +1,11 @@
 import type {
-  ContextScope,
   AgentContextMessage,
   AgentContextSkill,
   Outcome,
 } from "@rowan-agent/models";
 
 // Re-export shared runtime types from @rowan-agent/models (canonical source)
-export type { ContextScope, AgentContextMessage, AgentContextSkill, Outcome } from "@rowan-agent/models";
+export type { AgentContextMessage, AgentContextSkill, Outcome } from "@rowan-agent/models";
 
 export type {
   LlmRequest,
@@ -28,53 +27,9 @@ export type AgentContextState = {
   title?: string;
 };
 
-// ---------------------------------------------------------------------------
-// Scope utilities — canonical implementations
-// ---------------------------------------------------------------------------
-
-export function isContextScope(value: unknown): value is ContextScope {
-  return (
-    value === "conversation" ||
-    value === "execution" ||
-    value === "diagnostic"
-  );
-}
-
-export function defaultScopeForMessage(
-  role: AgentContextMessage["role"],
-  metadata?: Record<string, unknown>,
-): ContextScope | undefined {
-  if (
-    metadata?.kind === "phase_prompt" ||
-    metadata?.kind === "routing_decision" ||
-    metadata?.kind === "model_message" ||
-    metadata?.kind === "thread_output"
-  ) {
-    return "execution";
-  }
-
-  if (metadata?.kind === "error" || metadata?.kind === "limit_exceeded") {
-    return "diagnostic";
-  }
-
-  if (role === "user" || role === "assistant") {
-    return "conversation";
-  }
-
-  if (role === "tool") {
-    return "execution";
-  }
-
-  return undefined;
-}
-
-export function messageScope(message: { metadata?: { scope?: unknown } }): ContextScope | undefined {
-  const scope = message.metadata?.scope;
-  return isContextScope(scope) ? scope : undefined;
-}
-
-export function isConversationMessage(message: { metadata?: { scope?: unknown } }): boolean {
-  return messageScope(message) === "conversation";
+// All messages are now persisted — no scope-based filtering
+export function isConversationMessage(_message: AgentContextMessage): boolean {
+  return true;
 }
 
 /** Unified phase output — model decides routing via route. */

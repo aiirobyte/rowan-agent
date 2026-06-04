@@ -4,7 +4,6 @@ import type { PhaseRegistry, PhaseInput } from "./loop/phases";
 import type {
   AgentContextMessage,
   AgentContextSkill,
-  ContextScope,
   LlmModelRef,
   LlmModelUsage,
   LlmRequest,
@@ -16,7 +15,6 @@ import type {
   ToolResult,
 } from "./protocol";
 import type { AgentEvent, AgentEventListener } from "@rowan-agent/models";
-import { isContextScope, defaultScopeForMessage, isConversationMessage } from "./protocol/context";
 import { createId, createTimestamp, createJson } from "./utils";
 
 export type {
@@ -52,7 +50,6 @@ export type {
 } from "./protocol";
 
 export type { AgentEvent, AgentEventListener };
-export { isContextScope, messageScope, isConversationMessage } from "./protocol/context";
 
 export const AGENT_STATE_SCHEMA_VERSION = "0.4.4";
 
@@ -163,24 +160,19 @@ export function createMessage(
   content: string,
   metadata?: Record<string, unknown>,
 ): AgentMessage {
-  const scope = isContextScope(metadata?.scope) ? metadata!.scope : defaultScopeForMessage(role, metadata);
-  const normalizedMetadata = scope === undefined
-    ? metadata
-    : { ...metadata, scope };
-
   return {
     id: createId("msg"),
     role,
     content,
     createdAt: createTimestamp(),
-    ...(normalizedMetadata ? { metadata: normalizedMetadata } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
 export function createAgentState(input: CreateAgentStateInput): AgentState {
   const createdAt = createTimestamp();
   const messages = input.messages?.map(createJson.new) ?? [
-    createMessage("user", input.input, { scope: "conversation" }),
+    createMessage("user", input.input),
   ];
 
   return {
@@ -200,7 +192,7 @@ export function createAgentState(input: CreateAgentStateInput): AgentState {
 export function latestUserInput(state: Pick<AgentState, "input" | "messages">): string {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const message = state.messages[index];
-    if (message.role === "user" && isConversationMessage(message)) {
+    if (message.role === "user") {
       return message.content;
     }
   }
