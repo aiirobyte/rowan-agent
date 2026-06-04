@@ -173,11 +173,14 @@ export type LlmToolCall = {
 // Request / Response
 // ---------------------------------------------------------------------------
 
+export type LlmToolChoice = "auto" | "required" | "none" | { type: "tool"; name: string };
+
 export type LlmRequest = {
   model: LlmModelRef;
   system?: string;
   messages: LlmMessage[];
   tools?: LlmToolDefinition[];
+  toolChoice?: LlmToolChoice;
   maxTokens?: number;
   temperature?: number;
 };

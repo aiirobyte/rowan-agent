@@ -1,11 +1,14 @@
 import Type from "typebox";
 import type { Tool, ToolContext, ToolResult, Skill, RunResult } from "../types";
-import { buildStructuredSection } from "../context/structured";
+import { buildStructuredSection } from "../context/section-formatter";
 
 export const ThreadTool = "thread";
 
 export type ThreadToolArgs = {
   prompt: string;
+  /** Tool names available to the sub-agent. If omitted, all tools are available. */
+  tools?: string[];
+  /** Skill names available to the sub-agent. If omitted, all skills are available. */
   skills?: string[];
   limits?: {
     maxIterations?: number;
@@ -15,6 +18,7 @@ export type ThreadToolArgs = {
 /** Function signature for spawning a sub-agent loop. */
 export type SpawnThreadFn = (input: {
   prompt: string;
+  tools?: Tool[];
   skills?: Skill[];
   limits?: { maxIterations?: number };
 }) => Promise<RunResult>;
@@ -90,6 +94,22 @@ function resolveSkills(names: string[], available: Skill[]): Skill[] {
 }
 
 /**
+ * Resolve tool name strings to Tool objects from the available pool.
+ * Silently skips names that don't match any loaded tool.
+ */
+function resolveTools(names: string[], available: Tool[]): Tool[] {
+  const byName = new Map(available.map(t => [t.name, t]));
+  const resolved: Tool[] = [];
+  for (const name of names) {
+    const tool = byName.get(name);
+    if (tool) {
+      resolved.push(tool);
+    }
+  }
+  return resolved;
+}
+
+/**
  * Create a thread tool that spawns a sub-agent to handle a subtask.
  *
  * Unlike the route tool (which is a no-op intercepted by phases), the thread
@@ -97,6 +117,7 @@ function resolveSkills(names: string[], available: Skill[]): Skill[] {
  * launch a new agent loop and returns the result to the calling phase.
  */
 export function createThreadTool(
+  availableTools: Tool[],
   availableSkills: Skill[],
   spawnThread: SpawnThreadFn,
 ): Tool<ThreadToolArgs> {
@@ -107,6 +128,10 @@ export function createThreadTool(
       prompt: Type.String({
         description: "Clear, self-contained instructions for the sub-agent. Include all context needed — the sub-agent does NOT see the current conversation.",
       }),
+      tools: Type.Optional(Type.Array(
+        Type.String(),
+        { description: "Tool names to make available to the sub-agent. Only include tools the subtask actually needs." },
+      )),
       skills: Type.Optional(Type.Array(
         Type.String(),
         { description: "Skill names to make available to the sub-agent. Only include skills the subtask actually needs." },
@@ -118,7 +143,7 @@ export function createThreadTool(
       }, { description: "Resource limits for the sub-agent. Omit to inherit defaults." })),
     }),
     execute: async (args, context: ToolContext): Promise<ToolResult> => {
-      const { prompt, skills: skillNames, limits } = args;
+      const { prompt, tools: toolNames, skills: skillNames, limits } = args;
 
       if (!prompt || prompt.trim().length === 0) {
         return {
@@ -130,6 +155,11 @@ export function createThreadTool(
         };
       }
 
+      // Resolve tool names to Tool objects
+      const resolvedTools = toolNames
+        ? resolveTools(toolNames, availableTools)
+        : undefined;
+
       // Resolve skill names to Skill objects
       const resolvedSkills = skillNames
         ? resolveSkills(skillNames, context.state.skills)
@@ -137,6 +167,7 @@ export function createThreadTool(
 
       const result = await spawnThread({
         prompt: prompt.trim(),
+        ...(resolvedTools && resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
         ...(resolvedSkills && resolvedSkills.length > 0 ? { skills: resolvedSkills } : {}),
         ...(limits ? { limits } : {}),
       });

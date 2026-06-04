@@ -7,12 +7,13 @@ import type {
 } from "../../types";
 import type { ToolCall, ToolResult } from "../../types";
 import { createId } from "../../utils";
-import type { ContentBlock, LlmRequest } from "@rowan-agent/models";
+import type { ContentBlock, LlmRequest, LlmToolChoice } from "@rowan-agent/models";
 import type { PhaseOutput } from "../../protocol/context";
 import type { AgentRunState } from "../types";
 
 export { createId };
 export type { Outcome, ToolCall, ToolResult };
+export type { LlmToolChoice };
 
 export type { PhaseOutput };
 
@@ -29,12 +30,12 @@ export type PhaseInput = {
   phaseTools?: Tool[];
   /** Phase-specific filtered skills */
   phaseSkills?: Skill[];
-  /** Data from the previous phase's output.yield */
-  yield?: unknown;
   /** Additional guideline bullets appended to the system prompt. */
   promptGuidelines?: string[];
   /** Text to append after the system prompt. */
   appendSystemPrompt?: string;
+  /** Tool choice configuration from phase definition */
+  toolChoice?: LlmToolChoice;
 };
 
 export type PhaseManifest = {

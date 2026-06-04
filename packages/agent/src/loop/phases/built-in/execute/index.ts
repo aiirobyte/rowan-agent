@@ -39,15 +39,13 @@ export default function(api: ExtensionAPI) {
 
       // Check if collection was stopped due to abort
       if (collected.stopReason === "aborted") {
-        return { message: collected.text, route: "stop" };
+        return { message: collected.text, route: "stop", toolCalls: collected.toolCalls };
       }
 
-      // Check for route tool call first
-      const routeDecision = context.routeDecision(collected.toolCalls);
-
-      // Store assistant message with tool calls (execution-scoped, not streamed to CLI)
+      // Execute non-route tool calls and store results (execution-scoped)
       const nonRouteToolCalls = collected.toolCalls.filter(t => t.name !== "route");
       if (nonRouteToolCalls.length > 0) {
+        // Store assistant message with tool calls (execution-scoped, not streamed to CLI)
         const assistantMsgId = context.messages.start("assistant", collected.text || "", {
           kind: "model_message",
           phase: "execute",
@@ -55,46 +53,35 @@ export default function(api: ExtensionAPI) {
           toolCalls: nonRouteToolCalls.map(tc => ({ id: tc.id, name: tc.name, args: tc.args })),
         });
         await context.messages.end(assistantMsgId);
+
+        for (const toolCall of nonRouteToolCalls) {
+          await context.toolExecution.start(toolCall.id, toolCall.name, toolCall.args);
+
+          const result = await context.tools.execute({ toolCall });
+
+          await context.toolExecution.end(result.toolCallId, result.toolName, result, !result.ok);
+
+          const toolResultContent = JSON.stringify({
+            toolName: result.toolName,
+            ok: result.ok,
+            content: result.content,
+            ...(result.error ? { error: result.error } : {}),
+          });
+          const toolMsgId = context.messages.start("tool", toolResultContent, {
+            toolCallId: result.toolCallId,
+            toolName: result.toolName,
+            scope: "execution",
+            isError: !result.ok,
+          });
+          await context.messages.end(toolMsgId);
+        }
+
+        // Tools were executed, continue in execute phase
+        return { message: collected.text ?? "", route: "continue", toolCalls: collected.toolCalls };
       }
 
-      // Execute non-route tool calls and store results (execution-scoped)
-      for (const toolCall of nonRouteToolCalls) {
-        await context.toolExecution.start(toolCall.id, toolCall.name, toolCall.args);
-
-        const result = await context.tools.execute({ toolCall });
-
-        await context.toolExecution.end(result.toolCallId, result.toolName, result, !result.ok);
-
-        const toolResultContent = JSON.stringify({
-          toolName: result.toolName,
-          ok: result.ok,
-          content: result.content,
-          ...(result.error ? { error: result.error } : {}),
-        });
-        const toolMsgId = context.messages.start("tool", toolResultContent, {
-          toolCallId: result.toolCallId,
-          toolName: result.toolName,
-          scope: "execution",
-          isError: !result.ok,
-        });
-        await context.messages.end(toolMsgId);
-      }
-
-      // Use route decision if available (after executing tools)
-      if (routeDecision) {
-        return {
-          message: routeDecision.reason ?? collected.text ?? "",
-          route: routeDecision.route,
-        };
-      }
-
-      // If tools were executed, continue in execute phase
-      if (nonRouteToolCalls.length > 0) {
-        return { message: collected.text ?? "", route: "continue" };
-      }
-
-      // No tools called and no route - execution complete, go to chat for final response
-      return { message: collected.text ?? "", route: "chat" };
+      // No tools called - execution complete, return toolCalls for framework route extraction
+      return { message: collected.text ?? "", route: "chat", toolCalls: collected.toolCalls };
     },
   });
 }

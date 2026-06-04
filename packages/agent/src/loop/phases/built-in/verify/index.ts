@@ -16,7 +16,6 @@ export default function(api: ExtensionAPI) {
     },
 
     async run(context, input) {
-      const task = (input.yield as Record<string, unknown> | undefined)?.task;
       const maxAttempts = context.maxAttempts ?? 2;
 
       let collected;
@@ -28,52 +27,30 @@ export default function(api: ExtensionAPI) {
           return {
             message: "Verification error, retrying.",
             route: "execute",
-            yield: { task },
           };
         }
         return {
           message: "Verification error, no retries remaining.",
           route: "stop",
-          yield: { task },
         };
       }
-
-      // Check for route tool call
-      const routeDecision = context.routeDecision(collected.toolCalls);
 
       // If model called non-route tools, execute them
       const nonRouteToolCalls = collected.toolCalls.filter(t => t.name !== "route");
       if (nonRouteToolCalls.length > 0) {
-        // If route tool was also called, use that route
-        if (routeDecision) {
-          return {
-            message: routeDecision.reason ?? (collected.text || "Fixing issues."),
-            route: routeDecision.route,
-            yield: { task },
-          };
-        }
-        // No route tool - model should have called it, default to stop
+        // Return with route to execute for tool execution
         return {
-          message: collected.text || "Verification with fixes attempted.",
-          route: "stop",
-          yield: { task },
+          message: collected.text || "Fixing issues.",
+          route: "execute",
+          toolCalls: collected.toolCalls,
         };
       }
 
-      // Use route decision if available
-      if (routeDecision) {
-        return {
-          message: routeDecision.reason ?? collected.text.trim(),
-          route: routeDecision.route,
-          yield: { task },
-        };
-      }
-
-      // No route tool call and no other tools - default to stop
+      // Return toolCalls for framework route extraction
       return {
         message: collected.text.trim() || "Verification complete.",
         route: "stop",
-        yield: { task },
+        toolCalls: collected.toolCalls,
       };
     },
   });

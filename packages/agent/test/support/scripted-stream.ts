@@ -19,10 +19,18 @@ export function buildToolCallPartial(toolId: string, toolName: string, toolArgs:
 }
 
 /** Yield events for a route tool call */
-export function* yieldRouteToolCall(route: string, reason?: string): Generator<any> {
+export function* yieldRouteToolCall(route: string, reason?: string, existingText?: string): Generator<any> {
   const toolId = createId("route");
   const toolArgs = JSON.stringify({ route, reason });
-  const partial = buildToolCallPartial(toolId, "route", toolArgs);
+  const contentBlocks: AssistantMessagePartial["contentBlocks"] = [];
+  if (existingText) {
+    contentBlocks.push({ type: "text", text: existingText });
+  }
+  contentBlocks.push({ type: "tool_call", id: toolId, name: "route", args: toolArgs });
+  const partial: AssistantMessagePartial = {
+    role: "assistant",
+    contentBlocks,
+  };
   yield { type: "tool_call_start", id: toolId, name: "route", partial };
   yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
   yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial };

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
 import type { AgentEvent, LlmRequest, StreamFn } from "../src/types";
 import { createAgentState as createBaseAgentState, createMessage } from "../src/types";
@@ -225,10 +226,17 @@ test("default config preserves execute/verify retry behavior", async () => {
     const text = reason;
     const toolId = createId("route");
     const toolArgs = JSON.stringify({ route, reason });
+    const partialWithText: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [
+        { type: "text", text },
+        { type: "tool_call", id: toolId, name: "route", args: toolArgs },
+      ],
+    };
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
-    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
-    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+    yield { type: "tool_call_start", id: toolId, name: "route", partial: partialWithText };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: partialWithText };
+    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: partialWithText };
     yield { type: "done" };
   };
 
@@ -307,10 +315,17 @@ test("default config preserves max attempt exhaustion", async () => {
     const text = reason;
     const toolId = createId("route");
     const toolArgs = JSON.stringify({ route: "stop", reason });
+    const partialWithText: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [
+        { type: "text", text },
+        { type: "tool_call", id: toolId, name: "route", args: toolArgs },
+      ],
+    };
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield { type: "tool_call_start", id: toolId, name: "route", partial: buildToolCallPartial(toolId, "route", toolArgs) };
-    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
-    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: buildToolCallPartial(toolId, "route", toolArgs) };
+    yield { type: "tool_call_start", id: toolId, name: "route", partial: partialWithText };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: partialWithText };
+    yield { type: "tool_call_end", id: toolId, name: "route", arguments: toolArgs, partial: partialWithText };
     yield { type: "done" };
   };
 

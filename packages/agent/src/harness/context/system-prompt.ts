@@ -22,7 +22,7 @@ export interface SystemPromptOptions {
   cwd?: string;
 }
 
-import { buildSkillsDescription } from "./structured";
+import { buildSkillsDescription } from "./section-formatter";
 import { createTimestamp } from "../../utils";
 
 export function buildSystemPrompt(options: SystemPromptOptions): string {

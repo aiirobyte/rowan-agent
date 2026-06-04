@@ -54,16 +54,12 @@ export default function(api: ExtensionAPI) {
       try {
         raw = JSON.parse(collected.text) as Record<string, unknown>;
       } catch {
-        // If no valid JSON, check for route tool call and return empty task
-        const routeDecision = context.routeDecision(collected.toolCalls);
-        if (routeDecision) {
-          return {
-            message: routeDecision.reason ?? "",
-            route: routeDecision.route,
-            yield: { task: null },
-          };
-        }
-        throw new Error("Planner did not produce valid JSON.");
+        // If no valid JSON, return with toolCalls for framework route extraction
+        return {
+          message: "",
+          route: "stop",
+          toolCalls: collected.toolCalls,
+        };
       }
 
       const rawTask = raw?.task ?? raw;
@@ -71,24 +67,14 @@ export default function(api: ExtensionAPI) {
         throw new Error("Planner did not produce a structured task.");
       }
 
-      const task = normalizeTask(rawTask);
+      normalizeTask(rawTask); // Validate task structure
       const message = (raw?.message as string) ?? "";
 
-      // Check for route tool call
-      const routeDecision = context.routeDecision(collected.toolCalls);
-      if (routeDecision) {
-        return {
-          message: routeDecision.reason ?? message,
-          route: routeDecision.route,
-          yield: { task },
-        };
-      }
-
-      // Default: no route tool call, but task was produced
+      // Return toolCalls for framework route extraction
       return {
         message,
         route: "stop",
-        yield: { task },
+        toolCalls: collected.toolCalls,
       };
     },
   });

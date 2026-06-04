@@ -12,11 +12,13 @@ import type {
   ToolCall,
   ToolResult,
 } from "./types";
-import type { ContentBlock, AssistantMessagePartial, TextBlock, ToolCallBlock } from "@rowan-agent/models";
-import {
-  createAgentState,
-  createMessage,
-} from "./types";
+import type {
+  ContentBlock,
+  AssistantMessagePartial,
+  TextBlock,
+  ToolCallBlock,
+} from "@rowan-agent/models";
+import { createAgentState, createMessage } from "./types";
 import { createTimestamp } from "./utils";
 import {
   resolvePhaseEntry,
@@ -30,13 +32,9 @@ import { createBuiltinPhaseRegistry } from "./extensions";
 import { executeRuntimeToolCall } from "./harness/tools";
 import { LoopGuard } from "./loop/errors";
 import { createOutcome } from "./loop/outcomes";
-import {
-  snapshotMessage,
-  snapshotMessages,
-} from "./loop/state";
+import { snapshotMessage, snapshotMessages } from "./loop/state";
 import type { AgentLoopConfig, AgentRunState } from "./loop/types";
-import { createRouteTool, extractRouteCall } from "./harness/tools/route-tool";
-import { createThreadTool } from "./harness/tools/thread-tool";
+import { createRouteTool, extractRouteCall, createThreadTool } from "./harness/tools";
 import type { PhaseManifest } from "./loop/phases/registry";
 import { compactMessages, needsCompaction } from "./loop/compaction";
 
@@ -186,12 +184,12 @@ function createAgentLoopContext(
   availablePhases: PhaseManifest[],
 ): AgentLoopContext {
   const routeTool = createRouteTool(availablePhases);
-  const threadTool = createThreadTool(state.agentState.skills, async (input) => {
+  const threadTool = createThreadTool(config.tools, state.agentState.skills, async (input) => {
     const result = await runAgentLoop({
       context: {
         systemPrompt: state.agentState.systemPrompt,
         messages: [createMessage("user", input.prompt, { scope: "conversation" })],
-        tools: config.tools.slice(),
+        tools: input.tools?.slice() ?? config.tools.slice(),
         skills: input.skills?.slice() ?? state.agentState.skills.slice(),
       },
       model: config.model,
@@ -326,7 +324,6 @@ async function runLoop(
   const availablePhases = phaseConfig.phases.map((p) => ({ id: p.id, name: p.name, description: p.description }));
 
   let currentPhaseId = phaseConfig.entryPhaseId;
-  let lastYield: unknown;
 
   const maxIterations = config.limits?.maxIterations ?? 50;
   const maxPhaseRounds = config.limits?.maxPhaseRounds ?? 10;
@@ -396,7 +393,6 @@ async function runLoop(
       skills: loopContext.skills,    // All skills (for systemPrompt)
       phaseTools,                    // Phase-filtered tools (for LlmRequest.tools)
       phaseSkills,                   // Phase-filtered skills
-      yield: lastYield,
     };
 
     // Emit phase_start only when entering a new phase (not on continue)
@@ -438,7 +434,31 @@ async function runLoop(
       output = {
         message: collected.text,
         route: "stop",
+        toolCalls: collected.toolCalls,
       };
+    }
+
+    // ToolChoice fallback: if phase input requires a specific tool and model didn't call it
+    if (phaseInput.toolChoice && typeof phaseInput.toolChoice === 'object' && phaseInput.toolChoice.type === 'tool') {
+      const requiredTool = phaseInput.toolChoice.name;
+      const hasRequiredTool = output.toolCalls?.some(tc => tc.name === requiredTool);
+      if (!hasRequiredTool) {
+        // Fallback: model didn't call the required tool
+        // Keep the output as-is but log a warning
+        state.metrics.retryCount++;
+      }
+    }
+
+    // Framework-level route check: if phase returned toolCalls, extract route decision
+    // Only update route and routeReason, keep phase.run()'s message as primary output
+    if (output.toolCalls && output.toolCalls.length > 0) {
+      const routeDecision = context.routeDecision(output.toolCalls);
+      if (routeDecision) {
+        output.route = routeDecision.route;
+        if (routeDecision.reason) {
+          output.routeReason = routeDecision.reason;
+        }
+      }
     }
 
     // afterPhase hook — extension hooks first, then runtime hooks
@@ -450,6 +470,16 @@ async function runLoop(
       }
       if (extAfter.retry && phase.run) {
         output = resolvePhaseOutput(await phase.run(context, extAfter.retry), state);
+        // Re-run route check for retried output (route and routeReason)
+        if (output.toolCalls && output.toolCalls.length > 0) {
+          const routeDecision = context.routeDecision(output.toolCalls);
+          if (routeDecision) {
+            output.route = routeDecision.route;
+            if (routeDecision.reason) {
+              output.routeReason = routeDecision.reason;
+            }
+          }
+        }
       }
       if (extAfter.output) {
         output = extAfter.output;
@@ -506,8 +536,6 @@ async function runLoop(
       ts: createTimestamp(),
     });
 
-    // Pass yield to next phase
-    lastYield = output.yield;
     currentPhaseId = output.route;
   }
 
@@ -856,6 +884,10 @@ function createPhaseContext(
               parameters: t.parameters,
             }));
           }
+        }
+        // Pass toolChoice from phase input to request
+        if (input.input.toolChoice && !request.toolChoice) {
+          request.toolChoice = input.input.toolChoice;
         }
         // Retry with exponential backoff for transient model errors
         return withRetry(

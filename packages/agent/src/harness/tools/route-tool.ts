@@ -1,7 +1,7 @@
 import Type from "typebox";
 import type { Tool } from "../types";
 import type { PhaseManifest } from "../../loop/phases/registry";
-import { buildStructuredSection } from "../context/structured";
+import { buildStructuredSection } from "../context/section-formatter";
 
 export const PhaseRouteTool = "route";
 

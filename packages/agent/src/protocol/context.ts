@@ -82,6 +82,8 @@ export type PhaseOutput = {
   message: string;
   /** Route to next phase, or "continue" to re-execute current phase, or "stop" to end */
   route: string;
-  /** Phase-specific data for the next phase */
-  yield?: unknown;
+  /** Tool calls from the model invocation (used by framework for route extraction) */
+  toolCalls?: Array<{ id: string; name: string; args: unknown }>;
+  /** Route reason extracted from route tool call (for hooks to inspect) */
+  routeReason?: string;
 };

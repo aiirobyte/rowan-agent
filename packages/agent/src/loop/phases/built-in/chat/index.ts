@@ -8,28 +8,19 @@ export default function(api: ExtensionAPI) {
     async run(context, input) {
       const collected = await context.turn(() => context.model.invoke({ input }));
 
-      // Check if collection was stopped due to abort
+      // Abort check
       if (collected.stopReason === "aborted") {
-        return { message: collected.text, route: "stop" };
+        return { message: collected.text, route: "stop", toolCalls: collected.toolCalls };
       }
 
-      // Check for route tool call
-      const routeDecision = context.routeDecision(collected.toolCalls);
-      if (routeDecision) {
-        return {
-          message: routeDecision.reason ?? (collected.text || "Done."),
-          route: routeDecision.route,
-        };
-      }
-
-      // If the model called other tools (not route), route to execute to handle them
+      // Return toolCalls for framework-level route extraction
+      // Framework will handle route tool calls; non-route tools default to "execute"
       const nonRouteToolCalls = collected.toolCalls.filter(t => t.name !== "route");
       if (nonRouteToolCalls.length > 0) {
-        return { message: collected.text.trim() || "Executing tools.", route: "execute" };
+        return { message: collected.text.trim() || "Executing tools.", route: "execute", toolCalls: collected.toolCalls };
       }
 
-      // No route tool call and no other tools - default to stop
-      return { message: collected.text.trim() || "Done.", route: "stop" };
+      return { message: collected.text.trim() || "Done.", route: "stop", toolCalls: collected.toolCalls };
     },
   });
 }

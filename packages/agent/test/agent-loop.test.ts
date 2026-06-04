@@ -80,7 +80,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
     expect(options.signal).toBe(controller.signal);
     const text = "Done.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", text);
+    yield* yieldRouteToolCall("stop", text, text);
     yield { type: "done" };
   };
 
@@ -160,7 +160,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     if (phase === "chat") {
       const chatText = "Routing from model.";
       yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText);
+      yield* yieldRouteToolCall("plan", chatText, chatText);
       yield { type: "done" };
       return;
     }
@@ -168,7 +168,7 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
     if (phase === "plan") {
       const planText = JSON.stringify(task);
       yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.");
+      yield* yieldRouteToolCall("execute", "Task planned.", "");
       yield { type: "done" };
       return;
     }
@@ -181,14 +181,14 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
       yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield* yieldRouteToolCall("verify", "Execution complete.");
+      yield* yieldRouteToolCall("verify", "Execution complete.", "");
       yield { type: "done" };
       return;
     }
 
     const verifyText = "Verified.";
     yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall("stop", verifyText);
+    yield* yieldRouteToolCall("stop", verifyText, verifyText);
     yield { type: "done" };
   };
   const session = createState({
@@ -237,7 +237,7 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
     yield { type: "model_requested", model: request.model, usage: { inputMessages: 3 } };
     const text = "Hello.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", text);
+    yield* yieldRouteToolCall("stop", text, text);
     yield { type: "done" };
   };
 
@@ -375,14 +375,14 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     if (phase === "chat") {
       const chatText = "Create task.";
       yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText);
+      yield* yieldRouteToolCall("plan", chatText, chatText);
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
       const planText = JSON.stringify(task);
       yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.");
+      yield* yieldRouteToolCall("execute", "Task planned.", "");
       yield { type: "done" };
       return;
     }
@@ -394,7 +394,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
       yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield* yieldRouteToolCall("verify", "Execution complete.");
+      yield* yieldRouteToolCall("verify", "Execution complete.", "");
       yield { type: "done" };
       return;
     }
@@ -406,7 +406,7 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
     }
     const verifyText = "Verified after retry.";
     yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall("stop", verifyText);
+    yield* yieldRouteToolCall("stop", verifyText, verifyText);
     yield { type: "done" };
   };
 
@@ -456,14 +456,14 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
     if (phase === "chat") {
       const chatText = "Create task.";
       yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText);
+      yield* yieldRouteToolCall("plan", chatText, chatText);
       yield { type: "done" };
       return;
     }
     if (phase === "plan") {
       const planText = JSON.stringify(task);
       yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.");
+      yield* yieldRouteToolCall("execute", "Task planned.", "");
       yield { type: "done" };
       return;
     }
@@ -480,7 +480,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
       yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield* yieldRouteToolCall("verify", "Execution complete.");
+      yield* yieldRouteToolCall("verify", "Execution complete.", "");
       yield { type: "done" };
       return;
     }
@@ -492,7 +492,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
     const route = verifyCalls === 1 ? "execute" : "stop";
     const verifyText = reason;
     yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall(route, reason);
+    yield* yieldRouteToolCall(route, reason, verifyText);
     yield { type: "done" };
   };
 
@@ -579,7 +579,7 @@ test("invalid tool args do not execute tool", async () => {
     if (phase === "chat") {
       const chatText = "Routing invalid args task.";
       yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText);
+      yield* yieldRouteToolCall("plan", chatText, chatText);
       yield { type: "done" };
       return;
     }
@@ -596,7 +596,7 @@ test("invalid tool args do not execute tool", async () => {
         attempts: 0,
       });
       yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.");
+      yield* yieldRouteToolCall("execute", "Task planned.", "");
       yield { type: "done" };
       return;
     }
@@ -634,7 +634,7 @@ test("invalid tool args do not execute tool", async () => {
 
     const verifyText = "Invalid args prevented execution.";
     yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall("stop", verifyText);
+    yield* yieldRouteToolCall("stop", verifyText, verifyText);
     yield { type: "done" };
   };
   const session = createState({
@@ -672,7 +672,7 @@ test("beforePhase hook can adjust phase input", async () => {
 
     const text = "Adjusted route input.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", text);
+    yield* yieldRouteToolCall("stop", text, text);
     yield { type: "done" };
   };
 
@@ -706,7 +706,7 @@ test("afterPhase hook can adjust phase output", async () => {
 
     const text = "Original route output.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", text);
+    yield* yieldRouteToolCall("stop", text, text);
     yield { type: "done" };
   };
 
@@ -781,7 +781,7 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
     const reason = routeCalls > 1 ? "Retried with adjusted input." : "Needs retry.";
     const text = reason;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", reason);
+    yield* yieldRouteToolCall("stop", reason, text);
     yield { type: "done" };
   };
 
@@ -792,7 +792,7 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
     stream,
     tools: [],
     afterPhase: async (phaseId, output) => {
-      if (phaseId !== "chat" || output.message !== "Needs retry.") {
+      if (phaseId !== "chat" || output.routeReason !== "Needs retry.") {
         return {};
       }
       return {
@@ -822,7 +822,7 @@ test("beforePhase hook can abort with an outcome", async () => {
     if (phase === "chat") {
       const chatText = "Create a task.";
       yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText);
+      yield* yieldRouteToolCall("plan", chatText, chatText);
       yield { type: "done" };
     }
   };

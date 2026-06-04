@@ -3,7 +3,8 @@ import type {
   AgentContextState,
   ToolResult,
 } from "../protocol";
-import type { AgentRunLimits } from "../loop/types";
+import type { AgentRunLimits, LoopMetrics } from "../loop/types";
+import type { AgentContextMessage, AgentContextSkill, Outcome } from "../protocol";
 
 export { createId } from "../utils";
 export type {
@@ -24,6 +25,16 @@ export type {
   ToolCall,
   ToolResult,
 } from "../protocol";
+
+// Re-export from root types
+export type AgentMessage = AgentContextMessage;
+export type Skill = AgentContextSkill;
+export type RunResult = {
+  sessionId: string;
+  messages: AgentMessage[];
+  outcome: Outcome;
+  metrics: LoopMetrics;
+};
 
 export type ToolContext = {
   state: AgentContextState;

@@ -28,7 +28,7 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
     yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
     const text = message;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", message);
+    yield* yieldRouteToolCall("stop", message, text);
     yield { type: "done" };
   };
   const agent = new Agent({
@@ -88,8 +88,8 @@ test("Agent keeps conversation messages separate from execution steps", async ()
       "use echo tool again",
     ]),
   );
-  // With native tool_call format, task title falls back to user request (lowercase)
-  expect(agent.state.context.messages.some((message) => message.content === "Task passed: use echo tool")).toBe(true);
+  // With native tool_call format, task title comes from the task JSON (capitalized)
+  expect(agent.state.context.messages.some((message) => message.content === "Task passed: Use echo tool")).toBe(true);
   expect(
     agent.state.context.messages.some(
       (message) => message.role === "assistant" && message.metadata?.kind === "routing_decision",
@@ -129,7 +129,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
       yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
       const text = reason;
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
-      yield* yieldRouteToolCall(route, reason);
+      yield* yieldRouteToolCall(route, reason, text);
       yield { type: "done" };
       return;
     }
@@ -146,7 +146,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
         attempts: 0,
       });
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
-      yield* yieldRouteToolCall("execute", "Task planned.");
+      yield* yieldRouteToolCall("execute", "Task planned.", text);
       yield { type: "done" };
       return;
     }
@@ -154,7 +154,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
     if (phase === "execute") {
       const text = "No tool output.";
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
-      yield* yieldRouteToolCall("verify", text);
+      yield* yieldRouteToolCall("verify", text, text);
       yield { type: "done" };
       return;
     }
@@ -162,7 +162,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
     const reason = "Missing some functions to finish the task";
     const text = reason;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", reason);
+    yield* yieldRouteToolCall("stop", reason, text);
     yield { type: "done" };
   };
   const agent = new Agent({
