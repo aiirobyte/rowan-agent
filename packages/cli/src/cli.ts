@@ -31,7 +31,7 @@ import {
   resolveInWorkspace,
   resolveWorkspacePaths,
 } from "@rowan-agent/agent";
-import { formatJsonOutput } from "./output";
+import { formatJsonOutput, formatOutcomeOutput } from "./output";
 
 type CliCommand = "config" | "list";
 
@@ -45,6 +45,7 @@ type CliArgs = {
   apiKey?: string;
   model?: string;
   timeoutMs?: number;
+  maxThreadDepth?: number;
   prompt?: string;
 };
 
@@ -321,6 +322,11 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
+    if (next === "--max-thread-depth") {
+      parsed.maxThreadDepth = parseNonNegativeInteger(readOptionValue(args, "--max-thread-depth"), "--max-thread-depth");
+      continue;
+    }
+
     if (next.startsWith("--")) {
       throw new Error(`Unknown option: ${next}`);
     }
@@ -368,6 +374,10 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
   const logPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args);
   const tools = createCoreTools({ root: workspace.cwd });
+  const maxThreadDepth =
+    args.maxThreadDepth ??
+    (env.ROWAN_MAX_THREAD_DEPTH ? parseNonNegativeInteger(env.ROWAN_MAX_THREAD_DEPTH, "ROWAN_MAX_THREAD_DEPTH") : undefined) ??
+    4;
 
   return {
     command: "config",
@@ -413,6 +423,13 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
       path: formatWorkspacePathForDisplay(resolveSkillPath(skill, workspace), workspace),
     })),
     tools: tools.map((tool) => tool.name),
+    maxThreadDepth,
+    maxThreadDepthSource:
+      args.maxThreadDepth !== undefined
+        ? "flag"
+        : env.ROWAN_MAX_THREAD_DEPTH
+          ? "env"
+          : "default",
   };
 }
 
@@ -523,7 +540,7 @@ async function promptWithLog(input: {
       }
 
       if (event.type === "message_start" && event.message.role === "assistant") {
-        currentStreamableMessage = event.message.metadata?.scope === "conversation";
+        currentStreamableMessage = true;
         if (currentStreamableMessage && event.message.content) {
           process.stdout.write(event.message.content);
           streamedContent = true;
@@ -651,7 +668,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       printRunHeader();
       // Console event replay removed - logs only written to file
       if (!run.streamedContent) {
-        console.log(run.outcome.message);
+        console.log(formatOutcomeOutput(run.outcome));
       }
       // Print loop metrics
       const m = run.metrics;

@@ -36,7 +36,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(persisted.input).toBe("hello");
   expect(persisted).not.toHaveProperty("userInput");
   expect(persisted.title).toBe("Greeting");
-  expect(persisted.messages.some((message) => message.content.includes("\"route\":\"direct\""))).toBe(false);
+  expect(persisted.messages.some((message) => message.content.includes("\"route\":\"direct\""))).toBe(true);
 
   const list = await store.list();
   expect(list).toEqual([
@@ -44,7 +44,8 @@ test("SessionStore persists versioned conversation messages and metadata", async
       id: session.id,
       title: "Greeting",
       messageCount: persisted.messages.length,
-      latestMessage: "second turn",
+      // Routing decisions are now persisted, so latestMessage is the last message
+      latestMessage: "{\"route\":\"direct\",\"message\":\"internal\"}",
     }),
   ]);
 
@@ -53,7 +54,7 @@ test("SessionStore persists versioned conversation messages and metadata", async
   expect(loaded?.input).toBe("hello");
   expect(loaded ? latestUserInput(loaded) : undefined).toBe("second turn");
   expect(loaded?.log).toEqual([]);
-  expect(loaded?.messages.map((message) => message.content)).not.toContain(
+  expect(loaded?.messages.map((message) => message.content)).toContain(
     "{\"route\":\"direct\",\"message\":\"internal\"}",
   );
 

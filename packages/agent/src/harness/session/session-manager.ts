@@ -253,6 +253,10 @@ export class InMemorySessionManager implements SessionManager {
       systemPrompt: this.header.systemPrompt,
       messages: entries
         .filter((entry): entry is MessageSessionEntry => entry.type === "message")
+        .filter((entry) => {
+          const kind = entry.message.metadata?.kind;
+          return !kind || (kind !== "model_message" && kind !== "routing_decision" && kind !== "phase_prompt");
+        })
         .map((entry) => entry.message)
         .map(clone),
       tools: input.tools?.slice() ?? [],
