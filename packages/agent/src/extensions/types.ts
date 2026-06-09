@@ -12,6 +12,7 @@ import type {
 import type { LlmRequest, ProviderConfig } from "@rowan-agent/models";
 import type { Outcome } from "../types";
 import type { SourceInfo } from "./source-info";
+import type { ExtensionFactory } from "./context";
 
 export type { PhaseManifest } from "../loop/phases/registry";
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
@@ -315,7 +316,7 @@ export interface LoadedExtension {
   path: string;
   resolvedPath: string;
   name: string;
-  factory: (api: any) => void | Promise<void>;
+  factory: ExtensionFactory;
   manifest?: ExtensionManifest;
 }
 

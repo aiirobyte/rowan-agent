@@ -67,7 +67,6 @@ test("default config preserves direct answer behavior", async () => {
   });
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -86,7 +85,6 @@ test("default config preserves task plan/execute/verify behavior", async () => {
   const events: string[] = [];
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -109,7 +107,6 @@ test("custom phase config without verify phase skips verification", async () => 
 
   const phaseConfig = await builtinPhaseRegistryFor(["chat", "plan", "execute"]);
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -139,7 +136,6 @@ test("custom phase plugin can replace the builtin phase machine", async () => {
   });
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "unused" },
     stream: async function* () {},
@@ -241,7 +237,6 @@ test("default config preserves execute/verify retry behavior", async () => {
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "retry-verify" },
     stream,
@@ -330,7 +325,6 @@ test("default config preserves max attempt exhaustion", async () => {
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "failing" },
     stream,

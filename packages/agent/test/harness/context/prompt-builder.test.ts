@@ -67,7 +67,6 @@ function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skil
     messages: state.messages,
     tools: overrides.tools ?? [],
     skills: state.skills,
-    ...("yield" in overrides ? { yield: overrides.yield } : {}),
   };
 }
 
@@ -134,12 +133,10 @@ test("plan phase buildPrompt includes instructions", () => {
 });
 
 test("execute phase buildPrompt includes instructions", () => {
-  const task = createTestTask();
   const input = createTestInput({
     phase: "execute",
     input: "Use echo.",
     tools: [echoTool],
-    yield: { task },
   });
   const req = buildRequest({ context: input });
 
@@ -149,11 +146,9 @@ test("execute phase buildPrompt includes instructions", () => {
 });
 
 test("verify phase buildPrompt includes instructions", () => {
-  const task = createTestTask();
   const input = createTestInput({
     phase: "verify",
     input: "Verify echo.",
-    yield: { task },
   });
   const req = buildRequest({ context: input });
 

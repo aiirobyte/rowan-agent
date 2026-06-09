@@ -42,7 +42,6 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
   }> = [];
 
   await runAgentLoop({
-    kind: "run",
     context: {
       systemPrompt: "Test system",
       messages: [
@@ -85,7 +84,6 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   };
 
   await runAgentLoop({
-    kind: "run",
     context: {
       systemPrompt: "Test system",
       messages: [createMessage("user", "hello", { scope: "conversation" })],
@@ -124,7 +122,6 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
   const events: string[] = [];
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -198,7 +195,6 @@ test("runAgentLoop preserves phase messages before downstream events and tool ca
   const events: AgentEvent[] = [];
 
   await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "ordered" },
     stream,
@@ -242,7 +238,6 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
   };
 
   await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "prompt-recording" },
     stream,
@@ -269,7 +264,6 @@ test("runAgentLoop can return a direct response without creating a task", async 
   const emittedEvents: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -302,7 +296,6 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -339,7 +332,6 @@ test("runAgentLoop throws provider errors to the caller", async () => {
 
   await expect(
     runAgentLoop({
-      kind: "run",
       state: session,
       model: { provider: "test", name: "failing" },
       stream,
@@ -411,7 +403,6 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "retry-verify" },
     stream,
@@ -497,7 +488,6 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "retry-execute" },
     stream,
@@ -519,7 +509,6 @@ test("beforeToolCall hook can block execution", async () => {
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -541,7 +530,6 @@ test("afterToolCall hook review is logged with original and reviewed result", as
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -644,7 +632,6 @@ test("invalid tool args do not execute tool", async () => {
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "scripted" },
     stream: invalidArgsStream,
@@ -677,7 +664,6 @@ test("beforePhase hook can adjust phase input", async () => {
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "runtime-adjust-input" },
     stream,
@@ -711,7 +697,6 @@ test("afterPhase hook can adjust phase output", async () => {
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "runtime-adjust-output" },
     stream,
@@ -743,7 +728,6 @@ test("beforePhase hook can skip a phase", async () => {
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "runtime-skip" },
     stream,
@@ -786,7 +770,6 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "runtime-retry" },
     stream,
@@ -828,7 +811,6 @@ test("beforePhase hook can abort with an outcome", async () => {
   };
 
   const outcome = await runAgentLoop({
-    kind: "run",
     state: session,
     model: { provider: "test", name: "runtime-abort" },
     stream,

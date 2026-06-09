@@ -11,13 +11,7 @@ export const AGENT_EVENT_LOG_LEVEL_VALUES = {
 } satisfies Record<WritableAgentEventLogLevel, number>;
 
 function eventSessionId(event: AgentEvent): string | undefined {
-  if (
-    (event.type === "turn_start" || event.type === "turn_end") &&
-    "parentSessionId" in event
-  ) {
-    return event.parentSessionId;
-  }
-  if ("sessionId" in event && typeof event.sessionId === "string") {
+  if (event.type === "agent_start" || event.type === "agent_end") {
     return event.sessionId;
   }
   return undefined;

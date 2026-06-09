@@ -13,7 +13,6 @@ function executionTurn(sessionId: string): ExecutionTurn {
     requestedAtMs: 1,
     completedAtMs: 2,
     model: { provider: "test", name: "model" },
-    scope: "execution",
     entries: [{ kind: "assistant_text", text: "ran a tool" }],
   };
 }
