@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-const PACKAGE_IMPORT_PATTERN = /from\s+["'](@rowan-agent\/[^"']+)["']/g;
+const PACKAGE_IMPORT_PATTERN = /^\s*(?:import|export)\s+.*?from\s+["'](@rowan-agent\/[^"']+)["']/gm;
 
 async function sourceFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });

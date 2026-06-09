@@ -174,6 +174,10 @@ function completeRun(
   state.metrics.endedAt = createTimestamp();
   state.metrics.durationMs = Date.now() - state.metrics.startedAtMs;
 
+  // Persist outcome message to agent state for multi-turn context
+  const outcomeMessage = createMessage("assistant", outcome.message, { kind: "outcome" });
+  state.agentState.messages.push(outcomeMessage);
+
   return createRunResult(state, outcome);
 }
 
@@ -792,7 +796,10 @@ function createPhaseContext(
       if (!msg) return;
       activeMessages.delete(messageId);
       state.transcript.push(msg);
-      state.agentState.messages.push(msg);
+      // Only persist non-tool messages to agent state (tool messages are execution-scoped)
+      if (msg.role !== "tool") {
+        state.agentState.messages.push(msg);
+      }
       emit(state, config.emit, { type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
       endAutoTurn();
     },

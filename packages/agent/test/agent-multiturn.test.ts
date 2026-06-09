@@ -8,8 +8,11 @@ import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolC
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
-    if (match) return match[1];
+    const content = messages[i].content;
+    if (typeof content === "string") {
+      const match = content.match(/^Phase:\s*(\w+)/);
+      if (match) return match[1];
+    }
   }
   return "chat";
 }
