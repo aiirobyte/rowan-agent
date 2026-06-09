@@ -1,15 +1,29 @@
 {
   "name": "@rowan-agent/agent",
   "version": "0.4.4",
-  "private": true,
   "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./*": "./src/*.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup"
   },
   "dependencies": {
     "@rowan-agent/models": "workspace:*",
     "jiti": "2.7.0",
     "typebox": "^1.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
   }
 }

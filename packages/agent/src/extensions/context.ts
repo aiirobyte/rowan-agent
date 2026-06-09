@@ -76,6 +76,7 @@ import type {
 } from "./types";
 import type { EventBus } from "./event-bus";
 export { createEventBus } from "./event-bus";
+export type { EventBus } from "./event-bus";
 
 export type { LoadedExtension, ExtensionManifest } from "./types";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";

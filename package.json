@@ -8,8 +8,13 @@
   ],
   "scripts": {
     "build": "tsc --noEmit",
+    "build:packages": "bun run --filter '@rowan-agent/*' build",
     "test": "bun test packages",
-    "rowan": "bun packages/cli/src/cli.ts"
+    "rowan": "bun packages/cli/src/cli.ts",
+    "release": "bun run build:packages && bun run publish:packages",
+    "publish:models": "cd packages/models && npm publish --access public",
+    "publish:agent": "cd packages/agent && npm publish --access public",
+    "publish:packages": "bun run publish:models && bun run publish:agent"
   },
   "dependencies": {
     "typebox": "^1.0.0"
