@@ -24,59 +24,48 @@ jobs:
           echo "Previous tag: $PREV_TAG"
 
       - name: Generate changelog
-        id: changelog
         run: |
           CURRENT_TAG=${GITHUB_REF#refs/tags/}
           PREV_TAG=${{ steps.prev_tag.outputs.prev_tag }}
 
-          # Write changelog to temp file first
-          CHANGELOG_FILE=$(mktemp)
-
           if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$CURRENT_TAG" ]; then
             # First release - show all commits
-            git log --pretty=format:"- %s (%h)" --no-merges > "$CHANGELOG_FILE"
+            git log --pretty=format:"- %s (%h)" --no-merges > RELEASE_BODY.md
           else
             # Subsequent release - show commits between tags
-            echo "## Changes since $PREV_TAG" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
+            echo "## Changes since $PREV_TAG" > RELEASE_BODY.md
+            echo "" >> RELEASE_BODY.md
 
             # Features
             FEATURES=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --grep="^feat" || true)
             if [ -n "$FEATURES" ]; then
-              echo "### 🚀 Features" >> "$CHANGELOG_FILE"
-              echo "$FEATURES" >> "$CHANGELOG_FILE"
-              echo "" >> "$CHANGELOG_FILE"
+              echo "### 🚀 Features" >> RELEASE_BODY.md
+              echo "$FEATURES" >> RELEASE_BODY.md
+              echo "" >> RELEASE_BODY.md
             fi
 
             # Bug Fixes
             FIXES=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --grep="^fix" || true)
             if [ -n "$FIXES" ]; then
-              echo "### 🐛 Bug Fixes" >> "$CHANGELOG_FILE"
-              echo "$FIXES" >> "$CHANGELOG_FILE"
-              echo "" >> "$CHANGELOG_FILE"
+              echo "### 🐛 Bug Fixes" >> RELEASE_BODY.md
+              echo "$FIXES" >> RELEASE_BODY.md
+              echo "" >> RELEASE_BODY.md
             fi
 
             # Other changes
             OTHERS=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --invert-grep --grep="^feat" --invert-grep --grep="^fix" || true)
             if [ -n "$OTHERS" ]; then
-              echo "### 📦 Other Changes" >> "$CHANGELOG_FILE"
-              echo "$OTHERS" >> "$CHANGELOG_FILE"
-              echo "" >> "$CHANGELOG_FILE"
+              echo "### 📦 Other Changes" >> RELEASE_BODY.md
+              echo "$OTHERS" >> RELEASE_BODY.md
+              echo "" >> RELEASE_BODY.md
             fi
           fi
-
-          # Set output using delimiter
-          {
-            echo "body<<ROWAN_CHANGELOG_EOF"
-            cat "$CHANGELOG_FILE"
-            echo "ROWAN_CHANGELOG_EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.body }}
+          body_path: RELEASE_BODY.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
