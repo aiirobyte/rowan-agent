@@ -1,0 +1,79 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for changelog generation
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREV_TAG"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=${{ steps.prev_tag.outputs.prev_tag }}
+
+          # Generate changelog content
+          {
+            echo "changelog<<EOF"
+
+            if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$CURRENT_TAG" ]; then
+              # First release - show all commits
+              git log --pretty=format:"- %s (%h)" --no-merges
+            else
+              # Subsequent release - show commits between tags
+              echo "## Changes since $PREV_TAG"
+              echo ""
+
+              # Features
+              FEATURES=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --grep="^feat" || true)
+              if [ -n "$FEATURES" ]; then
+                echo "### 🚀 Features"
+                echo "$FEATURES"
+                echo ""
+              fi
+
+              # Bug Fixes
+              FIXES=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --grep="^fix" || true)
+              if [ -n "$FIXES" ]; then
+                echo "### 🐛 Bug Fixes"
+                echo "$FIXES"
+                echo ""
+              fi
+
+              # Other changes
+              OTHERS=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --grep="^feat" --invert-grep --grep="^fix" --invert-grep || true)
+              if [ -n "$OTHERS" ]; then
+                echo "### 📦 Other Changes"
+                echo "$OTHERS"
+                echo ""
+              fi
+            fi
+
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
