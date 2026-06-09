@@ -1,36 +1,98 @@
-# @rowan-agent/adapters
+# @rowan-agent/models
 
-## Main Features
+## Overview
 
-`@rowan-agent/adapters` connects external model services to the Rowan runtime protocol. The current primary implementation is an OpenAI-compatible Chat Completions adapter that resolves configuration, builds requests, handles retries and timeouts, and normalizes JSON model output into typed Rowan phase output events such as routing decisions, tasks, tool calls, and verification results.
+`@rowan-agent/models` provides the model registry, provider definitions, and token usage/cost calculation utilities for Rowan Agent. It serves as the central configuration layer for LLM model management.
 
-The package also provides JSON extraction helpers. They can parse complete JSON, `json` fenced code blocks, or balanced JSON fragments embedded in text. When model output does not match the expected contract, the adapter raises `OpenAICompatibleError` or `JsonExtractionError` with useful error codes for logging and recovery.
+## Features
+
+- **Model Registry** — register, resolve, and query models by provider and ID
+- **Provider Definitions** — structured provider metadata with base URLs and defaults
+- **Cost Calculation** — compute token costs (input, output, cache read/write) per model
+- **SSE Streaming** — server-sent event parsing for streaming model responses
+- **Protocol Types** — shared TypeScript types for models, providers, and token usage
 
 ## Architecture
 
-`src/index.ts` exports the package surface.
+```
+src/
+├── index.ts           # Package entry point, re-exports all modules
+├── protocol.ts        # Core types: Model, Provider, LlmTokenUsage, etc.
+├── models.ts          # Model registry with register/resolve/query functions
+├── models.generated.ts # Auto-generated model definitions for common providers
+├── registry.ts        # Higher-level registry helpers
+├── sse.ts             # SSE stream parser for model responses
+└── providers/         # Provider-specific implementations
+```
 
-`src/openai-compatible.ts` is the main adapter layer and has three core responsibilities:
+### Key Exports
 
-- `resolveOpenAICompatibleConfig` resolves `baseUrl`, `apiKey`, `model`, timeout, retry, and tool settings from input options and environment variables.
-- `callOpenAICompatibleChatCompletion` wraps HTTP requests, response parsing, error normalization, exponential backoff retries, and abort/timeout handling.
-- `createOpenAICompatibleStream` implements Rowan's `StreamFn`, uses `@rowan-agent/context` to build phase prompts, and converts model output into typed `phase_output` events from `@rowan-agent/protocol`.
+| Export | Description |
+|--------|-------------|
+| `registerModel()` | Register a model in the global registry |
+| `resolveModel()` | Look up by `"provider/model-id"` string |
+| `getModel()` | Look up by provider + model ID |
+| `getAllModels()` | List all registered models |
+| `calculateCost()` | Compute token costs from usage data |
 
-`src/json-extract.ts` only handles JSON extraction and parse errors from model text. It is independent from model providers and runtime phases.
+## Installation
 
-## Usage Flow
+```bash
+npm install @rowan-agent/models
+# or
+bun add @rowan-agent/models
+```
 
-1. Prepare OpenAI-compatible environment variables: `ROWAN_OPENAI_BASE_URL` is optional, while `ROWAN_OPENAI_API_KEY` and `ROWAN_MODEL` are required.
-2. Call `resolveOpenAICompatibleConfig` and pass the runtime tools through `tools`.
-3. Call `createOpenAICompatibleStream` to create a `StreamFn` that the Rowan runtime can consume.
-4. Pass the `stream` to `Agent` from `@rowan-agent/agent`.
+## Usage
+
+### Register and Resolve Models
 
 ```ts
-import {
-  createOpenAICompatibleStream,
-  resolveOpenAICompatibleConfig,
-} from "@rowan-agent/adapters";
+import { registerModel, resolveModel, getModel } from "@rowan-agent/models";
 
-const config = resolveOpenAICompatibleConfig({ tools });
-const stream = createOpenAICompatibleStream(config);
+// Register a custom model
+registerModel({
+  provider: "openai",
+  id: "gpt-4.1-mini",
+  cost: { input: 0.40, output: 1.60, cacheRead: 0.10, cacheWrite: 0.40 },
+});
+
+// Resolve by combined string
+const model = resolveModel("openai/gpt-4.1-mini");
+
+// Or look up explicitly
+const same = getModel("openai", "gpt-4.1-mini");
 ```
+
+### Calculate Token Costs
+
+```ts
+import { calculateCost, resolveModel } from "@rowan-agent/models";
+
+const model = resolveModel("anthropic/claude-sonnet-4-20250514")!;
+const usage = {
+  inputTokens: 1000,
+  outputTokens: 500,
+  cacheReadTokens: 2000,
+  cacheWriteTokens: 100,
+};
+
+const cost = calculateCost(model, usage);
+console.log(cost.total); // Total cost in USD
+```
+
+### Use Provider Definitions
+
+```ts
+import { getProviders, getModels } from "@rowan-agent/models";
+
+// List all providers
+const providers = getProviders();
+
+// List models for a provider
+const openaiModels = getModels("openai");
+```
+
+## Version
+
+Current version: **0.4.6**

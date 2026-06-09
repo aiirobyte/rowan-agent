@@ -1,37 +1,123 @@
 # @rowan-agent/cli
 
-## Main Features
+## Overview
 
-`@rowan-agent/cli` provides the `rowan` command-line entry point for running a Rowan agent from the terminal. It supports one-shot prompts, interactive multi-turn input, session resume, skill loading, configuration inspection, session listing, run logs, and model option overrides.
+`@rowan-agent/cli` provides the `rowan` command-line interface for running Rowan agents from the terminal. It supports one-shot prompts, interactive multi-turn sessions, session resume, skill loading, and run logging.
 
-CLI stdout is reserved for final command results. Runtime events are written to Pino JSONL logs and mirrored to stderr, which keeps script-friendly output clean.
+## Features
+
+- **One-Shot Prompts** — run a single prompt and exit
+- **Interactive Mode** — continue with stdin/TTY input after the initial prompt
+- **Session Management** — resume previous sessions with `--session`
+- **Skill System** — load custom skills with `--skill`
+- **Run Logging** — automatic JSONL logs with configurable verbosity
+- **Configuration** — inspect resolved config with `rowan config`
 
 ## Architecture
 
-`src/cli.ts` contains the full command implementation. It handles argument parsing, workspace resolution, model adapter configuration, session storage, logger subscriptions, Agent creation, and interactive input.
+```
+src/
+├── cli.ts     # Command implementation, arg parsing, agent setup
+├── output.ts  # JSON formatting for outcomes
+└── index.ts   # Package entry point
+```
 
-`src/output.ts` formats Outcomes and plain objects as JSON text.
+### Composition
 
-The CLI imports runtime skill helpers directly so `--skill` can resolve either `<workspace>/skills/<id>/SKILL.md` or explicit skill paths with one rule set.
+The CLI integrates these packages:
 
-The CLI composes these packages:
+| Package | Role |
+|---------|------|
+| `@rowan-agent/models` | Model configuration and streaming |
+| `@rowan-agent/agent` | Core agent runtime |
+| `@rowan-agent/logging` | Event logging (file + stderr) |
 
-- `@rowan-agent/adapters` creates the OpenAI-compatible `stream`.
-- `@rowan-agent/agent` creates the agent.
-- `@rowan-agent/runtime` provides core tools and resolves workspace, runs, sessions, and skills paths.
-- `@rowan-agent/logging` writes console and file logs.
-- `@rowan-agent/store` persists append-only JSONL sessions.
-
-## Usage Flow
-
-1. Install dependencies from the repository root with `bun install`.
-2. Prepare `.env` with at least `ROWAN_OPENAI_API_KEY` and `ROWAN_MODEL`.
-3. Run a one-shot prompt with `bun run rowan "hello"`.
-4. Use `bun run rowan config` to inspect redacted configuration, and `bun run rowan list` to list saved sessions.
-5. Use `--session <session-id>` to resume a session, `--skill <id>` to load a skill, and `--log-level debug` to include full redacted events.
+## Setup
 
 ```bash
-bun run rowan "use bash to inspect the current directory"
+# From the repository root
+bun install
+
+# Configure environment
+cp .env.example .env
+# Set ROWAN_OPENAI_API_KEY and ROWAN_MODEL in .env
+```
+
+## Usage
+
+### One-Shot Prompt
+
+```bash
+bun run rowan "what files are in this directory?"
+```
+
+### Interactive Session
+
+```bash
+bun run rowan "hello"
+# Continues reading from stdin after initial response
+```
+
+### Resume a Session
+
+```bash
 bun run rowan --session ses_12345678 "continue the previous topic"
+```
+
+### Load a Skill
+
+```bash
 bun run rowan --skill example "summarize what this skill does"
 ```
+
+### Inspect Configuration
+
+```bash
+bun run rowan config
+```
+
+### List Saved Sessions
+
+```bash
+bun run rowan list
+```
+
+### Debug Logging
+
+```bash
+bun run rowan --log-level debug "show me all the details"
+```
+
+## CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `--session <id>` | Resume a previous session |
+| `--skill <id>` | Load a skill from `<workspace>/skills/<id>/SKILL.md` |
+| `--log <path>` | Custom log file path (relative to workspace) |
+| `--log-level <level>` | Set verbosity: `debug`, `info`, `warn`, `error`, `silent` |
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `rowan config` | Print resolved configuration (redacted) |
+| `rowan list` | List saved session metadata |
+
+## Interactive Controls
+
+| Control | Action |
+|---------|--------|
+| `:session` | Show current session ID |
+| `:exit` | Exit the CLI |
+| `:quit` | Exit the CLI |
+
+## Output Behavior
+
+- **stdout** — reserved for final command results (JSON)
+- **stderr** — runtime events and metadata
+- **Logs** — JSONL files under `<workspace>/runs/`
+
+## Version
+
+Current version: **0.4.4**

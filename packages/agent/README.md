@@ -1,74 +1,130 @@
 # @rowan-agent/agent
 
-## Main Features
+## Overview
 
-`@rowan-agent/agent` is the public programming entry point and Agent core for Rowan. It wraps model execution, event subscriptions, tool registration, loop-owned thread delegation, run cancellation, and idle waiting.
+`@rowan-agent/agent` is the core agent runtime for Rowan. It provides the public `Agent` facade and implements a configurable phase-based execution loop with route → plan → execute → verify semantics.
 
-The package implements a phase-configured Agent loop. The loop executes a configurable sequence of phase definitions through a single base `runPhase()` runner. Built-in phases (route, thread, plan, execute, verify) preserve the default behavior, while custom phase configurations can extend or replace them.
+## Features
+
+- **Phase-Based Loop** — configurable execution phases (route, thread, plan, execute, verify)
+- **Event Streaming** — subscribe to typed agent events for logging and UI integration
+- **Tool Registration** — register and execute tools within the agent loop
+- **Session Support** — resume conversations with session IDs
+- **Cancellation** — abort running agent tasks gracefully
+- **Custom Phases** — extend or replace built-in phases with custom definitions
 
 ## Architecture
 
-`src/agent.ts` provides the `Agent` class and remains the core/facade entrypoint. It calls `src/loop.ts` directly.
+```
+src/
+├── index.ts           # Package entry point
+├── agent.ts           # Agent class — public facade
+├── agent-loop.ts      # Loop runner with phase iteration
+├── event-stream.ts    # Event subscription and emission
+├── types.ts           # Public types: AgentState, AgentRunResult, etc.
+├── utils.ts           # Internal helpers
+└── loop/              # Phase definitions and runners
+    ├── phase-config.ts     # Phase configuration types and validation
+    ├── built-in-phases.ts  # Default route/thread/plan/execute/verify phases
+    ├── phases.ts           # Base phase runners
+    ├── routing.ts          # Route scheduling helper
+    └── thread.ts           # Thread execution helper
+```
 
-`src/loop.ts` implements the generic phase-machine loop:
-- Creates the loop runtime from input
-- Resolves the phase configuration (default built-in or custom)
-- Iterates through phases by following transitions (`next`, `stop`, `abort`)
-- Completes the run with an `AgentRunResult`
+### Execution Flow
 
-Phase definitions live under `src/loop/`:
-- `phase-config.ts` — `AgentPhaseDefinition`, `AgentPhaseConfig`, validation, and default config factory
-- `built-in-phases.ts` — built-in route, thread, plan, execute, and verify phase definitions
-- `phases.ts` — base `runPhase()` and `runConfiguredPhase()` runners
-- `routing.ts` — route scheduling helper used by the route phase
-- `thread.ts` — thread execution helper used by the thread phase
+```
+┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
+│  Route   │───▶│  Plan   │───▶│ Execute │───▶│ Verify  │
+└─────────┘    └─────────┘    └─────────┘    └─────────┘
+     │                                            │
+     └────────────────────────────────────────────┘
+                   (loop on failure)
+```
 
-Mutable live runtime state and lifecycle helpers live in `src/loop.ts` with the generic phase-machine boundary.
+## Installation
 
-`Agent` keeps a small state object:
+```bash
+npm install @rowan-agent/agent
+# or
+bun add @rowan-agent/agent
+```
 
-- `sessionId` identifies the current live run/session.
-- `context` is the current `systemPrompt`, visible messages, tools, and skills snapshot.
-- `model` and `stream` describe the model identity and call path.
-- `tools` are the tools the runtime may expose to the model.
-- `isRunning`, `currentResult`, and `error` describe the current run state.
+## Usage
 
-`src/task.ts` and `src/types.ts` expose task helpers, typed protocol phase outputs, `AgentState`, `createAgentState`, `createMessage`, and public Agent types. Runtime-owned core tools are exported by `@rowan-agent/runtime`. `src/index.ts` is the package entry point.
-
-The loop consumes adapter-normalized `phase_output` events from `@rowan-agent/protocol` while still accepting `structured_output` events for local scripted streams. Default tool calls are executed through the event-neutral runtime primitive; `agent` translates runtime observations into ordered `AgentEvent`s, conversation messages, attempts, verification, and final `AgentRunResult`.
-
-`Agent` intentionally exposes the stable, application-facing run surface: context, model, stream, limits, session id, tool approval hooks, event subscriptions, and cancellation. Durable Session persistence belongs to composition roots through `@rowan-agent/session` contracts, not to `Agent`.
-
-## Usage Flow
-
-1. Prepare `model`, `stream`, and `tools`. Optionally provide skills, limits, and tool approval hooks.
-2. Create an `Agent` instance.
-3. Use `subscribe` to listen to events. Logging modules and UIs can both consume this stream.
-4. Call `run()` with an `AgentRunConfig.context` snapshot to start or continue a conversation turn.
-5. Pass a loaded `sessionId` and reconstructed context before continuing an existing session, or call `abort()` to stop the current run.
+### Basic Agent Setup
 
 ```ts
-import { Agent } from "@rowan-agent/agent";
-import { createMessage } from "@rowan-agent/agent";
+import { Agent, createMessage } from "@rowan-agent/agent";
 import { createCoreTools } from "@rowan-agent/runtime";
 
 const tools = createCoreTools({ root: process.cwd() });
 const agent = new Agent({
   context: {
-    systemPrompt: "You are Rowan.",
-    messages: [
-      createMessage("user", "list the package structure in this project"),
-    ],
+    systemPrompt: "You are a helpful coding assistant.",
+    messages: [createMessage("user", "list the files in this project")],
     tools,
   },
   model: { provider: "openai-compatible", name: "gpt-4.1-mini" },
   stream,
 });
 
+// Subscribe to events
 agent.subscribe((event) => {
-  console.error(event.type);
+  console.log(event.type, event.data);
 });
 
+// Run the agent
 const result = await agent.run();
 console.log(result.outcome.message);
 ```
+
+### Resume a Session
+
+```ts
+const agent = new Agent({
+  sessionId: "ses_abc123",
+  context: { /* reconstructed context */ },
+  model,
+  stream,
+});
+
+const result = await agent.run({
+  context: {
+    ...agent.state.context,
+    messages: [
+      ...agent.state.context.messages,
+      createMessage("user", "continue where we left off"),
+    ],
+  },
+});
+```
+
+### Abort a Running Task
+
+```ts
+const agent = new Agent({ /* config */ });
+
+// Start in background
+const runPromise = agent.run();
+
+// Cancel after 5 seconds
+setTimeout(() => agent.abort(), 5000);
+
+const result = await runPromise;
+console.log(result.status); // "aborted"
+```
+
+## Key Types
+
+| Type | Description |
+|------|-------------|
+| `Agent` | Main agent class with run/abort/subscribe |
+| `AgentState` | Current agent state (context, model, session) |
+| `AgentRunResult` | Result of a completed or aborted run |
+| `AgentEvent` | Typed events emitted during execution |
+| `PhaseDefinition` | Custom phase configuration |
+
+## Version
+
+Current version: **0.4.6**
