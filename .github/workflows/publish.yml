@@ -1,16 +1,77 @@
 name: Publish
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 permissions:
-  contents: write  # Required for uploading release assets
-  id-token: write  # Required for npm trusted publishing
+  contents: write
+  id-token: write
 
 jobs:
+  # Create GitHub Release with changelog
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        run: |
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=${{ steps.prev_tag.outputs.prev_tag }}
+
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$CURRENT_TAG" ]; then
+            git log --pretty=format:"- %s (%h)" --no-merges > RELEASE_BODY.md
+          else
+            echo "## Changes since $PREV_TAG" > RELEASE_BODY.md
+            echo "" >> RELEASE_BODY.md
+
+            FEATURES=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --grep="^feat" || true)
+            if [ -n "$FEATURES" ]; then
+              echo "### 🚀 Features" >> RELEASE_BODY.md
+              echo "$FEATURES" >> RELEASE_BODY.md
+              echo "" >> RELEASE_BODY.md
+            fi
+
+            FIXES=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --grep="^fix" || true)
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes" >> RELEASE_BODY.md
+              echo "$FIXES" >> RELEASE_BODY.md
+              echo "" >> RELEASE_BODY.md
+            fi
+
+            OTHERS=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges --invert-grep --grep="^feat" --invert-grep --grep="^fix" || true)
+            if [ -n "$OTHERS" ]; then
+              echo "### 📦 Other Changes" >> RELEASE_BODY.md
+              echo "$OTHERS" >> RELEASE_BODY.md
+              echo "" >> RELEASE_BODY.md
+            fi
+          fi
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_BODY.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
+
   # Build platform binaries
   build-binaries:
+    needs: create-release
     strategy:
       matrix:
         include:
@@ -62,6 +123,7 @@ jobs:
 
   # Publish to npm
   publish-npm:
+    needs: create-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +150,7 @@ jobs:
 
   # Upload binaries to GitHub Release
   upload-release:
-    needs: build-binaries
+    needs: [create-release, build-binaries]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -99,4 +161,5 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           files: artifacts/**/*
