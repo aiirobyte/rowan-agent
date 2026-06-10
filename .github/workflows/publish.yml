@@ -10,11 +10,91 @@ permissions:
   id-token: write
 
 jobs:
-  # Create GitHub Release with changelog
-  create-release:
+  # Build all platform binaries from a single Linux runner (cross-compilation)
+  build-binaries:
     runs-on: ubuntu-latest
-    outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
+    strategy:
+      matrix:
+        include:
+          - target: bun-linux-x64
+            asset: rowan-linux-x64
+            ext: .tar.gz
+          - target: bun-linux-arm64
+            asset: rowan-linux-arm64
+            ext: .tar.gz
+          - target: bun-darwin-x64
+            asset: rowan-darwin-x64
+            ext: .tar.gz
+          - target: bun-darwin-arm64
+            asset: rowan-darwin-arm64
+            ext: .tar.gz
+          - target: bun-windows-x64
+            asset: rowan-windows-x64
+            ext: .zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build binary
+        run: |
+          mkdir -p dist
+          bun build --compile --target=${{ matrix.target }} --outfile dist/rowan packages/cli/src/cli.ts
+        env:
+          NODE_ENV: production
+
+      - name: Package (tar.gz)
+        if: matrix.ext == '.tar.gz'
+        run: |
+          cd dist
+          tar czf ../${{ matrix.asset }}${{ matrix.ext }} *
+
+      - name: Package (zip)
+        if: matrix.ext == '.zip'
+        run: |
+          cd dist
+          zip -r ../${{ matrix.asset }}${{ matrix.ext }} *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}${{ matrix.ext }}
+
+  # Generate checksums
+  checksums:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f | while read -r f; do
+            mv "$f" "$(basename "$f")"
+          done
+          find . -type d -empty -delete
+          sha256sum * > checksums.txt
+
+      - name: Upload checksums artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: artifacts/checksums.txt
+
+  # Create GitHub Release with all artifacts
+  create-release:
+    needs: [build-binaries, checksums]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,8 +139,13 @@ jobs:
             fi
           fi
 
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
       - name: Create GitHub Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -68,58 +153,7 @@ jobs:
           body_path: RELEASE_BODY.md
           draft: false
           prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-rc') }}
-
-  # Build platform binaries
-  build-binaries:
-    needs: create-release
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
-          - os: macos-13
-            target: darwin-x64
-          - os: macos-latest
-            target: darwin-arm64
-          - os: windows-latest
-            target: windows-x64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build binary
-        run: |
-          mkdir -p dist
-          bun build --compile --outfile dist/rowan packages/cli/src/cli.ts
-        env:
-          NODE_ENV: production
-
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cd dist
-          tar czf ../rowan-${{ matrix.target }}.tar.gz *
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path dist/* -DestinationPath rowan-${{ matrix.target }}.zip
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rowan-${{ matrix.target }}
-          path: rowan-${{ matrix.target }}*
+          files: release-assets/*
 
   # Publish to npm
   publish-npm:
@@ -147,19 +181,3 @@ jobs:
         run: bun run publish:packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # Upload binaries to GitHub Release
-  upload-release:
-    needs: [create-release, build-binaries]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: artifacts/**/*
