@@ -1,10 +1,7 @@
-export { builtinPhases } from "./built-in";
 export {
   createPhaseRegistry,
-  definePhase,
   resolvePhaseEntry,
   ensurePhaseRegistry,
-  DEFAULT_PHASE_ID,
   type PhaseRegistry,
   type PhaseRegistryInput,
   type PhaseManifest,

@@ -85,8 +85,6 @@ export type { ExtensionRunnerRef } from "./agent";
 // ── phases ─────────────────────────────────────────────────────
 export {
   createPhaseRegistry,
-  definePhase,
-  DEFAULT_PHASE_ID,
   type PhaseRegistry,
   type PhaseRegistryInput,
   type PhaseManifest,

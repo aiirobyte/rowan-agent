@@ -31,7 +31,6 @@ import {
   type PhaseToolExecutionManager,
   type ModelInvokeOutput,
 } from "./loop/phases";
-import { createBuiltinPhaseRegistry } from "./extensions";
 import { executeRuntimeToolCall } from "./harness/tools";
 import { LoopGuard } from "./loop/errors";
 import { createOutcome } from "./loop/outcomes";
@@ -324,8 +323,16 @@ async function runLoop(
   config: AgentLoopConfig,
   state: AgentRunState,
 ): Promise<RunResult> {
-  const phaseConfig = config.phaseConfig ?? await createBuiltinPhaseRegistry();
-  if (config.phaseConfig) ensurePhaseRegistry(phaseConfig);
+  // No phases defined - return immediately with "none" state
+  if (!config.phaseConfig) {
+    return completeRun(state, {
+      id: "none",
+      message: state.transcript.filter(m => m.role === "assistant").pop()?.content ?? "",
+    });
+  }
+
+  const phaseConfig = config.phaseConfig;
+  ensurePhaseRegistry(phaseConfig);
   config.phaseConfig = phaseConfig;
 
   const availablePhases = phaseConfig.phases.map((p) => ({ id: p.id, name: p.name, description: p.description }));

@@ -18,7 +18,6 @@ export type {
   LlmStreamOptions,
   ExecutionTurn,
   ExecutionTurnEntry,
-  LoopPhase,
   Outcome,
   StepFilter,
   StreamFn,

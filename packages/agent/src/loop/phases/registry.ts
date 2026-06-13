@@ -38,6 +38,7 @@ export type PhaseInput = {
   toolChoice?: LlmToolChoice;
 };
 
+/** Minimal phase manifest for registry operations. */
 export type PhaseManifest = {
   id: string;
   name: string;
@@ -48,12 +49,12 @@ export type PhaseManifest = {
   skills?: string[];
 };
 
-export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
-
 export type PhaseDefinition = PhaseManifest & {
   run?: PhaseRun;
   buildPrompt?(input: PhaseInput): LlmRequest;
 };
+
+export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
 
 export type ModelInvokeOutput = {
   text: string;
@@ -140,12 +141,6 @@ export type PhaseRegistryInput = {
   phases?: PhaseDefinition[];
 };
 
-export function definePhase(
-  definition: PhaseDefinition,
-): PhaseDefinition {
-  return definition;
-}
-
 function validatePhaseRegistry(registry: PhaseRegistry): void {
   if (!registry.entryPhaseId || registry.entryPhaseId.trim().length === 0) {
     throw new Error("Phase registry must have a non-empty entryPhaseId.");
@@ -199,5 +194,3 @@ export function ensurePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {
   validatePhaseRegistry(registry);
   return registry;
 }
-
-export const DEFAULT_PHASE_ID = process.env.ROWAN_DEFAULT_PHASE ?? "chat";

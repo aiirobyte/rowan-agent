@@ -133,7 +133,6 @@ function applyProviderUnregistration(name: string): void {
 
 export type ExtensionRunnerOptions = {
   entryPhaseId?: string;
-  validatePhaseOverride?: (phaseId: string, extensionPath: string) => boolean;
   cwd?: string;
 };
 
@@ -172,10 +171,6 @@ export class ExtensionRunner {
   readonly runtime: ExtensionRuntime;
   readonly events: EventBus;
 
-  private readonly validatePhaseOverride?: (
-    phaseId: string,
-    extensionPath: string,
-  ) => boolean;
   private readonly cwd: string;
   private readonly abortController = new AbortController();
   private _idle = true;
@@ -204,7 +199,6 @@ export class ExtensionRunner {
     this.hooks = new HooksManager();
     this.runtime = createExtensionRuntime();
     this.events = createEventBus();
-    this.validatePhaseOverride = options?.validatePhaseOverride;
     this.cwd = options?.cwd ?? process.cwd();
   }
 
@@ -727,12 +721,6 @@ export class ExtensionRunner {
   ): void {
     if (!registration.id) {
       throw new Error(`Phase registration requires an "id" field.`);
-    }
-
-    if (this.validatePhaseOverride?.(registration.id, extension.path)) {
-      throw new Error(
-        `External extension cannot override built-in phase: ${registration.id}`,
-      );
     }
 
     if (this.phases.has(registration.id)) {

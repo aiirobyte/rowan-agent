@@ -3,7 +3,6 @@ import type {
   MessageSnapshot,
   PhaseContext,
   PhaseDefinition,
-  PhaseManifest,
   PhaseRun,
 } from "./registry";
 
@@ -11,7 +10,6 @@ export type {
   MessageSnapshot,
   PhaseContext,
   PhaseDefinition,
-  PhaseManifest,
   PhaseOutput,
   PhaseRun,
 };

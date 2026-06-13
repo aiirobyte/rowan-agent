@@ -1,5 +1,5 @@
 import { runAgentLoop } from "./agent-loop";
-import { createDefaultPhaseRegistry, ExtensionRunner } from "./extensions";
+import { ExtensionRunner } from "./extensions";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
 import { snapshotMessage, snapshotMessages } from "./loop/state";
 import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./loop/phases";
@@ -244,9 +244,8 @@ export class Agent {
       const emit = (event: AgentEvent) => {
         this.processEvents(event);
       };
-      const phaseConfig = resolved.phaseConfig ?? await createDefaultPhaseRegistry({
-        cwd: resolved.cwd ?? process.cwd(),
-      });
+      // No built-in phases - phaseConfig is optional, undefined means "none" state
+      const phaseConfig = resolved.phaseConfig;
 
       // Combine user-provided hooks with extension hooks
       const beforeToolCall: BeforeToolCall = async (input) => {
