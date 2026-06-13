@@ -14,6 +14,7 @@ import {
   type AgentEventListener,
   type AgentMessage,
   type Outcome,
+  type ExtensionRunnerRef,
 } from "@rowan-agent/agent";
 import {
   pinoAgentEventLogger,
@@ -30,6 +31,13 @@ import {
   type WorkspacePaths,
   resolveInWorkspace,
   resolveWorkspacePaths,
+} from "@rowan-agent/agent";
+import {
+  createExtensionRunner,
+  discoverAndLoadExtensions,
+  createPhaseRegistry,
+  type PhaseRegistry,
+  type PhaseDefinition,
 } from "@rowan-agent/agent";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
 
@@ -487,11 +495,48 @@ async function createConfiguredAgent(
       tools,
       skills,
     };
+
+  // Load extensions and create phase config
+  const extensionRunner = createExtensionRunner({ cwd: workspace.cwd });
+  const { extensions } = await discoverAndLoadExtensions(workspace.cwd);
+  if (extensions.length > 0) {
+    await extensionRunner.loadExtensions(extensions);
+    extensionRunner.bind();
+  }
+
+  // Create phase config from extensions or use default chat phase
+  let phaseConfig: PhaseRegistry;
+  const extensionPhases = extensionRunner.getPhases();
+  if (extensionPhases.length > 0) {
+    phaseConfig = extensionRunner.createPhaseRegistry({ entryPhaseId: "chat" });
+  } else {
+    // Default chat phase when no extensions provide phases
+    const chatPhase: PhaseDefinition = {
+      id: "chat",
+      name: "Chat",
+      description: "Chat with the user",
+      buildPrompt: (input) => ({
+        model: { provider: "openai-compatible", name: config.model },
+        system: input.systemPrompt,
+        messages: input.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+        tools: input.phaseTools?.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+        })),
+      }),
+    };
+    phaseConfig = createPhaseRegistry({ entryPhaseId: "chat", phases: [chatPhase] });
+  }
+
+  const extensionRunnerRef: ExtensionRunnerRef = { current: extensionRunner };
   const agent = new Agent({
     cwd: workspace.cwd,
     context,
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompletionsStream(config),
+    phaseConfig,
+    extensionRunnerRef,
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
   });
 

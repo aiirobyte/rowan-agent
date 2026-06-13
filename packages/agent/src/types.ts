@@ -1,6 +1,11 @@
 import Type from "typebox";
 import type { AgentRuntimePort, AgentRunLimits, BeforePhaseHook, AfterPhaseHook, BeforePromptHook, LoopMetrics } from "./loop/types";
 import type { PhaseRegistry, PhaseInput } from "./loop/phases";
+
+// New phase system types
+import type {
+  PhaseRegistry as NewPhaseRegistry,
+} from "./harness/phases";
 import type {
   AgentContextMessage,
   AgentContextSkill,
@@ -139,7 +144,10 @@ type AgentRunCommonConfig = {
 export type AgentLoopRunConfig = AgentRunCommonConfig & {
   sessionId?: string;
   state?: AgentState;
+  /** @deprecated Use newPhaseRegistry instead */
   phaseConfig?: PhaseRegistry;
+  /** New hot-pluggable phase registry */
+  newPhaseRegistry?: NewPhaseRegistry;
 };
 
 export type RunResult = {

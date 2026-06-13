@@ -20,6 +20,8 @@ import type {
 } from "@rowan-agent/models";
 import { createAgentState, createMessage } from "./types";
 import { createTimestamp } from "./utils";
+
+// Old phase system - still needed during migration
 import {
   resolvePhaseEntry,
   ensurePhaseRegistry,
@@ -31,6 +33,16 @@ import {
   type PhaseToolExecutionManager,
   type ModelInvokeOutput,
 } from "./loop/phases";
+
+// New phase system - types for future integration
+import type {
+  Phase,
+  PhaseRegistry,
+  PhaseState as NewPhaseState,
+  ExtensionAPI,
+} from "./harness/phases";
+import { createExtensionAPI } from "./harness/phases/extension-api-impl";
+
 import { executeRuntimeToolCall } from "./harness/tools";
 import { LoopGuard } from "./loop/errors";
 import { createOutcome } from "./loop/outcomes";
@@ -95,6 +107,7 @@ export function createLoopLifecycle(
     afterPhase: input.afterPhase,
     emit: input.emit,
     phaseConfig: input.phaseConfig,
+    newPhaseRegistry: input.newPhaseRegistry,
   };
 
   const state: AgentRunState = {
@@ -335,17 +348,291 @@ async function runLoop(
   config: AgentLoopConfig,
   state: AgentRunState,
 ): Promise<RunResult> {
-  // No phases defined - return immediately with "none" state
-  if (!config.phaseConfig) {
+  // New hot-pluggable phase system
+  if (config.newPhaseRegistry) {
+    return runNewPhaseLoop(config, state, config.newPhaseRegistry);
+  }
+
+  // Legacy phase system
+  if (config.phaseConfig) {
+    return runLegacyPhaseLoop(config, state, config.phaseConfig);
+  }
+
+  // No phases defined - run single cycle with "none" state
+  return runNonePhaseLoop(config, state);
+}
+
+// ============================================================================
+// None Phase Loop (no phases defined)
+// ============================================================================
+
+async function runNonePhaseLoop(
+  config: AgentLoopConfig,
+  state: AgentRunState,
+): Promise<RunResult> {
+  state.currentPhase = "none";
+
+  // Create a minimal context for the model invocation
+  const loopContext = createAgentLoopContext(config, state, []);
+
+  // Create a synthetic phase definition for "none"
+  const nonePhase: PhaseDefinition = {
+    id: "none",
+    name: "None",
+    description: "",
+    buildPrompt: (input: PhaseInput) => ({
+      system: input.systemPrompt,
+      messages: input.messages
+        .filter(m => m.role !== "system")
+        .map(m => ({ role: m.role as "user" | "assistant" | "tool", content: m.content })),
+      model: config.model,
+      tools: input.phaseTools?.map(t => ({
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      })),
+    }),
+  };
+
+  let nonePhaseInput: PhaseInput = {
+    phase: "none",
+    systemPrompt: loopContext.systemPrompt,
+    messages: loopContext.messages,
+    tools: loopContext.tools,
+    skills: loopContext.skills,
+    phaseTools: loopContext.tools,
+    phaseSkills: loopContext.skills,
+  };
+
+  emit(state, config.emit, { type: "phase_start", phase: "none", ts: createTimestamp() });
+
+  // Call beforePhase hook if defined
+  if (config.beforePhase) {
+    const extBefore = await config.beforePhase("none", nonePhaseInput);
+    if (extBefore.abort) {
+      emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      return completeRun(state, extBefore.abort);
+    }
+    if (extBefore.skip) {
+      emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      return completeRun(state, {
+        id: "skip",
+        message: extBefore.skip.message || "Skipped.",
+      });
+    }
+    if (extBefore.input) {
+      nonePhaseInput = extBefore.input;
+    }
+  }
+
+  // Execute model invocation
+  const context = createPhaseContext(config, state, nonePhase, loopContext, []);
+  const collected = await context.turn(() => context.model.invoke({ input: nonePhaseInput }));
+
+  // Create output
+  let output: PhaseOutput = {
+    message: collected.text,
+    route: "stop",
+    toolCalls: collected.toolCalls,
+  };
+
+  // Call afterPhase hook if defined
+  if (config.afterPhase) {
+    const extAfter = await config.afterPhase("none", output);
+    if (extAfter.abort) {
+      emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      return completeRun(state, extAfter.abort);
+    }
+    if (extAfter.retry) {
+      // Re-execute with retry input
+      const retryCollected = await context.turn(() => context.model.invoke({ input: extAfter.retry! }));
+      output = {
+        message: retryCollected.text,
+        route: "stop",
+        toolCalls: retryCollected.toolCalls,
+      };
+    }
+    if (extAfter.output) {
+      output = extAfter.output;
+    }
+  }
+
+  emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+
+  return completeRun(state, createOutcome.default(output));
+}
+
+// ============================================================================
+// New Hot-Pluggable Phase Loop
+// ============================================================================
+
+async function runNewPhaseLoop(
+  config: AgentLoopConfig,
+  state: AgentRunState,
+  registry: import("./harness/phases").PhaseRegistry,
+): Promise<RunResult> {
+  if (!registry.entryPhaseId) {
     return completeRun(state, {
       id: "none",
       message: state.transcript.filter(m => m.role === "assistant").pop()?.content ?? "",
     });
   }
 
-  const phaseConfig = config.phaseConfig;
+  const maxIterations = config.limits?.maxIterations ?? 50;
+  let currentPhaseId: string | PhaseState = registry.entryPhaseId;
+
+  while (!isPhaseState(currentPhaseId)) {
+    const abortResult = LoopGuard.checkAbort(config.signal);
+    if (abortResult.stopReason !== "none") {
+      return completeRun(state, createOutcome.aborted());
+    }
+
+    state.metrics.iterations++;
+    if (state.metrics.iterations > maxIterations) {
+      return completeRun(state, {
+        id: "max_iterations",
+        message: `Loop exceeded maximum iterations (${maxIterations}).`,
+      });
+    }
+
+    const phase = registry.phases.get(currentPhaseId);
+    if (!phase) {
+      throw new Error(`Phase "${currentPhaseId}" not found in registry`);
+    }
+
+    state.currentPhase = currentPhaseId;
+    emit(state, config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
+
+    // Build prompt from phase definition
+    const prompt = phase.buildPrompt();
+
+    // Execute phase
+    let output: import("./harness/phases").PhaseOutput;
+    if (phase.run) {
+      // Create ExtensionAPI context
+      const api = createExtensionAPI({
+        phase,
+        currentPhaseId: phase.id,
+        messages: state.agentState.messages,
+        availablePhases: [...registry.phases.keys()],
+        model: {
+          async chat(params) {
+            // TODO: Integrate with actual model client
+            return { content: "Not implemented" };
+          },
+        },
+        executeStep: async (action) => {
+          // TODO: Integrate with step execution
+          return {};
+        },
+        runLoop: async (options) => {
+          // TODO: Integrate with inner loop
+          return { iterations: 0, finalPhase: "stop", reason: "natural" as const };
+        },
+        phaseRegistry: registry.phases,
+        turnNumber: state.metrics.iterations,
+      });
+
+      // Call enter callbacks
+      for (const cb of api.__getEnterCallbacks()) {
+        await cb();
+      }
+
+      // Execute phase run function
+      const result = await phase.run(api);
+
+      // Call exit callbacks
+      for (const cb of api.__getExitCallbacks()) {
+        await cb();
+      }
+
+      // Handle injected prompts
+      const injectedPrompts = api.__getInjectedPrompts();
+      if (injectedPrompts.length > 0) {
+        // TODO: Inject prompts into message history
+      }
+
+      // Build output
+      output = result ?? { message: "", route: "stop" };
+
+      // Get code-suggested next phase
+      const codeNextPhase = api.__getNextPhase();
+
+      // Resolve next phase: target > code > stop
+      let nextPhase: string | PhaseState;
+      if (phase.target) {
+        nextPhase = phase.target;
+      } else if (codeNextPhase) {
+        nextPhase = codeNextPhase;
+      } else if (output.nextPhase) {
+        nextPhase = output.nextPhase;
+      } else {
+        nextPhase = "stop";
+      }
+
+      emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+
+      if (isPhaseState(nextPhase)) {
+        return completeRun(state, {
+          id: nextPhase,
+          message: output.message ?? "",
+        });
+      }
+
+      state.metrics.phaseTransitions.push({
+        from: currentPhaseId,
+        to: nextPhase,
+        ts: createTimestamp(),
+      });
+
+      currentPhaseId = nextPhase;
+    } else {
+      // No run function - use placeholder for now
+      output = { message: prompt, route: "stop" };
+
+      emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+
+      // Resolve next phase: target > stop
+      let nextPhase: string | PhaseState;
+      if (phase.target) {
+        nextPhase = phase.target;
+      } else {
+        nextPhase = "stop";
+      }
+
+      if (isPhaseState(nextPhase)) {
+        return completeRun(state, {
+          id: nextPhase,
+          message: output.message ?? "",
+        });
+      }
+
+      state.metrics.phaseTransitions.push({
+        from: currentPhaseId,
+        to: nextPhase,
+        ts: createTimestamp(),
+      });
+
+      currentPhaseId = nextPhase;
+    }
+  }
+
+  return completeRun(state, {
+    id: currentPhaseId,
+    message: state.transcript.filter(m => m.role === "assistant").pop()?.content ?? "",
+  });
+}
+
+// ============================================================================
+// Legacy Phase Loop (to be removed)
+// ============================================================================
+
+async function runLegacyPhaseLoop(
+  config: AgentLoopConfig,
+  state: AgentRunState,
+  phaseConfig: import("./loop/phases").PhaseRegistry,
+): Promise<RunResult> {
   ensurePhaseRegistry(phaseConfig);
-  config.phaseConfig = phaseConfig;
 
   const availablePhases = phaseConfig.phases.map((p) => ({ id: p.id, name: p.name, description: p.description }));
 
@@ -591,6 +878,8 @@ function isRetryableError(error: unknown): boolean {
   if (message.includes("service unavailable") || message.includes("503")) return true;
   if (message.includes("gateway timeout") || message.includes("504")) return true;
   if (message.includes("econnreset") || message.includes("econnrefused")) return true;
+  // Check for invalid model schema errors (retryable)
+  if ("code" in error && (error as { code: string }).code === "invalid_model_schema") return true;
   // Do NOT retry user-configured timeouts — those are intentional limits
   return false;
 }
