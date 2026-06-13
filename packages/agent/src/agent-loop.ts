@@ -40,6 +40,18 @@ import { createRouteTool, extractRouteCall, createThreadTool } from "./harness/t
 import type { PhaseManifest } from "./loop/phases/registry";
 import { compactMessages, needsCompaction } from "./loop/compaction";
 
+// ============================================================================
+// Phase State Utilities
+// ============================================================================
+
+/** Phase sentinel states - NOT executable phases, just markers */
+type PhaseState = "none" | "stop";
+
+/** Check if value is a sentinel state (not a real phase) */
+function isPhaseState(value: string): value is PhaseState {
+  return value === "none" || value === "stop";
+}
+
 /** Execute phase run and handle void return by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(
   result: PhaseOutput | void,
@@ -519,25 +531,41 @@ async function runLoop(
     // Emit phase_end
     emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
 
-    // Read route — main loop contains no phase-specific routing logic
-    if (output.route === "stop") {
-      const outcome = createOutcome.default(output);
-      return completeRun(state, outcome);
+    // Resolve next phase with priority:
+    // 1. Frontmatter target (highest priority)
+    // 2. Code-injected route (from run() or route tool)
+    // 3. Default: stop
+    let nextRoute: string | PhaseState;
+    if (phase.target) {
+      nextRoute = phase.target;
+    } else if (output.route) {
+      nextRoute = output.route;
+    } else {
+      nextRoute = "stop";
+    }
+
+    // Handle sentinel states
+    if (isPhaseState(nextRoute)) {
+      if (nextRoute === "stop" || nextRoute === "none") {
+        const outcome = createOutcome.default(output);
+        return completeRun(state, outcome);
+      }
     }
 
     // Validate route target exists
-    if (!phaseConfig.phases.some((p) => p.id === output.route)) {
+    const targetPhaseId = nextRoute as string;
+    if (!phaseConfig.phases.some((p) => p.id === targetPhaseId)) {
       return completeRun(state, createOutcome.phase());
     }
 
     // Track phase transition
     state.metrics.phaseTransitions.push({
       from: currentPhaseId,
-      to: output.route,
+      to: targetPhaseId,
       ts: createTimestamp(),
     });
 
-    currentPhaseId = output.route;
+    currentPhaseId = targetPhaseId;
   }
 
   throw new Error("Phase machine exited without a stop or abort transition.");

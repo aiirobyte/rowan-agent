@@ -47,6 +47,8 @@ export type PhaseManifest = {
   tools?: string[];
   /** Skills available in this phase. If omitted, all skills are available. */
   skills?: string[];
+  /** Forced next phase id (highest priority for transitions) */
+  target?: string;
 };
 
 export type PhaseDefinition = PhaseManifest & {

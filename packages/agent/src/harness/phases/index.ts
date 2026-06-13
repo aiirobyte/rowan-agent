@@ -19,3 +19,6 @@ export type {
 } from "./extension-api";
 
 export { loadPhase, loadPhases } from "./loader";
+
+export { createExtensionAPI } from "./extension-api-impl";
+export type { ExtensionAPIContext, ModelClient, ExtensionAPIInternals } from "./extension-api-impl";
