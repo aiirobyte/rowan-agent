@@ -10,11 +10,6 @@
  */
 
 import { execFile } from "node:child_process";
-import {
-  createPhaseRegistry,
-  type PhaseRegistry,
-  type PhaseDefinition,
-} from "../loop/phases/registry";
 import { buildModelRequest } from "../harness/context/prompt-builder";
 import type { ProviderConfig } from "@rowan-agent/models";
 import {
@@ -30,13 +25,15 @@ import type {
   ExtensionErrorListener,
   ExtensionRuntime,
   PhaseRegistration,
+  PhaseDefinition,
   RegisteredPhase,
   RegisteredTool,
   ToolDefinition,
 } from "./types";
 import { createExtension, createExtensionRuntime } from "./types";
 import type { Tool, ToolResult } from "../types";
-import type { PhaseInput, PhaseOutput } from "../loop/phases/registry";
+import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { Phase, PhaseRegistry } from "../harness/phases/types";
 import { HooksManager } from "./hooks";
 import type {
   HookEventType,
@@ -133,7 +130,6 @@ function applyProviderUnregistration(name: string): void {
 
 export type ExtensionRunnerOptions = {
   entryPhaseId?: string;
-  validatePhaseOverride?: (phaseId: string, extensionPath: string) => boolean;
   cwd?: string;
 };
 
@@ -172,10 +168,6 @@ export class ExtensionRunner {
   readonly runtime: ExtensionRuntime;
   readonly events: EventBus;
 
-  private readonly validatePhaseOverride?: (
-    phaseId: string,
-    extensionPath: string,
-  ) => boolean;
   private readonly cwd: string;
   private readonly abortController = new AbortController();
   private _idle = true;
@@ -204,7 +196,6 @@ export class ExtensionRunner {
     this.hooks = new HooksManager();
     this.runtime = createExtensionRuntime();
     this.events = createEventBus();
-    this.validatePhaseOverride = options?.validatePhaseOverride;
     this.cwd = options?.cwd ?? process.cwd();
   }
 
@@ -422,13 +413,15 @@ export class ExtensionRunner {
   // Phase management
   // ---------------------------------------------------------------------------
 
-  getPhase(id: string): PhaseDefinition | undefined {
-    return this.getRegisteredPhase(id)?.definition;
+  getPhase(id: string): Phase | undefined {
+    const reg = this.getRegisteredPhase(id);
+    if (!reg) return undefined;
+    return this.adaptToPhase(reg);
   }
 
-  getPhases(): PhaseDefinition[] {
+  getPhases(): Phase[] {
     return [...this.collectRegisteredPhases().values()].map(
-      (p) => p.definition,
+      (p) => this.adaptToPhase(p),
     );
   }
 
@@ -440,10 +433,31 @@ export class ExtensionRunner {
     input: { entryPhaseId?: string } = {},
   ): PhaseRegistry {
     const registered = this.collectRegisteredPhases();
-    return createPhaseRegistry({
-      entryPhaseId: input.entryPhaseId,
-      phases: [...registered.values()].map((p) => p.definition),
-    });
+    const phases = new Map<string, Phase>();
+    for (const [id, reg] of registered) {
+      phases.set(id, this.adaptToPhase(reg));
+    }
+    const entryPhaseId = input.entryPhaseId ?? phases.keys().next().value ?? null;
+    return { phases, entryPhaseId };
+  }
+
+  /** Adapt an extension RegisteredPhase to the core Phase type. */
+  private adaptToPhase(reg: RegisteredPhase): Phase {
+    const def = reg.definition;
+    return {
+      id: def.id,
+      name: def.name ?? def.id,
+      description: def.description ?? "",
+      tools: def.tools,
+      skills: def.skills,
+      target: def.target,
+      entry: false,
+      filePath: "",
+      baseDir: "",
+      content: "",
+      buildPrompt: () => "",
+      buildLlmRequest: reg.handler.buildPrompt,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -727,12 +741,6 @@ export class ExtensionRunner {
   ): void {
     if (!registration.id) {
       throw new Error(`Phase registration requires an "id" field.`);
-    }
-
-    if (this.validatePhaseOverride?.(registration.id, extension.path)) {
-      throw new Error(
-        `External extension cannot override built-in phase: ${registration.id}`,
-      );
     }
 
     if (this.phases.has(registration.id)) {

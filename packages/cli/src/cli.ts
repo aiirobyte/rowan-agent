@@ -14,6 +14,7 @@ import {
   type AgentEventListener,
   type AgentMessage,
   type Outcome,
+  type ExtensionRunnerRef,
 } from "@rowan-agent/agent";
 import {
   pinoAgentEventLogger,
@@ -30,6 +31,10 @@ import {
   type WorkspacePaths,
   resolveInWorkspace,
   resolveWorkspacePaths,
+} from "@rowan-agent/agent";
+import {
+  createExtensionRunner,
+  discoverAndLoadExtensions,
 } from "@rowan-agent/agent";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
 
@@ -487,11 +492,29 @@ async function createConfiguredAgent(
       tools,
       skills,
     };
+
+  // Load extensions and create phase config
+  const extensionRunner = createExtensionRunner({ cwd: workspace.cwd });
+  const { extensions } = await discoverAndLoadExtensions(workspace.cwd);
+  if (extensions.length > 0) {
+    await extensionRunner.loadExtensions(extensions);
+    extensionRunner.bind();
+  }
+
+  // Create phase registry from extensions (or undefined for default loop)
+  const extensionPhases = extensionRunner.getPhases();
+  const phases = extensionPhases.length > 0
+    ? extensionRunner.createPhaseRegistry({ entryPhaseId: "chat" })
+    : undefined;
+
+  const extensionRunnerRef: ExtensionRunnerRef = { current: extensionRunner };
   const agent = new Agent({
     cwd: workspace.cwd,
     context,
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompletionsStream(config),
+    phases,
+    extensionRunnerRef,
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
   });
 

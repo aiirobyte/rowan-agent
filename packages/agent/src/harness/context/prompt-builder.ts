@@ -1,9 +1,7 @@
 import type { AgentContextMessage, AgentContextSkill } from "../../protocol";
-import type { PhaseInput } from "../../loop/phases/registry";
+import type { PhaseInput } from "../../protocol/context";
 import type { LlmRequest, LlmMessage, LlmModelRef, LlmContentPart } from "@rowan-agent/models";
-import {
-  buildSystemPrompt,
-} from "./system-prompt";
+import { buildSystemPrompt } from "./system-prompt";
 
 export type PromptTool = { name: string; description: string; parameters: unknown };
 

@@ -6,8 +6,8 @@
  * preserving the most relevant conversation history.
  */
 
-import type { AgentMessage } from "../types";
-import { createMessage } from "../types";
+import type { AgentMessage } from "../../types";
+import { createMessage } from "../../types";
 
 export type CompactionOptions = {
   /** Maximum number of messages before compaction triggers. Default: 50. */

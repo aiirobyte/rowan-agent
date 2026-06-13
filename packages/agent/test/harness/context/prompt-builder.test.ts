@@ -1,31 +1,15 @@
-import { expect, test, beforeAll } from "bun:test";
+import { expect, test } from "bun:test";
 import Type from "typebox";
 import {
   buildModelRequest,
 } from "../../../src/harness/context/prompt-builder";
-import {
-  createBuiltinPhaseRegistry,
-} from "../../../src/extensions";
-import {
-  resolvePhaseEntry,
-} from "../../../src/loop/phases";
 import { createId, createMessage, createAgentState } from "@rowan-agent/agent";
-import type { PhaseInput, PhaseRegistry, Tool } from "@rowan-agent/agent";
-
-let builtinPhaseRegistry: PhaseRegistry;
-
-beforeAll(async () => {
-  builtinPhaseRegistry = await createBuiltinPhaseRegistry();
-});
+import type { PhaseInput, Tool } from "@rowan-agent/agent";
 
 function buildRequest(input: {
   context: PhaseInput;
 }) {
-  const phase = resolvePhaseEntry(builtinPhaseRegistry, input.context.phase);
-  if (!phase.buildPrompt) {
-    throw new Error(`Missing buildPrompt for phase "${input.context.phase}".`);
-  }
-  return phase.buildPrompt(input.context);
+  return buildModelRequest(input.context);
 }
 
 const echoTool: Tool<{ message: string }> = {
@@ -41,19 +25,6 @@ const echoTool: Tool<{ message: string }> = {
     };
   },
 };
-
-function createTestTask() {
-  return {
-    id: createId("task"),
-    title: "Echo task",
-    instruction: "Use echo to answer.",
-    acceptanceCriteria: ["Must include echo evidence."],
-    toolNames: ["echo"],
-    skillIds: ["writer"],
-    status: "pending" as const,
-    attempts: 0,
-  };
-}
 
 function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skills?: PhaseInput["skills"] } = {}): PhaseInput {
   const state = createAgentState({
@@ -106,54 +77,14 @@ test("buildModelRequest omits tools when empty", () => {
 // Phase buildPrompt integration
 // ---------------------------------------------------------------------------
 
-test("chat phase buildPrompt returns LlmRequest without extra instructions", () => {
-  const input = createTestInput({ phase: "chat", input: "What is 2 + 2?" });
+test("buildRequest returns LlmRequest with correct messages", () => {
+  const input = createTestInput({ phase: "review", input: "Review this code." });
   const req = buildRequest({ context: input });
 
   expect(req.system).toContain("Test system");
   expect(req.messages.length).toBeGreaterThanOrEqual(1);
-  // Chat phase doesn't add extra instructions
   const userMsg = req.messages.find(m => m.role === "user");
-  expect(userMsg?.content).toBe("What is 2 + 2?");
-});
-
-test("plan phase buildPrompt includes instructions", () => {
-  const input = createTestInput({
-    phase: "plan",
-    input: "Plan with echo.",
-    tools: [echoTool],
-    skills: [{ name: "writer", description: "Write plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", disableModelInvocation: false }],
-  });
-  const req = buildRequest({ context: input });
-
-  expect(req.tools).toHaveLength(1);
-  expect(req.system).toContain("writer");
-  const phaseMsg = req.messages.at(-1);
-  expect(phaseMsg?.content).toContain("Phase: plan");
-});
-
-test("execute phase buildPrompt includes instructions", () => {
-  const input = createTestInput({
-    phase: "execute",
-    input: "Use echo.",
-    tools: [echoTool],
-  });
-  const req = buildRequest({ context: input });
-
-  expect(req.tools).toHaveLength(1);
-  const phaseMsg = req.messages.at(-1);
-  expect(phaseMsg?.content).toContain("Phase: execute");
-});
-
-test("verify phase buildPrompt includes instructions", () => {
-  const input = createTestInput({
-    phase: "verify",
-    input: "Verify echo.",
-  });
-  const req = buildRequest({ context: input });
-
-  const phaseMsg = req.messages.at(-1);
-  expect(phaseMsg?.content).toContain("Phase: verify");
+  expect(userMsg?.content).toBe("Review this code.");
 });
 
 test("prompt builder excludes execution-scoped messages from conversation", () => {

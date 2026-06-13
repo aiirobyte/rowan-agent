@@ -1,113 +1,27 @@
 import { expect, test } from "bun:test";
-import {
-  createPhaseRegistry,
-  resolvePhaseEntry,
-  ensurePhaseRegistry,
-} from "../src/loop/phases";
-import type { PhaseRegistry, PhaseDefinition } from "../src/loop/phases";
+import type { PhaseRegistry } from "../src/harness/phases/types";
 import {
   createExtensionRunner,
   loadExtensionFromFactory,
 } from "../src/extensions";
 import type { LoadedExtension } from "../src/extensions";
 
-function stubPhase(id: string): PhaseDefinition {
-  return {
-    id,
-    name: id,
-    description: `${id} phase`,
-    run: async () => ({ message: "", route: "stop" }),
-  };
-}
+test("PhaseRegistry is Map-based with entryPhaseId", () => {
+  const phases = new Map();
+  phases.set("a", { id: "a", name: "A", description: "a phase", entry: false, filePath: "", baseDir: "", content: "", buildPrompt: () => "" });
+  phases.set("b", { id: "b", name: "B", description: "b phase", entry: false, filePath: "", baseDir: "", content: "", buildPrompt: () => "" });
 
-test("ensurePhaseRegistry accepts a valid registry", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "a",
-    phases: [stubPhase("a"), stubPhase("b")],
-  };
-
-  expect(() => ensurePhaseRegistry(registry)).not.toThrow();
-});
-
-test("ensurePhaseRegistry rejects empty entryPhaseId", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "",
-    phases: [stubPhase("a")],
-  };
-
-  expect(() => ensurePhaseRegistry(registry)).toThrow("non-empty entryPhaseId");
-});
-
-test("ensurePhaseRegistry rejects empty phases array", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "a",
-    phases: [],
-  };
-
-  expect(() => ensurePhaseRegistry(registry)).toThrow("at least one phase definition");
-});
-
-test("ensurePhaseRegistry rejects phase with empty id", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "a",
-    phases: [{ id: "", name: "empty", description: "", run: async () => ({ message: "", route: "stop" }) }],
-  };
-
-  expect(() => ensurePhaseRegistry(registry)).toThrow("non-empty id");
-});
-
-test("ensurePhaseRegistry rejects duplicate phase ids", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "a",
-    phases: [stubPhase("a"), stubPhase("a")],
-  };
-
-  expect(() => ensurePhaseRegistry(registry)).toThrow("Duplicate phase id");
-});
-
-test("ensurePhaseRegistry rejects entryPhaseId not in phases", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "missing",
-    phases: [stubPhase("a")],
-  };
-
-  expect(() => ensurePhaseRegistry(registry)).toThrow("Entry phase id");
-});
-
-test("resolvePhaseEntry returns phase by id", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "a",
-    phases: [stubPhase("a"), stubPhase("b")],
-  };
-
-  const phase = resolvePhaseEntry(registry, "b");
-  expect(phase.id).toBe("b");
-});
-
-test("resolvePhaseEntry throws for missing phase", () => {
-  const registry: PhaseRegistry = {
-    entryPhaseId: "a",
-    phases: [stubPhase("a")],
-  };
-
-  expect(() => resolvePhaseEntry(registry, "missing")).toThrow("is not defined in the phase registry");
-});
-
-test("createPhaseRegistry validates and normalizes", () => {
-  const registry = createPhaseRegistry({
-    entryPhaseId: "a",
-    phases: [stubPhase("a"), stubPhase("b")],
-  });
-
+  const registry: PhaseRegistry = { phases, entryPhaseId: "a" };
   expect(registry.entryPhaseId).toBe("a");
-  expect(registry.phases).toHaveLength(2);
+  expect(registry.phases.size).toBe(2);
+  expect(registry.phases.has("a")).toBe(true);
+  expect(registry.phases.has("b")).toBe(true);
 });
 
-test("createPhaseRegistry rejects invalid input", () => {
-  expect(() => createPhaseRegistry({
-    entryPhaseId: "",
-    phases: [],
-  })).toThrow();
+test("PhaseRegistry supports null entryPhaseId", () => {
+  const registry: PhaseRegistry = { phases: new Map(), entryPhaseId: null };
+  expect(registry.entryPhaseId).toBeNull();
+  expect(registry.phases.size).toBe(0);
 });
 
 test("ExtensionRunner loads phases from extensions", async () => {
@@ -135,7 +49,8 @@ test("ExtensionRunner loads phases from extensions", async () => {
 
   const registry = runner.createPhaseRegistry({ entryPhaseId: "custom" });
   expect(registry.entryPhaseId).toBe("custom");
-  expect(registry.phases.some(p => p.id === "custom")).toBe(true);
+  expect(registry.phases.has("custom")).toBe(true);
+  expect(registry.phases.get("custom")?.name).toBe("Custom");
 });
 
 test("ExtensionRunner rejects duplicate phase ids", async () => {

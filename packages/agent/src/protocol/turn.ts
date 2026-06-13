@@ -1,6 +1,5 @@
 import type { AgentContextMessage } from "./context";
 import type { LlmModelUsage, LlmModelRef } from "./model";
-import type { LoopPhase } from "./phase";
 import type { ToolCall, ToolResult } from "./tool";
 
 export type ExecutionTurnEntry =
@@ -13,7 +12,7 @@ export type ExecutionTurn = {
   id: string;
   sessionId: string;
   parentSessionId?: string;
-  phase: LoopPhase;
+  phase: string;
   requestedAtMs: number;
   completedAtMs: number;
   model: LlmModelRef;
@@ -22,6 +21,6 @@ export type ExecutionTurn = {
 };
 
 export type StepFilter = {
-  phase?: LoopPhase;
+  phase?: string;
   afterMs?: number;
 };

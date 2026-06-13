@@ -1,6 +1,11 @@
 import Type from "typebox";
 import type { AgentRuntimePort, AgentRunLimits, BeforePhaseHook, AfterPhaseHook, BeforePromptHook, LoopMetrics } from "./loop/types";
-import type { PhaseRegistry, PhaseInput } from "./loop/phases";
+import type { PhaseInput } from "./protocol/context";
+
+// Phase system types
+import type {
+  PhaseRegistry,
+} from "./harness/phases/types";
 import type {
   AgentContextMessage,
   AgentContextSkill,
@@ -9,7 +14,6 @@ import type {
   LlmRequest,
   LlmStreamEvent,
   LlmStreamOptions,
-  LoopPhase,
   Outcome,
   StreamFn,
   ToolResult,
@@ -30,7 +34,7 @@ export type {
   ToolRunner,
   ToolRunnerInput,
 } from "./loop/types";
-export type { PhaseInput, PhaseOutput } from "./loop/phases";
+export type { PhaseInput, PhaseOutput } from "./protocol/context";
 
 export type {
   AgentRunLimits,
@@ -42,7 +46,6 @@ export type {
   LlmRequest,
   LlmStreamEvent,
   LlmStreamOptions,
-  LoopPhase,
   Outcome,
   StreamFn,
   ToolCall,
@@ -141,7 +144,8 @@ type AgentRunCommonConfig = {
 export type AgentLoopRunConfig = AgentRunCommonConfig & {
   sessionId?: string;
   state?: AgentState;
-  phaseConfig?: PhaseRegistry;
+  /** Phase registry for hot-pluggable phase system */
+  phases?: PhaseRegistry;
 };
 
 export type RunResult = {

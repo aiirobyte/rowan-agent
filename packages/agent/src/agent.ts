@@ -1,8 +1,9 @@
 import { runAgentLoop } from "./agent-loop";
-import { createDefaultPhaseRegistry, ExtensionRunner } from "./extensions";
+import { ExtensionRunner } from "./extensions";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
 import { snapshotMessage, snapshotMessages } from "./loop/state";
-import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./loop/phases";
+import type { PhaseRegistry } from "./harness/phases/types";
+import type { PhaseInput, PhaseOutput } from "./protocol/context";
 import type {
   AgentMessage,
   LlmModelRef,
@@ -26,7 +27,7 @@ export type AgentOptions = {
   model: LlmModelRef;
   stream: StreamFn;
   cwd?: string;
-  phaseConfig?: PhaseRegistry;
+  phases?: PhaseRegistry;
   extensionRunnerRef?: ExtensionRunnerRef;
   sessionId?: string;
   maxAttempts?: number;
@@ -244,9 +245,8 @@ export class Agent {
       const emit = (event: AgentEvent) => {
         this.processEvents(event);
       };
-      const phaseConfig = resolved.phaseConfig ?? await createDefaultPhaseRegistry({
-        cwd: resolved.cwd ?? process.cwd(),
-      });
+      // No built-in phases - phases is optional, undefined means "none" state
+      const phases = resolved.phases;
 
       // Combine user-provided hooks with extension hooks
       const beforeToolCall: BeforeToolCall = async (input) => {
@@ -286,7 +286,7 @@ export class Agent {
         beforePhase: (phaseId: string, input: PhaseInput) => this.handleBeforePhase(phaseId, input),
         afterPhase: (phaseId: string, output: PhaseOutput) => this.handleAfterPhase(phaseId, output),
         beforePrompt: (phaseId: string, input: PhaseInput) => this.handleBeforePrompt(phaseId, input),
-        phaseConfig,
+        phases,
         emit,
       });
 

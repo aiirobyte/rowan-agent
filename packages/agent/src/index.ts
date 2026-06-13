@@ -83,24 +83,27 @@ export * from "./extensions";
 export type { ExtensionRunnerRef } from "./agent";
 
 // ── phases ─────────────────────────────────────────────────────
-export {
-  createPhaseRegistry,
-  definePhase,
-  DEFAULT_PHASE_ID,
-  type PhaseRegistry,
-  type PhaseRegistryInput,
-  type PhaseManifest,
-  type PhaseContext,
-  type PhaseDefinition,
-  type PhaseInput,
-  type PhaseOutput,
-  type PhaseRun,
-  type ModelInvokeOutput,
-  type ModelInvokeInput,
-  type MessageSnapshot,
-  type PhaseMessageManager,
-  type PhaseToolExecutionManager,
-} from "./loop/phases";
+export type {
+  PhaseRegistry,
+  Phase,
+  PhaseFrontmatter,
+  PhaseState,
+  PhaseTransition,
+} from "./harness/phases/types";
+
+export type {
+  PhaseInput,
+  PhaseOutput,
+} from "./protocol/context";
+
+export type {
+  PhaseContext,
+  PhaseMessageManager,
+  PhaseToolExecutionManager,
+  ModelInvokeOutput,
+  ModelInvokeInput,
+  MessageSnapshot,
+} from "./loop/execution";
 
 // ── prompt / context ───────────────────────────────────────────
 export {
