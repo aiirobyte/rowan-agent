@@ -96,7 +96,6 @@ export type {
   ExecOptions,
   ExecResult,
   ExtensionPackageManifest,
-  PhaseManifest,
   PhaseRegistration,
   RegisteredPhase,
   ToolDefinition,

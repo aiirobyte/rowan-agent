@@ -73,7 +73,6 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
     expect(options.signal).toBe(controller.signal);
     const text = "Done.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", text, text);
     yield { type: "done" };
   };
 
@@ -98,11 +97,15 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   expect(request.model).toEqual({ provider: "test-provider", name: "test-model" });
   expect(request.system).toContain("Test system");
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
-  // Chat phase no longer adds explicit instructions - it's a simple conversational phase
   expect(request.messages?.at(-1)?.content).toBe("hello");
+  // Default loop (no phases) only includes user-configured tools, no route tool
   expect(request.tools).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ name: "echo", description: echoTool.description }),
+    ]),
+  );
+  expect(request.tools).toEqual(
+    expect.not.arrayContaining([
       expect.objectContaining({ name: "route" }),
     ]),
   );
@@ -216,7 +219,6 @@ test("runAgentLoop can return a direct response without creating a task", async 
   });
   const events = emittedEvents.map((event) => event.type);
 
-  expect(outcome.outcome.taskId).toBeUndefined();
   expect(outcome.outcome.message).toBe("Direct response: hello");
   expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
   expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(true);

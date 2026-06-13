@@ -1,5 +1,8 @@
+import type { LlmRequest } from "@rowan-agent/models";
+import type { PhaseInput, PhaseOutput } from "../../protocol/context";
+import type { PhaseContext } from "../../loop/execution";
 import type { WorkspacePaths } from "../env/path";
-import type { ExtensionAPI, PhaseOutput } from "./extension-api";
+import type { ExtensionAPI } from "./extension-api";
 
 /**
  * Frontmatter properties parsed from PHASE.md
@@ -51,8 +54,10 @@ export interface Phase {
   content: string;
   /** Build prompt from phase definition */
   buildPrompt: () => string;
-  /** Optional execution function from index.ts|js */
-  run?: (api: ExtensionAPI) => Promise<PhaseOutput>;
+  /** Custom LLM request builder (for extension-registered phases) */
+  buildLlmRequest?: (input: PhaseInput) => LlmRequest;
+  /** Optional execution function */
+  run?: (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
 }
 
 /**

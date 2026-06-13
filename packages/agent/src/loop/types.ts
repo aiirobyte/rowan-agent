@@ -12,8 +12,8 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./phases/registry";
-import type { PhaseRegistry as NewPhaseRegistry } from "../harness/phases";
+import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseRegistry } from "../harness/phases/types";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
 export type AgentRunLimits = {
@@ -41,10 +41,8 @@ export type AgentLoopConfig = {
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
   emit?: AgentEventListener;
-  /** @deprecated Use newPhaseRegistry instead */
-  phaseConfig?: PhaseRegistry;
-  /** New hot-pluggable phase registry */
-  newPhaseRegistry?: NewPhaseRegistry;
+  /** Phase registry for hot-pluggable phase system */
+  phases?: PhaseRegistry;
 };
 
 export type LoopMetrics = {

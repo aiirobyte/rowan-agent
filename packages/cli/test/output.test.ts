@@ -9,7 +9,6 @@ test("formatOutcomeOutput uses the outcome JSON shape", () => {
   };
   const taskOutcome: Outcome = {
     id: "out_task",
-    taskId: "task_123",
     message: "Task completed",
   };
 

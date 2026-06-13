@@ -2,19 +2,13 @@
  * Extension types — simplified for the new hook-based system.
  */
 
-import type {
-  PhaseDefinition,
-  PhaseInput,
-  PhaseManifest,
-  PhaseOutput,
-  PhaseRun,
-} from "../loop/phases/registry";
+import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseContext } from "../loop/execution";
 import type { LlmRequest, ProviderConfig } from "@rowan-agent/models";
 import type { Outcome } from "../types";
 import type { SourceInfo } from "./source-info";
 import type { ExtensionFactory } from "./context";
 
-export type { PhaseManifest } from "../loop/phases/registry";
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
 export type { SourceInfo } from "./source-info";
 export { createSourceInfo } from "./source-info";
@@ -29,7 +23,22 @@ export type PhasePromptConfig = {
   instructions?: string[];
 };
 
-export type PhaseRegistration = Partial<PhaseManifest> & {
+/** Phase run function type for extensions */
+export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
+
+/** Phase definition shape used by extensions */
+export type PhaseDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  run?: PhaseRun;
+  buildPrompt?(input: PhaseInput): LlmRequest;
+  tools?: string[];
+  skills?: string[];
+  target?: string;
+};
+
+export type PhaseRegistration = Partial<Omit<PhaseDefinition, 'run' | 'buildPrompt'>> & {
   /** Optional execution override — takes over model invocation */
   run?: PhaseRun;
   /** Declarative prompt config — framework generates buildPrompt from this */
@@ -55,7 +64,13 @@ export type RegisteredPhase = {
 export type ExtensionPackageManifest = {
   rowan?: {
     extensions?: string[];
-    phase?: PhaseManifest;
+    phase?: {
+      id?: string;
+      name?: string;
+      description?: string;
+      tools?: string[];
+      skills?: string[];
+    };
   };
 };
 

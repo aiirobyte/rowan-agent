@@ -35,9 +35,6 @@ import {
 import {
   createExtensionRunner,
   discoverAndLoadExtensions,
-  createPhaseRegistry,
-  type PhaseRegistry,
-  type PhaseDefinition,
 } from "@rowan-agent/agent";
 import { formatJsonOutput, formatOutcomeOutput } from "./output";
 
@@ -504,30 +501,11 @@ async function createConfiguredAgent(
     extensionRunner.bind();
   }
 
-  // Create phase config from extensions or use default chat phase
-  let phaseConfig: PhaseRegistry;
+  // Create phase registry from extensions (or undefined for default loop)
   const extensionPhases = extensionRunner.getPhases();
-  if (extensionPhases.length > 0) {
-    phaseConfig = extensionRunner.createPhaseRegistry({ entryPhaseId: "chat" });
-  } else {
-    // Default chat phase when no extensions provide phases
-    const chatPhase: PhaseDefinition = {
-      id: "chat",
-      name: "Chat",
-      description: "Chat with the user",
-      buildPrompt: (input) => ({
-        model: { provider: "openai-compatible", name: config.model },
-        system: input.systemPrompt,
-        messages: input.messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-        tools: input.phaseTools?.map((t) => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        })),
-      }),
-    };
-    phaseConfig = createPhaseRegistry({ entryPhaseId: "chat", phases: [chatPhase] });
-  }
+  const phases = extensionPhases.length > 0
+    ? extensionRunner.createPhaseRegistry({ entryPhaseId: "chat" })
+    : undefined;
 
   const extensionRunnerRef: ExtensionRunnerRef = { current: extensionRunner };
   const agent = new Agent({
@@ -535,7 +513,7 @@ async function createConfiguredAgent(
     context,
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompletionsStream(config),
-    phaseConfig,
+    phases,
     extensionRunnerRef,
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
   });

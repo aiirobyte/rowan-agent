@@ -320,8 +320,13 @@ export type AgentContextSkill = {
 
 export type Outcome = {
   id: string;
-  taskId?: string;
   message: string;
+  toolResults?: Array<{
+    toolName: string;
+    ok: boolean;
+    content: unknown;
+    error?: string;
+  }>;
 };
 
 export type ToolCall = {

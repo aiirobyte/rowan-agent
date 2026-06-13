@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Phase, PhaseFrontmatter, PhaseRegistry } from "./types";
-import type { ExtensionAPI, PhaseOutput } from "./extension-api";
+import type { PhaseInput, PhaseOutput } from "../../protocol/context";
+import type { PhaseContext } from "../../loop/execution";
 import {
   parseFrontmatter,
   loadMarkdown,
@@ -129,10 +130,11 @@ async function discoverPhaseCode(baseDir: string): Promise<string | null> {
 /**
  * Load phase execution code using jiti.
  * Module must export a run() function.
+ * The loaded run function is adapted to accept PhaseContext.
  */
 async function loadPhaseCode(
   codePath: string,
-): Promise<(api: ExtensionAPI) => Promise<PhaseOutput>> {
+): Promise<(context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>> {
   const { createJiti } = await import("jiti");
   const jiti = createJiti(import.meta.url, {
     moduleCache: false,
@@ -144,7 +146,37 @@ async function loadPhaseCode(
     throw new Error(`Phase code at "${codePath}" must export a "run" function.`);
   }
 
-  return mod.run as (api: ExtensionAPI) => Promise<PhaseOutput>;
+  return mod.run as (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
+}
+
+/**
+ * Re-read all file-based phases from disk and rebuild the registry.
+ * Extension-registered phases (with empty filePath) are preserved as-is.
+ */
+export async function reloadPhases(
+  registry: PhaseRegistry,
+  workspace?: WorkspacePaths,
+): Promise<PhaseRegistry> {
+  const reloaded = new Map<string, Phase>();
+
+  for (const [id, phase] of registry.phases) {
+    // Skip extension-registered phases (no file path)
+    if (!phase.filePath) {
+      reloaded.set(id, phase);
+      continue;
+    }
+
+    try {
+      const fresh = await loadPhase(phase.filePath, workspace);
+      reloaded.set(id, fresh);
+    } catch (error) {
+      // Keep stale version on error
+      console.warn(`Failed to reload phase "${id}":`, error);
+      reloaded.set(id, phase);
+    }
+  }
+
+  return { phases: reloaded, entryPhaseId: registry.entryPhaseId };
 }
 
 /**

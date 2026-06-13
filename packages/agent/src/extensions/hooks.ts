@@ -74,7 +74,7 @@
  */
 
 import type { Outcome, Tool, ToolResult } from "../types";
-import type { PhaseInput, PhaseOutput } from "../loop/phases/registry";
+import type { PhaseInput, PhaseOutput } from "../protocol/context";
 import type { AgentMessage } from "../types";
 
 // ---------------------------------------------------------------------------
