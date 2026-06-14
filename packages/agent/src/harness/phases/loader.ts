@@ -32,13 +32,9 @@ export async function loadPhase(
   const resolved = resolveResourcePath(input, PHASE_DIR, PHASE_MARKER, workspace);
   const { frontmatter, body } = await loadMarkdown<PhaseFrontmatter>(resolved);
 
-  if (!frontmatter.id) {
-    throw new Error(`Phase at "${resolved}" is missing required "id" field in frontmatter.`);
-  }
-
   const baseDir = dirname(resolved);
   const phase: Phase = {
-    id: frontmatter.id,
+    id: inferResourceName(resolved, PHASE_MARKER),
     name: frontmatter.name ?? inferResourceName(resolved, PHASE_MARKER),
     description: frontmatter.description ?? "",
     tools: frontmatter.tools,

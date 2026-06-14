@@ -11,7 +11,6 @@ import type { ExtensionAPI, ChatParams, ChatResult } from "../src/harness/phases
 describe("parseFrontmatter", () => {
   test("parses basic key-value pairs", () => {
     const raw = `---
-id: review
 name: Code Review
 description: Review code changes
 ---
@@ -19,7 +18,6 @@ description: Review code changes
 Body content here.`;
 
     const result = parseFrontmatter<PhaseFrontmatter>(raw);
-    expect(result.frontmatter.id).toBe("review");
     expect(result.frontmatter.name).toBe("Code Review");
     expect(result.frontmatter.description).toBe("Review code changes");
     expect(result.body).toContain("Body content here.");
@@ -27,7 +25,6 @@ Body content here.`;
 
   test("parses arrays in bracket notation", () => {
     const raw = `---
-id: test
 tools: [read, grep, glob]
 skills: [code-review, security]
 ---
@@ -41,7 +38,6 @@ Content`;
 
   test("parses boolean values", () => {
     const raw = `---
-id: entry-phase
 entry: true
 ---
 

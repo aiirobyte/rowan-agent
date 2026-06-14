@@ -9,8 +9,6 @@ import type { ExtensionAPI } from "./extension-api";
  * Frontmatter properties parsed from PHASE.md
  */
 export interface PhaseFrontmatter {
-  /** Phase unique identifier (required) */
-  id: string;
   /** Display name, defaults to id */
   name?: string;
   /** Phase description */
