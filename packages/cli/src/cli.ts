@@ -501,7 +501,6 @@ async function createConfiguredAgent(
     extensionRunner.bind();
   }
 
-  // Create phase registry from extensions (or undefined for default loop)
   const extensionPhases = extensionRunner.getPhases();
   const phases = extensionPhases.length > 0
     ? extensionRunner.createPhaseRegistry({ entryPhaseId: "chat" })
@@ -605,14 +604,18 @@ async function promptWithLog(input: {
     const result = await input.agent.run({
       context,
       sessionId: sessionManager.getSessionId(),
+      onMessage: async (msg) => {
+        if (msg.role !== "user") {
+          await sessionManager!.appendMessage(msg);
+        }
+      },
+      onOutcome: async (outcome) => {
+        await sessionManager!.appendOutcome(outcome);
+      },
+      onModelTranscript: async (transcript, meta) => {
+        await sessionManager!.appendModelTranscript(transcript, meta);
+      },
     });
-    const newMessages = result.messages.slice(context.messages.length);
-    for (const message of newMessages) {
-      if (message.role !== "user") {
-        await sessionManager.appendMessage(message);
-      }
-    }
-    await sessionManager.appendOutcome(result.outcome);
     return { outcome: result.outcome, metrics: result.metrics, sessionManager, streamedContent, pendingConsoleEvents };
   } finally {
     try {

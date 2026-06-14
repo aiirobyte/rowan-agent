@@ -3,7 +3,8 @@
  */
 
 import type { PhaseInput, PhaseOutput } from "../protocol/context";
-import type { PhaseContext } from "../loop/execution";
+import type { PhaseExecution } from "../loop/execution";
+import type { AgentContext } from "../types";
 import type { LlmRequest, ProviderConfig } from "@rowan-agent/models";
 import type { Outcome } from "../types";
 import type { SourceInfo } from "./source-info";
@@ -24,7 +25,7 @@ export type PhasePromptConfig = {
 };
 
 /** Phase run function type for extensions */
-export type PhaseRun = (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
+export type PhaseRun = (context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 
 /** Phase definition shape used by extensions */
 export type PhaseDefinition = {

@@ -52,7 +52,6 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
   expect(second.outcome.message).toBe("Second answer saw the first turn.");
   expect(agent.state.sessionId).toBe(sessionId);
   expect(agent.state.context.messages.filter((message) => message.role === "user")).toHaveLength(2);
-  expect(agent.state.context.messages.some((message) => message.metadata?.kind === "outcome")).toBe(true);
   expect(agent.state.context.messages.some((message) => message.content.includes("First answer"))).toBe(true);
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining(["first", expect.stringContaining("First answer"), "second"]),
@@ -97,7 +96,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   expect(
     agent.state.context.messages.some(
       (message) =>
-        message.role === "assistant" && message.metadata?.kind === "outcome",
+        message.role === "assistant" && message.content.includes("Response to: use echo tool"),
     ),
   ).toBe(true);
 });
@@ -132,12 +131,4 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
 
   expect(first.outcome.message).toBe("Task failed: missing requirements");
   expect(second.outcome.message).toBe("Recovered direct answer.");
-  expect(
-    agent.state.context.messages.some(
-      (message) =>
-        message.role === "assistant" &&
-        message.metadata?.kind === "outcome" &&
-        message.content === "Task failed: missing requirements",
-    ),
-  ).toBe(true);
 });

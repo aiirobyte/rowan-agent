@@ -1,7 +1,7 @@
 import { runAgentLoop } from "./agent-loop";
 import { ExtensionRunner } from "./extensions";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
-import { snapshotMessage, snapshotMessages } from "./loop/state";
+import { snapshotMessages } from "./loop/state";
 import type { PhaseRegistry } from "./harness/phases/types";
 import type { PhaseInput, PhaseOutput } from "./protocol/context";
 import type {
@@ -18,7 +18,12 @@ import type {
   AgentEventListener,
   Unsubscribe,
   ToolResult,
+  Outcome,
 } from "./types";
+import type { ModelTranscript } from "./protocol/turn";
+import { createId } from "./utils";
+
+import type { AgentConfig } from "./loop/types";
 
 export type ExtensionRunnerRef = { current?: ExtensionRunner };
 
@@ -34,11 +39,12 @@ export type AgentOptions = {
   limits?: AgentRunLimits;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
+  onMessage?: (message: AgentMessage) => Promise<void>;
+  onOutcome?: (outcome: Outcome) => Promise<void>;
+  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
 };
 
-export type RunOptions = Partial<Omit<AgentOptions, "context">> & {
-  context: AgentContext;
-};
+export type RunOptions = Partial<AgentConfig> & Pick<AgentConfig, "context">;
 
 export type AgentStatus = {
   sessionId?: string;
@@ -275,7 +281,7 @@ export class Agent {
 
       const result = await runAgentLoop({
         context: resolved.context,
-        ...(sessionId ? { sessionId } : {}),
+        sessionId: sessionId ?? createId("ses"),
         model: resolved.model,
         stream: resolved.stream,
         maxAttempts: resolved.maxAttempts,
@@ -288,6 +294,9 @@ export class Agent {
         beforePrompt: (phaseId: string, input: PhaseInput) => this.handleBeforePrompt(phaseId, input),
         phases,
         emit,
+        onMessage: resolved.onMessage,
+        onOutcome: resolved.onOutcome,
+        onModelTranscript: resolved.onModelTranscript,
       });
 
       this.state.sessionId = result.sessionId;
@@ -337,7 +346,7 @@ function cloneAgentContext(context: AgentContext): AgentContext {
   return {
     systemPrompt: context.systemPrompt,
     messages: snapshotMessages(context.messages),
-    ...(context.tools ? { tools: context.tools.slice() } : {}),
-    ...(context.skills ? { skills: context.skills.slice() } : {}),
+    tools: context.tools.slice(),
+    skills: context.skills.slice(),
   };
 }

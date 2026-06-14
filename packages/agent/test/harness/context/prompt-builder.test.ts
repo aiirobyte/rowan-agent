@@ -3,8 +3,8 @@ import Type from "typebox";
 import {
   buildModelRequest,
 } from "../../../src/harness/context/prompt-builder";
-import { createId, createMessage, createAgentState } from "@rowan-agent/agent";
-import type { PhaseInput, Tool } from "@rowan-agent/agent";
+import { createId, createMessage } from "@rowan-agent/agent";
+import type { PhaseInput, Skill, Tool } from "@rowan-agent/agent";
 
 function buildRequest(input: {
   context: PhaseInput;
@@ -27,17 +27,16 @@ const echoTool: Tool<{ message: string }> = {
 };
 
 function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skills?: PhaseInput["skills"] } = {}): PhaseInput {
-  const state = createAgentState({
-    systemPrompt: overrides.systemPrompt ?? "Test system",
-    input: overrides.input ?? "Use echo.",
-    skills: overrides.skills,
-  });
+  const skills = overrides.skills ?? [];
+  const tools = overrides.tools ?? [];
   return {
     phase: overrides.phase ?? "chat",
-    systemPrompt: state.systemPrompt,
-    messages: state.messages,
-    tools: overrides.tools ?? [],
-    skills: state.skills,
+    systemPrompt: overrides.systemPrompt ?? "Test system",
+    messages: [createMessage("user", overrides.input ?? "Use echo.")],
+    tools,
+    skills,
+    phaseTools: overrides.phaseTools ?? tools,
+    phaseSkills: overrides.phaseSkills ?? skills,
   };
 }
 
@@ -88,8 +87,8 @@ test("buildRequest returns LlmRequest with correct messages", () => {
 });
 
 test("prompt builder excludes execution-scoped messages from conversation", () => {
-  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
-  state.messages.push(
+  const messages = [
+    createMessage("user", "Use echo."),
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating.\"}", {
       kind: "routing_decision",
       phase: "chat",
@@ -98,14 +97,16 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
       toolName: "echo",
       scope: "execution",
     }),
-  );
+  ];
 
   const testInput: PhaseInput = {
     phase: "chat",
-    systemPrompt: state.systemPrompt,
-    messages: state.messages,
+    systemPrompt: "Test system",
+    messages,
     tools: [],
     skills: [],
+    phaseTools: [],
+    phaseSkills: [],
   };
 
   const req = buildModelRequest(testInput);
@@ -118,13 +119,13 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
   expect(allContent).toContain("Use echo.");
   // Execution-scoped tool messages are now included for native tool_call format
   expect(allContent).toContain("tool evidence");
-  // Routing decisions (non-tool execution messages) are still excluded
-  expect(allContent).not.toContain("Creating.");
+  // Routing decisions are now included (kind filter removed)
+  expect(allContent).toContain("Creating.");
 });
 
 test("prompt builder includes execution-scoped tool messages as native tool_result", () => {
-  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
-  state.messages.push(
+  const messages = [
+    createMessage("user", "Use echo."),
     createMessage("assistant", "", {
       scope: "execution",
       toolCalls: [{ id: "call_1", name: "echo", args: { message: "hello" } }],
@@ -134,14 +135,16 @@ test("prompt builder includes execution-scoped tool messages as native tool_resu
       toolName: "echo",
       scope: "execution",
     }),
-  );
+  ];
 
   const testInput: PhaseInput = {
     phase: "chat",
-    systemPrompt: state.systemPrompt,
-    messages: state.messages,
+    systemPrompt: "Test system",
+    messages,
     tools: [],
     skills: [],
+    phaseTools: [],
+    phaseSkills: [],
   };
 
   const req = buildModelRequest(testInput);

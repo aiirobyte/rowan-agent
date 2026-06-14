@@ -1,44 +1,25 @@
 import Type from "typebox";
-import type { AgentRuntimePort, AgentRunLimits, BeforePhaseHook, AfterPhaseHook, BeforePromptHook, LoopMetrics } from "./loop/types";
-import type { PhaseInput } from "./protocol/context";
-
-// Phase system types
-import type {
-  PhaseRegistry,
-} from "./harness/phases/types";
+import type { LoopMetrics } from "./loop/types";
 import type {
   AgentContextMessage,
   AgentContextSkill,
-  LlmModelRef,
   LlmModelUsage,
   LlmRequest,
   LlmStreamEvent,
   LlmStreamOptions,
   Outcome,
-  StreamFn,
   ToolResult,
 } from "./protocol";
 import type { AgentEvent, AgentEventListener } from "@rowan-agent/models";
-import { createId, createTimestamp, createJson } from "./utils";
+import { createId, createTimestamp } from "./utils";
 
 export type {
-  AgentEffect,
-  AgentLoopContext,
-  AgentLoopConfig,
-  AgentRunState,
   AgentRuntimePort,
-  AfterPhaseHook,
-  BeforePhaseHook,
   LoopMetrics,
-  PhaseResult,
   ToolRunner,
-  ToolRunnerInput,
-} from "./loop/types";
-export type { PhaseInput, PhaseOutput } from "./protocol/context";
-
-export type {
   AgentRunLimits,
 } from "./loop/types";
+export type { PhaseInput, PhaseOutput } from "./protocol/context";
 
 export type {
   LlmModelRef,
@@ -54,38 +35,10 @@ export type {
 
 export type { AgentEvent, AgentEventListener };
 
-export const AGENT_STATE_SCHEMA_VERSION = "0.4.4";
-
 export type AgentMessage = AgentContextMessage;
 export type Skill = AgentContextSkill;
 
-export type AgentState = {
-  version: string;
-  id: string;
-  parentSessionId?: string;
-  systemPrompt: string;
-  input: string;
-  messages: AgentMessage[];
-  skills: Skill[];
-  createdAt: string;
-  updatedAt: string;
-  title?: string;
-};
-
-export type CreateAgentStateInput = {
-  id?: string;
-  systemPrompt: string;
-  input: string;
-  skills?: Skill[];
-  parentSessionId?: string;
-  title?: string;
-  messages?: AgentMessage[];
-};
-
-export type ToolContext = {
-  state: AgentState;
-  toolCallId: string;
-};
+export type ToolContext = Pick<AgentContext, "skills"> & { toolCallId: string };
 
 export type ToolExecutionMode = "sequential" | "parallel";
 
@@ -109,9 +62,9 @@ export type AgentContext = {
   /** Transcript visible to the model. */
   messages: AgentMessage[];
   /** Tools available for this run. */
-  tools?: Tool[];
+  tools: Tool[];
   /** Skills available for this run. */
-  skills?: Skill[];
+  skills: Skill[];
 };
 
 export type BeforeToolCall = (input: {
@@ -124,30 +77,6 @@ export type AfterToolCall = (input: {
   result: ToolResult;
 }) => Promise<ToolResult>;
 
-type AgentRunCommonConfig = {
-  context?: AgentContext;
-  model: LlmModelRef;
-  stream: StreamFn;
-  tools?: Tool[];
-  maxAttempts?: number;
-  limits?: AgentRunLimits;
-  signal?: AbortSignal;
-  runtime?: AgentRuntimePort;
-  beforeToolCall?: BeforeToolCall;
-  afterToolCall?: AfterToolCall;
-  beforePhase?: BeforePhaseHook;
-  afterPhase?: AfterPhaseHook;
-  beforePrompt?: BeforePromptHook;
-  emit?: AgentEventListener;
-};
-
-export type AgentLoopRunConfig = AgentRunCommonConfig & {
-  sessionId?: string;
-  state?: AgentState;
-  /** Phase registry for hot-pluggable phase system */
-  phases?: PhaseRegistry;
-};
-
 export type RunResult = {
   sessionId: string;
   messages: AgentMessage[];
@@ -156,8 +85,6 @@ export type RunResult = {
 };
 
 export type Unsubscribe = () => void;
-
-export type AgentLoopInput = AgentLoopRunConfig;
 
 export function createMessage(
   role: AgentMessage["role"],
@@ -171,35 +98,4 @@ export function createMessage(
     createdAt: createTimestamp(),
     ...(metadata ? { metadata } : {}),
   };
-}
-
-export function createAgentState(input: CreateAgentStateInput): AgentState {
-  const createdAt = createTimestamp();
-  const messages = input.messages?.map(createJson.new) ?? [
-    createMessage("user", input.input),
-  ];
-
-  return {
-    version: AGENT_STATE_SCHEMA_VERSION,
-    id: input.id ?? createId("ses"),
-    ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
-    systemPrompt: input.systemPrompt,
-    input: input.input,
-    messages,
-    skills: input.skills?.map(createJson.new) ?? [],
-    createdAt,
-    updatedAt: createdAt,
-    ...(input.title ? { title: input.title } : {}),
-  };
-}
-
-export function latestUserInput(state: Pick<AgentState, "input" | "messages">): string {
-  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    const message = state.messages[index];
-    if (message.role === "user") {
-      return message.content;
-    }
-  }
-
-  return state.input;
 }

@@ -1,5 +1,5 @@
 import Type from "typebox";
-import type { Tool } from "../types";
+import type { Tool } from "../../types";
 import type { Phase } from "../../harness/phases/types";
 import { buildStructuredSection } from "../context/section-formatter";
 

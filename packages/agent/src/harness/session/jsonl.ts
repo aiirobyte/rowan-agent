@@ -17,6 +17,9 @@ import {
   type StepFilter,
 } from "./session-manager";
 import type { AgentMessage } from "./session";
+import type { SessionState } from "../../loop/types";
+import type { ModelTranscript } from "../../protocol/turn";
+import type { LlmModelRef } from "../../protocol/model";
 
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9_-]+$/;
 
@@ -210,6 +213,18 @@ export class LocalJsonlSessionManager implements SessionManager {
 
   async appendCustom(input: { customType: string; data: unknown }): Promise<string> {
     return this.appendThroughInner(() => this.inner.appendCustom(input));
+  }
+
+  async appendSessionState(state: SessionState): Promise<string> {
+    return this.appendThroughInner(() => this.inner.appendSessionState(state));
+  }
+
+  async appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: LlmModelRef }): Promise<string> {
+    return this.appendThroughInner(() => this.inner.appendModelTranscript(transcript, meta));
+  }
+
+  async getSessionState(): Promise<SessionState | undefined> {
+    return this.inner.getSessionState();
   }
 
   async branch(entryId: string | null): Promise<void> {

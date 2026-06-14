@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
-import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
-import { createAgentState as createBaseAgentState, createMessage } from "../src/types";
+import type { AgentContext, AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
+import { createMessage } from "../src/types";
 import { createId } from "../src/utils";
 import { echoTool } from "./support/echo-tool";
 import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
@@ -31,8 +31,13 @@ function extractUserRequest(messages: LlmRequest["messages"]): string {
   return "";
 }
 
-function createState(input: Parameters<typeof createBaseAgentState>[0]) {
-  return createBaseAgentState(input);
+function createContext(input: { systemPrompt: string; input: string; tools?: Tool[]; skills?: import("../src/types").Skill[] }): AgentContext {
+  return {
+    systemPrompt: input.systemPrompt,
+    messages: [createMessage("user", input.input)],
+    tools: input.tools?.slice() ?? [],
+    skills: input.skills?.slice() ?? [],
+  };
 }
 
 test("runAgentLoop assembles runtime context for the first message", async () => {
@@ -51,6 +56,7 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
         createMessage("user", "hello", { scope: "conversation" }),
       ],
       tools: [echoTool],
+      skills: [],
     },
     model: { provider: "test", name: "scripted" },
     stream,
@@ -81,6 +87,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
       systemPrompt: "Test system",
       messages: [createMessage("user", "hello", { scope: "conversation" })],
       tools: [echoTool],
+      skills: [],
     },
     model: { provider: "test-provider", name: "test-model" },
     stream,
@@ -112,9 +119,10 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
 });
 
 test("runAgentLoop completes task with simple response", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: string[] = [];
   const stream: StreamFn = async function* simpleResponseStream() {
@@ -124,10 +132,9 @@ test("runAgentLoop completes task with simple response", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream,
-    tools: [echoTool],
     emit: (event) => {
       events.push(event.type);
     },
@@ -141,9 +148,10 @@ test("runAgentLoop completes task with simple response", async () => {
 });
 
 test("runAgentLoop preserves message order", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const stream: StreamFn = async function* orderedMessageStream() {
     const text = "Ordered messages.";
@@ -153,10 +161,9 @@ test("runAgentLoop preserves message order", async () => {
   const events: AgentEvent[] = [];
 
   await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "ordered" },
     stream,
-    tools: [echoTool],
     maxAttempts: 1,
     emit: (event) => {
       events.push(event);
@@ -169,9 +176,10 @@ test("runAgentLoop preserves message order", async () => {
 });
 
 test("runAgentLoop does not emit prompt messages as events", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "hello",
+    tools: [],
   });
   const emittedEvents: AgentEvent[] = [];
   const stream: StreamFn = async function* promptRecordingStream(request) {
@@ -183,10 +191,9 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
   };
 
   await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "prompt-recording" },
     stream,
-    tools: [],
     emit: (event) => {
       emittedEvents.push(event);
     },
@@ -202,17 +209,17 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
 });
 
 test("runAgentLoop can return a direct response without creating a task", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "hello",
+    tools: [echoTool],
   });
   const emittedEvents: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: [echoTool],
     emit: (event) => {
       emittedEvents.push(event);
     },
@@ -220,8 +227,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
   const events = emittedEvents.map((event) => event.type);
 
   expect(outcome.outcome.message).toBe("Direct response: hello");
-  expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
-  expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(true);
+  expect(outcome.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
   // Outcome message should not emit message_start/message_end events
   expect(
     emittedEvents.some(
@@ -233,9 +239,10 @@ test("runAgentLoop can return a direct response without creating a task", async 
 });
 
 test("runAgentLoop returns structured error for unknown tool without crashing", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [],
   });
   const events: AgentEvent[] = [];
   const stream: StreamFn = async function* simpleStream() {
@@ -245,10 +252,9 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream,
-    tools: [],
     maxAttempts: 1,
     emit: (event) => {
       events.push(event);
@@ -259,9 +265,10 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
 });
 
 test("runAgentLoop throws provider errors to the caller", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "hello",
+    tools: [echoTool],
   });
   const stream: StreamFn = async function* failingStream() {
     throw Object.assign(new Error("Provider request failed with status 400 Bad Request: Invalid model."), {
@@ -281,10 +288,9 @@ test("runAgentLoop throws provider errors to the caller", async () => {
 
   await expect(
     runAgentLoop({
-      state: session,
+      context: session,
       model: { provider: "test", name: "failing" },
       stream,
-      tools: [echoTool],
     }),
   ).rejects.toThrow("Invalid model");
 });
@@ -294,9 +300,10 @@ function invalidModelSchemaError(message: string): Error & { code: string } {
 }
 
 test("runAgentLoop retries when model returns invalid schema", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: AgentEvent[] = [];
   let callCount = 0;
@@ -312,10 +319,9 @@ test("runAgentLoop retries when model returns invalid schema", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "retry" },
     stream,
-    tools: [echoTool],
     maxAttempts: 2,
     emit: (event) => {
       events.push(event);
@@ -333,9 +339,10 @@ test("runAgentLoop retries when model returns invalid schema", async () => {
 });
 
 test("runAgentLoop retries when execute returns invalid model schema", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   let callCount = 0;
   const stream: StreamFn = async function* retryStream() {
@@ -350,10 +357,9 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "retry-execute" },
     stream,
-    tools: [echoTool],
     maxAttempts: 2,
   });
 
@@ -363,17 +369,17 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
 });
 
 test("beforeToolCall hook can block execution", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: [echoTool],
     maxAttempts: 1,
     beforeToolCall: async () => ({ allow: false, reason: "blocked in test" }),
     emit: (event) => {
@@ -384,17 +390,17 @@ test("beforeToolCall hook can block execution", async () => {
 });
 
 test("afterToolCall hook review is logged with original and reviewed result", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: [echoTool],
     afterToolCall: async ({ result }) => ({
       ...result,
       content: `${result.content} reviewed`,
@@ -441,17 +447,17 @@ test("invalid tool args do not execute tool", async () => {
     yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: withTool };
     yield { type: "done" };
   };
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "call strict",
+    tools: [strictTool],
   });
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: invalidArgsStream,
-    tools: [strictTool],
     maxAttempts: 1,
     emit: (event) => {
       events.push(event);
@@ -464,9 +470,10 @@ test("invalid tool args do not execute tool", async () => {
 });
 
 test("beforePhase hook can adjust phase input", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "adjust route input",
+    tools: [],
   });
   const stream: StreamFn = async function* adjustableRouteStream(request) {
     const phase = detectPhase(request.messages);
@@ -481,10 +488,9 @@ test("beforePhase hook can adjust phase input", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-adjust-input" },
     stream,
-    tools: [],
     beforePhase: async (phaseId, input) => {
       if (phaseId !== "chat") {
         return {};
@@ -497,9 +503,10 @@ test("beforePhase hook can adjust phase input", async () => {
 });
 
 test("afterPhase hook can adjust phase output", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "adjust route output",
+    tools: [],
   });
   const stream: StreamFn = async function* routeStream() {
     const text = "Original route output.";
@@ -508,10 +515,9 @@ test("afterPhase hook can adjust phase output", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-adjust-output" },
     stream,
-    tools: [],
     afterPhase: async (phaseId, output) => {
       if (phaseId !== "none") {
         return {};
@@ -529,9 +535,10 @@ test("afterPhase hook can adjust phase output", async () => {
 });
 
 test("beforePhase hook can skip a phase", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "skip route",
+    tools: [],
   });
   let modelCalled = false;
   const stream: StreamFn = async function* skippedStream() {
@@ -539,10 +546,9 @@ test("beforePhase hook can skip a phase", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-skip" },
     stream,
-    tools: [],
     beforePhase: async (phaseId) => {
       if (phaseId !== "none") {
         return {};
@@ -561,9 +567,10 @@ test("beforePhase hook can skip a phase", async () => {
 });
 
 test("afterPhase hook can retry a phase with adjusted input", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "retry route",
+    tools: [],
   });
   let callCount = 0;
   const stream: StreamFn = async function* retryableRouteStream() {
@@ -575,10 +582,9 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-retry" },
     stream,
-    tools: [],
     afterPhase: async (phaseId, output) => {
       if (phaseId !== "none" || output.message !== "Needs retry.") {
         return {};
@@ -600,9 +606,10 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
 });
 
 test("beforePhase hook can abort with an outcome", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "abort during phase",
+    tools: [],
   });
   const events: AgentEvent[] = [];
   const stream: StreamFn = async function* taskStream() {
@@ -612,10 +619,9 @@ test("beforePhase hook can abort with an outcome", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-abort" },
     stream,
-    tools: [],
     emit: (event) => {
       events.push(event);
     },

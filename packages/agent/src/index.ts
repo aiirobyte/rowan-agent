@@ -3,9 +3,7 @@ export { Agent } from "./agent";
 export type { AgentOptions, RunOptions, AgentStatus } from "./agent";
 
 export {
-  AGENT_STATE_SCHEMA_VERSION,
   createMessage,
-  createAgentState,
 } from "./types";
 
 export { createId, createTimestamp, createJson } from "./utils";
@@ -13,11 +11,10 @@ export { createId, createTimestamp, createJson } from "./utils";
 export type {
   AgentMessage,
   Skill,
-  AgentState,
-  CreateAgentStateInput,
   AgentContext,
   Tool,
   ToolExecutionMode,
+  ToolContext,
   BeforeToolCall,
   AfterToolCall,
   AgentEvent,
@@ -29,6 +26,11 @@ export type {
   AgentRunLimits,
   LoopMetrics,
 } from "./types";
+
+export type {
+  SessionState,
+  AgentConfig,
+} from "./loop/types";
 
 export { EventStream, AgentEventStream } from "./event-stream";
 
@@ -59,6 +61,8 @@ export {
   type BranchSummarySessionEntry,
   type SessionInfoSessionEntry,
   type CustomSessionEntry,
+  type SessionStateSessionEntry,
+  type ModelTranscriptSessionEntry,
   type SessionEntry,
   type SessionRecord,
   type SessionAgentContext,
@@ -86,6 +90,7 @@ export type { ExtensionRunnerRef } from "./agent";
 export type {
   PhaseRegistry,
   Phase,
+  PhaseConfig,
   PhaseFrontmatter,
   PhaseState,
   PhaseTransition,
@@ -97,12 +102,9 @@ export type {
 } from "./protocol/context";
 
 export type {
-  PhaseContext,
-  PhaseMessageManager,
-  PhaseToolExecutionManager,
+  PhaseExecution,
+  AgentContextSnapshot,
   ModelInvokeOutput,
-  ModelInvokeInput,
-  MessageSnapshot,
 } from "./loop/execution";
 
 // ── prompt / context ───────────────────────────────────────────
@@ -124,4 +126,5 @@ export type {
   StepFilter,
   Outcome,
   ToolResult,
+  ModelTranscript,
 } from "./protocol";

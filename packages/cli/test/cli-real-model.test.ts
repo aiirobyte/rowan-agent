@@ -564,7 +564,7 @@ test("CLI writes a default log without --log", async () => {
     expect(logText).not.toContain("\"event\":");
     expect(logText).not.toContain("\"input\":\"hello\"");
     expect(logText).toContain("\"eventType\":\"model_requested\"");
-    expect(logText).toContain("\"phase\":\"chat\"");
+    expect(logText).toContain("\"phase\":\"none\"");
     expect(logText).not.toContain("\"eventType\":\"task_created\"");
     expect(logText).toContain("\"eventType\":\"turn_end\"");
 
@@ -664,62 +664,16 @@ test("CLI --log-level silent suppresses run log files", async () => {
   }
 });
 
-test("CLI exposes core bash during planning and executes returned tool calls", async () => {
+test("CLI exposes core bash in the none phase", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-bash-"));
   const responses = [
     {
-      message: "Planning bash execution.",
+      message: "Bash is available.",
       toolCalls: [
         {
-          name: "route",
-          args: { route: "plan", reason: "Planning bash execution." },
-        },
-      ],
-    },
-    {
-      // Plan phase expects JSON output with task
-      // The openAIResponse function will serialize this as the content field
-      task: {
-        title: "Run bash",
-        instruction: "run a bash command",
-        acceptanceCriteria: ["The bash command output is present."],
-        toolNames: ["bash"],
-        skillIds: [],
-        status: "pending",
-        attempts: 0,
-      },
-      message: "Task planned.",
-      toolCalls: [
-        {
-          name: "route",
-          args: { route: "execute", reason: "Task planned." },
-        },
-      ],
-    },
-    {
-      message: "Running bash.",
-      toolCalls: [
-        {
+          id: "call_bash",
           name: "bash",
           args: { command: "printf cli-bash-ok" },
-        },
-      ],
-    },
-    {
-      message: "Execution complete.",
-      toolCalls: [
-        {
-          name: "route",
-          args: { route: "verify", reason: "Execution complete." },
-        },
-      ],
-    },
-    {
-      message: "Task passed: Run bash",
-      toolCalls: [
-        {
-          name: "route",
-          args: { route: "stop", reason: "Task passed: Run bash" },
         },
       ],
     },
@@ -753,23 +707,18 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     });
 
     expect(result.exitCode).toBe(0);
-    // Streaming is working, so stdout contains the streamed text
-    expect(result.stdout).toContain("Planning bash execution");
+    expect(result.stdout).toContain("Bash is available");
     expect(requests[0]?.tools?.some((t: { function: { name: string } }) => t.function.name === "bash")).toBe(true);
 
     const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
     expect(logMatch).not.toBeNull();
     const logPath = join(workspace, logMatch?.[1] ?? "");
-    const logText = await Bun.file(logPath).text();
     const logEvents = await readLogEvents(logPath);
-    // CLI uses legacy phase system with chat/plan/execute/verify phases
-    const routePhaseIndex = logEvents.findIndex(
-      (event) => event.type === "phase_start" && event.phase === "chat",
+    const nonePhaseIndex = logEvents.findIndex(
+      (event) => event.type === "phase_start" && event.phase === "none",
     );
-    expect(routePhaseIndex).toBeGreaterThanOrEqual(0);
-    // In the new phase system, tools may not be auto-executed depending on phaseConfig
-    // The test verifies that the CLI runs and produces output
-    expect(result.exitCode).toBe(0);
+    expect(nonePhaseIndex).toBeGreaterThanOrEqual(0);
+    expect(logEvents.some((event) => event.type === "tool_execution_start")).toBe(false);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

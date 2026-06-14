@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import Type from "typebox";
 import Schema from "typebox/schema";
 import type { ToolCall, ToolResult } from "../../protocol";
-import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../types";
+import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../../types";
 
 // Re-export route and thread tools
 export { createRouteTool, extractRouteCall, PhaseRouteTool } from "./route-tool";

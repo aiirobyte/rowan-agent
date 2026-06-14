@@ -1,30 +1,26 @@
 import type {
   AgentEvent,
-  AgentLoopContext,
-  AgentLoopInput,
   AgentMessage,
+  AgentContext,
   RunResult,
-  LlmStreamEvent,
   Outcome,
+  Tool,
   ToolCall,
   ToolResult,
 } from "../types";
-import type {
-  ContentBlock,
-  AssistantMessagePartial,
-  TextBlock,
-  ToolCallBlock,
-} from "@rowan-agent/models";
 import { createMessage } from "../types";
 import { createTimestamp } from "../utils";
+import type { AgentRunState, AgentConfig } from "./types";
 
 // Execution types (loop-level)
 import type {
-  PhaseContext,
   PhaseMessageManager,
   PhaseToolExecutionManager,
   ModelInvokeOutput,
+  PhaseExecution,
+  AgentContextSnapshot,
 } from "./execution";
+import { invokeModel } from "./stream-collector";
 import type { PhaseInput, PhaseOutput } from "../protocol/context";
 
 // Phase system types
@@ -39,7 +35,6 @@ import { buildModelRequest } from "../harness/context/prompt-builder";
 import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessage, snapshotMessages } from "./state";
-import type { AgentLoopConfig, AgentRunState } from "./types";
 import { createRouteTool, extractRouteCall, createThreadTool } from "../harness/tools";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
 
@@ -58,11 +53,11 @@ function isPhaseState(value: string): value is PhaseState {
 /** Execute phase run and handle void return by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(
   result: PhaseOutput | void,
-  state: AgentRunState,
+  context: AgentContext,
 ): PhaseOutput {
   if (result) return result;
   return {
-    message: state.transcript.filter(m => m.role === "assistant").pop()?.content ?? "",
+    message: context.messages.filter(m => m.role === "assistant").pop()?.content ?? "",
     route: "stop",
   };
 }
@@ -72,41 +67,24 @@ function resolvePhaseOutput(
 // ============================================================================
 
 function emit(
-  state: AgentRunState,
   emitFn: ((event: AgentEvent) => void) | undefined,
   event: AgentEvent,
 ): void {
-  state.agentState.updatedAt = event.ts;
   emitFn?.(event);
 }
 
 function emitTurn(
-  state: AgentRunState,
+  context: AgentContext,
   emitFn: ((event: AgentEvent) => void) | undefined,
   type: "turn_start" | "turn_end",
   extra?: { outcome?: Outcome },
 ): void {
-  emit(state, emitFn, {
+  emit(emitFn, {
     type,
-    content: snapshotMessages(state.transcript),
+    content: snapshotMessages(context.messages),
     ...extra,
     ts: createTimestamp(),
   });
-}
-
-// ============================================================================
-// Message Management
-// ============================================================================
-
-function appendMessage(
-  state: AgentRunState,
-  message: AgentMessage,
-  toState = false,
-): void {
-  if (toState) {
-    state.agentState.messages.push(message);
-  }
-  state.transcript.push(message);
 }
 
 // ============================================================================
@@ -114,12 +92,13 @@ function appendMessage(
 // ============================================================================
 
 function createRunResult(
+  config: AgentConfig,
   state: AgentRunState,
   outcome: Outcome,
 ): RunResult {
   return {
-    sessionId: state.agentState.id,
-    messages: snapshotMessages(state.agentState.messages),
+    sessionId: config.sessionId!,
+    messages: snapshotMessages(config.context.messages),
     outcome,
     metrics: state.metrics,
   };
@@ -129,43 +108,42 @@ function createRunResult(
 // Run Completion
 // ============================================================================
 
-function completeRun(
+async function completeRun(
+  config: AgentConfig,
   state: AgentRunState,
   outcome: Outcome,
-): RunResult {
+): Promise<RunResult> {
   // Finalize metrics
   state.metrics.endedAt = createTimestamp();
   state.metrics.durationMs = Date.now() - state.metrics.startedAtMs;
 
-  // Persist outcome message to agent state for multi-turn context
-  const outcomeMessage = createMessage("assistant", outcome.message, { kind: "outcome" });
-  state.agentState.messages.push(outcomeMessage);
+  await config.onOutcome?.(outcome);
 
-  return createRunResult(state, outcome);
+  return createRunResult(config, state, outcome);
 }
 
 // ============================================================================
-// Context Factory
+// Tools Factory
 // ============================================================================
 
-function createAgentLoopContext(
-  config: AgentLoopConfig,
-  state: AgentRunState,
+function buildToolsWithRouting(
+  config: AgentConfig,
   availablePhases: Pick<Phase, 'id' | 'name' | 'description'>[],
-  runLoop: (input: AgentLoopInput) => Promise<RunResult>,
-): AgentLoopContext {
-  const tools = [...config.tools];
+  runLoop: (input: AgentConfig) => Promise<RunResult>,
+) {
+  const tools = [...config.context.tools];
   if (availablePhases.length > 0) {
     tools.push(createRouteTool(availablePhases));
   }
-  const threadTool = createThreadTool(config.tools, state.agentState.skills, async (input) => {
+  const threadTool = createThreadTool(config.context.tools, config.context.skills, async (input) => {
     const result = await runLoop({
       context: {
-        systemPrompt: state.agentState.systemPrompt,
+        systemPrompt: config.context.systemPrompt,
         messages: [createMessage("user", input.prompt)],
-        tools: input.tools?.slice() ?? config.tools.slice(),
-        skills: input.skills?.slice() ?? state.agentState.skills.slice(),
+        tools: input.tools?.slice() ?? config.context.tools.slice(),
+        skills: input.skills?.slice() ?? config.context.skills.slice(),
       },
+      sessionId: config.sessionId!,
       model: config.model,
       stream: config.stream,
       maxAttempts: config.maxAttempts,
@@ -182,19 +160,64 @@ function createAgentLoopContext(
     });
     return result;
   });
+  return [...tools, threadTool];
+}
 
+function createMessageManager(
+  context: AgentContext,
+  emitFn: AgentConfig["emit"],
+  onMessage?: (message: AgentMessage) => Promise<void>,
+): PhaseMessageManager {
+  const activeMessages = new Map<string, AgentMessage>();
   return {
-    systemPrompt: state.agentState.systemPrompt,
-    messages: snapshotMessages(state.agentState.messages),
-    tools: [...tools, threadTool],
-    skills: state.agentState.skills.slice(),
-    config,
-    state,
-    ...(config.signal ? { signal: config.signal } : {}),
-    emit: (event) => emit(state, config.emit, event),
-    appendMessage: (message) => appendMessage(state, message),
-    appendStateMessage: (message) => appendMessage(state, message, true),
+    visible: () => [...context.messages],
+    start(role, content, metadata) {
+      const msg = createMessage(role, content, metadata);
+      activeMessages.set(msg.id, msg);
+      emit(emitFn, { type: "message_start", message: snapshotMessage(msg), ts: createTimestamp() });
+      return msg.id;
+    },
+    async update(messageId, delta) {
+      const msg = activeMessages.get(messageId);
+      if (!msg) return;
+      msg.content += delta;
+      emit(emitFn, { type: "message_update", message: snapshotMessage(msg), delta, ts: createTimestamp() });
+    },
+    async end(messageId) {
+      const msg = activeMessages.get(messageId);
+      if (!msg) return;
+      activeMessages.delete(messageId);
+      context.messages.push(msg);
+      emit(emitFn, { type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
+      await onMessage?.(msg);
+    },
   };
+}
+
+function createToolExecutionManager(
+  emitFn: AgentConfig["emit"],
+): PhaseToolExecutionManager {
+  return {
+    async start(toolCallId, toolName, args) {
+      emit(emitFn, { type: "tool_execution_start", toolCallId, toolName, args, ts: createTimestamp() });
+    },
+    async end(toolCallId, toolName, result, isError) {
+      emit(emitFn, { type: "tool_execution_end", toolCallId, toolName, result, isError, ts: createTimestamp() });
+    },
+  };
+}
+
+async function runTurn<T>(
+  context: AgentContext,
+  emitFn: AgentConfig["emit"],
+  fn: () => Promise<T>,
+): Promise<T> {
+  emitTurn(context, emitFn, "turn_start");
+  try {
+    return await fn();
+  } finally {
+    emitTurn(context, emitFn, "turn_end");
+  }
 }
 
 // ============================================================================
@@ -202,9 +225,9 @@ function createAgentLoopContext(
 // ============================================================================
 
 export async function runPhaseLoop(
-  config: AgentLoopConfig,
+  config: AgentConfig,
   state: AgentRunState,
-  runLoop: (input: AgentLoopInput) => Promise<RunResult>,
+  runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
   if (config.phases?.entryPhaseId) {
     return runPhasedLoop(config, state, config.phases, runLoop);
@@ -217,14 +240,13 @@ export async function runPhaseLoop(
 // ============================================================================
 
 async function runDefaultLoop(
-  config: AgentLoopConfig,
+  config: AgentConfig,
   state: AgentRunState,
-  runLoop: (input: AgentLoopInput) => Promise<RunResult>,
+  runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
   state.currentPhase = "none";
 
-  // No route tool, no phase-related system prompt — only user's configured tools
-  const loopContext = createAgentLoopContext(config, state, [], runLoop);
+  const allTools = buildToolsWithRouting(config, [], runLoop);
 
   const nonePhase: Phase = {
     id: "none",
@@ -237,57 +259,68 @@ async function runDefaultLoop(
     buildPrompt: () => "",
   };
 
-  let phaseInput: PhaseInput = {
-    phase: "none",
-    systemPrompt: loopContext.systemPrompt,
-    messages: loopContext.messages,
-    tools: loopContext.tools,
-    skills: loopContext.skills,
-    phaseTools: loopContext.tools,
-    phaseSkills: loopContext.skills,
+  const messageManager = createMessageManager(config.context, config.emit, config.onMessage);
+  const toolExecutionManager = createToolExecutionManager(config.emit);
+
+  const execution = createPhaseExecution(config, state, allTools, nonePhase, messageManager, toolExecutionManager);
+
+  const agentContext: AgentContext = {
+    systemPrompt: config.context.systemPrompt,
+    messages: snapshotMessages(config.context.messages),
+    tools: allTools,
+    skills: config.context.skills,
   };
 
-  emit(state, config.emit, { type: "phase_start", phase: "none", ts: createTimestamp() });
+  let phaseInput: PhaseInput = {
+    phase: "none",
+    systemPrompt: config.context.systemPrompt,
+    messages: snapshotMessages(config.context.messages),
+    tools: allTools,
+    skills: config.context.skills,
+    phaseTools: allTools,
+    phaseSkills: config.context.skills,
+  };
 
-  // Call beforePhase hook if defined
+  emit(config.emit, { type: "phase_start", phase: "none", ts: createTimestamp() });
+
   if (config.beforePhase) {
     const extBefore = await config.beforePhase("none", phaseInput);
     if (extBefore.abort) {
-      emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
-      return completeRun(state, extBefore.abort);
+      emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      return completeRun(config, state, extBefore.abort);
     }
     if (extBefore.skip) {
-      emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
-      return completeRun(state, {
-        id: "skip",
-        message: extBefore.skip.message || "Skipped.",
-      });
+      emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      return completeRun(config, state, { id: "skip", message: extBefore.skip.message || "Skipped." });
     }
     if (extBefore.input) {
       phaseInput = extBefore.input;
     }
   }
 
-  // Execute model invocation
-  const context = createPhaseContext(config, state, nonePhase, loopContext, []);
-  const collected = await context.turn(() => context.model.invoke({ input: phaseInput }));
+  const collected = await execution.invokeModel(agentContext, { phaseInput });
 
-  // Create output
   let output: PhaseOutput = {
     message: collected.text,
     route: "stop",
     toolCalls: collected.toolCalls,
   };
 
-  // Call afterPhase hook if defined
   if (config.afterPhase) {
     const extAfter = await config.afterPhase("none", output);
     if (extAfter.abort) {
-      emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
-      return completeRun(state, extAfter.abort);
+      emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      return completeRun(config, state, extAfter.abort);
     }
     if (extAfter.retry) {
-      const retryCollected = await context.turn(() => context.model.invoke({ input: extAfter.retry! }));
+      // Convert retry PhaseInput to AgentContext for execution.invokeModel
+      const retryContext: AgentContext = {
+        systemPrompt: extAfter.retry.systemPrompt,
+        messages: extAfter.retry.messages,
+        tools: allTools,
+        skills: config.context.skills,
+      };
+      const retryCollected = await execution.invokeModel(retryContext);
       output = {
         message: retryCollected.text,
         route: "stop",
@@ -299,9 +332,9 @@ async function runDefaultLoop(
     }
   }
 
-  emit(state, config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+  emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
 
-  return completeRun(state, createOutcome.default(output, state.transcript));
+  return completeRun(config, state, createOutcome.default(output, config.context.messages));
 }
 
 // ============================================================================
@@ -309,10 +342,10 @@ async function runDefaultLoop(
 // ============================================================================
 
 async function runPhasedLoop(
-  config: AgentLoopConfig,
+  config: AgentConfig,
   state: AgentRunState,
   registry: PhaseRegistry,
-  runLoop: (input: AgentLoopInput) => Promise<RunResult>,
+  runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
   // Hot-reload: re-read phase files from disk before each run
   const freshRegistry = await reloadPhases(registry);
@@ -332,26 +365,25 @@ async function runPhasedLoop(
   while (currentPhaseId) {
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
-      return completeRun(state, createOutcome.aborted());
+      return completeRun(config, state, createOutcome.aborted());
     }
 
     state.metrics.iterations++;
 
     if (state.metrics.iterations > maxIterations) {
-      return completeRun(state, {
+      return completeRun(config, state, {
         id: "max_iterations",
         message: `Loop exceeded maximum iterations (${maxIterations}). Stopping to prevent infinite loop.`,
       });
     }
 
     // Auto-compact when transcript grows too long
-    if (needsCompaction(state.transcript)) {
-      const compacted = compactMessages(state.transcript);
+    if (needsCompaction(config.context.messages)) {
+      const compacted = compactMessages(config.context.messages);
       if (compacted.compacted) {
-        state.transcript = compacted.messages;
-        state.agentState.messages = compacted.messages;
+        config.context.messages = compacted.messages;
         state.metrics.compactionCount++;
-        emit(state, config.emit, {
+        emit(config.emit, {
           type: "message_start",
           message: {
             id: "compaction",
@@ -372,31 +404,42 @@ async function runPhasedLoop(
 
     state.currentPhase = currentPhaseId;
 
-    const loopContext = createAgentLoopContext(config, state, availablePhases, runLoop);
-    const context = createPhaseContext(config, state, phase, loopContext, availablePhases);
+    const allTools = buildToolsWithRouting(config, availablePhases, runLoop);
 
-    // Filter tools and skills based on phase configuration
+    const messageManager = createMessageManager(config.context, config.emit, config.onMessage);
+    const toolExecutionManager = createToolExecutionManager(config.emit);
+
+    const execution = createPhaseExecution(config, state, allTools, phase, messageManager, toolExecutionManager);
+
+    // Build AgentContext for this phase
+    const agentContext: AgentContext = {
+      systemPrompt: config.context.systemPrompt,
+      messages: messageManager.visible(),
+      tools: allTools,
+      skills: config.context.skills,
+    };
+
+    // Build PhaseInput for hooks
     const phaseTools = phase.tools
-      ? loopContext.tools.filter(t => phase.tools!.includes(t.name))
-      : loopContext.tools;
+      ? allTools.filter(t => phase.tools!.includes(t.name))
+      : allTools;
     const phaseSkills = phase.skills
-      ? state.agentState.skills.filter(s => phase.skills!.includes(s.name))
-      : state.agentState.skills;
+      ? config.context.skills.filter(s => phase.skills!.includes(s.name))
+      : config.context.skills;
 
-    // Build unified input
     let phaseInput: PhaseInput = {
       phase: currentPhaseId,
-      systemPrompt: loopContext.systemPrompt,
-      messages: context.messages.visible(),
-      tools: loopContext.tools,
-      skills: loopContext.skills,
+      systemPrompt: config.context.systemPrompt,
+      messages: agentContext.messages,
+      tools: allTools,
+      skills: config.context.skills,
       phaseTools,
       phaseSkills,
     };
 
     // Emit phase_start only when entering a new phase (not on continue)
     if (!isContinuing) {
-      emit(state, config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
+      emit(config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
     }
     isContinuing = false;
 
@@ -404,13 +447,13 @@ async function runPhasedLoop(
     if (config.beforePhase) {
       const extBefore = await config.beforePhase(currentPhaseId, phaseInput);
       if (extBefore.abort) {
-        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-        return completeRun(state, extBefore.abort);
+        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        return completeRun(config, state, extBefore.abort);
       }
       if (extBefore.skip) {
-        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         if (extBefore.skip.route === "stop") {
-          return completeRun(state, {
+          return completeRun(config, state, {
             id: "skip",
             message: extBefore.skip.message || "Skipped.",
           });
@@ -423,13 +466,13 @@ async function runPhasedLoop(
       }
     }
 
-    // Execute phase — if run is provided, it takes over; otherwise framework calls model.invoke
+    // Execute phase — if run is provided, it takes over; otherwise framework calls execution.invokeModel
     let output: PhaseOutput;
     if (phase.run) {
-      const result = await phase.run(context, phaseInput);
-      output = resolvePhaseOutput(result, state);
+      const result = await phase.run(agentContext, execution);
+      output = resolvePhaseOutput(result, config.context);
     } else {
-      const collected = await context.turn(() => context.model.invoke({ input: phaseInput }));
+      const collected = await execution.invokeModel(agentContext, { phaseInput });
       output = {
         message: collected.text,
         route: "stop",
@@ -448,7 +491,7 @@ async function runPhasedLoop(
 
     // Framework-level route check: extract route from tool calls
     if (output.toolCalls && output.toolCalls.length > 0) {
-      const routeDecision = context.routeDecision(output.toolCalls);
+      const routeDecision = extractRouteCall(output.toolCalls);
       if (routeDecision) {
         output.route = routeDecision.route;
         if (routeDecision.reason) {
@@ -461,13 +504,13 @@ async function runPhasedLoop(
     if (config.afterPhase) {
       const extAfter = await config.afterPhase(currentPhaseId, output);
       if (extAfter.abort) {
-        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-        return completeRun(state, extAfter.abort);
+        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        return completeRun(config, state, extAfter.abort);
       }
       if (extAfter.retry && phase.run) {
-        output = resolvePhaseOutput(await phase.run(context, extAfter.retry), state);
+        output = resolvePhaseOutput(await phase.run(agentContext, execution), config.context);
         if (output.toolCalls && output.toolCalls.length > 0) {
-          const routeDecision = context.routeDecision(output.toolCalls);
+          const routeDecision = extractRouteCall(output.toolCalls);
           if (routeDecision) {
             output.route = routeDecision.route;
             if (routeDecision.reason) {
@@ -485,10 +528,10 @@ async function runPhasedLoop(
     if (output.route === "continue") {
       phaseRounds++;
       if (phaseRounds > maxPhaseRounds) {
-        emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         phaseRounds = 0;
         // Force stop to avoid infinite loop
-        return completeRun(state, createOutcome.default(output, state.transcript));
+        return completeRun(config, state, createOutcome.default(output, config.context.messages));
       }
       isContinuing = true;
       state.metrics.iterations++;
@@ -497,7 +540,7 @@ async function runPhasedLoop(
 
     phaseRounds = 0;
 
-    emit(state, config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+    emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
 
     // Resolve next phase: target > route > stop
     let nextRoute: string | PhaseState;
@@ -511,13 +554,13 @@ async function runPhasedLoop(
 
     // Handle sentinel states
     if (isPhaseState(nextRoute)) {
-      return completeRun(state, createOutcome.default(output, state.transcript));
+      return completeRun(config, state, createOutcome.default(output, config.context.messages));
     }
 
     // Validate route target exists
     const targetPhaseId = nextRoute as string;
     if (!freshRegistry.phases.has(targetPhaseId)) {
-      return completeRun(state, createOutcome.phase());
+      return completeRun(config, state, createOutcome.phase());
     }
 
     state.metrics.phaseTransitions.push({
@@ -605,415 +648,143 @@ async function withRetry<T>(
 // Phase Capabilities
 // ============================================================================
 
-async function collectStreamResult(input: {
-  context: AgentLoopContext;
-  message: PhaseMessageManager;
-  events: AsyncIterable<LlmStreamEvent>;
-  metadataPhase: string;
-}): Promise<{
-  text: string;
-  contentBlocks: ContentBlock[];
-  toolCalls: ToolCall[];
-  stopReason?: string;
-}> {
-  let activeMessageId: string | undefined;
-  let lastPartial: AssistantMessagePartial | undefined;
-  let stopReason: string | undefined;
-
-  for await (const event of input.events) {
-    const abortResult = LoopGuard.checkAbort(input.context.signal);
-    if (abortResult.stopReason !== "none") {
-      return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
-    }
-
-    if (event.type === "model_requested") {
-      input.context.emit({
-        type: "model_requested",
-        model: event.model,
-        usage: event.usage,
-        ts: createTimestamp(),
-      });
-    }
-
-    if (event.type === "error") {
-      throw event.error;
-    }
-
-    // ---- Start: create assistant message immediately (even for tool-call-only responses) ----
-    if (event.type === "start") {
-      lastPartial = event.partial;
-      if (!activeMessageId) {
-        activeMessageId = input.message.start("assistant", "", {
-          phase: input.metadataPhase,
-        });
-      }
-    }
-
-    // ---- Text: stream to UI ----
-    if (event.type === "text_delta") {
-      lastPartial = event.partial;
-      if (!activeMessageId) {
-        activeMessageId = input.message.start("assistant", event.text, {
-          phase: input.metadataPhase,
-        });
-      } else {
-        await input.message.update(activeMessageId, event.text);
-      }
-    }
-
-    // ---- Tool call events: just update partial ----
-    if (event.type === "tool_call_start" || event.type === "tool_call_delta" || event.type === "tool_call_end") {
-      lastPartial = event.partial;
-    }
-
-    // ---- Thinking: update partial ----
-    if (event.type === "thinking_delta") {
-      lastPartial = event.partial;
-    }
-
-    // ---- Done: finalize ----
-    if (event.type === "done") {
-      stopReason = event.response?.stopReason;
-
-      // Fallback: ensure assistant message exists if there are tool calls
-      const toolCallBlocks = lastPartial?.contentBlocks?.filter(b => b.type === "tool_call") ?? [];
-      if (!activeMessageId && toolCallBlocks.length > 0) {
-        activeMessageId = input.message.start("assistant", "", {
-          phase: input.metadataPhase,
-          toolCalls: toolCallBlocks.map(tc => ({ id: tc.id, name: tc.name, args: tc.args })),
-        });
-      }
-
-      if (activeMessageId) {
-        await input.message.end(activeMessageId);
-        activeMessageId = undefined;
-      }
-    }
-  }
-
-  if (activeMessageId) {
-    await input.message.end(activeMessageId);
-  }
-
-  // Extract from lastPartial
-  const contentBlocks = lastPartial?.contentBlocks ?? [];
-  const text = contentBlocks
-    .filter((b): b is TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-  const toolCalls: ToolCall[] = contentBlocks
-    .filter((b): b is ToolCallBlock => b.type === "tool_call")
-    .map((b) => {
-      let parsedArgs: unknown = b.args;
-      try { parsedArgs = JSON.parse(b.args); } catch { /* keep raw */ }
-      return { id: b.id, name: b.name, args: parsedArgs };
-    });
-
-  return { text, contentBlocks, toolCalls, stopReason };
-}
-
 async function executeToolCall(input: {
-  context: AgentLoopContext;
+  config: AgentConfig;
+  tools: Tool[];
   toolCall: ToolCall;
 }): Promise<ToolResult> {
-  if (input.context.config.runtime?.tools) {
-    return input.context.config.runtime.tools({
-      context: input.context,
+  if (input.config.runtime?.tools) {
+    return input.config.runtime.tools({
+      config: input.config,
       toolCall: input.toolCall,
     });
   }
 
   const toolContext = {
-    state: input.context.state.agentState,
+    skills: input.config.context.skills,
     toolCallId: input.toolCall.id,
   };
   return executeRuntimeToolCall({
-    tools: input.context.tools,
+    tools: input.tools,
     toolCall: input.toolCall,
     toolContext,
-    beforeToolCall: input.context.config.beforeToolCall,
-    afterToolCall: input.context.config.afterToolCall,
-    signal: input.context.signal,
+    beforeToolCall: input.config.beforeToolCall,
+    afterToolCall: input.config.afterToolCall,
+    signal: input.config.signal,
   });
 }
 
-function createPhaseContext(
-  config: AgentLoopConfig,
+// ============================================================================
+// PhaseExecution Factory
+// ============================================================================
+
+function createPhaseExecution(
+  config: AgentConfig,
   state: AgentRunState,
+  allTools: Tool[],
   phase: Phase,
-  loopContext: AgentLoopContext,
-  availablePhases: PhaseContext["availablePhases"],
-): PhaseContext {
-  // Track active messages for streaming lifecycle
-  const activeMessages = new Map<string, AgentMessage>();
+  messageManager: PhaseMessageManager,
+  toolExecutionManager: PhaseToolExecutionManager,
+): PhaseExecution {
+  // Build PhaseInput from AgentContext + phase config
+  function buildPhaseInput(context: AgentContext): PhaseInput {
+    const phaseTools = phase.tools
+      ? context.tools.filter(t => phase.tools!.includes(t.name))
+      : context.tools;
+    const phaseSkills = phase.skills
+      ? context.skills.filter(s => phase.skills!.includes(s.name))
+      : context.skills;
 
-  // Turn depth tracking: explicit turn() calls and auto-turn for event-emitting APIs
-  let turnDepth = 0;
-  let autoTurnCount = 0;
-
-  function beginAutoTurn() {
-    if (turnDepth === 0) {
-      autoTurnCount++;
-      if (autoTurnCount === 1) {
-        emitTurn(state, config.emit, "turn_start");
-      }
-    }
+    return {
+      phase: phase.id,
+      systemPrompt: context.systemPrompt,
+      messages: context.messages,
+      tools: context.tools,
+      skills: context.skills,
+      phaseTools,
+      phaseSkills,
+      ...(phase.id !== "none" ? { appendSystemPrompt: phase.buildPrompt() } : {}),
+    };
   }
-
-  function endAutoTurn() {
-    if (turnDepth === 0 && autoTurnCount > 0) {
-      autoTurnCount--;
-      if (autoTurnCount === 0) {
-        emitTurn(state, config.emit, "turn_end");
-      }
-    }
-  }
-
-  const messageManager: PhaseMessageManager = {
-    visible: () => [...state.transcript],
-    start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>) {
-      const msg = createMessage(role, content, metadata);
-      activeMessages.set(msg.id, msg);
-      beginAutoTurn();
-      emit(state, config.emit, { type: "message_start", message: snapshotMessage(msg), ts: createTimestamp() });
-      return msg.id;
-    },
-    async update(messageId: string, delta: string) {
-      const msg = activeMessages.get(messageId);
-      if (!msg) return;
-      msg.content += delta;
-      emit(state, config.emit, {
-        type: "message_update",
-        message: snapshotMessage(msg),
-        delta,
-        ts: createTimestamp(),
-      });
-    },
-    async end(messageId: string) {
-      const msg = activeMessages.get(messageId);
-      if (!msg) return;
-      activeMessages.delete(messageId);
-      state.transcript.push(msg);
-      // Only persist non-tool messages to agent state (tool messages are execution-scoped)
-      if (msg.role !== "tool") {
-        state.agentState.messages.push(msg);
-      }
-      emit(state, config.emit, { type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
-      endAutoTurn();
-    },
-    snapshot() {
-      return {
-        transcriptLength: state.transcript.length,
-        stateMessagesLength: state.agentState.messages.length,
-      };
-    },
-    restore(snap) {
-      state.transcript.length = snap.transcriptLength;
-      state.agentState.messages.length = snap.stateMessagesLength;
-      // Discard all in-flight messages that started after the snapshot
-      activeMessages.clear();
-    },
-    delete(target: string | number) {
-      const transcriptIdx = typeof target === "number"
-        ? target
-        : state.transcript.findIndex(m => m.id === target);
-      if (transcriptIdx >= 0 && transcriptIdx < state.transcript.length) {
-        const msg = state.transcript[transcriptIdx];
-        state.transcript.splice(transcriptIdx, 1);
-        const stateIdx = state.agentState.messages.findIndex(m => m.id === msg.id);
-        if (stateIdx !== -1) {
-          state.agentState.messages.splice(stateIdx, 1);
-        }
-        activeMessages.delete(msg.id);
-      }
-    },
-    insert(target: string | number, message: AgentMessage) {
-      const idx = typeof target === "number"
-        ? target
-        : state.transcript.findIndex(m => m.id === target);
-      const insertIdx = idx >= 0 ? idx : state.transcript.length;
-      state.transcript.splice(insertIdx, 0, message);
-      state.agentState.messages.push(message);
-    },
-    clear() {
-      state.transcript.length = 0;
-      state.agentState.messages.length = 0;
-      activeMessages.clear();
-    },
-  };
-
-  const toolExecutionManager: PhaseToolExecutionManager = {
-    async start(toolCallId, toolName, args) {
-      beginAutoTurn();
-      emit(state, config.emit, {
-        type: "tool_execution_start",
-        toolCallId,
-        toolName,
-        args,
-        ts: createTimestamp(),
-      });
-    },
-    async update(_toolCallId, _partialResult) {
-      // tool_execution_update — reserved for future use
-    },
-    async end(toolCallId, toolName, result, isError) {
-      emit(state, config.emit, {
-        type: "tool_execution_end",
-        toolCallId,
-        toolName,
-        result,
-        isError,
-        ts: createTimestamp(),
-      });
-      endAutoTurn();
-    },
-  };
 
   return {
-    phaseId: phase.id,
-    state: loopContext.state,
-    messages: messageManager,
-    toolExecution: toolExecutionManager,
-    model: {
-      invoke: async (input) => {
-        const { autoExecuteTools, maxToolRounds = 10, excludeTools = [] } = input;
-
-        // Single invoke call helper
-        const invokeOnce = async (phaseInput: PhaseInput): Promise<ModelInvokeOutput> => {
-          // Allow extensions to transform PhaseInput before building request
-          if (loopContext.config.beforePrompt) {
-            phaseInput = await loopContext.config.beforePrompt(phase.id, phaseInput);
-          }
-          // Build LlmRequest: use phase's custom builder or default
-          const request = phase.buildLlmRequest
-            ? phase.buildLlmRequest(phaseInput)
-            : buildModelRequest(phaseInput, { model: loopContext.config.model });
-          // Ensure tools are available when phase has tools configured
-          if (!request.tools) {
-            const modelTools = phaseInput.phaseTools ?? phaseInput.tools;
-            if (modelTools.length > 0) {
-              request.tools = modelTools.map((t) => ({
-                name: t.name,
-                description: t.description,
-                parameters: t.parameters,
-              }));
-            }
-          }
-          // Pass toolChoice from phase input to request
-          if (phaseInput.toolChoice && !request.toolChoice) {
-            request.toolChoice = phaseInput.toolChoice;
-          }
-          // Retry with exponential backoff for transient model errors
-          return withRetry(
-            () => collectStreamResult({
-              context: loopContext,
-              message: messageManager,
-              events: loopContext.config.stream(request, { signal: loopContext.signal }),
-              metadataPhase: phase.id,
-            }),
-            {
-              signal: loopContext.signal,
-              onRetry: (attempt, error, delayMs) => {
-                state.metrics.retryCount++;
-                const errMsg = error instanceof Error ? error.message : String(error);
-                loopContext.emit({
-                  type: "message_start",
-                  message: {
-                    id: `retry_${attempt}`,
-                    role: "assistant",
-                    content: `[Retry ${attempt + 1}/${DEFAULT_MAX_RETRIES}] Transient error: ${errMsg}. Retrying in ${Math.round(delayMs)}ms...`,
-                    createdAt: createTimestamp(),
-                    metadata: { type: "retry_notice" },
-                  },
-                  ts: createTimestamp(),
-                });
-              },
-            },
-          );
-        };
-
-        // If auto-execute is disabled, just do a single invoke
-        if (!autoExecuteTools) {
-          return invokeOnce(input.input);
-        }
-
-        // Auto-execute loop: invoke → execute tools → repeat until no tool calls
-        let currentInput = input.input;
-        let lastResult: ModelInvokeOutput | undefined;
-
-        for (let round = 0; round < maxToolRounds; round++) {
-          lastResult = await invokeOnce(currentInput);
-
-          // Filter out excluded tool calls
-          const executableToolCalls = lastResult.toolCalls.filter(
-            tc => !excludeTools.includes(tc.name)
-          );
-
-          // If no executable tool calls, we're done
-          if (executableToolCalls.length === 0) {
-            break;
-          }
-
-          // Execute each tool and record results
-          for (const toolCall of executableToolCalls) {
-            await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
-
-            const result = await executeToolCall({ context: loopContext, toolCall });
-
-            await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
-
-            // Record tool result to message history
-            const toolResultContent = JSON.stringify({
-              toolName: result.toolName,
-              ok: result.ok,
-              content: result.content,
-              ...(result.error ? { error: result.error } : {}),
-            });
-            const toolMsgId = messageManager.start("tool", toolResultContent, {
-              toolCallId: result.toolCallId,
-              toolName: result.toolName,
-              isError: !result.ok,
-            });
-            await messageManager.end(toolMsgId);
-          }
-
-          // Update input with current messages for next round
-          currentInput = {
-            ...currentInput,
-            messages: messageManager.visible(),
-          };
-        }
-
-        return lastResult!;
-      },
+    snapshot(context: AgentContext): AgentContextSnapshot {
+      return { messagesLength: context.messages.length };
     },
-    tools: {
-      execute: async (input) => {
-        return executeToolCall({
-          context: loopContext,
-          toolCall: input.toolCall,
-        });
-      },
+
+    restore(context: AgentContext, snapshot: AgentContextSnapshot): void {
+      context.messages.length = snapshot.messagesLength;
+      config.context.messages.length = Math.min(config.context.messages.length, snapshot.messagesLength);
     },
-    skills: state.agentState.skills.slice(),
-    turn: async (fn) => {
-      turnDepth++;
-      emitTurn(state, config.emit, "turn_start");
-      try {
-        return await fn();
-      } finally {
-        turnDepth--;
-        emitTurn(state, config.emit, "turn_end");
+
+    async invokeModel(context: AgentContext, options?: { phaseInput?: PhaseInput }): Promise<ModelInvokeOutput> {
+      let phaseInput = options?.phaseInput ?? buildPhaseInput(context);
+
+      // Allow extensions to transform PhaseInput before building request
+      if (config.beforePrompt) {
+        phaseInput = await config.beforePrompt(phase.id, phaseInput);
       }
+
+      // Build LlmRequest
+      const request = phase.buildLlmRequest
+        ? phase.buildLlmRequest(phaseInput)
+        : buildModelRequest(phaseInput, { model: config.model });
+
+      // Ensure tools are available
+      if (!request.tools) {
+        const modelTools = phaseInput.phaseTools ?? phaseInput.tools;
+        if (modelTools.length > 0) {
+          request.tools = modelTools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters,
+          }));
+        }
+      }
+      if (phaseInput.toolChoice && !request.toolChoice) {
+        request.toolChoice = phaseInput.toolChoice;
+      }
+
+      const result = await runTurn(config.context, config.emit, () =>
+        withRetry(
+          () => invokeModel({
+            config,
+            message: messageManager,
+            request,
+            phaseId: phase.id,
+          }),
+          {
+            signal: config.signal,
+            onRetry: (attempt, error, delayMs) => {
+              state.metrics.retryCount++;
+              const errMsg = error instanceof Error ? error.message : String(error);
+              config.emit?.({
+                type: "message_start",
+                message: {
+                  id: `retry_${attempt}`,
+                  role: "assistant",
+                  content: `[Retry ${attempt + 1}/${DEFAULT_MAX_RETRIES}] Transient error: ${errMsg}. Retrying in ${Math.round(delayMs)}ms...`,
+                  createdAt: createTimestamp(),
+                  metadata: { type: "retry_notice" },
+                },
+                ts: createTimestamp(),
+              });
+            },
+          },
+        ),
+      );
+
+      await config.onModelTranscript?.(result.transcript, { phase: phase.id, model: config.model });
+      return result;
     },
-    maxAttempts: config.maxAttempts,
-    incrementAttempt() {
-      state.attempt += 1;
-      loopContext.state.attempt = state.attempt;
-    },
-    availablePhases,
-    routeDecision(toolCalls) {
-      return extractRouteCall(toolCalls);
+
+    async executeTool(_context: AgentContext, toolCall: ToolCall): Promise<ToolResult> {
+      return runTurn(config.context, config.emit, async () => {
+        await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
+        const result = await executeToolCall({ config, tools: allTools, toolCall });
+        await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
+        return result;
+      });
     },
   };
 }

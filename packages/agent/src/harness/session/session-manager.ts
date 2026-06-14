@@ -1,4 +1,6 @@
-import type { ExecutionTurn, Outcome, StepFilter } from "../../protocol";
+import type { ExecutionTurn, Outcome, StepFilter, ModelTranscript } from "../../protocol";
+import type { SessionState } from "../../loop/types";
+import type { LlmModelRef } from "../../protocol";
 import {
   createId,
   nowIso,
@@ -66,6 +68,18 @@ export type CustomSessionEntry = SessionEntryBase & {
   data: unknown;
 };
 
+export type SessionStateSessionEntry = SessionEntryBase & {
+  type: "session_state";
+  state: SessionState;
+};
+
+export type ModelTranscriptSessionEntry = SessionEntryBase & {
+  type: "model_transcript";
+  transcript: ModelTranscript;
+  phase?: string;
+  model?: LlmModelRef;
+};
+
 export type SessionEntry =
   | MessageSessionEntry
   | OutcomeSessionEntry
@@ -73,7 +87,9 @@ export type SessionEntry =
   | CompactionSessionEntry
   | BranchSummarySessionEntry
   | SessionInfoSessionEntry
-  | CustomSessionEntry;
+  | CustomSessionEntry
+  | SessionStateSessionEntry
+  | ModelTranscriptSessionEntry;
 
 export type SessionRecord = SessionHeader | SessionEntry;
 
@@ -84,7 +100,9 @@ type NewSessionEntry =
   | Omit<CompactionSessionEntry, keyof SessionEntryBase>
   | Omit<BranchSummarySessionEntry, keyof SessionEntryBase>
   | Omit<SessionInfoSessionEntry, keyof SessionEntryBase>
-  | Omit<CustomSessionEntry, keyof SessionEntryBase>;
+  | Omit<CustomSessionEntry, keyof SessionEntryBase>
+  | Omit<SessionStateSessionEntry, keyof SessionEntryBase>
+  | Omit<ModelTranscriptSessionEntry, keyof SessionEntryBase>;
 
 export type SessionAgentContext<TTool = unknown> = {
   systemPrompt: string;
@@ -128,6 +146,9 @@ export type SessionManager = {
   appendBranchSummary(input: { fromId: string; summary: string }): Promise<string>;
   appendSessionInfo(input: { title: string }): Promise<string>;
   appendCustom(input: { customType: string; data: unknown }): Promise<string>;
+  appendSessionState(state: SessionState): Promise<string>;
+  appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: LlmModelRef }): Promise<string>;
+  getSessionState(): Promise<SessionState | undefined>;
   branch(entryId: string | null): Promise<void>;
   buildAgentContext<TTool = unknown>(input?: BuildAgentContextInput<TTool>): Promise<SessionAgentContext<TTool>>;
   listEntries(): Promise<SessionEntry[]>;
@@ -234,6 +255,29 @@ export class InMemorySessionManager implements SessionManager {
     return this.appendEntry({ type: "custom", customType: input.customType, data: clone(input.data) });
   }
 
+  async appendSessionState(state: SessionState): Promise<string> {
+    return this.appendEntry({ type: "session_state", state: clone(state) });
+  }
+
+  async appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: LlmModelRef }): Promise<string> {
+    return this.appendEntry({
+      type: "model_transcript",
+      transcript: clone(transcript),
+      ...(meta?.phase ? { phase: meta.phase } : {}),
+      ...(meta?.model ? { model: clone(meta.model) } : {}),
+    });
+  }
+
+  async getSessionState(): Promise<SessionState | undefined> {
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const entry = this.entries[i]!;
+      if (entry.type === "session_state") {
+        return clone(entry.state);
+      }
+    }
+    return undefined;
+  }
+
   async branch(entryId: string | null): Promise<void> {
     if (entryId !== null && !this.entries.some((entry) => entry.id === entryId)) {
       throw new Error(`Session entry not found: ${entryId}`);
@@ -253,10 +297,6 @@ export class InMemorySessionManager implements SessionManager {
       systemPrompt: this.header.systemPrompt,
       messages: entries
         .filter((entry): entry is MessageSessionEntry => entry.type === "message")
-        .filter((entry) => {
-          const kind = entry.message.metadata?.kind;
-          return !kind || (kind !== "model_message" && kind !== "routing_decision" && kind !== "phase_prompt");
-        })
         .map((entry) => entry.message)
         .map(clone),
       tools: input.tools?.slice() ?? [],

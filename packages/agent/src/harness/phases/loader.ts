@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Phase, PhaseFrontmatter, PhaseRegistry } from "./types";
-import type { PhaseInput, PhaseOutput } from "../../protocol/context";
-import type { PhaseContext } from "../../loop/execution";
+import type { AgentContext } from "../../types";
+import type { PhaseOutput } from "../../protocol/context";
+import type { PhaseExecution } from "../../loop/execution";
 import {
   parseFrontmatter,
   loadMarkdown,
@@ -130,11 +131,11 @@ async function discoverPhaseCode(baseDir: string): Promise<string | null> {
 /**
  * Load phase execution code using jiti.
  * Module must export a run() function.
- * The loaded run function is adapted to accept PhaseContext.
+ * The loaded run function accepts AgentContext and PhaseExecution.
  */
 async function loadPhaseCode(
   codePath: string,
-): Promise<(context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>> {
+): Promise<(context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>> {
   const { createJiti } = await import("jiti");
   const jiti = createJiti(import.meta.url, {
     moduleCache: false,
@@ -146,7 +147,7 @@ async function loadPhaseCode(
     throw new Error(`Phase code at "${codePath}" must export a "run" function.`);
   }
 
-  return mod.run as (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
+  return mod.run as (context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 }
 
 /**

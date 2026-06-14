@@ -10,7 +10,8 @@ export function createTestContext(input: {
   return {
     systemPrompt: input.systemPrompt ?? "Test system",
     messages: input.messages ?? [],
-    ...(input.tools ? { tools: input.tools } : {}),
+    tools: input.tools ?? [],
+    skills: [],
   };
 }
 

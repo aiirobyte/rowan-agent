@@ -47,10 +47,6 @@ export function conversationMessages(messages: AgentContextMessage[]): LlmMessag
 
     // Assistant messages (without tool calls)
     if (message.role === "assistant") {
-      // Skip routing decision messages — they are internal, not conversation
-      if (message.metadata?.kind === "routing_decision") {
-        return [];
-      }
       const toolCalls = message.metadata?.toolCalls as Array<{ id: string; name: string; args: unknown }> | undefined;
       if (!toolCalls?.length) {
         return [{ role: "assistant", content: message.content }];

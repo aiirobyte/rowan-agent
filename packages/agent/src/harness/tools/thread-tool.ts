@@ -1,5 +1,5 @@
 import Type from "typebox";
-import type { Tool, ToolContext, ToolResult, Skill, RunResult } from "../types";
+import type { Tool, ToolContext, ToolResult, Skill, RunResult } from "../../types";
 import { buildStructuredSection } from "../context/section-formatter";
 
 export const ThreadTool = "thread";
@@ -162,7 +162,7 @@ export function createThreadTool(
 
       // Resolve skill names to Skill objects
       const resolvedSkills = skillNames
-        ? resolveSkills(skillNames, context.state.skills)
+        ? resolveSkills(skillNames, context.skills)
         : undefined;
 
       const result = await spawnThread({

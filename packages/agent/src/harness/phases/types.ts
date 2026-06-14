@@ -1,6 +1,7 @@
 import type { LlmRequest } from "@rowan-agent/models";
+import type { AgentContext } from "../../types";
 import type { PhaseInput, PhaseOutput } from "../../protocol/context";
-import type { PhaseContext } from "../../loop/execution";
+import type { PhaseExecution } from "../../loop/execution";
 import type { WorkspacePaths } from "../env/path";
 import type { ExtensionAPI } from "./extension-api";
 
@@ -24,6 +25,25 @@ export interface PhaseFrontmatter {
   entry?: boolean;
   /** Forced next phase id */
   target?: string;
+}
+
+/**
+ * Phase static configuration — describes what a phase is, not how it runs.
+ */
+export interface PhaseConfig {
+  id: string;
+  name: string;
+  description: string;
+  tools?: string[];
+  skills?: string[];
+  toolChoice?: string;
+  entry: boolean;
+  target?: string;
+  filePath?: string;
+  baseDir?: string;
+  content: string;
+  buildPrompt: () => string;
+  buildLlmRequest?: (input: PhaseInput) => LlmRequest;
 }
 
 /**
@@ -57,7 +77,7 @@ export interface Phase {
   /** Custom LLM request builder (for extension-registered phases) */
   buildLlmRequest?: (input: PhaseInput) => LlmRequest;
   /** Optional execution function */
-  run?: (context: PhaseContext, input: PhaseInput) => Promise<PhaseOutput | void>;
+  run?: (context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 }
 
 /**

@@ -10,14 +10,14 @@ import {
   resolveWorkspacePaths,
   resolveWorkspacePath,
 } from "../../../src/harness/env";
-import { createId, type Tool, type ToolContext } from "../../../src/harness/types";
+import { type Tool, type ToolContext } from "../../../src/types";
+import { createId } from "../../../src/utils";
 import { createCoreTools } from "../../../src/harness/tools";
 import { loadSkill, resolveSkillPath } from "../../../src/harness/skills";
 
 function createToolContext(toolCallId = createId("call")): ToolContext {
-  const state = createSession({ systemPrompt: "test", input: "inspect" });
   return {
-    state,
+    skills: [],
     toolCallId,
   };
 }

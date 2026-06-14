@@ -33,7 +33,7 @@ test("InMemorySessionManager appends entries and rebuilds conversation context",
 
   expect(context.systemPrompt).toBe("Test system");
   expect(context.skills.map((skill) => skill.name)).toEqual(["skill"]);
-  expect(context.messages.map((message) => message.content)).toEqual(["hello", "visible answer"]);
+  expect(context.messages.map((message) => message.content)).toEqual(["hello", "visible answer", "hidden phase"]);
   expect((await manager.listEntries()).map((entry) => entry.type)).toEqual([
     "message",
     "message",
