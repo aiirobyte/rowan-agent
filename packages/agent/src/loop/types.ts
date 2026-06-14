@@ -14,11 +14,20 @@ import type { PhaseRegistry } from "../harness/phases/types";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
 export type AgentRunLimits = {
-  /** Maximum number of phase iterations before forcing stop. Default: 50. */
-  maxIterations?: number;
-  /** Maximum consecutive "continue" rounds within a single phase before forcing transition. Default: 10. */
-  maxPhaseRounds?: number;
+  /** Current nested thread depth. Root agent runs start at 0. */
+  threadDepth?: number;
+  /** Maximum nested thread depth. Default: 4. */
+  maxThreadDepth?: number;
 };
+
+export const DEFAULT_MAX_THREAD_DEPTH = 4;
+
+export function resolveThreadLimits(limits?: AgentRunLimits): Required<AgentRunLimits> {
+  return {
+    threadDepth: limits?.threadDepth ?? 0,
+    maxThreadDepth: limits?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH,
+  };
+}
 
 export type BeforePhaseHook = (phaseId: string, input: PhaseInput) => Promise<BeforePhaseHookResult>;
 export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;

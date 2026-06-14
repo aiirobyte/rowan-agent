@@ -64,6 +64,9 @@ async function runCli(
 }
 
 function openAIResponse(content: unknown): Response {
+  const contentText = content && typeof content === "object" && "message" in content && typeof content.message === "string"
+    ? content.message
+    : JSON.stringify(content);
   const toolCalls = content && typeof content === "object" && "toolCalls" in content && Array.isArray(content.toolCalls)
     ? content.toolCalls.map((toolCall: { id?: string; name?: string; args?: unknown }, index: number) => ({
         id: toolCall.id ?? `call_${index}`,
@@ -79,7 +82,7 @@ function openAIResponse(content: unknown): Response {
     choices: [
       {
         message: {
-          content: JSON.stringify(content),
+          content: contentText,
           ...(toolCalls ? { tool_calls: toolCalls } : {}),
         },
       },
@@ -440,15 +443,21 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
 test("CLI interactive prompt reports model errors once", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-interactive-error-"));
   let server: ReturnType<typeof Bun.serve> | undefined;
+  let requestCount = 0;
   try {
     try {
       server = Bun.serve({
         port: 0,
-        fetch: () =>
-          Response.json(
-            { error: { message: "provider down" } },
-            { status: 400, statusText: "Bad Request" },
-          ),
+        fetch: () => {
+          requestCount++;
+          if (requestCount === 1) {
+            return Response.json(
+              { error: { message: "provider down" } },
+              { status: 400, statusText: "Bad Request" },
+            );
+          }
+          return openAIResponse({ message: "Recovered.", route: "direct" });
+        },
       });
     } catch (error) {
       if (canSkipLocalBindError(error)) {
@@ -466,14 +475,31 @@ test("CLI interactive prompt reports model errors once", async () => {
         ROWAN_MODEL: "test-model",
         ROWAN_WORKSPACE: workspace,
       },
-      "hello\n",
+      "hello\nagain\n",
     );
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Recovered.");
     expect(countMatches(result.stderr, /provider down/g)).toBe(1);
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
     expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
-    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(2);
+
+    const sessionId = sessionIdFrom(result.stderr);
+    const sessionPath = join(workspace, ".rowan", "sessions", `${sessionId}.jsonl`);
+    const sessionLines = (await Bun.file(sessionPath).text()).trim().split("\n");
+    const messageEntries = sessionLines.slice(1).map((line) => JSON.parse(line)) as Array<{
+      type?: string;
+      message?: { role?: string; content?: unknown };
+    }>;
+    expect(
+      messageEntries.some(
+        (entry) => entry.message?.role === "assistant" && JSON.stringify(entry.message.content).includes("provider down"),
+      ),
+    ).toBe(false);
+    expect(
+      messageEntries.filter((entry) => entry.type === "message" && entry.message?.role === "assistant"),
+    ).toHaveLength(1);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
@@ -519,9 +545,7 @@ test("CLI writes a default log without --log", async () => {
 
     expect(result.exitCode).toBe(0);
     const stdout = result.stdout.trim();
-    // Non-streaming mock server outputs JSON outcome
-    const outcome = JSON.parse(stdout) as { message?: string };
-    expect(outcome.message).toBe("Hello from model");
+    expect(stdout).toBe("Hello from model");
 
     const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
     expect(logMatch).not.toBeNull();
@@ -575,11 +599,10 @@ test("CLI writes a default log without --log", async () => {
     };
     const messageEntries = sessionLines.slice(1).map((line) => JSON.parse(line)) as Array<{
       type?: string;
-      message?: { content?: string };
+      message?: { content?: unknown };
     }>;
     expect(session.version).toBe("0.4.4");
-    // Mock server stringifies the entire response object into content
-    expect(messageEntries.some((entry) => entry.message?.content?.includes("Hello from model"))).toBe(true);
+    expect(messageEntries.some((entry) => JSON.stringify(entry.message?.content).includes("Hello from model"))).toBe(true);
     expect(messageEntries.some((entry) => entry.type === "execution_turn")).toBe(false);
   } finally {
     server?.stop(true);
@@ -677,6 +700,7 @@ test("CLI exposes core bash in the none phase", async () => {
         },
       ],
     },
+    { message: "Bash finished." },
   ];
   const requests: Array<{ messages?: Array<{ content?: string }>; tools?: Array<{ function: { name: string } }> }> = [];
   let requestCount = 0;
@@ -708,6 +732,8 @@ test("CLI exposes core bash in the none phase", async () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Bash is available");
+    expect(result.stdout).toContain("Bash finished.");
+    expect(result.stdout).not.toContain("cli-bash-ok");
     expect(requests[0]?.tools?.some((t: { function: { name: string } }) => t.function.name === "bash")).toBe(true);
 
     const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
@@ -718,7 +744,8 @@ test("CLI exposes core bash in the none phase", async () => {
       (event) => event.type === "phase_start" && event.phase === "none",
     );
     expect(nonePhaseIndex).toBeGreaterThanOrEqual(0);
-    expect(logEvents.some((event) => event.type === "tool_execution_start")).toBe(false);
+    expect(logEvents.some((event) => event.type === "tool_execution_start")).toBe(true);
+    expect(logEvents.some((event) => event.type === "tool_execution_end")).toBe(true);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

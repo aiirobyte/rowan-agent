@@ -299,14 +299,10 @@ export type ApiStreamFn = (
 export type AgentContextMessage = {
   id: string;
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | LlmContentPart[];
   createdAt: string;
   metadata?: Record<string, unknown> & {
     phase?: string;
-    toolCalls?: Array<{ id: string; name: string; args: unknown }>;
-    toolCallId?: string;
-    toolName?: string;
-    isError?: boolean;
   };
 };
 
@@ -322,6 +318,7 @@ export type Outcome = {
   id: string;
   message: string;
   toolResults?: Array<{
+    toolCallId: string;
     toolName: string;
     ok: boolean;
     content: unknown;

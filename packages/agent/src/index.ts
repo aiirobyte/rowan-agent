@@ -4,6 +4,7 @@ export type { AgentOptions, RunOptions, AgentStatus } from "./agent";
 
 export {
   createMessage,
+  messageContentText,
 } from "./types";
 
 export { createId, createTimestamp, createJson } from "./utils";

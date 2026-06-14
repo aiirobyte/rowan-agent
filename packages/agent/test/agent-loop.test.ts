@@ -4,6 +4,7 @@ import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
 import type { AgentContext, AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
 import { createMessage } from "../src/types";
+import { messageContentText } from "../src/types";
 import { createId } from "../src/utils";
 import { echoTool } from "./support/echo-tool";
 import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
@@ -147,6 +148,195 @@ test("runAgentLoop completes task with simple response", async () => {
   expect(events.length).toBeGreaterThan(0);
 });
 
+test("runAgentLoop executes known tool calls in the default loop", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "use echo tool",
+    tools: [echoTool],
+  });
+  const events: AgentEvent[] = [];
+  let requestCount = 0;
+  const stream: StreamFn = async function* toolCallingStream(request) {
+    requestCount++;
+    if (requestCount === 1) {
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "tool evidence" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    const toolResult = request.messages.find((message) => message.role === "tool");
+    expect(JSON.stringify(toolResult?.content)).toContain("tool evidence");
+    const text = "Final answer from tool evidence.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "tool-calling" },
+    stream,
+    emit: (event) => {
+      events.push(event);
+    },
+  });
+
+  expect(requestCount).toBe(2);
+  expect(result.outcome.message).toBe("Final answer from tool evidence.");
+  expect(result.outcome.toolResults).toEqual([
+    expect.objectContaining({
+      toolCallId: expect.stringMatching(/^call_/),
+      toolName: "echo",
+      ok: true,
+      content: "tool evidence",
+    }),
+  ]);
+  expect(session.messages.some((message) => message.role === "tool" && messageContentText(message.content).includes("tool evidence"))).toBe(true);
+  expect(events.some((event) => event.type === "tool_execution_start" && event.toolName === "echo")).toBe(true);
+  expect(events.some((event) => event.type === "tool_execution_end" && event.toolName === "echo")).toBe(true);
+});
+
+test("runAgentLoop keeps executing tool calls after the old tool round threshold", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "use echo tool repeatedly",
+    tools: [echoTool],
+  });
+  const toolCallCount = 9;
+  let requestCount = 0;
+  const stream: StreamFn = async function* toolRoundStream(request) {
+    requestCount++;
+    if (requestCount <= toolCallCount) {
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: `tool evidence ${requestCount}` });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    expect(request.messages.filter((message) => message.role === "tool")).toHaveLength(toolCallCount);
+    const text = "Finished after nine tool calls.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "tool-rounds" },
+    stream,
+  });
+
+  expect(requestCount).toBe(toolCallCount + 1);
+  expect(result.outcome.message).toBe("Finished after nine tool calls.");
+});
+
+test("runAgentLoop rejects nested threads beyond maxThreadDepth", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "delegate once",
+  });
+  let requestCount = 0;
+  const stream: StreamFn = async function* threadDepthStream(request) {
+    requestCount++;
+    const toolResult = request.messages.find((message) => message.role === "tool");
+    if (!toolResult) {
+      const toolId = createId("call");
+      const toolName = "thread";
+      const toolArgs = JSON.stringify({ prompt: "nested work" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    const serializedToolResult = JSON.stringify(toolResult.content);
+    expect(serializedToolResult).toContain("thread_depth_limit");
+    expect(serializedToolResult).toContain("Thread depth limit exceeded (1/0).");
+    const text = "Thread depth limit reported.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "thread-depth" },
+    stream,
+    limits: { maxThreadDepth: 0 },
+  });
+
+  expect(requestCount).toBe(2);
+  expect(result.outcome.message).toBe("Thread depth limit reported.");
+  expect(result.outcome.toolResults).toEqual([
+    expect.objectContaining({
+      toolName: "thread",
+      ok: false,
+      error: "Thread depth limit exceeded (1/0).",
+    }),
+  ]);
+});
+
+test("runAgentLoop preserves assistant text with tool calls for the follow-up request", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "use echo tool",
+    tools: [echoTool],
+  });
+  let requestCount = 0;
+  const stream: StreamFn = async function* textAndToolStream(request) {
+    requestCount++;
+    if (requestCount === 1) {
+      const text = "I will check.";
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "checked" });
+      const partial: AssistantMessagePartial = {
+        role: "assistant",
+        contentBlocks: [
+          { type: "text", text },
+          { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
+        ],
+      };
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    const assistantWithTool = request.messages.find(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === "tool_use" && part.name === "echo"),
+    );
+    expect(JSON.stringify(assistantWithTool?.content)).toContain("I will check.");
+    const text = "Checked.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "text-and-tool" },
+    stream,
+  });
+
+  expect(requestCount).toBe(2);
+  expect(result.outcome.message).toBe("Checked.");
+});
+
 test("runAgentLoop preserves message order", async () => {
   const session = createContext({
     systemPrompt: "Test system",
@@ -172,7 +362,7 @@ test("runAgentLoop preserves message order", async () => {
 
   const messageEndEvents = events.filter(e => e.type === "message_end");
   expect(messageEndEvents.length).toBeGreaterThan(0);
-  expect(messageEndEvents.some(e => e.type === "message_end" && e.message.content.includes("Ordered messages"))).toBe(true);
+  expect(messageEndEvents.some(e => e.type === "message_end" && messageContentText(e.message.content).includes("Ordered messages"))).toBe(true);
 });
 
 test("runAgentLoop does not emit prompt messages as events", async () => {
@@ -227,7 +417,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
   const events = emittedEvents.map((event) => event.type);
 
   expect(outcome.outcome.message).toBe("Direct response: hello");
-  expect(outcome.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
+  expect(outcome.messages.some((message) => messageContentText(message.content).includes("Direct response: hello"))).toBe(true);
   // Outcome message should not emit message_start/message_end events
   expect(
     emittedEvents.some(
@@ -293,6 +483,33 @@ test("runAgentLoop throws provider errors to the caller", async () => {
       stream,
     }),
   ).rejects.toThrow("Invalid model");
+});
+
+test("runAgentLoop does not append an assistant message when the model stream errors", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "hello",
+    tools: [echoTool],
+  });
+  const events: AgentEvent[] = [];
+  const stream: StreamFn = async function* failingStream() {
+    yield { type: "start", partial: buildTestPartial("") };
+    yield { type: "error", error: new Error("provider down") };
+  };
+
+  await expect(
+    runAgentLoop({
+      context: session,
+      model: { provider: "test", name: "failing" },
+      stream,
+      emit: (event) => {
+        events.push(event);
+      },
+    }),
+  ).rejects.toThrow("provider down");
+
+  expect(session.messages.map((message) => message.role)).toEqual(["user"]);
+  expect(events.some((event) => event.type === "message_start" && event.message.role === "assistant")).toBe(false);
 });
 
 function invalidModelSchemaError(message: string): Error & { code: string } {
@@ -428,9 +645,18 @@ test("invalid tool args do not execute tool", async () => {
       };
     },
   };
-  const invalidArgsStream: StreamFn = async function* invalidArgsStream() {
-    // In the new phase system without phaseConfig, tools aren't automatically executed
-    // The model simply returns a response
+  const invalidArgsStream: StreamFn = async function* invalidArgsStream(request) {
+    const toolResult = request.messages.find((message) => message.role === "tool");
+    if (toolResult) {
+      const serializedToolResult = messageContentText(toolResult.content);
+      expect(serializedToolResult).toContain("\"toolName\":\"strict\"");
+      expect(serializedToolResult).toContain("\"ok\":false");
+      const text = "Saw invalid tool args.";
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "done" };
+      return;
+    }
+
     const text = "Response with invalid args tool call.";
     const toolId = createId("call");
     const toolName = "strict";
@@ -464,8 +690,14 @@ test("invalid tool args do not execute tool", async () => {
     },
   });
 
-  // Tool is not auto-executed in none phase (no phaseConfig)
   expect(executed).toBe(false);
+  expect(outcome.outcome.message).toBe("Saw invalid tool args.");
+  expect(outcome.outcome.toolResults).toEqual([
+    expect.objectContaining({
+      toolName: "strict",
+      ok: false,
+    }),
+  ]);
   expect(events.some((event) => event.type === "phase_end")).toBe(true);
 });
 

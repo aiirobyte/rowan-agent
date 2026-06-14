@@ -1,5 +1,6 @@
 import Type from "typebox";
 import type { Tool, ToolContext, ToolResult, Skill, RunResult } from "../../types";
+import { messageContentText } from "../../types";
 import { buildStructuredSection } from "../context/section-formatter";
 
 export const ThreadTool = "thread";
@@ -10,9 +11,6 @@ export type ThreadToolArgs = {
   tools?: string[];
   /** Skill names available to the sub-agent. If omitted, all skills are available. */
   skills?: string[];
-  limits?: {
-    maxIterations?: number;
-  };
 };
 
 /** Function signature for spawning a sub-agent loop. */
@@ -20,7 +18,6 @@ export type SpawnThreadFn = (input: {
   prompt: string;
   tools?: Tool[];
   skills?: Skill[];
-  limits?: { maxIterations?: number };
 }) => Promise<RunResult>;
 
 function buildThreadDescription(availableSkills: Skill[]): string {
@@ -65,8 +62,9 @@ function buildThreadDescription(availableSkills: Skill[]): string {
 function extractThreadSummary(result: RunResult): string {
   for (let i = result.messages.length - 1; i >= 0; i--) {
     const msg = result.messages[i];
-    if (msg.role === "assistant" && msg.content.trim().length > 0) {
-      return msg.content.trim();
+    const content = messageContentText(msg.content).trim();
+    if (msg.role === "assistant" && content.length > 0) {
+      return content;
     }
   }
 
@@ -136,14 +134,9 @@ export function createThreadTool(
         Type.String(),
         { description: "Skill names to make available to the sub-agent. Only include skills the subtask actually needs." },
       )),
-      limits: Type.Optional(Type.Object({
-        maxIterations: Type.Optional(Type.Number({
-          description: "Maximum phase iterations the sub-agent is allowed. Default: 50.",
-        })),
-      }, { description: "Resource limits for the sub-agent. Omit to inherit defaults." })),
     }),
     execute: async (args, context: ToolContext): Promise<ToolResult> => {
-      const { prompt, tools: toolNames, skills: skillNames, limits } = args;
+      const { prompt, tools: toolNames, skills: skillNames } = args;
 
       if (!prompt || prompt.trim().length === 0) {
         return {
@@ -169,11 +162,10 @@ export function createThreadTool(
         prompt: prompt.trim(),
         ...(resolvedTools && resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
         ...(resolvedSkills && resolvedSkills.length > 0 ? { skills: resolvedSkills } : {}),
-        ...(limits ? { limits } : {}),
       });
 
       const summary = extractThreadSummary(result);
-      const ok = result.outcome.id !== "aborted";
+      const ok = result.outcome.id !== "aborted" && result.outcome.id !== "thread_depth_limit";
 
       return {
         toolCallId: context.toolCallId,

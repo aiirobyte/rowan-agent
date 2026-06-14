@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Agent, type StreamFn } from "../src";
+import { Agent, messageContentText, type StreamFn } from "../src";
 import type { LlmRequest } from "../src/types";
 import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
@@ -25,8 +25,8 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
       return;
     }
 
-    routeContexts.push(request.messages.map((message) => message.content as string));
-    const sawFirstAnswer = request.messages.some((message) => (message.content as string).includes("First answer"));
+    routeContexts.push(request.messages.map((message) => messageContentText(message.content)));
+    const sawFirstAnswer = request.messages.some((message) => messageContentText(message.content).includes("First answer"));
     const message = sawFirstAnswer ? "Second answer saw the first turn." : "First answer";
     yield { type: "model_requested", model: request.model, usage: { inputMessages: request.messages.length } };
     const text = message;
@@ -52,7 +52,7 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
   expect(second.outcome.message).toBe("Second answer saw the first turn.");
   expect(agent.state.sessionId).toBe(sessionId);
   expect(agent.state.context.messages.filter((message) => message.role === "user")).toHaveLength(2);
-  expect(agent.state.context.messages.some((message) => message.content.includes("First answer"))).toBe(true);
+  expect(agent.state.context.messages.some((message) => messageContentText(message.content).includes("First answer"))).toBe(true);
   expect(routeContexts[1]).toEqual(
     expect.arrayContaining(["first", expect.stringContaining("First answer"), "second"]),
   );
@@ -96,7 +96,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   expect(
     agent.state.context.messages.some(
       (message) =>
-        message.role === "assistant" && message.content.includes("Response to: use echo tool"),
+        message.role === "assistant" && messageContentText(message.content).includes("Response to: use echo tool"),
     ),
   ).toBe(true);
 });

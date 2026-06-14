@@ -20,6 +20,15 @@ test("Agent does not expose startThread", async () => {
 
 test("tools can spawn sub-agents via the thread tool and return outcomes", async () => {
   const parentStream: StreamFn = async function* parentStream(request, options) {
+    const threadResult = request.messages.find((message) => message.role === "tool");
+    if (threadResult) {
+      expect(JSON.stringify(threadResult.content)).toContain("Sub-agent response.");
+      const text = "Parent received sub-agent response.";
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "done" };
+      return;
+    }
+
     // Sub-agent runs get a simple response
     const isSubAgent = request.messages.some(
       (m) => typeof m.content === "string" && m.content.includes("use echo tool"),
@@ -69,8 +78,11 @@ test("tools can spawn sub-agents via the thread tool and return outcomes", async
 
   expect(outcome.outcome).not.toHaveProperty("evidence");
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
-
-  // In the new phase system (no phaseConfig), tools are not auto-executed in none phase
-  // The model simply returns a response without executing the thread tool
-  expect(outcome.outcome.message).toBeDefined();
+  expect(outcome.outcome.message).toBe("Parent received sub-agent response.");
+  expect(outcome.outcome.toolResults).toEqual([
+    expect.objectContaining({
+      toolName: "thread",
+      ok: true,
+    }),
+  ]);
 });

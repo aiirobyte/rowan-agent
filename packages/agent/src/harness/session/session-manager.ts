@@ -1,6 +1,7 @@
 import type { ExecutionTurn, Outcome, StepFilter, ModelTranscript } from "../../protocol";
 import type { SessionState } from "../../loop/types";
 import type { LlmModelRef } from "../../protocol";
+import { messageContentText } from "../../types";
 import {
   createId,
   nowIso,
@@ -373,7 +374,8 @@ export function summarizeSessionManagerRecords(records: readonly SessionRecord[]
   const messages = entries
     .filter((entry): entry is MessageSessionEntry => entry.type === "message")
     .map((entry) => entry.message);
-  const latestMessage = messages.at(-1)?.content;
+  const latestMessageContent = messages.at(-1)?.content;
+  const latestMessage = latestMessageContent ? messageContentText(latestMessageContent) : undefined;
 
   return {
     id: header.id,

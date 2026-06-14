@@ -4,6 +4,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
+import type { LlmContentPart } from "@rowan-agent/models";
 import type { ContentBlock } from "@rowan-agent/models";
 import type { PhaseInput, PhaseOutput } from "../protocol/context";
 
@@ -34,9 +35,11 @@ export type PhaseMessageManager = {
   /** Get all visible messages in the transcript */
   visible(): AgentMessage[];
   /** Start a new message stream, returns message id */
-  start(role: "assistant" | "tool", content: string, metadata?: Record<string, unknown>): string;
+  start(role: "assistant" | "tool", content: AgentMessage["content"], metadata?: Record<string, unknown>): string;
   /** Stream a text delta */
   update(messageId: string, delta: string): Promise<void>;
+  /** Replace the active message content with model-native content parts */
+  replaceContent(messageId: string, content: string | LlmContentPart[]): void;
   /** End the message stream, appends to transcript */
   end(messageId: string): Promise<void>;
 };

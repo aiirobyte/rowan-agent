@@ -8,9 +8,10 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import { createMessage } from "../types";
+import { createMessage, messageContentText } from "../types";
 import { createTimestamp } from "../utils";
 import type { AgentRunState, AgentConfig } from "./types";
+import { resolveThreadLimits } from "./types";
 
 // Execution types (loop-level)
 import type {
@@ -35,8 +36,9 @@ import { buildModelRequest } from "../harness/context/prompt-builder";
 import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessage, snapshotMessages } from "./state";
-import { createRouteTool, extractRouteCall, createThreadTool } from "../harness/tools";
+import { createRouteTool, extractRouteCall, createThreadTool, PhaseRouteTool } from "../harness/tools";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
+import type { LlmContentPart } from "@rowan-agent/models";
 
 // ============================================================================
 // Phase State Utilities
@@ -57,7 +59,7 @@ function resolvePhaseOutput(
 ): PhaseOutput {
   if (result) return result;
   return {
-    message: context.messages.filter(m => m.role === "assistant").pop()?.content ?? "",
+    message: messageContentText(context.messages.filter(m => m.role === "assistant").pop()?.content ?? ""),
     route: "stop",
   };
 }
@@ -136,6 +138,7 @@ function buildToolsWithRouting(
     tools.push(createRouteTool(availablePhases));
   }
   const threadTool = createThreadTool(config.context.tools, config.context.skills, async (input) => {
+    const runtime = resolveThreadLimits(config.limits);
     const result = await runLoop({
       context: {
         systemPrompt: config.context.systemPrompt,
@@ -147,7 +150,11 @@ function buildToolsWithRouting(
       model: config.model,
       stream: config.stream,
       maxAttempts: config.maxAttempts,
-      limits: input.limits ?? config.limits,
+      limits: {
+        ...config.limits,
+        threadDepth: runtime.threadDepth + 1,
+        maxThreadDepth: runtime.maxThreadDepth,
+      },
       signal: config.signal,
       runtime: config.runtime,
       beforeToolCall: config.beforeToolCall,
@@ -180,8 +187,15 @@ function createMessageManager(
     async update(messageId, delta) {
       const msg = activeMessages.get(messageId);
       if (!msg) return;
-      msg.content += delta;
+      msg.content = typeof msg.content === "string"
+        ? msg.content + delta
+        : [...msg.content, { type: "text", text: delta }];
       emit(emitFn, { type: "message_update", message: snapshotMessage(msg), delta, ts: createTimestamp() });
+    },
+    replaceContent(messageId, content) {
+      const msg = activeMessages.get(messageId);
+      if (!msg) return;
+      msg.content = content;
     },
     async end(messageId) {
       const msg = activeMessages.get(messageId);
@@ -205,6 +219,76 @@ function createToolExecutionManager(
       emit(emitFn, { type: "tool_execution_end", toolCallId, toolName, result, isError, ts: createTimestamp() });
     },
   };
+}
+
+function createToolResultContent(result: ToolResult): LlmContentPart[] {
+  return [
+    {
+      type: "tool_result",
+      toolUseId: result.toolCallId,
+      content: JSON.stringify(result),
+      isError: !result.ok,
+    },
+  ];
+}
+
+async function invokeModelWithToolLoop(input: {
+  config: AgentConfig;
+  execution: PhaseExecution;
+  messageManager: PhaseMessageManager;
+  basePhaseInput: PhaseInput;
+  phaseId: string;
+  availableTools: Tool[];
+}): Promise<PhaseOutput> {
+  const executableToolNames = new Set(
+    input.availableTools
+      .filter((tool) => tool.name !== PhaseRouteTool)
+      .map((tool) => tool.name),
+  );
+  let output: PhaseOutput = {
+    message: "",
+    route: "stop",
+    toolCalls: [],
+  };
+
+  while (true) {
+    const roundContext: AgentContext = {
+      systemPrompt: input.config.context.systemPrompt,
+      messages: input.messageManager.visible(),
+      tools: input.availableTools,
+      skills: input.basePhaseInput.phaseSkills ?? input.config.context.skills,
+    };
+    const roundInput: PhaseInput = {
+      ...input.basePhaseInput,
+      messages: snapshotMessages(roundContext.messages),
+      tools: input.basePhaseInput.tools,
+      skills: input.basePhaseInput.skills,
+      phaseTools: input.availableTools,
+      phaseSkills: input.basePhaseInput.phaseSkills ?? input.config.context.skills,
+    };
+    const collected = await input.execution.invokeModel(roundContext, { phaseInput: roundInput });
+
+    output = {
+      message: collected.text,
+      route: "stop",
+      toolCalls: collected.toolCalls,
+    };
+
+    const executableToolCalls = collected.toolCalls.filter((toolCall) =>
+      executableToolNames.has(toolCall.name),
+    );
+    if (executableToolCalls.length === 0) {
+      return output;
+    }
+
+    for (const toolCall of executableToolCalls) {
+      const result = await input.execution.executeTool(roundContext, toolCall);
+      const messageId = input.messageManager.start("tool", createToolResultContent(result), {
+        phase: input.phaseId,
+      });
+      await input.messageManager.end(messageId);
+    }
+  }
 }
 
 async function runTurn<T>(
@@ -264,13 +348,6 @@ async function runDefaultLoop(
 
   const execution = createPhaseExecution(config, state, allTools, nonePhase, messageManager, toolExecutionManager);
 
-  const agentContext: AgentContext = {
-    systemPrompt: config.context.systemPrompt,
-    messages: snapshotMessages(config.context.messages),
-    tools: allTools,
-    skills: config.context.skills,
-  };
-
   let phaseInput: PhaseInput = {
     phase: "none",
     systemPrompt: config.context.systemPrompt,
@@ -298,13 +375,14 @@ async function runDefaultLoop(
     }
   }
 
-  const collected = await execution.invokeModel(agentContext, { phaseInput });
-
-  let output: PhaseOutput = {
-    message: collected.text,
-    route: "stop",
-    toolCalls: collected.toolCalls,
-  };
+  let output = await invokeModelWithToolLoop({
+    config,
+    execution,
+    messageManager,
+    basePhaseInput: phaseInput,
+    phaseId: nonePhase.id,
+    availableTools: allTools,
+  });
 
   if (config.afterPhase) {
     const extAfter = await config.afterPhase("none", output);
@@ -314,18 +392,20 @@ async function runDefaultLoop(
     }
     if (extAfter.retry) {
       // Convert retry PhaseInput to AgentContext for execution.invokeModel
-      const retryContext: AgentContext = {
-        systemPrompt: extAfter.retry.systemPrompt,
-        messages: extAfter.retry.messages,
-        tools: allTools,
-        skills: config.context.skills,
-      };
-      const retryCollected = await execution.invokeModel(retryContext);
-      output = {
-        message: retryCollected.text,
-        route: "stop",
-        toolCalls: retryCollected.toolCalls,
-      };
+      output = await invokeModelWithToolLoop({
+        config,
+        execution,
+        messageManager,
+        basePhaseInput: {
+          ...extAfter.retry,
+          tools: allTools,
+          skills: config.context.skills,
+          phaseTools: allTools,
+          phaseSkills: config.context.skills,
+        },
+        phaseId: nonePhase.id,
+        availableTools: allTools,
+      });
     }
     if (extAfter.output) {
       output = extAfter.output;
@@ -350,10 +430,7 @@ async function runPhasedLoop(
   // Hot-reload: re-read phase files from disk before each run
   const freshRegistry = await reloadPhases(registry);
 
-  const maxIterations = config.limits?.maxIterations ?? 50;
-  const maxPhaseRounds = config.limits?.maxPhaseRounds ?? 10;
   let currentPhaseId = freshRegistry.entryPhaseId!;
-  let phaseRounds = 0;
   let isContinuing = false;
 
   // Build available phases list for route tool
@@ -369,13 +446,6 @@ async function runPhasedLoop(
     }
 
     state.metrics.iterations++;
-
-    if (state.metrics.iterations > maxIterations) {
-      return completeRun(config, state, {
-        id: "max_iterations",
-        message: `Loop exceeded maximum iterations (${maxIterations}). Stopping to prevent infinite loop.`,
-      });
-    }
 
     // Auto-compact when transcript grows too long
     if (needsCompaction(config.context.messages)) {
@@ -472,12 +542,14 @@ async function runPhasedLoop(
       const result = await phase.run(agentContext, execution);
       output = resolvePhaseOutput(result, config.context);
     } else {
-      const collected = await execution.invokeModel(agentContext, { phaseInput });
-      output = {
-        message: collected.text,
-        route: "stop",
-        toolCalls: collected.toolCalls,
-      };
+      output = await invokeModelWithToolLoop({
+        config,
+        execution,
+        messageManager,
+        basePhaseInput: phaseInput,
+        phaseId: phase.id,
+        availableTools: phaseTools,
+      });
     }
 
     // ToolChoice fallback
@@ -526,19 +598,9 @@ async function runPhasedLoop(
 
     // Handle "continue" — re-execute current phase
     if (output.route === "continue") {
-      phaseRounds++;
-      if (phaseRounds > maxPhaseRounds) {
-        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
-        phaseRounds = 0;
-        // Force stop to avoid infinite loop
-        return completeRun(config, state, createOutcome.default(output, config.context.messages));
-      }
       isContinuing = true;
-      state.metrics.iterations++;
       continue;
     }
-
-    phaseRounds = 0;
 
     emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
 

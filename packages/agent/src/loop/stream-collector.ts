@@ -2,6 +2,7 @@ import type {
   LlmStreamEvent,
   ToolCall,
 } from "../types";
+import { contentBlocksToMessageContent } from "../types";
 import type { AgentConfig } from "./types";
 import type {
   ContentBlock,
@@ -103,11 +104,6 @@ async function collectStreamResult(input: {
 
     if (event.type === "start") {
       lastPartial = event.partial;
-      if (!activeMessageId) {
-        activeMessageId = input.message.start("assistant", "", {
-          phase: input.metadataPhase,
-        });
-      }
     }
 
     if (event.type === "text_delta") {
@@ -133,12 +129,16 @@ async function collectStreamResult(input: {
       doneResponse = event.response;
       stopReason = event.response?.stopReason;
 
-      const toolCallBlocks = lastPartial?.contentBlocks?.filter(b => b.type === "tool_call") ?? [];
-      if (!activeMessageId && toolCallBlocks.length > 0) {
+      const contentBlocks = lastPartial?.contentBlocks ?? [];
+      if (!activeMessageId && contentBlocks.length > 0) {
         activeMessageId = input.message.start("assistant", "", {
           phase: input.metadataPhase,
-          toolCalls: toolCallBlocks.map(tc => ({ id: tc.id, name: tc.name, args: tc.args })),
         });
+      }
+
+      const shouldStoreContentParts = contentBlocks.some((block) => block.type !== "text");
+      if (activeMessageId && shouldStoreContentParts) {
+        input.message.replaceContent(activeMessageId, contentBlocksToMessageContent(contentBlocks));
       }
 
       if (activeMessageId) {

@@ -7,7 +7,7 @@
  */
 
 import type { AgentMessage } from "../../types";
-import { createMessage } from "../../types";
+import { createMessage, messageContentText } from "../../types";
 
 export type CompactionOptions = {
   /** Maximum number of messages before compaction triggers. Default: 50. */
@@ -65,7 +65,7 @@ function buildSummary(messages: AgentMessage[]): string {
       flush();
       currentRole = msg.role;
     }
-    currentContent.push(msg.content);
+    currentContent.push(messageContentText(msg.content));
   }
   flush();
 
@@ -142,7 +142,7 @@ export function compactMessages(
 export function estimateTokenCount(messages: AgentMessage[]): number {
   let totalChars = 0;
   for (const msg of messages) {
-    totalChars += msg.content.length;
+    totalChars += messageContentText(msg.content).length;
     // Add overhead for role, metadata, etc.
     totalChars += 20;
   }

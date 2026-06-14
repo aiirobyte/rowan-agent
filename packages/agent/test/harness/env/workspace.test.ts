@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSession } from "@rowan-agent/agent";
+import { createSession, messageContentText } from "@rowan-agent/agent";
 import {
   detectRuntimeMode,
   findSourceWorkspaceRoot,
@@ -124,7 +124,7 @@ test("loadSkill reads SKILL.md and infers id from parent directory", async () =>
 
   expect(skill.name).toBe("example");
   expect(session.skills[0]?.name).toBe("example");
-  expect(session.messages.some((message) => message.content.includes("Use echo."))).toBe(false);
+  expect(session.messages.some((message) => messageContentText(message.content).includes("Use echo."))).toBe(false);
 });
 
 test("loadSkill resolves skill ids from the workspace skills directory", async () => {
