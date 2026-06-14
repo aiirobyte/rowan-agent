@@ -657,8 +657,11 @@ function isRetryableError(error: unknown): boolean {
   if (message.includes("service unavailable") || message.includes("503")) return true;
   if (message.includes("gateway timeout") || message.includes("504")) return true;
   if (message.includes("econnreset") || message.includes("econnrefused")) return true;
-  // Check for invalid model schema errors (retryable)
-  if ("code" in error && (error as { code: string }).code === "invalid_model_schema") return true;
+  // Check for invalid model schema or empty response errors (retryable)
+  if ("code" in error) {
+    const code = (error as { code: string }).code;
+    if (code === "invalid_model_schema" || code === "empty_response") return true;
+  }
   // Do NOT retry user-configured timeouts — those are intentional limits
   return false;
 }

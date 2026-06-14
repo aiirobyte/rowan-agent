@@ -15,7 +15,7 @@ import type {
 import type { ModelInvokeOutput, PhaseMessageManager } from "./execution";
 import type { ModelTranscript } from "../protocol/turn";
 import { createTimestamp } from "../utils";
-import { LoopGuard } from "./errors";
+import { LoopGuard, EmptyResponseError } from "./errors";
 
 export type ModelInvokerInput = {
   config: AgentConfig;
@@ -150,6 +150,13 @@ async function collectStreamResult(input: {
 
   if (activeMessageId) {
     await input.message.end(activeMessageId);
+  }
+
+  // Detect empty responses — model returned no text and no tool calls.
+  // Abort and error stop reasons are handled upstream, so only flag benign stop reasons.
+  const hasContent = (lastPartial?.contentBlocks?.length ?? 0) > 0 || (doneResponse?.content?.length ?? 0) > 0;
+  if (!hasContent && stopReason !== "error" && stopReason !== "aborted") {
+    throw new EmptyResponseError();
   }
 
   // Use done.response as final truth when available

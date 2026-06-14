@@ -1,6 +1,15 @@
 /** Stop reason for loop termination */
 export type StopReason = "none" | "completed" | "aborted" | "error";
 
+/** Error thrown when the model returns an empty response (no text, no tool calls). */
+export class EmptyResponseError extends Error {
+  readonly code = "empty_response";
+  constructor(message = "Model returned an empty response.") {
+    super(message);
+    this.name = "EmptyResponseError";
+  }
+}
+
 /** Result with stop reason */
 export type LoopResult = {
   stopReason: "none";
