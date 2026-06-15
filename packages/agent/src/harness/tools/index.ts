@@ -8,7 +8,7 @@ import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../../typ
 // Re-export route and thread tools
 export { createRouteTool, extractRouteCall, PhaseRouteTool } from "./route-tool";
 export type { RouteToolArgs } from "./route-tool";
-export { createThreadTool, isThreadToolCall, ThreadTool } from "./thread-tool";
+export { createThreadTool, ThreadTool } from "./thread-tool";
 export type { ThreadToolArgs, SpawnThreadFn } from "./thread-tool";
 
 const DEFAULT_MAX_READ_BYTES = 64_000;

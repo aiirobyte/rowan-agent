@@ -79,7 +79,6 @@ export type { ExtensionRunnerOptions } from "./runner";
 export {
   discoverAndLoadExtensions,
   loadExtensionFromFactory,
-  loadExtensionFromFactorySync,
   loadExtensions,
 } from "./loader";
 

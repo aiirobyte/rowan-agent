@@ -10,8 +10,6 @@ import {
   type AgentEventLogLevel,
 } from "./record";
 
-export type { AgentEventLogLevel } from "./record";
-
 export type AgentEventLogPath = string | ((event: AgentEvent) => string | undefined);
 
 export type AgentEventLoggerOptions = {

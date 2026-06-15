@@ -69,20 +69,13 @@ function resolvePhaseOutput(
 // Event Emission
 // ============================================================================
 
-function emit(
-  emitFn: ((event: AgentEvent) => void) | undefined,
-  event: AgentEvent,
-): void {
-  emitFn?.(event);
-}
-
 function emitTurn(
   context: AgentContext,
   emitFn: ((event: AgentEvent) => void) | undefined,
   type: "turn_start" | "turn_end",
   extra?: { outcome?: Outcome },
 ): void {
-  emit(emitFn, {
+  emitFn?.({
     type,
     content: snapshotMessages(context.messages),
     ...extra,
@@ -182,7 +175,7 @@ function createMessageManager(
     start(role, content, metadata) {
       const msg = createMessage(role, content, metadata);
       activeMessages.set(msg.id, msg);
-      emit(emitFn, { type: "message_start", message: snapshotMessage(msg), ts: createTimestamp() });
+      emitFn?.({ type: "message_start", message: snapshotMessage(msg), ts: createTimestamp() });
       return msg.id;
     },
     async update(messageId, delta) {
@@ -191,7 +184,7 @@ function createMessageManager(
       msg.content = typeof msg.content === "string"
         ? msg.content + delta
         : [...msg.content, { type: "text", text: delta }];
-      emit(emitFn, { type: "message_update", message: snapshotMessage(msg), delta, ts: createTimestamp() });
+      emitFn?.({ type: "message_update", message: snapshotMessage(msg), delta, ts: createTimestamp() });
     },
     replaceContent(messageId, content) {
       const msg = activeMessages.get(messageId);
@@ -203,7 +196,7 @@ function createMessageManager(
       if (!msg) return;
       activeMessages.delete(messageId);
       context.messages.push(msg);
-      emit(emitFn, { type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
+      emitFn?.({ type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
       await onMessage?.(msg);
     },
   };
@@ -214,10 +207,10 @@ function createToolExecutionManager(
 ): PhaseToolExecutionManager {
   return {
     async start(toolCallId, toolName, args) {
-      emit(emitFn, { type: "tool_execution_start", toolCallId, toolName, args, ts: createTimestamp() });
+      emitFn?.({ type: "tool_execution_start", toolCallId, toolName, args, ts: createTimestamp() });
     },
     async end(toolCallId, toolName, result, isError) {
-      emit(emitFn, { type: "tool_execution_end", toolCallId, toolName, result, isError, ts: createTimestamp() });
+      emitFn?.({ type: "tool_execution_end", toolCallId, toolName, result, isError, ts: createTimestamp() });
     },
   };
 }
@@ -359,16 +352,16 @@ async function runDefaultLoop(
     phaseSkills: config.context.skills,
   };
 
-  emit(config.emit, { type: "phase_start", phase: "none", ts: createTimestamp() });
+  config.emit?.({ type: "phase_start", phase: "none", ts: createTimestamp() });
 
   if (config.beforePhase) {
     const extBefore = await config.beforePhase("none", phaseInput);
     if (extBefore.abort) {
-      emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
       return completeRun(config, state, extBefore.abort);
     }
     if (extBefore.skip) {
-      emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
       return completeRun(config, state, { id: "skip", message: extBefore.skip.message || "Skipped." });
     }
     if (extBefore.input) {
@@ -388,7 +381,7 @@ async function runDefaultLoop(
   if (config.afterPhase) {
     const extAfter = await config.afterPhase("none", output);
     if (extAfter.abort) {
-      emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+      config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
       return completeRun(config, state, extAfter.abort);
     }
     if (extAfter.retry) {
@@ -413,7 +406,7 @@ async function runDefaultLoop(
     }
   }
 
-  emit(config.emit, { type: "phase_end", phase: "none", ts: createTimestamp() });
+  config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
 
   return completeRun(config, state, createOutcome.default(output, config.context.messages));
 }
@@ -454,7 +447,7 @@ async function runPhasedLoop(
       if (compacted.compacted) {
         config.context.messages = compacted.messages;
         state.metrics.compactionCount++;
-        emit(config.emit, {
+        config.emit?.({
           type: "message_start",
           message: {
             id: "compaction",
@@ -511,7 +504,7 @@ async function runPhasedLoop(
     // Emit phase_start only when entering a new phase (not on continue)
     const enteringNewPhase = !isContinuing;
     if (enteringNewPhase) {
-      emit(config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
+      config.emit?.({ type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
     }
     isContinuing = false;
 
@@ -519,11 +512,11 @@ async function runPhasedLoop(
     if (config.beforePhase) {
       const extBefore = await config.beforePhase(currentPhaseId, phaseInput);
       if (extBefore.abort) {
-        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         return completeRun(config, state, extBefore.abort);
       }
       if (extBefore.skip) {
-        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         if (extBefore.skip.route === "stop") {
           return completeRun(config, state, {
             id: "skip",
@@ -597,7 +590,7 @@ async function runPhasedLoop(
     if (config.afterPhase) {
       const extAfter = await config.afterPhase(currentPhaseId, output);
       if (extAfter.abort) {
-        emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+        config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         return completeRun(config, state, extAfter.abort);
       }
       if (extAfter.retry && phase.run) {
@@ -623,7 +616,7 @@ async function runPhasedLoop(
       continue;
     }
 
-    emit(config.emit, { type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+    config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
 
     // Resolve next phase: target > route > stop
     let nextRoute: string | PhaseState;

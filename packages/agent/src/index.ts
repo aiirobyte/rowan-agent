@@ -7,7 +7,7 @@ export {
   messageContentText,
 } from "./types";
 
-export { createId, createTimestamp, createJson } from "./utils";
+export { createId, createTimestamp } from "./utils";
 
 export type {
   AgentMessage,
@@ -93,8 +93,6 @@ export type {
   Phase,
   PhaseConfig,
   PhaseFrontmatter,
-  PhaseState,
-  PhaseTransition,
 } from "./harness/phases/types";
 
 export type {

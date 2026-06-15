@@ -577,47 +577,6 @@ export class HooksManager {
   }
 
   /**
-   * Emit event and collect all non-undefined results.
-   *
-   * @param eventType - Event type
-   * @param event - Event object
-   * @returns Array of non-undefined results
-   */
-  async emitCollect<K extends HookEventType>(
-    eventType: K,
-    event: Extract<HookEvent, { type: K }>,
-  ): Promise<Array<NonNullable<HookResultMap[K]>>> {
-    const handlers = this.handlers.get(eventType);
-    if (!handlers?.length) return [];
-
-    const results: Array<NonNullable<HookResultMap[K]>> = [];
-    const errors: Error[] = [];
-
-    for (const handler of handlers) {
-      try {
-        const result = await handler(event);
-        if (result !== undefined) {
-          results.push(result);
-        }
-      } catch (error) {
-        errors.push(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      }
-    }
-
-    if (errors.length > 0) {
-      throw new HookError(
-        eventType,
-        `${errors.length} handler(s) failed for "${eventType}"`,
-        errors[0],
-      );
-    }
-
-    return results;
-  }
-
-  /**
    * Emit event and return first non-undefined result (short-circuit).
    *
    * @param eventType - Event type
@@ -647,25 +606,7 @@ export class HooksManager {
     return undefined;
   }
 
-  /**
-   * Emit event and aggregate results with reducer.
-   *
-   * @param eventType - Event type
-   * @param event - Event object
-   * @param reducer - Aggregation function
-   * @param initial - Initial value
-   * @returns Aggregated result
-   */
-  async emitReduce<K extends HookEventType, T>(
-    eventType: K,
-    event: Extract<HookEvent, { type: K }>,
-    reducer: (acc: T, result: NonNullable<HookResultMap[K]>) => T,
-    initial: T,
-  ): Promise<T> {
-    const results = await this.emitCollect(eventType, event);
-    return results.reduce(reducer, initial);
   }
-}
 
 // ---------------------------------------------------------------------------
 // Global hooks instance (optional convenience)

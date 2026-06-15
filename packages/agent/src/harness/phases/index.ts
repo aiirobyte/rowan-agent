@@ -1,10 +1,7 @@
 export type {
   PhaseFrontmatter,
   Phase,
-  PhaseState,
-  PhaseTransition,
   PhaseRegistry,
-  PhaseLoadOptions,
 } from "./types";
 
 export type {

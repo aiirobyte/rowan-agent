@@ -564,7 +564,7 @@ test("CLI writes a default log without --log", async () => {
     expect(metadataLines[2]).toMatch(/^Log written to \.rowan\/runs\/.+\.jsonl$/);
     expect(displayedLogPath?.startsWith(".rowan/runs/")).toBe(true);
     expect(displayedLogPath).toMatch(
-      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{6}-\\d{2}[+-]\\d{2}:\\d{2}-${sessionId}\\.jsonl$`),
+      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z-${sessionId}\\.jsonl$`),
     );
 
     const logPath = join(workspace, displayedLogPath ?? "");
@@ -572,7 +572,7 @@ test("CLI writes a default log without --log", async () => {
     const [firstRecord] = await readLogRecords(logPath);
     const [firstEvent] = await readLogEvents(logPath);
     expect(firstRecord?.time).toEqual(expect.any(Number));
-    expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
+    expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(firstEvent?.type).toBe("agent_start");
     expect(firstRecord?.timestamp).toBeUndefined();
     expect(firstRecord?.event).toBeUndefined();

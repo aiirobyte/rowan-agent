@@ -183,9 +183,3 @@ export function createThreadTool(
   };
 }
 
-/**
- * Check if a tool call is a thread tool call.
- */
-export function isThreadToolCall(toolCall: { name: string }): boolean {
-  return toolCall.name === ThreadTool;
-}

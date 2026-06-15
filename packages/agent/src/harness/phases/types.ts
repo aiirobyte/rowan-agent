@@ -2,9 +2,6 @@ import type { LlmRequest } from "@rowan-agent/models";
 import type { AgentContext } from "../../types";
 import type { PhaseInput, PhaseOutput } from "../../protocol/context";
 import type { PhaseExecution } from "../../loop/execution";
-import type { WorkspacePaths } from "../env/path";
-import type { ExtensionAPI } from "./extension-api";
-
 /**
  * Frontmatter properties parsed from PHASE.md
  */
@@ -79,22 +76,6 @@ export interface Phase {
 }
 
 /**
- * Built-in phase sentinel states
- * These are NOT executable phases, just type-level markers
- */
-export type PhaseState = "none" | "stop";
-
-/**
- * Result of phase transition decision
- */
-export interface PhaseTransition {
-  /** Next phase id or sentinel state */
-  nextPhase: string | PhaseState;
-  /** Reason for transition */
-  reason?: string;
-}
-
-/**
  * Phase registry containing all loaded phases
  */
 export interface PhaseRegistry {
@@ -104,12 +85,3 @@ export interface PhaseRegistry {
   entryPhaseId: string | null;
 }
 
-/**
- * Phase loading options
- */
-export interface PhaseLoadOptions {
-  /** Base directory to search for phases */
-  baseDir?: string;
-  /** Workspace paths for resolution */
-  workspace?: WorkspacePaths;
-}

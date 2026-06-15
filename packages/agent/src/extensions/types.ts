@@ -181,8 +181,6 @@ export type PendingProviderUnregistration = {
   name: string;
 };
 
-export type PendingProviderAction = PendingProviderRegistration | PendingProviderUnregistration;
-
 // ---------------------------------------------------------------------------
 // Hook results (for backward compatibility with runner.ts)
 // ---------------------------------------------------------------------------
@@ -349,12 +347,3 @@ export interface ExtensionManifest {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Legacy types (backward compatibility)
-// ---------------------------------------------------------------------------
-
-export type ExtensionHandler = (...args: unknown[]) => unknown | Promise<unknown>;
-
-export type ExtensionPhaseHandler = {
-  buildPrompt?(input: PhaseInput): LlmRequest;
-};

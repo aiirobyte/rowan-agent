@@ -341,27 +341,6 @@ export interface ExtensionUtils {
    * @returns LLM request object
    */
   buildModelRequest(input: PhaseInput): LlmRequest;
-
-  /**
-   * Create a prompt builder.
-   * @param instructions - Instruction list
-   * @returns Builder function
-   *
-   * @example
-   * ```typescript
-   * const builder = ctx.utils.createPromptBuilder([
-   *   "Phase: review",
-   *   "Review code changes",
-   * ]);
-   *
-   * // Use in buildPrompt
-   * ctx.registerPhase({
-   *   id: "review",
-   *   buildPrompt: builder,
-   * });
-   * ```
-   */
-  createPromptBuilder(instructions: string[]): (input: PhaseInput) => LlmRequest;
 }
 
 // ---------------------------------------------------------------------------
@@ -427,19 +406,6 @@ export function createExtensionAPI(
     }
   };
 
-  const createPromptBuilder = (instructions: string[]) => {
-    return (input: PhaseInput): LlmRequest => {
-      const req = buildModelRequest(input);
-      if (instructions.length > 0) {
-        req.messages.push({
-          role: "user",
-          content: instructions.join("\n"),
-        });
-      }
-      return req;
-    };
-  };
-
   return {
     on: (eventType, handler) => {
       runtime.assertActive();
@@ -470,7 +436,6 @@ export function createExtensionAPI(
       createId,
       formatJson,
       buildModelRequest,
-      createPromptBuilder,
     },
     context: options.context,
     events: eventBus,

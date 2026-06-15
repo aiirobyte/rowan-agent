@@ -37,7 +37,7 @@ test("public value exports snapshot", () => {
     "EventStream", "ExtensionRunner", "HooksManager", "InMemorySessionManager",
     "LocalJsonlSessionManager", "SESSION_MANAGER_SCHEMA_VERSION", "SESSION_SCHEMA_VERSION",
     "appendUserTurn", "buildModelRequest", "buildSystemPrompt", "conversationMessages",
-    "createCoreTools", "createId", "createJson", "createMessage",
+    "createCoreTools", "createId", "createMessage",
     "createSession", "createSessionHeader", "createSourceInfo", "createTimestamp",
     "latestUserInput", "loadSkill", "loadSkills", "resolveInWorkspace",
     "resolveSkillPath", "resolveWorkspacePaths", "serializeSkills",
