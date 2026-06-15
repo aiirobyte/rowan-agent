@@ -16,8 +16,6 @@ export interface PhaseFrontmatter {
   skills?: string[];
   /** Tool choice strategy */
   "tool-choice"?: string;
-  /** Is this the entry phase */
-  entry?: boolean;
   /** Forced next phase id */
   target?: string;
 }
@@ -32,7 +30,6 @@ export interface PhaseConfig {
   tools?: string[];
   skills?: string[];
   toolChoice?: string;
-  entry: boolean;
   target?: string;
   filePath?: string;
   baseDir?: string;
@@ -57,8 +54,6 @@ export interface Phase {
   skills?: string[];
   /** Tool choice strategy */
   toolChoice?: string;
-  /** Is entry phase */
-  entry: boolean;
   /** Forced next phase */
   target?: string;
   /** Path to PHASE.md file */

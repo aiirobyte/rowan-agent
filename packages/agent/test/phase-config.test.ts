@@ -8,8 +8,8 @@ import type { LoadedExtension } from "../src/extensions";
 
 test("PhaseRegistry is Map-based with entryPhaseId", () => {
   const phases = new Map();
-  phases.set("a", { id: "a", name: "A", description: "a phase", entry: false, filePath: "", baseDir: "", content: "", buildPrompt: () => "" });
-  phases.set("b", { id: "b", name: "B", description: "b phase", entry: false, filePath: "", baseDir: "", content: "", buildPrompt: () => "" });
+  phases.set("a", { id: "a", name: "A", description: "a phase", filePath: "", baseDir: "", content: "", buildPrompt: () => "" });
+  phases.set("b", { id: "b", name: "B", description: "b phase", filePath: "", baseDir: "", content: "", buildPrompt: () => "" });
 
   const registry: PhaseRegistry = { phases, entryPhaseId: "a" };
   expect(registry.entryPhaseId).toBe("a");

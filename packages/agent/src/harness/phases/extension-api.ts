@@ -141,6 +141,30 @@ export interface ExtensionAPI {
    */
   getContext(): AgentContext;
 
+  /** Get the current system prompt */
+  getSystemPrompt(): string;
+
+  /** Set/override the system prompt for the current turn */
+  setSystemPrompt(prompt: string): void;
+
+  /** Get the full message history */
+  getMessages(): AgentMessage[];
+
+  /** Append a message to the history */
+  addMessage(role: "user" | "assistant" | "system", content: string): void;
+
+  /** Get all available tools */
+  getAvailableTools(): Array<{ name: string; description: string }>;
+
+  /** Get all available skills */
+  getAvailableSkills(): Array<{ name: string; description: string }>;
+
+  /** Get skill content by name */
+  getSkillContent(skillName: string): string;
+
+  /** Get all available phase IDs */
+  getAvailablePhases(): string[];
+
   /**
    * Register callback for phase entry
    */

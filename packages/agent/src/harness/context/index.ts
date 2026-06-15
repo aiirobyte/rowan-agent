@@ -1,4 +1,4 @@
 export * from "./system-prompt";
 export * from "./prompt-builder";
-export * from "./section-formatter";
+export * from "./resource-formatter";
 export * from "./compaction";

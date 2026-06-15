@@ -20,12 +20,12 @@ function createContext(input: { input: string; tools?: Tool[] }): AgentContext {
   };
 }
 
-function buildPhaseRegistry(phases: Phase[]): PhaseRegistry {
+function buildPhaseRegistry(phases: Phase[], entryPhaseId?: string): PhaseRegistry {
   const map = new Map<string, Phase>();
   for (const phase of phases) {
     map.set(phase.id, phase);
   }
-  const entry = phases.find(p => p.entry)?.id ?? phases[0]?.id ?? null;
+  const entry = entryPhaseId ?? phases[0]?.id ?? null;
   return { phases: map, entryPhaseId: entry };
 }
 
@@ -44,9 +44,8 @@ describe("Phase file loading", () => {
     const phase = await loadPhase("plan");
     expect(phase.id).toBe("plan");
     expect(phase.name).toBe("Plan");
-    expect(phase.entry).toBe(true);
     // tools can be undefined (empty/undefined = all tools available)
-    expect(phase.content).toContain("Plan");
+    expect(phase.content).toMatch(/plan/i);
   });
 
   test("verify phase loads from filesystem", async () => {
@@ -55,7 +54,7 @@ describe("Phase file loading", () => {
     expect(phase.name).toBe("Verify");
     expect(phase.target).toBe("stop");
     // tools can be undefined (empty/undefined = all tools available)
-    expect(phase.content).toContain("Verify");
+    expect(phase.content).toMatch(/verify/i);
   });
 
   test("loadPhases discovers both plan and verify", async () => {
@@ -63,7 +62,8 @@ describe("Phase file loading", () => {
     expect(registry.phases.size).toBeGreaterThanOrEqual(2);
     expect(registry.phases.has("plan")).toBe(true);
     expect(registry.phases.has("verify")).toBe(true);
-    expect(registry.entryPhaseId).toBe("plan"); // plan has entry: true
+    // entryPhaseId defaults to null (start from "none")
+    expect(registry.entryPhaseId).toBeNull();
   });
 });
 
@@ -173,8 +173,7 @@ describe("Verify phase execution", () => {
   test("verify phase routes to stop when criteria met", async () => {
     const verifyPhase = await loadPhase("verify");
     // Set verify as entry since it's the only phase
-    const entryVerify = { ...verifyPhase, entry: true };
-    const registry = buildPhaseRegistry([entryVerify]);
+    const registry = buildPhaseRegistry([verifyPhase], "verify");
 
     const stream: StreamFn = async function* (request) {
       const text = "Verification complete.";
@@ -292,12 +291,12 @@ describe("Phase framework execution", () => {
     // Phase has no index.ts, so run is undefined
     // Framework handles execution via invokeModelWithToolLoop
     expect(phase.run).toBeUndefined();
-    expect(phase.content).toContain("Plan");
+    expect(phase.content).toMatch(/plan/i);
   });
 
   test("verify phase has no run function — framework handles via invokeModelWithToolLoop", async () => {
     const phase = await loadPhase("verify");
     expect(phase.run).toBeUndefined();
-    expect(phase.content).toContain("Verify");
+    expect(phase.content).toMatch(/verify/i);
   });
 });

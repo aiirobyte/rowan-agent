@@ -6,12 +6,12 @@ import type { AgentContext } from "../../types";
 import type { PhaseOutput } from "../../protocol/context";
 import type { PhaseExecution } from "../../loop/execution";
 import {
-  parseFrontmatter,
   loadMarkdown,
   resolveResourcePath,
   inferResourceName,
 } from "../loader";
 import type { WorkspacePaths } from "../env/path";
+import { formatResourceOutput } from "../context/resource-formatter";
 
 const PHASE_MARKER = "PHASE.md";
 const PHASE_DIR = "phases";
@@ -40,7 +40,6 @@ export async function loadPhase(
     tools: frontmatter.tools,
     skills: frontmatter.skills,
     toolChoice: frontmatter["tool-choice"],
-    entry: frontmatter.entry === true,
     target: frontmatter.target,
     filePath: resolved,
     baseDir,
@@ -57,26 +56,45 @@ export async function loadPhase(
   return phase;
 }
 
+/** Format phase content for LLM consumption using unified XML format. */
+export function readPhaseContent(phase: Phase): string {
+  return formatResourceOutput({
+    type: "phase", name: phase.name, location: phase.filePath,
+    content: phase.content, baseDir: phase.baseDir,
+  });
+}
+
 /**
  * Load all phases from .rowan/phases directory.
  *
  * Scans for subdirectories containing PHASE.md files.
- * Returns PhaseRegistry with entry phase set to:
- * 1. Phase with entry: true in frontmatter
- * 2. First phase found (if none marked as entry)
- * 3. null (if no phases found)
+ * Returns PhaseRegistry with entryPhaseId:
+ * - null by default (caller must explicitly set to start from a specific phase)
+ * - Set to a specific phase id to start from that phase
+ *
+ * When entryPhaseId is null, AgentLoop starts from "none" phase.
  */
 export async function loadPhases(
   workspace?: WorkspacePaths,
+  paths?: string[],
 ): Promise<PhaseRegistry> {
+  const phases = new Map<string, Phase>();
+
+  if (paths && paths.length > 0) {
+    // Load from explicit paths
+    for (const path of paths) {
+      const phase = await loadPhase(path, workspace);
+      phases.set(phase.id, phase);
+    }
+    return { phases, entryPhaseId: null };
+  }
+
+  // Auto-discover from .rowan/phases directory
   const ws = workspace ?? (await import("../env/path")).resolveWorkspacePaths();
   const phasesDir = join(ws.rowanDir, PHASE_DIR);
 
-  const phases = new Map<string, Phase>();
-  let entryPhaseId: string | null = null;
-
   if (!existsSync(phasesDir)) {
-    return { phases, entryPhaseId };
+    return { phases, entryPhaseId: null };
   }
 
   const entries = await readdir(phasesDir, { withFileTypes: true });
@@ -90,21 +108,12 @@ export async function loadPhases(
     try {
       const phase = await loadPhase(entry.name, ws);
       phases.set(phase.id, phase);
-
-      if (phase.entry && !entryPhaseId) {
-        entryPhaseId = phase.id;
-      }
     } catch (error) {
       console.warn(`Failed to load phase "${entry.name}":`, error);
     }
   }
 
-  // Default to first phase if none marked as entry
-  if (!entryPhaseId && phases.size > 0) {
-    entryPhaseId = phases.keys().next().value ?? null;
-  }
-
-  return { phases, entryPhaseId };
+  return { phases, entryPhaseId: null };
 }
 
 /**

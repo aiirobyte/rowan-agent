@@ -1,7 +1,7 @@
 import Type from "typebox";
 import type { Tool, ToolContext, ToolResult, Skill, RunResult } from "../../types";
 import { messageContentText } from "../../types";
-import { buildStructuredSection } from "../context/section-formatter";
+import { buildStructuredSection } from "../context/resource-formatter";
 
 export const ThreadTool = "thread";
 

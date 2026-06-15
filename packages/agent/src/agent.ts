@@ -3,7 +3,7 @@ import { ExtensionRunner } from "./extensions";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
 import { snapshotMessages } from "./loop/state";
 import { loadPhases } from "./harness/phases/loader";
-import { loadAllSkills, formatSkillInvocation } from "./harness/skills";
+import { loadSkills, readSkillContent } from "./harness/skills";
 import { resolveWorkspacePaths } from "./harness/env/path";
 import type { PhaseRegistry } from "./harness/phases/types";
 import type { PhaseInput, PhaseOutput } from "./protocol/context";
@@ -237,7 +237,7 @@ export class Agent {
     }
 
     // Discover skills from .rowan/skills/
-    const fileSkills = await loadAllSkills(workspace);
+    const fileSkills = await loadSkills(workspace);
 
     // Merge with provided skills (deduplicate by name, provided take priority)
     const skillMap = new Map<string, AgentContext["skills"][number]>();
@@ -393,7 +393,8 @@ export class Agent {
     if (!skill) {
       throw new Error(`Unknown skill: ${name}`);
     }
-    return formatSkillInvocation(skill, additionalInstructions);
+    const content = readSkillContent(skill);
+    return additionalInstructions ? `${content}\n\n${additionalInstructions}` : content;
   }
 
   /**
@@ -407,11 +408,11 @@ export class Agent {
    */
   async phase(name: string): Promise<string> {
     const workspace = resolveWorkspacePaths({ cwd: this.options.cwd });
-    const { loadPhase } = await import("./harness/phases/loader");
+    const { loadPhase, readPhaseContent } = await import("./harness/phases/loader");
 
     try {
       const phase = await loadPhase(name, workspace);
-      return phase.content;
+      return readPhaseContent(phase);
     } catch {
       return "";
     }

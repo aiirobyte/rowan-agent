@@ -29,8 +29,7 @@ import type {
   Phase,
   PhaseRegistry,
 } from "../harness/phases";
-import { reloadPhases } from "../harness/phases";
-import { loadMarkdown } from "../harness/loader";
+import { reloadPhases, readPhaseContent } from "../harness/phases";
 
 import { executeRuntimeToolCall } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
@@ -330,7 +329,6 @@ async function runDefaultLoop(
     id: "none",
     name: "None",
     description: "",
-    entry: false,
     filePath: "",
     baseDir: "",
     content: "",
@@ -535,19 +533,19 @@ async function runPhasedLoop(
     // Inject phase content as tool result when entering a new phase
     if (enteringNewPhase && phase.filePath) {
       try {
-        const { body } = await loadMarkdown(phase.filePath);
-        if (body) {
+        const phaseContent = readPhaseContent(phase);
+        if (phaseContent) {
           const content: LlmContentPart[] = [{
             type: "tool_result",
             toolUseId: `phase_${phase.id}`,
-            content: body,
+            content: phaseContent,
             isError: false,
           }];
           const msgId = messageManager.start("tool", content, { phase: phase.id });
           await messageManager.end(msgId);
         }
       } catch {
-        // Phase file read failed — continue without content
+        // Phase content formatting failed — continue without content
       }
     }
 

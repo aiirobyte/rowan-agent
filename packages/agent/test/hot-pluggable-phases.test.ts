@@ -38,13 +38,13 @@ Content`;
 
   test("parses boolean values", () => {
     const raw = `---
-entry: true
+target: verify
 ---
 
 Content`;
 
     const result = parseFrontmatter<PhaseFrontmatter>(raw);
-    expect(result.frontmatter.entry).toBe(true);
+    expect(result.frontmatter.target).toBe("verify");
   });
 
   test("handles missing frontmatter", () => {
@@ -94,7 +94,6 @@ describe("ExtensionAPI", () => {
       id: "test",
       name: "Test Phase",
       description: "A test phase",
-      entry: false,
       filePath: "/test/PHASE.md",
       baseDir: "/test",
       content: "Test content",
@@ -121,6 +120,9 @@ describe("ExtensionAPI", () => {
       }),
       phaseRegistry: new Map<string, Phase>(),
       turnNumber: 1,
+      systemPrompt: "Test system prompt",
+      skills: [] as Array<{ name: string; description: string; filePath: string; content: string }>,
+      tools: [] as Array<{ name: string; description: string }>,
     };
   }
 
@@ -230,7 +232,6 @@ describe("PhaseState", () => {
       id: "review",
       name: "Code Review",
       description: "Review code",
-      entry: true,
       target: "verify",
       filePath: "/phases/review/PHASE.md",
       baseDir: "/phases/review",
@@ -241,7 +242,6 @@ describe("PhaseState", () => {
     };
 
     expect(phase.id).toBe("review");
-    expect(phase.entry).toBe(true);
     expect(phase.target).toBe("verify");
     expect(phase.tools).toEqual(["read", "grep"]);
   });

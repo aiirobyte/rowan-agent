@@ -8,6 +8,7 @@ import type {
   PhaseOutput,
 } from "./extension-api";
 import type { Phase } from "./types";
+import type { AgentMessage } from "../../types";
 
 /**
  * Context required to create an ExtensionAPI instance
@@ -31,6 +32,12 @@ export interface ExtensionAPIContext {
   phaseRegistry: Map<string, Phase>;
   /** Current turn number */
   turnNumber: number;
+  /** Current system prompt */
+  systemPrompt: string;
+  /** Skills available for this phase */
+  skills: Array<{ name: string; description: string; filePath: string; content: string }>;
+  /** Tools available for this phase */
+  tools: Array<{ name: string; description: string }>;
 }
 
 /**
@@ -121,6 +128,40 @@ export function createExtensionAPI(context: ExtensionAPIContext): ExtensionAPI &
         availablePhases: context.availablePhases,
         turnNumber: context.turnNumber,
       };
+    },
+
+    // AgentContext CRUD methods
+    getSystemPrompt(): string {
+      return context.systemPrompt;
+    },
+
+    setSystemPrompt(prompt: string): void {
+      context.systemPrompt = prompt;
+    },
+
+    getMessages(): AgentMessage[] {
+      return context.messages as AgentMessage[];
+    },
+
+    addMessage(role: "user" | "assistant" | "system", content: string): void {
+      (context.messages as Array<{ role: string; content: string }>).push({ role, content });
+    },
+
+    getAvailableTools(): Array<{ name: string; description: string }> {
+      return context.tools.map(t => ({ name: t.name, description: t.description }));
+    },
+
+    getAvailableSkills(): Array<{ name: string; description: string }> {
+      return context.skills.map(s => ({ name: s.name, description: s.description }));
+    },
+
+    getSkillContent(skillName: string): string {
+      const skill = context.skills.find(s => s.name === skillName);
+      return skill?.content ?? "";
+    },
+
+    getAvailablePhases(): string[] {
+      return context.availablePhases;
     },
 
     // Register lifecycle callbacks

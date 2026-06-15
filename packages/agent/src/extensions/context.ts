@@ -311,6 +311,30 @@ export interface ExtensionContext {
 
   /** Get current system prompt */
   getSystemPrompt?(): string;
+
+  /** Set/override the system prompt */
+  setSystemPrompt?(prompt: string): void;
+
+  /** Get the full message history */
+  getMessages?(): Array<{ role: string; content: string }>;
+
+  /** Append a message to the history */
+  addMessage?(role: "user" | "assistant" | "system", content: string): void;
+
+  /** Get all available tools */
+  getAvailableTools?(): Array<{ name: string; description: string }>;
+
+  /** Get all available skills */
+  getAvailableSkills?(): Array<{ name: string; description: string }>;
+
+  /** Get skill content by name */
+  getSkillContent?(skillName: string): string;
+
+  /** Get all available phase IDs */
+  getAvailablePhases?(): string[];
+
+  /** Get phase content by ID */
+  getPhaseContent?(phaseId: string): string;
 }
 
 // ---------------------------------------------------------------------------

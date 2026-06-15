@@ -4,11 +4,11 @@ import { dirname, join } from "node:path";
 import type { AgentContextSkill as Skill } from "../protocol";
 import { type WorkspacePaths, resolveWorkspacePaths } from "./env/path";
 import {
-  parseFrontmatter,
   loadMarkdown,
   resolveResourcePath,
   inferResourceName,
 } from "./loader";
+import { formatResourceOutput } from "./context/resource-formatter";
 
 const SKILL_MARKER = "SKILL.md";
 
@@ -16,10 +16,12 @@ export function resolveSkillPath(input: string, workspace = resolveWorkspacePath
   return resolveResourcePath(input, "skills", SKILL_MARKER, workspace);
 }
 
-/** Format a skill invocation prompt, optionally appending additional user instructions. */
-export function formatSkillInvocation(skill: Skill, additionalInstructions?: string): string {
-  const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${skill.content}\n</skill>`;
-  return additionalInstructions ? `${skillBlock}\n\n${additionalInstructions}` : skillBlock;
+/** Format skill content for LLM consumption using unified XML format. */
+export function readSkillContent(skill: Skill): string {
+  return formatResourceOutput({
+    type: "skill", name: skill.name, location: skill.filePath,
+    content: skill.content, baseDir: skill.baseDir,
+  });
 }
 
 export async function loadSkill(path: string, workspace?: WorkspacePaths): Promise<Skill> {
@@ -36,17 +38,12 @@ export async function loadSkill(path: string, workspace?: WorkspacePaths): Promi
   };
 }
 
-export async function loadSkills(paths: string[] = [], workspace?: WorkspacePaths): Promise<Skill[]> {
-  return Promise.all(paths.map((path) => loadSkill(path, workspace)));
-}
+export async function loadSkills(workspace?: WorkspacePaths, paths?: string[]): Promise<Skill[]> {
+  if (paths && paths.length > 0) {
+    return Promise.all(paths.map((path) => loadSkill(path, workspace)));
+  }
 
-/**
- * Discover and load all skills from .rowan/skills/ directory.
- *
- * Scans for subdirectories containing SKILL.md files.
- * Returns an array of loaded Skill objects.
- */
-export async function loadAllSkills(workspace?: WorkspacePaths): Promise<Skill[]> {
+  // Auto-discover from .rowan/skills/ directory
   const ws = workspace ?? resolveWorkspacePaths();
   const skillsDir = join(ws.rowanDir, "skills");
 

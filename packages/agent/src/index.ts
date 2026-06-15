@@ -74,7 +74,7 @@ export {
 
 // ── tools / skills / env ───────────────────────────────────────
 export { createCoreTools, type CoreToolContext } from "./harness/tools";
-export { resolveSkillPath, loadSkill, loadSkills, loadAllSkills, formatSkillInvocation } from "./harness/skills";
+export { resolveSkillPath, loadSkill, loadSkills, readSkillContent } from "./harness/skills";
 export {
   resolveWorkspacePaths,
   resolveInWorkspace,

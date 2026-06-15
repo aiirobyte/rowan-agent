@@ -464,7 +464,7 @@ async function createConfiguredAgent(
   args: CliArgs,
   workspace: WorkspacePaths,
 ): Promise<ConfiguredAgent> {
-  const skills = await loadSkills(args.skills, workspace);
+  const skills = await loadSkills(workspace, args.skills);
   const tools = createCoreTools({ root: workspace.cwd });
   const sessionManager = args.sessionId
     ? await LocalJsonlSessionManager.open(workspaceSessionsDir(workspace), args.sessionId)

@@ -31,7 +31,7 @@ import type {
   ToolDefinition,
 } from "./types";
 import { createExtension, createExtensionRuntime } from "./types";
-import type { Tool, ToolResult } from "../types";
+import type { Tool, ToolResult, AgentContext } from "../types";
 import type { PhaseInput, PhaseOutput } from "../protocol/context";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
 import { HooksManager } from "./hooks";
@@ -129,7 +129,7 @@ function applyProviderUnregistration(name: string): void {
 // ---------------------------------------------------------------------------
 
 export type ExtensionRunnerOptions = {
-  entryPhaseId?: string;
+  entryPhaseId?: string | null;
   cwd?: string;
 };
 
@@ -191,6 +191,9 @@ export class ExtensionRunner {
 
   // Loaded extension metadata (pre-initialization form)
   private readonly loadedExtensions: LoadedExtension[] = [];
+
+  /** Current agent context — set by the agent before each phase */
+  currentContext?: AgentContext;
 
   constructor(options?: ExtensionRunnerOptions) {
     this.hooks = new HooksManager();
@@ -430,14 +433,15 @@ export class ExtensionRunner {
   }
 
   createPhaseRegistry(
-    input: { entryPhaseId?: string } = {},
+    input: { entryPhaseId?: string | null } = {},
   ): PhaseRegistry {
     const registered = this.collectRegisteredPhases();
     const phases = new Map<string, Phase>();
     for (const [id, reg] of registered) {
       phases.set(id, this.adaptToPhase(reg));
     }
-    const entryPhaseId = input.entryPhaseId ?? phases.keys().next().value ?? null;
+    // Default to null (start from "none") unless explicitly provided
+    const entryPhaseId = input.entryPhaseId ?? null;
     return { phases, entryPhaseId };
   }
 
@@ -451,7 +455,6 @@ export class ExtensionRunner {
       tools: def.tools,
       skills: def.skills,
       target: def.target,
-      entry: false,
       filePath: "",
       baseDir: "",
       content: "",
@@ -702,6 +705,18 @@ export class ExtensionRunner {
         return execCommand(command, args, runner.cwd, options);
       },
       manifest,
+      getSystemPrompt() { return runner.currentContext?.systemPrompt ?? ""; },
+      setSystemPrompt(prompt) { if (runner.currentContext) runner.currentContext.systemPrompt = prompt; },
+      getMessages() { return (runner.currentContext?.messages ?? []) as Array<{ role: string; content: string }>; },
+      addMessage(role, content) { runner.currentContext?.messages.push({ role, content } as any); },
+      getAvailableTools() { return (runner.currentContext?.tools ?? []).map(t => ({ name: t.name, description: t.description })); },
+      getAvailableSkills() { return (runner.currentContext?.skills ?? []).map(s => ({ name: s.name, description: s.description })); },
+      getSkillContent(skillName) {
+        const skill = runner.currentContext?.skills.find(s => s.name === skillName);
+        return skill?.content ?? "";
+      },
+      getAvailablePhases() { return [...runner.phases.keys()]; },
+      getPhaseContent(phaseId) { return runner.phases.get(phaseId)?.definition.description ?? ""; },
     };
 
     return createExtensionAPI(this.hooks, extension.path, {

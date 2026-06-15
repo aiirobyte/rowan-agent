@@ -16,7 +16,6 @@ function buildTestPhase(overrides: Partial<Phase> & { id: string }): Phase {
   return {
     name: overrides.id,
     description: `${overrides.id} phase`,
-    entry: false,
     filePath: "",
     baseDir: "",
     content: "",
@@ -25,12 +24,12 @@ function buildTestPhase(overrides: Partial<Phase> & { id: string }): Phase {
   };
 }
 
-function buildPhaseRegistry(phases: Phase[]): PhaseRegistry {
+function buildPhaseRegistry(phases: Phase[], entryPhaseId?: string): PhaseRegistry {
   const map = new Map<string, Phase>();
   for (const phase of phases) {
     map.set(phase.id, phase);
   }
-  const entry = phases.find(p => p.entry)?.id ?? phases[0]?.id ?? null;
+  const entry = entryPhaseId ?? phases[0]?.id ?? null;
   return { phases: map, entryPhaseId: entry };
 }
 
@@ -65,9 +64,9 @@ function* yieldRouteToolCall(route: string, reason?: string): Generator<any> {
 
 test("route in same turn extracts route normally — no forced routing", async () => {
   const phases = buildPhaseRegistry([
-    buildTestPhase({ id: "plan", entry: true }),
+    buildTestPhase({ id: "plan" }),
     buildTestPhase({ id: "execute" }),
-  ]);
+  ], "plan");
 
   let requestCount = 0;
   const stream: StreamFn = async function* (request) {
@@ -110,11 +109,10 @@ test("phase with tools restricted to exclude route returns stop gracefully", asy
   const phases = buildPhaseRegistry([
     buildTestPhase({
       id: "plan",
-      entry: true,
       tools: ["echo"], // route tool excluded
     }),
     buildTestPhase({ id: "execute" }),
-  ]);
+  ], "plan");
 
   let requestCount = 0;
   const stream: StreamFn = async function* (request) {

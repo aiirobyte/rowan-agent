@@ -1,7 +1,7 @@
 import Type from "typebox";
 import type { Tool } from "../../types";
 import type { Phase } from "../../harness/phases/types";
-import { buildStructuredSection } from "../context/section-formatter";
+import { buildStructuredSection } from "../context/resource-formatter";
 
 export const PhaseRouteTool = "route";
 

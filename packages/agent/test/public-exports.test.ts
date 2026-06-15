@@ -39,7 +39,7 @@ test("public value exports snapshot", () => {
     "appendUserTurn", "buildModelRequest", "buildSystemPrompt", "conversationMessages",
     "createCoreTools", "createId", "createMessage",
     "createSession", "createSessionHeader", "createSourceInfo", "createTimestamp",
-    "latestUserInput", "loadSkill", "loadSkills", "resolveInWorkspace",
+    "latestUserInput", "loadSkill", "loadSkills", "readSkillContent", "resolveInWorkspace",
     "resolveSkillPath", "resolveWorkspacePaths", "serializeSkills",
     "summarizeSessionManagerRecords",
   ]));
