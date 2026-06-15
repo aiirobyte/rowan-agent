@@ -1,47 +1,37 @@
 import type {
-  AgentMessage,
-  AgentEvent,
-  AgentEventListener,
-  AgentState,
+  AgentContext,
   AfterToolCall,
   BeforeToolCall,
   LlmModelRef,
-  Outcome,
   StreamFn,
-  Tool,
   ToolCall,
   ToolResult,
+  AgentEventListener,
 } from "../types";
-import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./phases/registry";
+import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { ModelTranscript } from "../protocol/turn";
+import type { PhaseRegistry } from "../harness/phases/types";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
 export type AgentRunLimits = {
-  /** Maximum number of phase iterations before forcing stop. Default: 50. */
-  maxIterations?: number;
-  /** Maximum consecutive "continue" rounds within a single phase before forcing transition. Default: 10. */
-  maxPhaseRounds?: number;
+  /** Current nested thread depth. Root agent runs start at 0. */
+  threadDepth?: number;
+  /** Maximum nested thread depth. Default: 4. */
+  maxThreadDepth?: number;
 };
+
+export const DEFAULT_MAX_THREAD_DEPTH = 4;
+
+export function resolveThreadLimits(limits?: AgentRunLimits): Required<AgentRunLimits> {
+  return {
+    threadDepth: limits?.threadDepth ?? 0,
+    maxThreadDepth: limits?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH,
+  };
+}
 
 export type BeforePhaseHook = (phaseId: string, input: PhaseInput) => Promise<BeforePhaseHookResult>;
 export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;
 export type BeforePromptHook = (phaseId: string, input: PhaseInput) => Promise<PhaseInput>;
-
-export type AgentLoopConfig = {
-  model: LlmModelRef;
-  stream: StreamFn;
-  tools: Tool[];
-  maxAttempts: number;
-  limits?: AgentRunLimits;
-  signal?: AbortSignal;
-  runtime?: AgentRuntimePort;
-  beforeToolCall?: BeforeToolCall;
-  afterToolCall?: AfterToolCall;
-  beforePhase?: BeforePhaseHook;
-  afterPhase?: AfterPhaseHook;
-  beforePrompt?: BeforePromptHook;
-  emit?: AgentEventListener;
-  phaseConfig?: PhaseRegistry;
-};
 
 export type LoopMetrics = {
   /** Number of phase iterations executed. */
@@ -62,47 +52,40 @@ export type LoopMetrics = {
   durationMs?: number;
 };
 
-export type AgentRunState = {
-  agentState: AgentState;
+export type SessionState = {
   currentPhase: string;
   attempt: number;
-  transcript: AgentMessage[];
-  /** Loop execution metrics. */
   metrics: LoopMetrics;
+  status: "idle" | "running" | "completed" | "aborted" | "failed";
 };
 
-export type AgentMessageSnapshot = AgentMessage;
-
-export type AgentLoopContext = {
-  /** System prompt included with the request. */
-  systemPrompt: string;
-  /** Transcript visible to the model. */
-  messages: AgentMessageSnapshot[];
-  /** Tools available for this run. */
-  tools: Tool[];
-  /** Skills available for this run. */
-  skills: AgentState["skills"];
-  config: AgentLoopConfig;
-  state: AgentRunState;
+export type AgentConfig = {
+  context: AgentContext;
+  sessionId?: string;
+  model: LlmModelRef;
+  stream: StreamFn;
+  limits?: AgentRunLimits;
   signal?: AbortSignal;
-  emit(event: AgentEvent): void;
-  appendMessage(message: AgentMessageSnapshot): void;
-  appendStateMessage(message: AgentMessageSnapshot): void;
+  emit?: AgentEventListener;
+  phases?: PhaseRegistry;
+  runtime?: AgentRuntimePort;
+  beforeToolCall?: BeforeToolCall;
+  afterToolCall?: AfterToolCall;
+  beforePhase?: BeforePhaseHook;
+  afterPhase?: AfterPhaseHook;
+  beforePrompt?: BeforePromptHook;
+  maxAttempts?: number;
+  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
+  onMessage?: (message: import("../types").AgentMessage) => Promise<void>;
+  onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
+  sessionState?: SessionState;
 };
 
-export type AgentEffect =
-  | { type: "event"; event: AgentEvent }
-  | { type: "event_message"; message: AgentMessageSnapshot }
-  | { type: "agent_state_message"; message: AgentMessageSnapshot };
-
-export type PhaseResult =
-  | { action: "continue"; output: PhaseOutput; effects?: AgentEffect[] }
-  | { action: "skip"; output: PhaseOutput; reason?: string }
-  | { action: "retry"; input?: PhaseInput; reason?: string }
-  | { action: "abort"; outcome: Outcome; reason?: string };
+/** Runtime loop state — pure alias for SessionState. */
+export type AgentRunState = SessionState;
 
 export type ToolRunnerInput = {
-  context: AgentLoopContext;
+  config: AgentConfig;
   toolCall: ToolCall;
 };
 

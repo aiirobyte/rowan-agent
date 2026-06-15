@@ -8,6 +8,7 @@ import {
   type Session,
 } from "./session";
 import { snapshotMessage } from "../../loop/state";
+import { messageContentText } from "../../types";
 
 export const PersistedSessionSchema = Type.Object({
   version: Type.String(),
@@ -74,7 +75,7 @@ export function sessionFromPersisted<TLogEvent = never>(value: unknown): Session
     ...(parsed.parentSessionId ? { parentSessionId: parsed.parentSessionId } : {}),
     systemPrompt: parsed.systemPrompt,
     input: parsed.input,
-    messages: parsed.messages.map(snapshotMessage),
+    messages: (parsed.messages as AgentMessage[]).map(snapshotMessage),
     log: [],
     skills: parsed.skills,
     createdAt: parsed.createdAt,
@@ -95,7 +96,7 @@ export function summarizePersistedSession(value: unknown): SessionListItem {
     createdAt: parsed.createdAt,
     updatedAt: parsed.updatedAt,
     messageCount: parsed.messages.length,
-    ...(latestMessage ? { latestMessage: latestMessage.content } : {}),
+    ...(latestMessage ? { latestMessage: messageContentText((latestMessage as AgentMessage).content) } : {}),
   };
 }
 

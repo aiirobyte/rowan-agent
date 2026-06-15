@@ -14,6 +14,7 @@ import {
   type AgentEventListener,
   type AgentMessage,
   type Outcome,
+  type ExtensionRunnerRef,
 } from "@rowan-agent/agent";
 import {
   pinoAgentEventLogger,
@@ -31,7 +32,11 @@ import {
   resolveInWorkspace,
   resolveWorkspacePaths,
 } from "@rowan-agent/agent";
-import { formatJsonOutput, formatOutcomeOutput } from "./output";
+import {
+  createExtensionRunner,
+  discoverAndLoadExtensions,
+} from "@rowan-agent/agent";
+import { formatJsonOutput, formatMessageContent, formatOutcomeOutput, formatToolArgsPreview } from "./output";
 
 type CliCommand = "config" | "list";
 
@@ -362,6 +367,13 @@ function configuredValue(flagValue: string | undefined, envValue: string | undef
   return nonEmpty(flagValue) ?? nonEmpty(envValue) ?? defaultValue;
 }
 
+function resolveMaxThreadDepth(args: CliArgs): number {
+  const env = process.env as Record<string, string | undefined>;
+  return args.maxThreadDepth ??
+    (env.ROWAN_MAX_THREAD_DEPTH ? parseNonNegativeInteger(env.ROWAN_MAX_THREAD_DEPTH, "ROWAN_MAX_THREAD_DEPTH") : undefined) ??
+    4;
+}
+
 function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<string, unknown> {
   const env = process.env as Record<string, string | undefined>;
   const baseUrl = configuredValue(args.baseUrl, env.ROWAN_OPENAI_BASE_URL, "https://api.openai.com/v1");
@@ -374,10 +386,7 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
   const logPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args);
   const tools = createCoreTools({ root: workspace.cwd });
-  const maxThreadDepth =
-    args.maxThreadDepth ??
-    (env.ROWAN_MAX_THREAD_DEPTH ? parseNonNegativeInteger(env.ROWAN_MAX_THREAD_DEPTH, "ROWAN_MAX_THREAD_DEPTH") : undefined) ??
-    4;
+  const maxThreadDepth = resolveMaxThreadDepth(args);
 
   return {
     command: "config",
@@ -455,7 +464,7 @@ async function createConfiguredAgent(
   args: CliArgs,
   workspace: WorkspacePaths,
 ): Promise<ConfiguredAgent> {
-  const skills = await loadSkills(args.skills, workspace);
+  const skills = await loadSkills(workspace, args.skills);
   const tools = createCoreTools({ root: workspace.cwd });
   const sessionManager = args.sessionId
     ? await LocalJsonlSessionManager.open(workspaceSessionsDir(workspace), args.sessionId)
@@ -487,11 +496,31 @@ async function createConfiguredAgent(
       tools,
       skills,
     };
+
+  // Load extension phases
+  const extensionRunner = createExtensionRunner({ cwd: workspace.cwd });
+  const { extensions } = await discoverAndLoadExtensions(workspace.cwd);
+  if (extensions.length > 0) {
+    await extensionRunner.loadExtensions(extensions);
+    extensionRunner.bind();
+  }
+
+  const extensionPhases = extensionRunner.getPhases();
+  const phases = extensionPhases.length > 0
+    ? extensionRunner.createPhaseRegistry()
+    : undefined;
+
+  const extensionRunnerRef: ExtensionRunnerRef = { current: extensionRunner };
   const agent = new Agent({
     cwd: workspace.cwd,
     context,
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompletionsStream(config),
+    limits: {
+      maxThreadDepth: resolveMaxThreadDepth(args),
+    },
+    phases,
+    extensionRunnerRef,
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
   });
 
@@ -508,6 +537,7 @@ async function promptWithLog(input: {
   logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
+  onSessionManager?: (sessionManager: LocalJsonlSessionManager) => void;
 }): Promise<{ outcome: Outcome; metrics: import("@rowan-agent/agent").LoopMetrics; sessionManager: LocalJsonlSessionManager; streamedContent: boolean; pendingConsoleEvents: AgentEvent[] }> {
   let sessionManager = input.sessionManager;
   let unsubscribe: (() => void) | undefined;
@@ -520,6 +550,7 @@ async function promptWithLog(input: {
         skills: input.agent.state.context.skills ?? [],
       });
     }
+    input.onSessionManager?.(sessionManager);
 
     const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, sessionManager.getSessionId());
     const runEventLogger = pinoAgentEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
@@ -527,6 +558,7 @@ async function promptWithLog(input: {
     let messageId: string | undefined;
     let streamedContent = false;
     let currentStreamableMessage = false;
+    let currentAssistantWroteContent = false;
     const pendingConsoleEvents: AgentEvent[] = [];
     const listener: AgentEventListener = ((event: AgentEvent) => {
       runEventLogger(event);
@@ -541,25 +573,33 @@ async function promptWithLog(input: {
 
       if (event.type === "message_start" && event.message.role === "assistant") {
         currentStreamableMessage = true;
+        currentAssistantWroteContent = false;
         if (currentStreamableMessage && event.message.content) {
-          process.stdout.write(event.message.content);
-          streamedContent = true;
+          const content = formatMessageContent(event.message.content);
+          if (content) {
+            process.stdout.write(content);
+            currentAssistantWroteContent = true;
+            streamedContent = true;
+          }
         }
       }
 
       if (event.type === "message_update" && event.delta && currentStreamableMessage) {
         process.stdout.write(event.delta);
         streamedContent = true;
+        currentAssistantWroteContent = true;
       }
 
-      if (event.type === "message_end" && currentStreamableMessage && streamedContent) {
-        process.stdout.write("\n");
+      if (event.type === "message_end" && currentStreamableMessage) {
+        if (currentAssistantWroteContent) {
+          process.stdout.write("\n");
+        }
         currentStreamableMessage = false;
+        currentAssistantWroteContent = false;
       }
 
       if (event.type === "tool_execution_start") {
-        const argsStr = JSON.stringify(event.args);
-        const argsPreview = argsStr.length > 60 ? argsStr.slice(0, 60) + "..." : argsStr;
+        const argsPreview = formatToolArgsPreview(event.toolName, event.args);
         process.stderr.write(`  ⚙ ${event.toolName}(${argsPreview})\n`);
       }
       if (event.type === "tool_execution_end") {
@@ -582,14 +622,18 @@ async function promptWithLog(input: {
     const result = await input.agent.run({
       context,
       sessionId: sessionManager.getSessionId(),
+      onMessage: async (msg) => {
+        if (msg.role !== "user") {
+          await sessionManager!.appendMessage(msg);
+        }
+      },
+      onOutcome: async (outcome) => {
+        await sessionManager!.appendOutcome(outcome);
+      },
+      onModelTranscript: async (transcript, meta) => {
+        await sessionManager!.appendModelTranscript(transcript, meta);
+      },
     });
-    const newMessages = result.messages.slice(context.messages.length);
-    for (const message of newMessages) {
-      if (message.role !== "user") {
-        await sessionManager.appendMessage(message);
-      }
-    }
-    await sessionManager.appendOutcome(result.outcome);
     return { outcome: result.outcome, metrics: result.metrics, sessionManager, streamedContent, pendingConsoleEvents };
   } finally {
     try {
@@ -633,7 +677,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     printSessionOnce();
   }
 
-  const runPrompt = async (prompt: string) => {
+  const runPrompt = async (prompt: string, options: { recoverable?: boolean } = {}) => {
     let writtenLogPath: string | undefined;
     let messageId: string | undefined;
     const printRunHeader = () => {
@@ -663,6 +707,9 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         onMessageId: (id) => {
           messageId = id;
         },
+        onSessionManager: (manager) => {
+          sessionManager = manager;
+        },
       });
       sessionManager = run.sessionManager;
       printRunHeader();
@@ -686,6 +733,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       }
     } catch (error) {
       printRunHeader();
+      if (options.recoverable) {
+        console.error(error instanceof Error ? error.message : error);
+        return;
+      }
       throw error;
     }
   };
@@ -724,7 +775,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         continue;
       }
 
-      await runPrompt(prompt);
+      await runPrompt(prompt, { recoverable: true });
 
       if (process.stdin.isTTY) {
         process.stdout.write("> ");

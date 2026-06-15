@@ -1,14 +1,16 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import Type from "typebox";
 import Schema from "typebox/schema";
 import type { ToolCall, ToolResult } from "../../protocol";
-import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../types";
+import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../../types";
+import { formatResourceOutput, detectResourceType, type ResourceType } from "../context/resource-formatter";
+import { parseFrontmatter, inferResourceName } from "../loader";
 
 // Re-export route and thread tools
 export { createRouteTool, extractRouteCall, PhaseRouteTool } from "./route-tool";
 export type { RouteToolArgs } from "./route-tool";
-export { createThreadTool, isThreadToolCall, ThreadTool } from "./thread-tool";
+export { createThreadTool, ThreadTool } from "./thread-tool";
 export type { ThreadToolArgs, SpawnThreadFn } from "./thread-tool";
 
 const DEFAULT_MAX_READ_BYTES = 64_000;
@@ -34,6 +36,10 @@ type NormalizedCoreToolContext = Required<CoreToolContext>;
 const ReadArgsSchema = Type.Object({
   path: Type.String(),
   maxBytes: Type.Optional(Type.Number()),
+  type: Type.Optional(Type.Union([
+    Type.Literal("skill"), Type.Literal("phase"),
+    Type.Literal("markdown"), Type.Literal("code"), Type.Literal("file"),
+  ])),
 });
 
 type ReadArgs = Type.Static<typeof ReadArgsSchema>;
@@ -347,13 +353,29 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
 
       const bytes = await readFile(resolved.absolutePath);
       const sliced = bytes.subarray(0, maxBytes);
+      const text = new TextDecoder().decode(sliced);
+
+      // Resolve resource type and name
+      const resourceType: ResourceType = parsed.type ?? detectResourceType(resolved.absolutePath);
+      let name: string;
+      let baseDir: string | undefined;
+
+      if (resourceType === "skill" || resourceType === "phase") {
+        const { frontmatter } = parseFrontmatter(text);
+        const marker = resourceType === "skill" ? "SKILL.md" : "PHASE.md";
+        name = (frontmatter.name as string) ?? inferResourceName(resolved.absolutePath, marker);
+        baseDir = dirname(resolved.absolutePath);
+      } else {
+        name = inferResourceName(resolved.absolutePath, basename(resolved.absolutePath));
+      }
+
       return toolResult({
         context: toolContext,
         toolName: "read",
         ok: true,
         content: {
           path: resolved.relativePath,
-          content: new TextDecoder().decode(sliced),
+          content: formatResourceOutput({ type: resourceType, name, location: resolved.absolutePath, content: text, baseDir }),
           sizeBytes: bytes.byteLength,
           truncated: bytes.byteLength > maxBytes,
         },

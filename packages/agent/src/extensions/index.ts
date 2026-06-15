@@ -75,22 +75,10 @@ export type {
 export { ExtensionRunner, createExtensionRunner } from "./runner";
 export type { ExtensionRunnerOptions } from "./runner";
 
-// Builtin extensions
-export {
-  getBuiltinExtensions,
-  getBuiltinRunner,
-  createBuiltinPhaseRegistry,
-  createDefaultPhaseRegistry,
-  isBuiltinPhaseOverride,
-  isBuiltinSource,
-  type CreateDefaultPhaseRegistryOptions,
-} from "./builtin";
-
 // Loader
 export {
   discoverAndLoadExtensions,
   loadExtensionFromFactory,
-  loadExtensionFromFactorySync,
   loadExtensions,
 } from "./loader";
 
@@ -107,7 +95,6 @@ export type {
   ExecOptions,
   ExecResult,
   ExtensionPackageManifest,
-  PhaseManifest,
   PhaseRegistration,
   RegisteredPhase,
   ToolDefinition,

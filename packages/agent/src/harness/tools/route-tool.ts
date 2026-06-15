@@ -1,7 +1,7 @@
 import Type from "typebox";
-import type { Tool } from "../types";
-import type { PhaseManifest } from "../../loop/phases/registry";
-import { buildStructuredSection } from "../context/section-formatter";
+import type { Tool } from "../../types";
+import type { Phase } from "../../harness/phases/types";
+import { buildStructuredSection } from "../context/resource-formatter";
 
 export const PhaseRouteTool = "route";
 
@@ -10,7 +10,7 @@ export type RouteToolArgs = {
   reason?: string;
 };
 
-function buildRouteDescription(availablePhases: PhaseManifest[]): string {
+function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'description'>[]): string {
   const phasesBlock = buildStructuredSection("phase", [
     ...availablePhases.map(p => ({ id: p.id, description: p.description })),
     { id: "stop", description: "End execution and return the result to the user" },
@@ -36,7 +36,7 @@ function buildRouteDescription(availablePhases: PhaseManifest[]): string {
  * The execute function is a no-op placeholder - phase routing is handled by
  * intercepting route tool calls in each phase's run function.
  */
-export function createRouteTool(availablePhases: PhaseManifest[]): Tool<RouteToolArgs> {
+export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'description'>[]): Tool<RouteToolArgs> {
   return {
     name: PhaseRouteTool,
     description: buildRouteDescription(availablePhases),

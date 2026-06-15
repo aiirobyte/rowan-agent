@@ -299,29 +299,35 @@ export type ApiStreamFn = (
 export type AgentContextMessage = {
   id: string;
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | LlmContentPart[];
   createdAt: string;
   metadata?: Record<string, unknown> & {
     phase?: string;
-    toolCalls?: Array<{ id: string; name: string; args: unknown }>;
-    toolCallId?: string;
-    toolName?: string;
-    isError?: boolean;
   };
 };
 
 export type AgentContextSkill = {
   name: string;
   description: string;
+  /** Absolute path to the SKILL.md file */
   filePath: string;
+  /** Directory containing the SKILL.md file */
   baseDir: string;
+  /** Full body content of the SKILL.md (after frontmatter) */
+  content: string;
   disableModelInvocation: boolean;
 };
 
 export type Outcome = {
   id: string;
-  taskId?: string;
   message: string;
+  toolResults?: Array<{
+    toolCallId: string;
+    toolName: string;
+    ok: boolean;
+    content: unknown;
+    error?: string;
+  }>;
 };
 
 export type ToolCall = {

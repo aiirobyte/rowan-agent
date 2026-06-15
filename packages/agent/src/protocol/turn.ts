@@ -1,7 +1,7 @@
 import type { AgentContextMessage } from "./context";
 import type { LlmModelUsage, LlmModelRef } from "./model";
-import type { LoopPhase } from "./phase";
 import type { ToolCall, ToolResult } from "./tool";
+import type { LlmRequest, LlmResponse } from "@rowan-agent/models";
 
 export type ExecutionTurnEntry =
   | { kind: "prompt"; message: Pick<AgentContextMessage, "role" | "content"> }
@@ -13,7 +13,7 @@ export type ExecutionTurn = {
   id: string;
   sessionId: string;
   parentSessionId?: string;
-  phase: LoopPhase;
+  phase: string;
   requestedAtMs: number;
   completedAtMs: number;
   model: LlmModelRef;
@@ -22,6 +22,12 @@ export type ExecutionTurn = {
 };
 
 export type StepFilter = {
-  phase?: LoopPhase;
+  phase?: string;
   afterMs?: number;
+};
+
+/** Raw model input/output for session persistence. */
+export type ModelTranscript = {
+  request: LlmRequest;
+  response: LlmResponse;
 };

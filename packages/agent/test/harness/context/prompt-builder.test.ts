@@ -1,31 +1,15 @@
-import { expect, test, beforeAll } from "bun:test";
+import { expect, test } from "bun:test";
 import Type from "typebox";
 import {
   buildModelRequest,
 } from "../../../src/harness/context/prompt-builder";
-import {
-  createBuiltinPhaseRegistry,
-} from "../../../src/extensions";
-import {
-  resolvePhaseEntry,
-} from "../../../src/loop/phases";
-import { createId, createMessage, createAgentState } from "@rowan-agent/agent";
-import type { PhaseInput, PhaseRegistry, Tool } from "@rowan-agent/agent";
-
-let builtinPhaseRegistry: PhaseRegistry;
-
-beforeAll(async () => {
-  builtinPhaseRegistry = await createBuiltinPhaseRegistry();
-});
+import { createId, createMessage } from "@rowan-agent/agent";
+import type { PhaseInput, Skill, Tool } from "@rowan-agent/agent";
 
 function buildRequest(input: {
   context: PhaseInput;
 }) {
-  const phase = resolvePhaseEntry(builtinPhaseRegistry, input.context.phase);
-  if (!phase.buildPrompt) {
-    throw new Error(`Missing buildPrompt for phase "${input.context.phase}".`);
-  }
-  return phase.buildPrompt(input.context);
+  return buildModelRequest(input.context);
 }
 
 const echoTool: Tool<{ message: string }> = {
@@ -42,31 +26,17 @@ const echoTool: Tool<{ message: string }> = {
   },
 };
 
-function createTestTask() {
-  return {
-    id: createId("task"),
-    title: "Echo task",
-    instruction: "Use echo to answer.",
-    acceptanceCriteria: ["Must include echo evidence."],
-    toolNames: ["echo"],
-    skillIds: ["writer"],
-    status: "pending" as const,
-    attempts: 0,
-  };
-}
-
 function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skills?: PhaseInput["skills"] } = {}): PhaseInput {
-  const state = createAgentState({
-    systemPrompt: overrides.systemPrompt ?? "Test system",
-    input: overrides.input ?? "Use echo.",
-    skills: overrides.skills,
-  });
+  const skills = overrides.skills ?? [];
+  const tools = overrides.tools ?? [];
   return {
     phase: overrides.phase ?? "chat",
-    systemPrompt: state.systemPrompt,
-    messages: state.messages,
-    tools: overrides.tools ?? [],
-    skills: state.skills,
+    systemPrompt: overrides.systemPrompt ?? "Test system",
+    messages: [createMessage("user", overrides.input ?? "Use echo.")],
+    tools,
+    skills,
+    phaseTools: overrides.phaseTools ?? tools,
+    phaseSkills: overrides.phaseSkills ?? skills,
   };
 }
 
@@ -87,7 +57,7 @@ test("buildModelRequest returns a valid LlmRequest with system, messages, and to
 
 test("buildModelRequest includes skills in system prompt when present", () => {
   const input = createTestInput({
-    skills: [{ name: "writer", description: "Write concise plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", disableModelInvocation: false }],
+    skills: [{ name: "writer", description: "Write concise plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", content: "", disableModelInvocation: false }],
   });
   const req = buildModelRequest(input);
 
@@ -102,63 +72,65 @@ test("buildModelRequest omits tools when empty", () => {
   expect(req.tools).toBeUndefined();
 });
 
+test("buildModelRequest only exposes phase-visible tools and skills", () => {
+  const visibleTool: Tool<{ message: string }> = {
+    ...echoTool,
+    promptSnippet: "Visible echo tool.",
+  };
+  const hiddenTool: Tool<{ message: string }> = {
+    ...echoTool,
+    name: "hidden",
+    description: "Hidden tool.",
+    promptSnippet: "Hidden tool.",
+  };
+  const visibleSkill: Skill = {
+    name: "visible-skill",
+    description: "Visible skill.",
+    filePath: "/skills/visible/SKILL.md",
+    baseDir: "/skills/visible",
+    content: "",
+    disableModelInvocation: false,
+  };
+  const hiddenSkill: Skill = {
+    name: "hidden-skill",
+    description: "Hidden skill.",
+    filePath: "/skills/hidden/SKILL.md",
+    baseDir: "/skills/hidden",
+    content: "",
+    disableModelInvocation: false,
+  };
+  const input = createTestInput({
+    tools: [visibleTool, hiddenTool],
+    phaseTools: [visibleTool],
+    skills: [visibleSkill, hiddenSkill],
+    phaseSkills: [visibleSkill],
+  });
+  const req = buildModelRequest(input);
+
+  expect(req.tools?.map((tool) => tool.name)).toEqual(["echo"]);
+  expect(req.system).toContain("visible-skill");
+  expect(req.system).not.toContain("hidden-skill");
+  expect(req.system).toContain("Visible echo tool.");
+  expect(req.system).not.toContain("Hidden tool.");
+});
+
 // ---------------------------------------------------------------------------
 // Phase buildPrompt integration
 // ---------------------------------------------------------------------------
 
-test("chat phase buildPrompt returns LlmRequest without extra instructions", () => {
-  const input = createTestInput({ phase: "chat", input: "What is 2 + 2?" });
+test("buildRequest returns LlmRequest with correct messages", () => {
+  const input = createTestInput({ phase: "review", input: "Review this code." });
   const req = buildRequest({ context: input });
 
   expect(req.system).toContain("Test system");
   expect(req.messages.length).toBeGreaterThanOrEqual(1);
-  // Chat phase doesn't add extra instructions
   const userMsg = req.messages.find(m => m.role === "user");
-  expect(userMsg?.content).toBe("What is 2 + 2?");
-});
-
-test("plan phase buildPrompt includes instructions", () => {
-  const input = createTestInput({
-    phase: "plan",
-    input: "Plan with echo.",
-    tools: [echoTool],
-    skills: [{ name: "writer", description: "Write plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", disableModelInvocation: false }],
-  });
-  const req = buildRequest({ context: input });
-
-  expect(req.tools).toHaveLength(1);
-  expect(req.system).toContain("writer");
-  const phaseMsg = req.messages.at(-1);
-  expect(phaseMsg?.content).toContain("Phase: plan");
-});
-
-test("execute phase buildPrompt includes instructions", () => {
-  const input = createTestInput({
-    phase: "execute",
-    input: "Use echo.",
-    tools: [echoTool],
-  });
-  const req = buildRequest({ context: input });
-
-  expect(req.tools).toHaveLength(1);
-  const phaseMsg = req.messages.at(-1);
-  expect(phaseMsg?.content).toContain("Phase: execute");
-});
-
-test("verify phase buildPrompt includes instructions", () => {
-  const input = createTestInput({
-    phase: "verify",
-    input: "Verify echo.",
-  });
-  const req = buildRequest({ context: input });
-
-  const phaseMsg = req.messages.at(-1);
-  expect(phaseMsg?.content).toContain("Phase: verify");
+  expect(userMsg?.content).toBe("Review this code.");
 });
 
 test("prompt builder excludes execution-scoped messages from conversation", () => {
-  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
-  state.messages.push(
+  const messages = [
+    createMessage("user", "Use echo."),
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating.\"}", {
       kind: "routing_decision",
       phase: "chat",
@@ -167,14 +139,16 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
       toolName: "echo",
       scope: "execution",
     }),
-  );
+  ];
 
   const testInput: PhaseInput = {
     phase: "chat",
-    systemPrompt: state.systemPrompt,
-    messages: state.messages,
+    systemPrompt: "Test system",
+    messages,
     tools: [],
     skills: [],
+    phaseTools: [],
+    phaseSkills: [],
   };
 
   const req = buildModelRequest(testInput);
@@ -187,13 +161,13 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
   expect(allContent).toContain("Use echo.");
   // Execution-scoped tool messages are now included for native tool_call format
   expect(allContent).toContain("tool evidence");
-  // Routing decisions (non-tool execution messages) are still excluded
-  expect(allContent).not.toContain("Creating.");
+  // Routing decisions are now included (kind filter removed)
+  expect(allContent).toContain("Creating.");
 });
 
 test("prompt builder includes execution-scoped tool messages as native tool_result", () => {
-  const state = createAgentState({ systemPrompt: "Test system", input: "Use echo." });
-  state.messages.push(
+  const messages = [
+    createMessage("user", "Use echo."),
     createMessage("assistant", "", {
       scope: "execution",
       toolCalls: [{ id: "call_1", name: "echo", args: { message: "hello" } }],
@@ -203,14 +177,16 @@ test("prompt builder includes execution-scoped tool messages as native tool_resu
       toolName: "echo",
       scope: "execution",
     }),
-  );
+  ];
 
   const testInput: PhaseInput = {
     phase: "chat",
-    systemPrompt: state.systemPrompt,
-    messages: state.messages,
+    systemPrompt: "Test system",
+    messages,
     tools: [],
     skills: [],
+    phaseTools: [],
+    phaseSkills: [],
   };
 
   const req = buildModelRequest(testInput);

@@ -3,21 +3,19 @@ export { Agent } from "./agent";
 export type { AgentOptions, RunOptions, AgentStatus } from "./agent";
 
 export {
-  AGENT_STATE_SCHEMA_VERSION,
   createMessage,
-  createAgentState,
+  messageContentText,
 } from "./types";
 
-export { createId, createTimestamp, createJson } from "./utils";
+export { createId, createTimestamp } from "./utils";
 
 export type {
   AgentMessage,
   Skill,
-  AgentState,
-  CreateAgentStateInput,
   AgentContext,
   Tool,
   ToolExecutionMode,
+  ToolContext,
   BeforeToolCall,
   AfterToolCall,
   AgentEvent,
@@ -29,6 +27,11 @@ export type {
   AgentRunLimits,
   LoopMetrics,
 } from "./types";
+
+export type {
+  SessionState,
+  AgentConfig,
+} from "./loop/types";
 
 export { EventStream, AgentEventStream } from "./event-stream";
 
@@ -59,6 +62,8 @@ export {
   type BranchSummarySessionEntry,
   type SessionInfoSessionEntry,
   type CustomSessionEntry,
+  type SessionStateSessionEntry,
+  type ModelTranscriptSessionEntry,
   type SessionEntry,
   type SessionRecord,
   type SessionAgentContext,
@@ -69,7 +74,7 @@ export {
 
 // ── tools / skills / env ───────────────────────────────────────
 export { createCoreTools, type CoreToolContext } from "./harness/tools";
-export { resolveSkillPath, loadSkill, loadSkills } from "./harness/skills";
+export { resolveSkillPath, loadSkill, loadSkills, readSkillContent } from "./harness/skills";
 export {
   resolveWorkspacePaths,
   resolveInWorkspace,
@@ -83,24 +88,23 @@ export * from "./extensions";
 export type { ExtensionRunnerRef } from "./agent";
 
 // ── phases ─────────────────────────────────────────────────────
-export {
-  createPhaseRegistry,
-  definePhase,
-  DEFAULT_PHASE_ID,
-  type PhaseRegistry,
-  type PhaseRegistryInput,
-  type PhaseManifest,
-  type PhaseContext,
-  type PhaseDefinition,
-  type PhaseInput,
-  type PhaseOutput,
-  type PhaseRun,
-  type ModelInvokeOutput,
-  type ModelInvokeInput,
-  type MessageSnapshot,
-  type PhaseMessageManager,
-  type PhaseToolExecutionManager,
-} from "./loop/phases";
+export type {
+  PhaseRegistry,
+  Phase,
+  PhaseConfig,
+  PhaseFrontmatter,
+} from "./harness/phases/types";
+
+export type {
+  PhaseInput,
+  PhaseOutput,
+} from "./protocol/context";
+
+export type {
+  PhaseExecution,
+  AgentContextSnapshot,
+  ModelInvokeOutput,
+} from "./loop/execution";
 
 // ── prompt / context ───────────────────────────────────────────
 export {
@@ -121,4 +125,5 @@ export type {
   StepFilter,
   Outcome,
   ToolResult,
+  ModelTranscript,
 } from "./protocol";

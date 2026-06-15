@@ -180,9 +180,6 @@ export function loadExtensionFromFactory(
   };
 }
 
-// Keep old name as alias for compatibility
-export const loadExtensionFromFactorySync = loadExtensionFromFactory;
-
 /**
  * Load extensions from file paths.
  */

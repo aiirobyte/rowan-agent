@@ -1,0 +1,53 @@
+import type {
+  AgentContext,
+  AgentMessage,
+  ToolCall,
+  ToolResult,
+} from "../types";
+import type { LlmContentPart } from "@rowan-agent/models";
+import type { ContentBlock } from "@rowan-agent/models";
+import type { PhaseInput, PhaseOutput } from "../protocol/context";
+
+export type { PhaseOutput };
+
+export type ModelInvokeOutput = {
+  text: string;
+  contentBlocks: ContentBlock[];
+  toolCalls: ToolCall[];
+  stopReason?: string;
+};
+
+/** Snapshot of AgentContext for restore */
+export type AgentContextSnapshot = {
+  messagesLength: number;
+};
+
+/** Execution capabilities for a phase — operates on AgentContext, not a state container. */
+export type PhaseExecution = {
+  snapshot(context: AgentContext): AgentContextSnapshot;
+  restore(context: AgentContext, snapshot: AgentContextSnapshot): void;
+  invokeModel(context: AgentContext, options?: { maxToolRounds?: number; phaseInput?: PhaseInput }): Promise<ModelInvokeOutput>;
+  executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
+};
+
+/** Message lifecycle manager for streaming updates */
+export type PhaseMessageManager = {
+  /** Get all visible messages in the transcript */
+  visible(): AgentMessage[];
+  /** Start a new message stream, returns message id */
+  start(role: "assistant" | "tool", content: AgentMessage["content"], metadata?: Record<string, unknown>): string;
+  /** Stream a text delta */
+  update(messageId: string, delta: string): Promise<void>;
+  /** Replace the active message content with model-native content parts */
+  replaceContent(messageId: string, content: string | LlmContentPart[]): void;
+  /** End the message stream, appends to transcript */
+  end(messageId: string): Promise<void>;
+};
+
+/** Tool execution lifecycle manager */
+export type PhaseToolExecutionManager = {
+  /** Start tool execution */
+  start(toolCallId: string, toolName: string, args: unknown): Promise<void>;
+  /** End tool execution */
+  end(toolCallId: string, toolName: string, result: ToolResult, isError: boolean): Promise<void>;
+};

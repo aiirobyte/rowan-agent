@@ -81,7 +81,7 @@ export type { EventBus } from "./event-bus";
 export type { LoadedExtension, ExtensionManifest } from "./types";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
 import type { LlmRequest } from "@rowan-agent/models";
-import type { PhaseInput } from "../loop/phases/registry";
+import type { PhaseInput } from "../protocol/context";
 import { buildModelRequest } from "../harness/context/prompt-builder";
 
 // ---------------------------------------------------------------------------
@@ -311,6 +311,30 @@ export interface ExtensionContext {
 
   /** Get current system prompt */
   getSystemPrompt?(): string;
+
+  /** Set/override the system prompt */
+  setSystemPrompt?(prompt: string): void;
+
+  /** Get the full message history */
+  getMessages?(): Array<{ role: string; content: string }>;
+
+  /** Append a message to the history */
+  addMessage?(role: "user" | "assistant" | "system", content: string): void;
+
+  /** Get all available tools */
+  getAvailableTools?(): Array<{ name: string; description: string }>;
+
+  /** Get all available skills */
+  getAvailableSkills?(): Array<{ name: string; description: string }>;
+
+  /** Get skill content by name */
+  getSkillContent?(skillName: string): string;
+
+  /** Get all available phase IDs */
+  getAvailablePhases?(): string[];
+
+  /** Get phase content by ID */
+  getPhaseContent?(phaseId: string): string;
 }
 
 // ---------------------------------------------------------------------------
@@ -341,27 +365,6 @@ export interface ExtensionUtils {
    * @returns LLM request object
    */
   buildModelRequest(input: PhaseInput): LlmRequest;
-
-  /**
-   * Create a prompt builder.
-   * @param instructions - Instruction list
-   * @returns Builder function
-   *
-   * @example
-   * ```typescript
-   * const builder = ctx.utils.createPromptBuilder([
-   *   "Phase: review",
-   *   "Review code changes",
-   * ]);
-   *
-   * // Use in buildPrompt
-   * ctx.registerPhase({
-   *   id: "review",
-   *   buildPrompt: builder,
-   * });
-   * ```
-   */
-  createPromptBuilder(instructions: string[]): (input: PhaseInput) => LlmRequest;
 }
 
 // ---------------------------------------------------------------------------
@@ -427,19 +430,6 @@ export function createExtensionAPI(
     }
   };
 
-  const createPromptBuilder = (instructions: string[]) => {
-    return (input: PhaseInput): LlmRequest => {
-      const req = buildModelRequest(input);
-      if (instructions.length > 0) {
-        req.messages.push({
-          role: "user",
-          content: instructions.join("\n"),
-        });
-      }
-      return req;
-    };
-  };
-
   return {
     on: (eventType, handler) => {
       runtime.assertActive();
@@ -470,7 +460,6 @@ export function createExtensionAPI(
       createId,
       formatJson,
       buildModelRequest,
-      createPromptBuilder,
     },
     context: options.context,
     events: eventBus,

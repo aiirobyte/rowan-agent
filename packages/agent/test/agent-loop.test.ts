@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
-import type { AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
-import { createAgentState as createBaseAgentState, createMessage } from "../src/types";
+import type { AgentContext, AgentEvent, LlmRequest, StreamFn, Tool } from "../src/types";
+import { createMessage } from "../src/types";
+import { messageContentText } from "../src/types";
 import { createId } from "../src/utils";
 import { echoTool } from "./support/echo-tool";
 import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
@@ -31,15 +32,23 @@ function extractUserRequest(messages: LlmRequest["messages"]): string {
   return "";
 }
 
-function createState(input: Parameters<typeof createBaseAgentState>[0]) {
-  return createBaseAgentState(input);
+function createContext(input: { systemPrompt: string; input: string; tools?: Tool[]; skills?: import("../src/types").Skill[] }): AgentContext {
+  return {
+    systemPrompt: input.systemPrompt,
+    messages: [createMessage("user", input.input)],
+    tools: input.tools?.slice() ?? [],
+    skills: input.skills?.slice() ?? [],
+  };
 }
 
 test("runAgentLoop assembles runtime context for the first message", async () => {
-  const seenContexts: Array<{
-    systemPrompt: string;
-    messages: string[];
-  }> = [];
+  const seenRequests: unknown[] = [];
+  const stream: StreamFn = async function* requestRecordingStream(request) {
+    seenRequests.push(request);
+    const text = "Response.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
 
   await runAgentLoop({
     context: {
@@ -48,27 +57,19 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
         createMessage("user", "hello", { scope: "conversation" }),
       ],
       tools: [echoTool],
+      skills: [],
     },
     model: { provider: "test", name: "scripted" },
-    stream: scriptedStream,
-    beforePhase: async (phaseId, input) => {
-      if (phaseId !== "chat") {
-        return {};
-      }
-      seenContexts.push({
-        systemPrompt: input.systemPrompt,
-        messages: input.messages.map((message) => message.content),
-      });
-      return {};
-    },
+    stream,
   });
 
-  expect(seenContexts).toEqual([
-    {
-      systemPrompt: "Test system",
-      messages: ["hello"],
-    },
-  ]);
+  expect(seenRequests).toHaveLength(1);
+  const request = seenRequests[0] as {
+    system?: string;
+    messages?: Array<{ role: string; content: string }>;
+  };
+  expect(request.system).toContain("Test system");
+  expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
 });
 
 test("runAgentLoop requests the LLM with a fixed request object", async () => {
@@ -79,7 +80,6 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
     expect(options.signal).toBe(controller.signal);
     const text = "Done.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", text, text);
     yield { type: "done" };
   };
 
@@ -88,6 +88,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
       systemPrompt: "Test system",
       messages: [createMessage("user", "hello", { scope: "conversation" })],
       tools: [echoTool],
+      skills: [],
     },
     model: { provider: "test-provider", name: "test-model" },
     stream,
@@ -104,28 +105,37 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   expect(request.model).toEqual({ provider: "test-provider", name: "test-model" });
   expect(request.system).toContain("Test system");
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
-  // Chat phase no longer adds explicit instructions - it's a simple conversational phase
   expect(request.messages?.at(-1)?.content).toBe("hello");
+  // Default loop (no phases) only includes user-configured tools, no route tool
   expect(request.tools).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ name: "echo", description: echoTool.description }),
+    ]),
+  );
+  expect(request.tools).toEqual(
+    expect.not.arrayContaining([
       expect.objectContaining({ name: "route" }),
     ]),
   );
 });
 
-test("runAgentLoop completes task with echo tool and verification", async () => {
-  const session = createState({
+test("runAgentLoop completes task with simple response", async () => {
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: string[] = [];
+  const stream: StreamFn = async function* simpleResponseStream() {
+    const text = "Simple response.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
-    stream: scriptedStream,
-    tools: [echoTool],
+    stream,
     emit: (event) => {
       events.push(event.type);
     },
@@ -133,100 +143,233 @@ test("runAgentLoop completes task with echo tool and verification", async () => 
 
   expect(outcome.outcome).not.toHaveProperty("evidence");
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
-  expect(events).toContain("tool_execution_end");
   expect(events).toContain("phase_end");
-  // Tool messages are execution-scoped (not persisted to agentState.messages)
   expect(session.messages.some((message) => message.role === "tool")).toBe(false);
   expect(events.length).toBeGreaterThan(0);
 });
 
-test("runAgentLoop preserves phase messages before downstream events and tool calls", async () => {
-  const task = {
-    id: createId("task"),
-    title: "Ordered messages",
-    instruction: "Use echo with ordered messages",
-    acceptanceCriteria: ["Echo evidence is present."],
-    toolNames: ["echo"],
-    skillIds: [],
-    status: "pending" as const,
-    attempts: 0,
-  };
-  const stream: StreamFn = async function* orderedMessageStream(request) {
-    const phase = detectPhase(request.messages);
-
-    if (phase === "chat") {
-      const chatText = "Routing from model.";
-      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText, chatText);
-      yield { type: "done" };
-      return;
-    }
-
-    if (phase === "plan") {
-      const planText = JSON.stringify(task);
-      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.", "");
-      yield { type: "done" };
-      return;
-    }
-
-    if (phase === "execute") {
-      const toolId = createId("call");
-      const toolName = "echo";
-      const toolArgs = JSON.stringify({ message: "ordered" });
-      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
-      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield* yieldRouteToolCall("verify", "Execution complete.", "");
-      yield { type: "done" };
-      return;
-    }
-
-    const verifyText = "Verified.";
-    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall("stop", verifyText, verifyText);
-    yield { type: "done" };
-  };
-  const session = createState({
+test("runAgentLoop executes known tool calls in the default loop", async () => {
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
+  const events: AgentEvent[] = [];
+  let requestCount = 0;
+  const stream: StreamFn = async function* toolCallingStream(request) {
+    requestCount++;
+    if (requestCount === 1) {
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "tool evidence" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    const toolResult = request.messages.find((message) => message.role === "tool");
+    expect(JSON.stringify(toolResult?.content)).toContain("tool evidence");
+    const text = "Final answer from tool evidence.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "tool-calling" },
+    stream,
+    emit: (event) => {
+      events.push(event);
+    },
+  });
+
+  expect(requestCount).toBe(2);
+  expect(result.outcome.message).toBe("Final answer from tool evidence.");
+  expect(result.outcome.toolResults).toEqual([
+    expect.objectContaining({
+      toolCallId: expect.stringMatching(/^call_/),
+      toolName: "echo",
+      ok: true,
+      content: "tool evidence",
+    }),
+  ]);
+  expect(session.messages.some((message) => message.role === "tool" && messageContentText(message.content).includes("tool evidence"))).toBe(true);
+  expect(events.some((event) => event.type === "tool_execution_start" && event.toolName === "echo")).toBe(true);
+  expect(events.some((event) => event.type === "tool_execution_end" && event.toolName === "echo")).toBe(true);
+});
+
+test("runAgentLoop keeps executing tool calls after the old tool round threshold", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "use echo tool repeatedly",
+    tools: [echoTool],
+  });
+  const toolCallCount = 9;
+  let requestCount = 0;
+  const stream: StreamFn = async function* toolRoundStream(request) {
+    requestCount++;
+    if (requestCount <= toolCallCount) {
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: `tool evidence ${requestCount}` });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    expect(request.messages.filter((message) => message.role === "tool")).toHaveLength(toolCallCount);
+    const text = "Finished after nine tool calls.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "tool-rounds" },
+    stream,
+  });
+
+  expect(requestCount).toBe(toolCallCount + 1);
+  expect(result.outcome.message).toBe("Finished after nine tool calls.");
+});
+
+test("runAgentLoop rejects nested threads beyond maxThreadDepth", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "delegate once",
+  });
+  let requestCount = 0;
+  const stream: StreamFn = async function* threadDepthStream(request) {
+    requestCount++;
+    const toolResult = request.messages.find((message) => message.role === "tool");
+    if (!toolResult) {
+      const toolId = createId("call");
+      const toolName = "thread";
+      const toolArgs = JSON.stringify({ prompt: "nested work" });
+      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    const serializedToolResult = JSON.stringify(toolResult.content);
+    expect(serializedToolResult).toContain("thread_depth_limit");
+    expect(serializedToolResult).toContain("Thread depth limit exceeded (1/0).");
+    const text = "Thread depth limit reported.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "thread-depth" },
+    stream,
+    limits: { maxThreadDepth: 0 },
+  });
+
+  expect(requestCount).toBe(2);
+  expect(result.outcome.message).toBe("Thread depth limit reported.");
+  expect(result.outcome.toolResults).toEqual([
+    expect.objectContaining({
+      toolName: "thread",
+      ok: false,
+      error: "Thread depth limit exceeded (1/0).",
+    }),
+  ]);
+});
+
+test("runAgentLoop preserves assistant text with tool calls for the follow-up request", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "use echo tool",
+    tools: [echoTool],
+  });
+  let requestCount = 0;
+  const stream: StreamFn = async function* textAndToolStream(request) {
+    requestCount++;
+    if (requestCount === 1) {
+      const text = "I will check.";
+      const toolId = createId("call");
+      const toolName = "echo";
+      const toolArgs = JSON.stringify({ message: "checked" });
+      const partial: AssistantMessagePartial = {
+        role: "assistant",
+        contentBlocks: [
+          { type: "text", text },
+          { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
+        ],
+      };
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
+      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
+      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    const assistantWithTool = request.messages.find(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === "tool_use" && part.name === "echo"),
+    );
+    expect(JSON.stringify(assistantWithTool?.content)).toContain("I will check.");
+    const text = "Checked.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: session,
+    model: { provider: "test", name: "text-and-tool" },
+    stream,
+  });
+
+  expect(requestCount).toBe(2);
+  expect(result.outcome.message).toBe("Checked.");
+});
+
+test("runAgentLoop preserves message order", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "use echo tool",
+    tools: [echoTool],
+  });
+  const stream: StreamFn = async function* orderedMessageStream() {
+    const text = "Ordered messages.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
   const events: AgentEvent[] = [];
 
   await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "ordered" },
     stream,
-    tools: [echoTool],
     maxAttempts: 1,
     emit: (event) => {
       events.push(event);
     },
   });
 
-  const indexOf = (predicate: (event: AgentEvent) => boolean) =>
-    events.findIndex(predicate);
-  const messageIndex = (content: string) =>
-    indexOf(
-      (event) =>
-        event.type === "message_end" &&
-        event.message.content.includes(content),
-    );
-
-  expect(messageIndex("Ordered messages")).toBeLessThan(
-    indexOf((event) => event.type === "phase_start" && event.phase === "execute"),
-  );
-  // Execute phase doesn't emit text messages, only tool calls and route
-  expect(messageIndex("Verified.")).toBeLessThan(
-    indexOf((event) => event.type === "phase_end" && event.phase === "verify"),
-  );
+  const messageEndEvents = events.filter(e => e.type === "message_end");
+  expect(messageEndEvents.length).toBeGreaterThan(0);
+  expect(messageEndEvents.some(e => e.type === "message_end" && messageContentText(e.message.content).includes("Ordered messages"))).toBe(true);
 });
 
 test("runAgentLoop does not emit prompt messages as events", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "hello",
+    tools: [],
   });
   const emittedEvents: AgentEvent[] = [];
   const stream: StreamFn = async function* promptRecordingStream(request) {
@@ -238,10 +381,9 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
   };
 
   await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "prompt-recording" },
     stream,
-    tools: [],
     emit: (event) => {
       emittedEvents.push(event);
     },
@@ -257,27 +399,25 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
 });
 
 test("runAgentLoop can return a direct response without creating a task", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "hello",
+    tools: [echoTool],
   });
   const emittedEvents: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: [echoTool],
     emit: (event) => {
       emittedEvents.push(event);
     },
   });
   const events = emittedEvents.map((event) => event.type);
 
-  expect(outcome.outcome.taskId).toBeUndefined();
   expect(outcome.outcome.message).toBe("Direct response: hello");
-  expect(session.messages.some((message) => message.content === "Direct response: hello")).toBe(true);
-  expect(session.messages.some((message) => message.metadata?.kind === "outcome")).toBe(true);
+  expect(outcome.messages.some((message) => messageContentText(message.content).includes("Direct response: hello"))).toBe(true);
   // Outcome message should not emit message_start/message_end events
   expect(
     emittedEvents.some(
@@ -289,30 +429,36 @@ test("runAgentLoop can return a direct response without creating a task", async 
 });
 
 test("runAgentLoop returns structured error for unknown tool without crashing", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [],
   });
   const events: AgentEvent[] = [];
+  const stream: StreamFn = async function* simpleStream() {
+    const text = "Response.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
-    stream: scriptedStream,
-    tools: [],
+    stream,
     maxAttempts: 1,
     emit: (event) => {
       events.push(event);
     },
   });
 
-  expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
+  expect(events.some((event) => event.type === "phase_end")).toBe(true);
 });
 
 test("runAgentLoop throws provider errors to the caller", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "hello",
+    tools: [echoTool],
   });
   const stream: StreamFn = async function* failingStream() {
     throw Object.assign(new Error("Provider request failed with status 400 Bad Request: Invalid model."), {
@@ -332,81 +478,67 @@ test("runAgentLoop throws provider errors to the caller", async () => {
 
   await expect(
     runAgentLoop({
-      state: session,
+      context: session,
       model: { provider: "test", name: "failing" },
       stream,
-      tools: [echoTool],
     }),
   ).rejects.toThrow("Invalid model");
+});
+
+test("runAgentLoop does not append an assistant message when the model stream errors", async () => {
+  const session = createContext({
+    systemPrompt: "Test system",
+    input: "hello",
+    tools: [echoTool],
+  });
+  const events: AgentEvent[] = [];
+  const stream: StreamFn = async function* failingStream() {
+    yield { type: "start", partial: buildTestPartial("") };
+    yield { type: "error", error: new Error("provider down") };
+  };
+
+  await expect(
+    runAgentLoop({
+      context: session,
+      model: { provider: "test", name: "failing" },
+      stream,
+      emit: (event) => {
+        events.push(event);
+      },
+    }),
+  ).rejects.toThrow("provider down");
+
+  expect(session.messages.map((message) => message.role)).toEqual(["user"]);
+  expect(events.some((event) => event.type === "message_start" && event.message.role === "assistant")).toBe(false);
 });
 
 function invalidModelSchemaError(message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code: "invalid_model_schema" });
 }
 
-test("runAgentLoop retries when verify returns invalid model schema", async () => {
-  const session = createState({
+test("runAgentLoop retries when model returns invalid schema", async () => {
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: AgentEvent[] = [];
-  const task = {
-    id: createId("task"),
-    title: "Retry verify",
-    instruction: "use echo tool",
-    acceptanceCriteria: ["Echo evidence is present."],
-    toolNames: ["echo"],
-    skillIds: [],
-    status: "pending" as const,
-    attempts: 0,
-  };
-  let verifyCalls = 0;
-  const stream: StreamFn = async function* retryVerifyStream(request) {
-    const phase = detectPhase(request.messages);
-
-    if (phase === "chat") {
-      const chatText = "Create task.";
-      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText, chatText);
-      yield { type: "done" };
-      return;
+  let callCount = 0;
+  const stream: StreamFn = async function* retryStream() {
+    callCount++;
+    yield { type: "model_requested", model: { provider: "test", name: "retry" }, usage: { inputMessages: 1 } };
+    if (callCount === 1) {
+      throw invalidModelSchemaError("Model output did not match the expected schema.");
     }
-    if (phase === "plan") {
-      const planText = JSON.stringify(task);
-      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.", "");
-      yield { type: "done" };
-      return;
-    }
-    if (phase === "execute") {
-      const toolId = createId("call");
-      const toolName = "echo";
-      const toolArgs = JSON.stringify({ message: "retry" });
-      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
-      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield* yieldRouteToolCall("verify", "Execution complete.", "");
-      yield { type: "done" };
-      return;
-    }
-
-    verifyCalls += 1;
-    yield { type: "model_requested", model: request.model, usage: { inputMessages: 1 } };
-    if (verifyCalls === 1) {
-      throw invalidModelSchemaError("Model output for verify did not match the expected schema.");
-    }
-    const verifyText = "Verified after retry.";
-    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall("stop", verifyText, verifyText);
+    const text = "Verified after retry.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
   const outcome = await runAgentLoop({
-    state: session,
-    model: { provider: "test", name: "retry-verify" },
+    context: session,
+    model: { provider: "test", name: "retry" },
     stream,
-    tools: [echoTool],
     maxAttempts: 2,
     emit: (event) => {
       events.push(event);
@@ -414,105 +546,57 @@ test("runAgentLoop retries when verify returns invalid model schema", async () =
   });
 
   expect(outcome.outcome.message).toBe("Verified after retry.");
-  expect(verifyCalls).toBe(2);
+  expect(callCount).toBe(2);
   expect(
     events.some(
       (event) =>
-        event.type === "phase_end" &&
-        event.phase === "verify",
+        event.type === "phase_end" && event.phase === "none",
     ),
   ).toBe(true);
 });
 
 test("runAgentLoop retries when execute returns invalid model schema", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
-  const task = {
-    id: createId("task"),
-    title: "Retry execute",
-    instruction: "use echo tool",
-    acceptanceCriteria: ["Echo evidence is present."],
-    toolNames: ["echo"],
-    skillIds: [],
-    status: "pending" as const,
-    attempts: 0,
-  };
-  let executeCalls = 0;
-  let verifyCalls = 0;
-  const stream: StreamFn = async function* retryExecuteStream(request) {
-    const phase = detectPhase(request.messages);
-
-    if (phase === "chat") {
-      const chatText = "Create task.";
-      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText, chatText);
-      yield { type: "done" };
-      return;
+  let callCount = 0;
+  const stream: StreamFn = async function* retryStream() {
+    callCount++;
+    yield { type: "model_requested", model: { provider: "test", name: "retry" }, usage: { inputMessages: 1 } };
+    if (callCount === 1) {
+      throw invalidModelSchemaError("Model output did not include expected fields.");
     }
-    if (phase === "plan") {
-      const planText = JSON.stringify(task);
-      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.", "");
-      yield { type: "done" };
-      return;
-    }
-    if (phase === "execute") {
-      executeCalls += 1;
-      yield { type: "model_requested", model: request.model, usage: { inputMessages: 1 } };
-      if (executeCalls === 1) {
-        throw invalidModelSchemaError("Model output for execute did not include toolCalls.");
-      }
-      const toolId = createId("call");
-      const toolName = "echo";
-      const toolArgs = JSON.stringify({ message: "retry" });
-      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
-      yield { type: "tool_call_start", id: toolId, name: toolName, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      yield* yieldRouteToolCall("verify", "Execution complete.", "");
-      yield { type: "done" };
-      return;
-    }
-
-    verifyCalls += 1;
-    const reason = verifyCalls === 1
-      ? "Missing echo evidence."
-      : "Verified after execute retry.";
-    const route = verifyCalls === 1 ? "execute" : "stop";
-    const verifyText = reason;
-    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall(route, reason, verifyText);
+    const text = "Verified after retry.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "retry-execute" },
     stream,
-    tools: [echoTool],
     maxAttempts: 2,
   });
 
-  expect(outcome.outcome.message).toBe("Verified after execute retry.");
-  // executeCalls: 1 (error) + 2 (success after verify retry) + 3 (success after second verify)
-  expect(executeCalls).toBe(3);
+  expect(outcome.outcome.message).toBe("Verified after retry.");
+  expect(callCount).toBe(2);
   expect(session.messages.some((message) => message.metadata?.toolName === "model.execute")).toBe(false);
 });
 
 test("beforeToolCall hook can block execution", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: [echoTool],
     maxAttempts: 1,
     beforeToolCall: async () => ({ allow: false, reason: "blocked in test" }),
     emit: (event) => {
@@ -523,17 +607,17 @@ test("beforeToolCall hook can block execution", async () => {
 });
 
 test("afterToolCall hook review is logged with original and reviewed result", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "use echo tool",
+    tools: [echoTool],
   });
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
-    tools: [echoTool],
     afterToolCall: async ({ result }) => ({
       ...result,
       content: `${result.content} reviewed`,
@@ -562,80 +646,44 @@ test("invalid tool args do not execute tool", async () => {
     },
   };
   const invalidArgsStream: StreamFn = async function* invalidArgsStream(request) {
-    const phase = detectPhase(request.messages);
-
-    if (phase === "chat") {
-      const chatText = "Routing invalid args task.";
-      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText, chatText);
+    const toolResult = request.messages.find((message) => message.role === "tool");
+    if (toolResult) {
+      const serializedToolResult = messageContentText(toolResult.content);
+      expect(serializedToolResult).toContain("\"toolName\":\"strict\"");
+      expect(serializedToolResult).toContain("\"ok\":false");
+      const text = "Saw invalid tool args.";
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
       yield { type: "done" };
       return;
     }
 
-    if (phase === "plan") {
-      const planText = JSON.stringify({
-        id: createId("task"),
-        title: "Invalid args task",
-        instruction: "Call strict tool",
-        acceptanceCriteria: ["Strict tool should pass"],
-        toolNames: ["strict"],
-        skillIds: [],
-        status: "pending",
-        attempts: 0,
-      });
-      yield { type: "text_delta", text: planText, partial: buildTestPartial(planText) };
-      yield* yieldRouteToolCall("execute", "Task planned.", "");
-      yield { type: "done" };
-      return;
-    }
-
-    if (phase === "execute") {
-      const toolId = createId("call");
-      const toolName = "strict";
-      const toolArgs = JSON.stringify({ value: 123 });
-      // Accumulate both tool calls in the partial
-      const withBoth: AssistantMessagePartial = {
-        role: "assistant",
-        contentBlocks: [
-          { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
-        ],
-      };
-      yield { type: "tool_call_start", id: toolId, name: toolName, partial: withBoth };
-      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: withBoth };
-      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: withBoth };
-      // Add route tool call
-      const routeId = createId("route");
-      const routeArgs = JSON.stringify({ route: "verify", reason: "Execution complete." });
-      const withRoute: AssistantMessagePartial = {
-        role: "assistant",
-        contentBlocks: [
-          { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
-          { type: "tool_call", id: routeId, name: "route", args: routeArgs },
-        ],
-      };
-      yield { type: "tool_call_start", id: routeId, name: "route", partial: withRoute };
-      yield { type: "tool_call_delta", id: routeId, arguments: routeArgs, partial: withRoute };
-      yield { type: "tool_call_end", id: routeId, name: "route", arguments: routeArgs, partial: withRoute };
-      yield { type: "done" };
-      return;
-    }
-
-    const verifyText = "Invalid args prevented execution.";
-    yield { type: "text_delta", text: verifyText, partial: buildTestPartial(verifyText) };
-    yield* yieldRouteToolCall("stop", verifyText, verifyText);
+    const text = "Response with invalid args tool call.";
+    const toolId = createId("call");
+    const toolName = "strict";
+    const toolArgs = JSON.stringify({ value: 123 });
+    const withTool: AssistantMessagePartial = {
+      role: "assistant",
+      contentBlocks: [
+        { type: "text", text },
+        { type: "tool_call", id: toolId, name: toolName, args: toolArgs },
+      ],
+    };
+    yield { type: "tool_call_start", id: toolId, name: toolName, partial: withTool };
+    yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial: withTool };
+    yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: withTool };
     yield { type: "done" };
   };
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "call strict",
+    tools: [strictTool],
   });
   const events: AgentEvent[] = [];
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "scripted" },
     stream: invalidArgsStream,
-    tools: [strictTool],
     maxAttempts: 1,
     emit: (event) => {
       events.push(event);
@@ -643,13 +691,21 @@ test("invalid tool args do not execute tool", async () => {
   });
 
   expect(executed).toBe(false);
-  expect(events.some((event) => event.type === "tool_execution_end")).toBe(true);
+  expect(outcome.outcome.message).toBe("Saw invalid tool args.");
+  expect(outcome.outcome.toolResults).toEqual([
+    expect.objectContaining({
+      toolName: "strict",
+      ok: false,
+    }),
+  ]);
+  expect(events.some((event) => event.type === "phase_end")).toBe(true);
 });
 
 test("beforePhase hook can adjust phase input", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "adjust route input",
+    tools: [],
   });
   const stream: StreamFn = async function* adjustableRouteStream(request) {
     const phase = detectPhase(request.messages);
@@ -664,10 +720,9 @@ test("beforePhase hook can adjust phase input", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-adjust-input" },
     stream,
-    tools: [],
     beforePhase: async (phaseId, input) => {
       if (phaseId !== "chat") {
         return {};
@@ -680,29 +735,23 @@ test("beforePhase hook can adjust phase input", async () => {
 });
 
 test("afterPhase hook can adjust phase output", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "adjust route output",
+    tools: [],
   });
-  const stream: StreamFn = async function* routeStream(request) {
-    const phase = detectPhase(request.messages);
-    if (phase !== "chat") {
-      return;
-    }
-
+  const stream: StreamFn = async function* routeStream() {
     const text = "Original route output.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", text, text);
     yield { type: "done" };
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-adjust-output" },
     stream,
-    tools: [],
     afterPhase: async (phaseId, output) => {
-      if (phaseId !== "chat") {
+      if (phaseId !== "none") {
         return {};
       }
       return {
@@ -718,9 +767,10 @@ test("afterPhase hook can adjust phase output", async () => {
 });
 
 test("beforePhase hook can skip a phase", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "skip route",
+    tools: [],
   });
   let modelCalled = false;
   const stream: StreamFn = async function* skippedStream() {
@@ -728,54 +778,47 @@ test("beforePhase hook can skip a phase", async () => {
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-skip" },
     stream,
-    tools: [],
     beforePhase: async (phaseId) => {
-      if (phaseId !== "chat") {
+      if (phaseId !== "none") {
         return {};
       }
       return {
         skip: {
           route: "stop",
-          message: "Skipped route phase.",
+          message: "Skipped none phase.",
         },
       };
     },
   });
 
   expect(modelCalled).toBe(false);
-  expect(outcome.outcome.message).toBe("Skipped route phase.");
+  expect(outcome.outcome.message).toBe("Skipped none phase.");
 });
 
 test("afterPhase hook can retry a phase with adjusted input", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
     input: "retry route",
+    tools: [],
   });
-  let routeCalls = 0;
-  const stream: StreamFn = async function* retryableRouteStream(request) {
-    const phase = detectPhase(request.messages);
-    if (phase !== "chat") {
-      return;
-    }
-
-    routeCalls += 1;
-    const reason = routeCalls > 1 ? "Retried with adjusted input." : "Needs retry.";
+  let callCount = 0;
+  const stream: StreamFn = async function* retryableRouteStream() {
+    callCount++;
+    const reason = callCount > 1 ? "Retried with adjusted input." : "Needs retry.";
     const text = reason;
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield* yieldRouteToolCall("stop", reason, text);
     yield { type: "done" };
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-retry" },
     stream,
-    tools: [],
     afterPhase: async (phaseId, output) => {
-      if (phaseId !== "chat" || output.routeReason !== "Needs retry.") {
+      if (phaseId !== "none" || output.message !== "Needs retry.") {
         return {};
       }
       return {
@@ -790,36 +833,32 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
     },
   });
 
-  expect(routeCalls).toBe(2);
+  expect(callCount).toBe(2);
   expect(outcome.outcome.message).toBe("Retried with adjusted input.");
 });
 
 test("beforePhase hook can abort with an outcome", async () => {
-  const session = createState({
+  const session = createContext({
     systemPrompt: "Test system",
-    input: "abort during plan",
+    input: "abort during phase",
+    tools: [],
   });
   const events: AgentEvent[] = [];
-  const stream: StreamFn = async function* taskRouteStream(request) {
-    const phase = detectPhase(request.messages);
-    if (phase === "chat") {
-      const chatText = "Create a task.";
-      yield { type: "text_delta", text: chatText, partial: buildTestPartial(chatText) };
-      yield* yieldRouteToolCall("plan", chatText, chatText);
-      yield { type: "done" };
-    }
+  const stream: StreamFn = async function* taskStream() {
+    const text = "Should not reach here.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
   };
 
   const outcome = await runAgentLoop({
-    state: session,
+    context: session,
     model: { provider: "test", name: "runtime-abort" },
     stream,
-    tools: [],
     emit: (event) => {
       events.push(event);
     },
     beforePhase: async (phaseId) => {
-      if (phaseId !== "plan") {
+      if (phaseId !== "none") {
         return {};
       }
       return {

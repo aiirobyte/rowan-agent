@@ -1,8 +1,12 @@
 import { runAgentLoop } from "./agent-loop";
-import { createDefaultPhaseRegistry, ExtensionRunner } from "./extensions";
+import { ExtensionRunner } from "./extensions";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
-import { snapshotMessage, snapshotMessages } from "./loop/state";
-import type { PhaseRegistry, PhaseInput, PhaseOutput } from "./loop/phases";
+import { snapshotMessages } from "./loop/state";
+import { loadPhases } from "./harness/phases/loader";
+import { loadSkills, readSkillContent } from "./harness/skills";
+import { resolveWorkspacePaths } from "./harness/env/path";
+import type { PhaseRegistry } from "./harness/phases/types";
+import type { PhaseInput, PhaseOutput } from "./protocol/context";
 import type {
   AgentMessage,
   LlmModelRef,
@@ -17,7 +21,12 @@ import type {
   AgentEventListener,
   Unsubscribe,
   ToolResult,
+  Outcome,
 } from "./types";
+import type { ModelTranscript } from "./protocol/turn";
+import { createId } from "./utils";
+
+import type { AgentConfig } from "./loop/types";
 
 export type ExtensionRunnerRef = { current?: ExtensionRunner };
 
@@ -26,18 +35,19 @@ export type AgentOptions = {
   model: LlmModelRef;
   stream: StreamFn;
   cwd?: string;
-  phaseConfig?: PhaseRegistry;
+  phases?: PhaseRegistry;
   extensionRunnerRef?: ExtensionRunnerRef;
   sessionId?: string;
   maxAttempts?: number;
   limits?: AgentRunLimits;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
+  onMessage?: (message: AgentMessage) => Promise<void>;
+  onOutcome?: (outcome: Outcome) => Promise<void>;
+  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
 };
 
-export type RunOptions = Partial<Omit<AgentOptions, "context">> & {
-  context: AgentContext;
-};
+export type RunOptions = Partial<AgentConfig> & Pick<AgentConfig, "context">;
 
 export type AgentStatus = {
   sessionId?: string;
@@ -192,6 +202,56 @@ export class Agent {
     // turn_end and agent_end are handled by runAgentLoop's phase turn() and finally block.
   }
 
+  /**
+   * Discover and load phases and skills from the workspace.
+   *
+   * - Auto-discovers file-based phases from .rowan/phases/
+   * - Auto-discovers skills from .rowan/skills/
+   * - Merges with CLI-provided phases and skills
+   */
+  private async discoverResources(context: AgentContext): Promise<{
+    phases?: PhaseRegistry;
+    skills: AgentContext["skills"];
+  }> {
+    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd });
+
+    // Discover file-based phases
+    const filePhases = await loadPhases(workspace);
+
+    // Merge with provided phases (provided take priority)
+    let phases: PhaseRegistry | undefined;
+    const providedPhases = this.options.phases;
+
+    if (providedPhases && providedPhases.phases.size > 0) {
+      // Provided phases take priority over file-based
+      const merged = new Map(filePhases.phases);
+      for (const [id, phase] of providedPhases.phases) {
+        merged.set(id, phase);
+      }
+      phases = {
+        phases: merged,
+        entryPhaseId: providedPhases.entryPhaseId ?? filePhases.entryPhaseId,
+      };
+    } else if (filePhases.phases.size > 0) {
+      phases = filePhases;
+    }
+
+    // Discover skills from .rowan/skills/
+    const fileSkills = await loadSkills(workspace);
+
+    // Merge with provided skills (deduplicate by name, provided take priority)
+    const skillMap = new Map<string, AgentContext["skills"][number]>();
+    for (const skill of fileSkills) {
+      skillMap.set(skill.name, skill);
+    }
+    for (const skill of context.skills) {
+      skillMap.set(skill.name, skill);
+    }
+    const skills = Array.from(skillMap.values());
+
+    return { phases, skills };
+  }
+
   private async runWithLifecycle(
     executor: (signal: AbortSignal) => Promise<RunResult>,
   ): Promise<RunResult> {
@@ -240,13 +300,19 @@ export class Agent {
     this.state.currentResult = undefined;
     this.state.error = undefined;
 
+    // Discover phases and skills from workspace
+    const { phases, skills } = await this.discoverResources(resolved.context);
+
+    // Update context with discovered skills
+    const contextWithSkills: AgentContext = {
+      ...resolved.context,
+      skills,
+    };
+
     return this.runWithLifecycle(async (signal) => {
       const emit = (event: AgentEvent) => {
         this.processEvents(event);
       };
-      const phaseConfig = resolved.phaseConfig ?? await createDefaultPhaseRegistry({
-        cwd: resolved.cwd ?? process.cwd(),
-      });
 
       // Combine user-provided hooks with extension hooks
       const beforeToolCall: BeforeToolCall = async (input) => {
@@ -274,8 +340,8 @@ export class Agent {
       };
 
       const result = await runAgentLoop({
-        context: resolved.context,
-        ...(sessionId ? { sessionId } : {}),
+        context: contextWithSkills,
+        sessionId: sessionId ?? createId("ses"),
         model: resolved.model,
         stream: resolved.stream,
         maxAttempts: resolved.maxAttempts,
@@ -286,8 +352,11 @@ export class Agent {
         beforePhase: (phaseId: string, input: PhaseInput) => this.handleBeforePhase(phaseId, input),
         afterPhase: (phaseId: string, output: PhaseOutput) => this.handleAfterPhase(phaseId, output),
         beforePrompt: (phaseId: string, input: PhaseInput) => this.handleBeforePrompt(phaseId, input),
-        phaseConfig,
+        phases,
         emit,
+        onMessage: resolved.onMessage,
+        onOutcome: resolved.onOutcome,
+        onModelTranscript: resolved.onModelTranscript,
       });
 
       this.state.sessionId = result.sessionId;
@@ -307,6 +376,46 @@ export class Agent {
 
   abort(reason = "Aborted by caller."): void {
     this.activeRun?.abortController.abort(reason);
+  }
+
+  /**
+   * Get formatted skill content for LLM consumption.
+   *
+   * Finds the skill by name and returns the formatted content using `formatSkillInvocation`.
+   * This is a programmatic API for developers to invoke skills directly.
+   *
+   * @param name - The skill name to look up
+   * @param additionalInstructions - Optional additional instructions to append
+   * @returns Formatted skill content string
+   */
+  skill(name: string, additionalInstructions?: string): string {
+    const skill = this.state.context.skills.find(s => s.name === name);
+    if (!skill) {
+      throw new Error(`Unknown skill: ${name}`);
+    }
+    const content = readSkillContent(skill);
+    return additionalInstructions ? `${content}\n\n${additionalInstructions}` : content;
+  }
+
+  /**
+   * Get formatted phase content for LLM consumption.
+   *
+   * Finds the phase by name and returns the formatted content.
+   * This is a programmatic API for developers to invoke phases directly.
+   *
+   * @param name - The phase name to look up
+   * @returns Formatted phase content string, or empty string if not found
+   */
+  async phase(name: string): Promise<string> {
+    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd });
+    const { loadPhase, readPhaseContent } = await import("./harness/phases/loader");
+
+    try {
+      const phase = await loadPhase(name, workspace);
+      return readPhaseContent(phase);
+    } catch {
+      return "";
+    }
   }
 
   async waitForIdle(): Promise<void> {
@@ -337,7 +446,7 @@ function cloneAgentContext(context: AgentContext): AgentContext {
   return {
     systemPrompt: context.systemPrompt,
     messages: snapshotMessages(context.messages),
-    ...(context.tools ? { tools: context.tools.slice() } : {}),
-    ...(context.skills ? { skills: context.skills.slice() } : {}),
+    tools: context.tools.slice(),
+    skills: context.skills.slice(),
   };
 }

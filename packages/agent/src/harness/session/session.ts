@@ -1,4 +1,5 @@
 import Type from "typebox";
+import type { AgentContextMessage } from "../../protocol";
 
 export const SESSION_SCHEMA_VERSION = "0.4.4";
 
@@ -14,18 +15,19 @@ export const AgentMessageSchema = Type.Object({
     Type.Literal("assistant"),
     Type.Literal("tool"),
   ]),
-  content: Type.String(),
+  content: Type.Union([Type.String(), Type.Array(Type.Unknown())]),
   createdAt: Type.String(),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 
-export type AgentMessage = Type.Static<typeof AgentMessageSchema>;
+export type AgentMessage = AgentContextMessage;
 
 export const SkillSchema = Type.Object({
   name: Type.String(),
   description: Type.String(),
   filePath: Type.String(),
   baseDir: Type.String(),
+  content: Type.String(),
   disableModelInvocation: Type.Boolean(),
 });
 
@@ -79,7 +81,7 @@ export function nowIso(): string {
 
 export function createMessage(
   role: AgentMessage["role"],
-  content: string,
+  content: AgentMessage["content"],
   metadata?: Record<string, unknown>,
 ): AgentMessage {
   return {
@@ -129,7 +131,7 @@ export function latestUserInput(session: Session<unknown>): string {
   for (let index = session.messages.length - 1; index >= 0; index -= 1) {
     const message = session.messages[index];
     if (message.role === "user" && message.metadata?.kind !== "phase_prompt") {
-      return message.content;
+      return typeof message.content === "string" ? message.content : "";
     }
   }
 

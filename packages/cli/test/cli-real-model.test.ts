@@ -64,6 +64,9 @@ async function runCli(
 }
 
 function openAIResponse(content: unknown): Response {
+  const contentText = content && typeof content === "object" && "message" in content && typeof content.message === "string"
+    ? content.message
+    : JSON.stringify(content);
   const toolCalls = content && typeof content === "object" && "toolCalls" in content && Array.isArray(content.toolCalls)
     ? content.toolCalls.map((toolCall: { id?: string; name?: string; args?: unknown }, index: number) => ({
         id: toolCall.id ?? `call_${index}`,
@@ -79,7 +82,7 @@ function openAIResponse(content: unknown): Response {
     choices: [
       {
         message: {
-          content: JSON.stringify(content),
+          content: contentText,
           ...(toolCalls ? { tool_calls: toolCalls } : {}),
         },
       },
@@ -440,15 +443,21 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
 test("CLI interactive prompt reports model errors once", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-interactive-error-"));
   let server: ReturnType<typeof Bun.serve> | undefined;
+  let requestCount = 0;
   try {
     try {
       server = Bun.serve({
         port: 0,
-        fetch: () =>
-          Response.json(
-            { error: { message: "provider down" } },
-            { status: 400, statusText: "Bad Request" },
-          ),
+        fetch: () => {
+          requestCount++;
+          if (requestCount === 1) {
+            return Response.json(
+              { error: { message: "provider down" } },
+              { status: 400, statusText: "Bad Request" },
+            );
+          }
+          return openAIResponse({ message: "Recovered.", route: "direct" });
+        },
       });
     } catch (error) {
       if (canSkipLocalBindError(error)) {
@@ -466,14 +475,31 @@ test("CLI interactive prompt reports model errors once", async () => {
         ROWAN_MODEL: "test-model",
         ROWAN_WORKSPACE: workspace,
       },
-      "hello\n",
+      "hello\nagain\n",
     );
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Recovered.");
     expect(countMatches(result.stderr, /provider down/g)).toBe(1);
     expect(countMatches(result.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
     expect(countMatches(result.stderr, /Log written to .+\.jsonl/g)).toBe(1);
-    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(1);
+    expect(countMatches(result.stderr, /Message id: msg_[A-Za-z0-9_-]+/g)).toBe(2);
+
+    const sessionId = sessionIdFrom(result.stderr);
+    const sessionPath = join(workspace, ".rowan", "sessions", `${sessionId}.jsonl`);
+    const sessionLines = (await Bun.file(sessionPath).text()).trim().split("\n");
+    const messageEntries = sessionLines.slice(1).map((line) => JSON.parse(line)) as Array<{
+      type?: string;
+      message?: { role?: string; content?: unknown };
+    }>;
+    expect(
+      messageEntries.some(
+        (entry) => entry.message?.role === "assistant" && JSON.stringify(entry.message.content).includes("provider down"),
+      ),
+    ).toBe(false);
+    expect(
+      messageEntries.filter((entry) => entry.type === "message" && entry.message?.role === "assistant"),
+    ).toHaveLength(1);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
@@ -519,9 +545,7 @@ test("CLI writes a default log without --log", async () => {
 
     expect(result.exitCode).toBe(0);
     const stdout = result.stdout.trim();
-    // Non-streaming mock server outputs JSON outcome
-    const outcome = JSON.parse(stdout) as { message?: string };
-    expect(outcome.message).toBe("Hello from model");
+    expect(stdout).toBe("Hello from model");
 
     const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
     expect(logMatch).not.toBeNull();
@@ -540,7 +564,7 @@ test("CLI writes a default log without --log", async () => {
     expect(metadataLines[2]).toMatch(/^Log written to \.rowan\/runs\/.+\.jsonl$/);
     expect(displayedLogPath?.startsWith(".rowan/runs/")).toBe(true);
     expect(displayedLogPath).toMatch(
-      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{6}-\\d{2}[+-]\\d{2}:\\d{2}-${sessionId}\\.jsonl$`),
+      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z-${sessionId}\\.jsonl$`),
     );
 
     const logPath = join(workspace, displayedLogPath ?? "");
@@ -548,7 +572,7 @@ test("CLI writes a default log without --log", async () => {
     const [firstRecord] = await readLogRecords(logPath);
     const [firstEvent] = await readLogEvents(logPath);
     expect(firstRecord?.time).toEqual(expect.any(Number));
-    expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}-\d{2}[+-]\d{2}:\d{2}$/);
+    expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(firstEvent?.type).toBe("agent_start");
     expect(firstRecord?.timestamp).toBeUndefined();
     expect(firstRecord?.event).toBeUndefined();
@@ -564,7 +588,7 @@ test("CLI writes a default log without --log", async () => {
     expect(logText).not.toContain("\"event\":");
     expect(logText).not.toContain("\"input\":\"hello\"");
     expect(logText).toContain("\"eventType\":\"model_requested\"");
-    expect(logText).toContain("\"phase\":\"chat\"");
+    expect(logText).toContain("\"phase\":\"none\"");
     expect(logText).not.toContain("\"eventType\":\"task_created\"");
     expect(logText).toContain("\"eventType\":\"turn_end\"");
 
@@ -575,11 +599,10 @@ test("CLI writes a default log without --log", async () => {
     };
     const messageEntries = sessionLines.slice(1).map((line) => JSON.parse(line)) as Array<{
       type?: string;
-      message?: { content?: string };
+      message?: { content?: unknown };
     }>;
     expect(session.version).toBe("0.4.4");
-    // Mock server stringifies the entire response object into content
-    expect(messageEntries.some((entry) => entry.message?.content?.includes("Hello from model"))).toBe(true);
+    expect(messageEntries.some((entry) => JSON.stringify(entry.message?.content).includes("Hello from model"))).toBe(true);
     expect(messageEntries.some((entry) => entry.type === "execution_turn")).toBe(false);
   } finally {
     server?.stop(true);
@@ -664,65 +687,20 @@ test("CLI --log-level silent suppresses run log files", async () => {
   }
 });
 
-test("CLI exposes core bash during planning and executes returned tool calls", async () => {
+test("CLI exposes core bash in the none phase", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-bash-"));
   const responses = [
     {
-      message: "Planning bash execution.",
+      message: "Bash is available.",
       toolCalls: [
         {
-          name: "route",
-          args: { route: "plan", reason: "Planning bash execution." },
-        },
-      ],
-    },
-    {
-      // Plan phase expects JSON output with task
-      // The openAIResponse function will serialize this as the content field
-      task: {
-        title: "Run bash",
-        instruction: "run a bash command",
-        acceptanceCriteria: ["The bash command output is present."],
-        toolNames: ["bash"],
-        skillIds: [],
-        status: "pending",
-        attempts: 0,
-      },
-      message: "Task planned.",
-      toolCalls: [
-        {
-          name: "route",
-          args: { route: "execute", reason: "Task planned." },
-        },
-      ],
-    },
-    {
-      message: "Running bash.",
-      toolCalls: [
-        {
+          id: "call_bash",
           name: "bash",
           args: { command: "printf cli-bash-ok" },
         },
       ],
     },
-    {
-      message: "Execution complete.",
-      toolCalls: [
-        {
-          name: "route",
-          args: { route: "verify", reason: "Execution complete." },
-        },
-      ],
-    },
-    {
-      message: "Task passed: Run bash",
-      toolCalls: [
-        {
-          name: "route",
-          args: { route: "stop", reason: "Task passed: Run bash" },
-        },
-      ],
-    },
+    { message: "Bash finished." },
   ];
   const requests: Array<{ messages?: Array<{ content?: string }>; tools?: Array<{ function: { name: string } }> }> = [];
   let requestCount = 0;
@@ -753,26 +731,21 @@ test("CLI exposes core bash during planning and executes returned tool calls", a
     });
 
     expect(result.exitCode).toBe(0);
-    // Streaming is working, so stdout contains the streamed text
-    expect(result.stdout).toContain("Planning bash execution");
+    expect(result.stdout).toContain("Bash is available");
+    expect(result.stdout).toContain("Bash finished.");
+    expect(result.stdout).not.toContain("cli-bash-ok");
     expect(requests[0]?.tools?.some((t: { function: { name: string } }) => t.function.name === "bash")).toBe(true);
 
     const logMatch = result.stderr.match(/Log written to (.+\.jsonl)/);
     expect(logMatch).not.toBeNull();
     const logPath = join(workspace, logMatch?.[1] ?? "");
-    const logText = await Bun.file(logPath).text();
     const logEvents = await readLogEvents(logPath);
-    const routePhaseIndex = logEvents.findIndex(
-      (event) => event.type === "phase_start" && event.phase === "chat",
+    const nonePhaseIndex = logEvents.findIndex(
+      (event) => event.type === "phase_start" && event.phase === "none",
     );
-    const executePhaseIndex = logEvents.findIndex(
-      (event) => event.type === "phase_start" && event.phase === "execute",
-    );
-    expect(routePhaseIndex).toBeGreaterThanOrEqual(0);
-    expect(executePhaseIndex).toBeGreaterThan(routePhaseIndex);
-    expect(logText).toContain("\"eventType\":\"tool_execution_start\"");
-    expect(logText).not.toContain("\"toolName\":\"bash\"");
-    expect(logText).not.toContain("cli-bash-ok");
+    expect(nonePhaseIndex).toBeGreaterThanOrEqual(0);
+    expect(logEvents.some((event) => event.type === "tool_execution_start")).toBe(true);
+    expect(logEvents.some((event) => event.type === "tool_execution_end")).toBe(true);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
