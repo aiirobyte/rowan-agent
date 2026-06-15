@@ -30,6 +30,7 @@ import type {
   PhaseRegistry,
 } from "../harness/phases";
 import { reloadPhases } from "../harness/phases";
+import { loadMarkdown } from "../harness/loader";
 
 import { executeRuntimeToolCall } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
@@ -508,7 +509,8 @@ async function runPhasedLoop(
     };
 
     // Emit phase_start only when entering a new phase (not on continue)
-    if (!isContinuing) {
+    const enteringNewPhase = !isContinuing;
+    if (enteringNewPhase) {
       emit(config.emit, { type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
     }
     isContinuing = false;
@@ -533,6 +535,25 @@ async function runPhasedLoop(
       }
       if (extBefore.input) {
         phaseInput = extBefore.input;
+      }
+    }
+
+    // Inject phase content as tool result when entering a new phase
+    if (enteringNewPhase && phase.filePath) {
+      try {
+        const { body } = await loadMarkdown(phase.filePath);
+        if (body) {
+          const content: LlmContentPart[] = [{
+            type: "tool_result",
+            toolUseId: `phase_${phase.id}`,
+            content: body,
+            isError: false,
+          }];
+          const msgId = messageManager.start("tool", content, { phase: phase.id });
+          await messageManager.end(msgId);
+        }
+      } catch {
+        // Phase file read failed — continue without content
       }
     }
 
@@ -768,7 +789,6 @@ function createPhaseExecution(
       skills: context.skills,
       phaseTools,
       phaseSkills,
-      ...(phase.id !== "none" ? { appendSystemPrompt: phase.buildPrompt() } : {}),
     };
   }
 

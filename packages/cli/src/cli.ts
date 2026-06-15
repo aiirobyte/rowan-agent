@@ -497,7 +497,7 @@ async function createConfiguredAgent(
       skills,
     };
 
-  // Load extensions and create phase config
+  // Load extension phases
   const extensionRunner = createExtensionRunner({ cwd: workspace.cwd });
   const { extensions } = await discoverAndLoadExtensions(workspace.cwd);
   if (extensions.length > 0) {
@@ -507,7 +507,7 @@ async function createConfiguredAgent(
 
   const extensionPhases = extensionRunner.getPhases();
   const phases = extensionPhases.length > 0
-    ? extensionRunner.createPhaseRegistry({ entryPhaseId: "chat" })
+    ? extensionRunner.createPhaseRegistry()
     : undefined;
 
   const extensionRunnerRef: ExtensionRunnerRef = { current: extensionRunner };

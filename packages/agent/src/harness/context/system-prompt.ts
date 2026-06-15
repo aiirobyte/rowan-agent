@@ -67,6 +67,8 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 
 **Important:** Tool and skill availability varies by phase. Only use tools that are available in your current phase context.
 
+Skills are listed with their name, description, and file location. When a task matches a skill's description, use the read tool to load the full skill file before proceeding.
+
 Available tools:
 ${toolsList}
 
