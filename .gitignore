@@ -5,6 +5,7 @@
 .codex/
 .claude/
 .rowan/
+.worktrees/
 CLAUDE.md
 AGENTS.md
 
