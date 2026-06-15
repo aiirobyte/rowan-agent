@@ -21,7 +21,7 @@ test("InMemorySessionManager appends entries and rebuilds conversation context",
   const manager = InMemorySessionManager.create({
     systemPrompt: "Test system",
     input: "hello",
-    skills: [{ name: "skill", description: "Use the skill.", filePath: "SKILL.md", baseDir: ".", disableModelInvocation: false }],
+    skills: [{ name: "skill", description: "Use the skill.", filePath: "SKILL.md", baseDir: ".", content: "", disableModelInvocation: false }],
   });
 
   await manager.appendMessage(createMessage("user", "hello", { scope: "conversation" }));

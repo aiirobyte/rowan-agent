@@ -484,6 +484,7 @@ async function runPhasedLoop(
     };
 
     // Build PhaseInput for hooks
+    // undefined = all available; explicit [] = none available
     const phaseTools = phase.tools
       ? allTools.filter(t => phase.tools!.includes(t.name))
       : allTools;
@@ -767,6 +768,7 @@ function createPhaseExecution(
 ): PhaseExecution {
   // Build PhaseInput from AgentContext + phase config
   function buildPhaseInput(context: AgentContext): PhaseInput {
+    // undefined = all available; explicit [] = none available
     const phaseTools = phase.tools
       ? context.tools.filter(t => phase.tools!.includes(t.name))
       : context.tools;

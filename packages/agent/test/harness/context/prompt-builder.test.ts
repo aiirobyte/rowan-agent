@@ -57,7 +57,7 @@ test("buildModelRequest returns a valid LlmRequest with system, messages, and to
 
 test("buildModelRequest includes skills in system prompt when present", () => {
   const input = createTestInput({
-    skills: [{ name: "writer", description: "Write concise plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", disableModelInvocation: false }],
+    skills: [{ name: "writer", description: "Write concise plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", content: "", disableModelInvocation: false }],
   });
   const req = buildModelRequest(input);
 
@@ -88,6 +88,7 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
     description: "Visible skill.",
     filePath: "/skills/visible/SKILL.md",
     baseDir: "/skills/visible",
+    content: "",
     disableModelInvocation: false,
   };
   const hiddenSkill: Skill = {
@@ -95,6 +96,7 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
     description: "Hidden skill.",
     filePath: "/skills/hidden/SKILL.md",
     baseDir: "/skills/hidden",
+    content: "",
     disableModelInvocation: false,
   };
   const input = createTestInput({

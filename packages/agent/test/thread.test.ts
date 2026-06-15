@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createSession } from "@rowan-agent/agent";
 import { Agent } from "../src/agent";
 import type { AgentEvent, StreamFn } from "../src/types";
@@ -7,8 +10,19 @@ import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
 import { scriptedStream, buildTestPartial, yieldRouteToolCall } from "./support/scripted-stream";
 
+// Create a temp directory without phases to avoid auto-discovery
+let testCwd: string;
+async function getTestCwd(): Promise<string> {
+  if (!testCwd) {
+    testCwd = await mkdtemp(join(tmpdir(), "rowan-thread-test-"));
+  }
+  return testCwd;
+}
+
 test("Agent does not expose startThread", async () => {
+  const cwd = await getTestCwd();
   const agent = new Agent({
+    cwd,
     context: createTestContext({ tools: [echoTool] }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -19,6 +33,7 @@ test("Agent does not expose startThread", async () => {
 });
 
 test("tools can spawn sub-agents via the thread tool and return outcomes", async () => {
+  const cwd = await getTestCwd();
   const parentStream: StreamFn = async function* parentStream(request, options) {
     const threadResult = request.messages.find((message) => message.role === "tool");
     if (threadResult) {
@@ -62,6 +77,7 @@ test("tools can spawn sub-agents via the thread tool and return outcomes", async
     input: "call helper tool",
   });
   const agent = new Agent({
+    cwd,
     context: createTestContext({
       tools: [echoTool],
       messages: session.messages,
@@ -86,3 +102,4 @@ test("tools can spawn sub-agents via the thread tool and return outcomes", async
     }),
   ]);
 });
+

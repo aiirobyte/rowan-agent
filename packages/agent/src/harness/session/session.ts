@@ -27,6 +27,7 @@ export const SkillSchema = Type.Object({
   description: Type.String(),
   filePath: Type.String(),
   baseDir: Type.String(),
+  content: Type.String(),
   disableModelInvocation: Type.Boolean(),
 });
 

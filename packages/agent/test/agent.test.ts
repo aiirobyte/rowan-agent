@@ -8,6 +8,15 @@ import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { buildTestPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
 
+// Create a temp directory without phases to avoid auto-discovery
+let testCwd: string;
+async function getTestCwd(): Promise<string> {
+  if (!testCwd) {
+    testCwd = await mkdtemp(join(tmpdir(), "rowan-test-"));
+  }
+  return testCwd;
+}
+
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const match = (messages[i].content as string).match(/^Phase:\s*(\w+)/);
@@ -17,7 +26,9 @@ function detectPhase(messages: LlmRequest["messages"]): string {
 }
 
 test("Agent.run returns a run result and emits events", async () => {
+  const cwd = await getTestCwd();
   const agent = new Agent({
+    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -87,7 +98,9 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
 });
 
 test("Agent.run does not wait for async event listeners", async () => {
+  const cwd = await getTestCwd();
   const agent = new Agent({
+    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -113,7 +126,9 @@ test("Agent.run does not wait for async event listeners", async () => {
 });
 
 test("Agent rejects concurrent runs", async () => {
+  const cwd = await getTestCwd();
   const agent = new Agent({
+    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: scriptedStream,
@@ -125,6 +140,7 @@ test("Agent rejects concurrent runs", async () => {
 });
 
 test("Agent.abort stops an active run", async () => {
+  const cwd = await getTestCwd();
   const hangingStream: StreamFn = async function* hangingStream(_request, options) {
     yield { type: "text_delta", text: "working", partial: buildTestPartial("working") };
     await new Promise((_resolve, reject) => {
@@ -133,6 +149,7 @@ test("Agent.abort stops an active run", async () => {
     yield { type: "done" };
   };
   const agent = new Agent({
+    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", name: "scripted" },
     stream: hangingStream,
@@ -145,3 +162,4 @@ test("Agent.abort stops an active run", async () => {
   await expect(run).rejects.toThrow("aborted");
   expect(agent.state.isRunning).toBe(false);
 });
+

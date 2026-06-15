@@ -309,8 +309,12 @@ export type AgentContextMessage = {
 export type AgentContextSkill = {
   name: string;
   description: string;
+  /** Absolute path to the SKILL.md file */
   filePath: string;
+  /** Directory containing the SKILL.md file */
   baseDir: string;
+  /** Full body content of the SKILL.md (after frontmatter) */
+  content: string;
   disableModelInvocation: boolean;
 };
 
