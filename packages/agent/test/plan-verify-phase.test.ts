@@ -1,11 +1,24 @@
 import { expect, test, describe } from "bun:test";
+import { join } from "node:path";
 import { runAgentLoop } from "../src/agent-loop";
 import type { AgentContext, StreamFn, Tool } from "../src/types";
 import { createMessage } from "../src/types";
 import { loadPhase, loadPhases } from "../src/harness/phases/loader";
 import type { Phase, PhaseRegistry } from "../src/harness/phases/types";
+import type { WorkspacePaths } from "../src/harness/env/path";
 import { echoTool } from "./support/echo-tool";
 import { buildTestPartial, yieldRouteToolCall } from "./support/scripted-stream";
+
+// ---------------------------------------------------------------------------
+// Test workspace pointing to checked-in fixtures
+// ---------------------------------------------------------------------------
+
+const FIXTURES_DIR = join(import.meta.dir, "fixtures");
+const testWorkspace: WorkspacePaths = {
+  mode: "source",
+  cwd: FIXTURES_DIR,
+  rowanDir: FIXTURES_DIR,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,7 +54,7 @@ function* yieldTextAndRoute(text: string, route: string, reason?: string): Gener
 
 describe("Phase file loading", () => {
   test("plan phase loads from filesystem", async () => {
-    const phase = await loadPhase("plan");
+    const phase = await loadPhase("plan", testWorkspace);
     expect(phase.id).toBe("plan");
     expect(phase.name).toBe("Plan");
     // tools can be undefined (empty/undefined = all tools available)
@@ -49,7 +62,7 @@ describe("Phase file loading", () => {
   });
 
   test("verify phase loads from filesystem", async () => {
-    const phase = await loadPhase("verify");
+    const phase = await loadPhase("verify", testWorkspace);
     expect(phase.id).toBe("verify");
     expect(phase.name).toBe("Verify");
     expect(phase.target).toBe("stop");
@@ -58,7 +71,7 @@ describe("Phase file loading", () => {
   });
 
   test("loadPhases discovers both plan and verify", async () => {
-    const registry = await loadPhases();
+    const registry = await loadPhases(testWorkspace);
     expect(registry.phases.size).toBeGreaterThanOrEqual(2);
     expect(registry.phases.has("plan")).toBe(true);
     expect(registry.phases.has("verify")).toBe(true);
@@ -73,7 +86,7 @@ describe("Phase file loading", () => {
 
 describe("Plan phase execution", () => {
   test("plan phase runs and produces output", async () => {
-    const planPhase = await loadPhase("plan");
+    const planPhase = await loadPhase("plan", testWorkspace);
     const registry = buildPhaseRegistry([planPhase]);
 
     const stream: StreamFn = async function* (request) {
@@ -104,8 +117,8 @@ describe("Plan phase execution", () => {
   });
 
   test("plan phase routes to next phase via route tool", async () => {
-    const planPhase = await loadPhase("plan");
-    const verifyPhase = await loadPhase("verify");
+    const planPhase = await loadPhase("plan", testWorkspace);
+    const verifyPhase = await loadPhase("verify", testWorkspace);
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     let requestCount = 0;
@@ -151,7 +164,7 @@ describe("Plan phase execution", () => {
 
 describe("Verify phase execution", () => {
   test("verify phase produces output", async () => {
-    const verifyPhase = await loadPhase("verify");
+    const verifyPhase = await loadPhase("verify", testWorkspace);
     const registry = buildPhaseRegistry([verifyPhase]);
 
     const stream: StreamFn = async function* (request) {
@@ -171,7 +184,7 @@ describe("Verify phase execution", () => {
   });
 
   test("verify phase routes to stop when criteria met", async () => {
-    const verifyPhase = await loadPhase("verify");
+    const verifyPhase = await loadPhase("verify", testWorkspace);
     // Set verify as entry since it's the only phase
     const registry = buildPhaseRegistry([verifyPhase], "verify");
 
@@ -199,8 +212,8 @@ describe("Verify phase execution", () => {
 
 describe("Plan → Verify full flow", () => {
   test("plan→verify→stop complete flow", async () => {
-    const planPhase = await loadPhase("plan");
-    const verifyPhase = await loadPhase("verify");
+    const planPhase = await loadPhase("plan", testWorkspace);
+    const verifyPhase = await loadPhase("verify", testWorkspace);
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     let requestCount = 0;
@@ -239,8 +252,8 @@ describe("Plan → Verify full flow", () => {
   });
 
   test("plan phase routes to verify even without explicit route tool", async () => {
-    const planPhase = await loadPhase("plan");
-    const verifyPhase = await loadPhase("verify");
+    const planPhase = await loadPhase("plan", testWorkspace);
+    const verifyPhase = await loadPhase("verify", testWorkspace);
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     let requestCount = 0;
@@ -287,7 +300,7 @@ describe("Plan → Verify full flow", () => {
 
 describe("Phase framework execution", () => {
   test("plan phase has no run function — framework handles via invokeModelWithToolLoop", async () => {
-    const phase = await loadPhase("plan");
+    const phase = await loadPhase("plan", testWorkspace);
     // Phase has no index.ts, so run is undefined
     // Framework handles execution via invokeModelWithToolLoop
     expect(phase.run).toBeUndefined();
@@ -295,7 +308,7 @@ describe("Phase framework execution", () => {
   });
 
   test("verify phase has no run function — framework handles via invokeModelWithToolLoop", async () => {
-    const phase = await loadPhase("verify");
+    const phase = await loadPhase("verify", testWorkspace);
     expect(phase.run).toBeUndefined();
     expect(phase.content).toMatch(/verify/i);
   });
