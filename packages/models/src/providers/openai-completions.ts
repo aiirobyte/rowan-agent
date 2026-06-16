@@ -35,6 +35,7 @@ import {
   asTrimmedString,
   isRecord,
   truncateString,
+  sanitizeToolInput,
 } from "./shared";
 
 // ---------------------------------------------------------------------------
@@ -178,7 +179,7 @@ function convertMessages(messages: LlmMessage[]): OpenAIChatMessage[] {
             type: "function" as const,
             function: {
               name: p.name,
-              arguments: typeof p.input === "string" ? p.input : JSON.stringify(p.input),
+              arguments: JSON.stringify(sanitizeToolInput(p.input)),
             },
           }));
           result.push({ role: "assistant", content: text, tool_calls: toolCalls });

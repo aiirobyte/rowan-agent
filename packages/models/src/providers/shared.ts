@@ -238,6 +238,12 @@ export function summarizeRequestUsage(request: LlmRequest): Pick<LlmModelUsage, 
 // Config types
 // ---------------------------------------------------------------------------
 
+/** Recover valid JSON from possibly-malformed model tool output. */
+export function sanitizeToolInput(input: unknown): unknown {
+  if (typeof input !== "string") return input;
+  try { return JSON.parse(input); } catch { return input; }
+}
+
 export type ProviderFetch = (
   input: Parameters<typeof fetch>[0],
   init?: Parameters<typeof fetch>[1],

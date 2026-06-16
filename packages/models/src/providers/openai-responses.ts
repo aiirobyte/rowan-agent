@@ -35,6 +35,7 @@ import {
   asTrimmedString,
   isRecord,
   truncateString,
+  sanitizeToolInput,
 } from "./shared";
 
 // ---------------------------------------------------------------------------
@@ -153,7 +154,7 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
               type: "function_call",
               id: part.id,
               name: part.name,
-              arguments: typeof part.input === "string" ? part.input : JSON.stringify(part.input),
+              arguments: JSON.stringify(sanitizeToolInput(part.input)),
             });
           }
         }
