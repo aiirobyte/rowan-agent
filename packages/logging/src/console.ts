@@ -3,6 +3,7 @@ import {
   AGENT_EVENT_LOG_LEVEL_VALUES,
   createAgentEventLogFields,
   eventLogLevel,
+  formatLocalIso,
   shouldWriteEvent,
   type AgentEventLogLevel,
 } from "./record";
@@ -42,19 +43,9 @@ export function consoleAgentEventLogger(
       if (!shouldWriteEvent(eventLevel, level)) {
         return;
       }
-      const now = new Date();
-      const offset = now.getTimezoneOffset();
-      const local = new Date(now.getTime() - offset * 60_000);
-      const iso = local.toISOString().slice(0, -1);
-      const sign = offset <= 0 ? "+" : "-";
-      const abs = Math.abs(offset);
-      const hh = String(Math.floor(abs / 60)).padStart(2, "0");
-      const mm = String(abs % 60).padStart(2, "0");
-      const localTime = `${iso}${sign}${hh}:${mm}`;
-
       const record = {
         level: AGENT_EVENT_LOG_LEVEL_VALUES[eventLevel],
-        time: localTime,
+        time: formatLocalIso(),
         ...createAgentEventLogFields(snapshot, level === "debug"),
       };
       stream.write(`${JSON.stringify(record)}\n`);

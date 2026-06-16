@@ -9,7 +9,7 @@ import { createTimestamp, createId } from "./utils";
 import { LoopGuard } from "./loop/errors";
 import { createOutcome } from "./loop/outcomes";
 import { snapshotMessages } from "./loop/state";
-import type { AgentRunState, AgentConfig } from "./loop/types";
+import type { SessionState, AgentConfig } from "./loop/types";
 import { resolveThreadLimits } from "./loop/types";
 import { runPhaseLoop } from "./loop/runners";
 
@@ -25,7 +25,7 @@ export async function runAgentLoop(input: AgentConfig): Promise<RunResult> {
     maxAttempts: input.maxAttempts ?? 2,
   };
 
-  const state: AgentRunState = {
+  const state: SessionState = {
     currentPhase: config.sessionState?.currentPhase ?? "",
     attempt: config.sessionState?.attempt ?? 0,
     status: config.sessionState?.status ?? "running",
@@ -73,7 +73,7 @@ export async function runAgentLoop(input: AgentConfig): Promise<RunResult> {
 
 async function completeRun(
   config: AgentConfig,
-  state: AgentRunState,
+  state: SessionState,
   outcome: Outcome,
 ): Promise<RunResult> {
   state.metrics.endedAt = createTimestamp();

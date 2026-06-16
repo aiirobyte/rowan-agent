@@ -10,6 +10,18 @@ export const AGENT_EVENT_LOG_LEVEL_VALUES = {
   error: 50,
 } satisfies Record<WritableAgentEventLogLevel, number>;
 
+/** Local ISO-8601 timestamp with timezone offset (e.g. "2026-06-17T14:30:45.12+09:00"). */
+export function formatLocalIso(date = new Date()): string {
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60_000);
+  const iso = local.toISOString().slice(0, -1);
+  const sign = offset <= 0 ? "+" : "-";
+  const abs = Math.abs(offset);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${iso}${sign}${hh}:${mm}`;
+}
+
 function eventSessionId(event: AgentEvent): string | undefined {
   if (event.type === "agent_start" || event.type === "agent_end") {
     return event.sessionId;

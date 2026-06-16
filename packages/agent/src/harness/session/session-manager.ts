@@ -2,9 +2,9 @@ import type { ExecutionTurn, Outcome, StepFilter, ModelTranscript } from "../../
 import type { SessionState } from "../../loop/types";
 import type { LlmModelRef } from "../../protocol";
 import { messageContentText } from "../../types";
+import { createTimestamp } from "../../utils";
 import {
   createId,
-  nowIso,
   type AgentMessage,
   type Skill,
 } from "./session";
@@ -161,7 +161,7 @@ function clone<T>(value: T): T {
 }
 
 export function createSessionHeader(input: CreateSessionManagerInput): SessionHeader {
-  const createdAt = nowIso();
+  const createdAt = createTimestamp();
   return {
     type: "header",
     id: input.id ?? createId("ses"),
@@ -247,7 +247,7 @@ export class InMemorySessionManager implements SessionManager {
     this.header = {
       ...this.header,
       title: input.title,
-      updatedAt: nowIso(),
+      updatedAt: createTimestamp(),
     };
     return this.appendEntry({ type: "session_info", title: input.title });
   }
@@ -286,7 +286,7 @@ export class InMemorySessionManager implements SessionManager {
     this.header = {
       ...this.header,
       currentLeafId: entryId,
-      updatedAt: nowIso(),
+      updatedAt: createTimestamp(),
     };
   }
 
@@ -328,7 +328,7 @@ export class InMemorySessionManager implements SessionManager {
   }
 
   private appendEntry(input: NewSessionEntry): string {
-    const timestamp = nowIso();
+    const timestamp = createTimestamp();
     const entry = {
       id: createId("entry"),
       parentId: this.header.currentLeafId ?? null,

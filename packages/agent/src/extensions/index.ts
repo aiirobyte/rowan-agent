@@ -87,8 +87,8 @@ export { createEventBus } from "./event-bus";
 export type { EventBus } from "./event-bus";
 
 // Source info
-export { createSourceInfo } from "./source-info";
-export type { SourceInfo } from "./source-info";
+export { createSourceInfo } from "./types";
+export type { SourceInfo } from "./types";
 
 // Types
 export type {

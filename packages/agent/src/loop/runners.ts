@@ -10,7 +10,7 @@ import type {
 } from "../types";
 import { createMessage, messageContentText } from "../types";
 import { createTimestamp } from "../utils";
-import type { AgentRunState, AgentConfig } from "./types";
+import type { SessionState, AgentConfig } from "./types";
 import { resolveThreadLimits } from "./types";
 
 // Execution types (loop-level)
@@ -93,7 +93,7 @@ function emitTurn(
 
 function createRunResult(
   config: AgentConfig,
-  state: AgentRunState,
+  state: SessionState,
   outcome: Outcome,
 ): RunResult {
   return {
@@ -110,7 +110,7 @@ function createRunResult(
 
 async function completeRun(
   config: AgentConfig,
-  state: AgentRunState,
+  state: SessionState,
   outcome: Outcome,
 ): Promise<RunResult> {
   // Finalize metrics
@@ -308,7 +308,7 @@ async function runTurn<T>(
 
 export async function runPhaseLoop(
   config: AgentConfig,
-  state: AgentRunState,
+  state: SessionState,
   runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
   const entryPhaseId = config.phases?.entryPhaseId ?? "default";
@@ -347,7 +347,7 @@ export async function runPhaseLoop(
 
 async function runPhase(
   config: AgentConfig,
-  state: AgentRunState,
+  state: SessionState,
   registry: PhaseRegistry,
   runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
@@ -710,7 +710,7 @@ async function executeToolCall(input: {
 
 function createPhaseExecution(
   config: AgentConfig,
-  state: AgentRunState,
+  state: SessionState,
   allTools: Tool[],
   phase: Phase,
   messageManager: PhaseMessageManager,

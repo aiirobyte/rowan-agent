@@ -6,6 +6,7 @@ import type { ToolCall, ToolResult } from "../../protocol";
 import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../../types";
 import { formatResourceOutput, detectResourceType, type ResourceType } from "../context/resource-formatter";
 import { parseFrontmatter, inferResourceName } from "../loader";
+import { normalizeRelativePath } from "../env/path";
 
 // Re-export route and thread tools
 export { createRouteTool, extractRouteCall, PhaseRouteTool } from "./route-tool";
@@ -118,10 +119,6 @@ export type RuntimeToolExecutionInput = {
   signal?: AbortSignal;
   observe?: (event: RuntimeToolExecutionEvent) => void | Promise<void>;
 };
-
-function normalizeRelativePath(path: string): string {
-  return path.split(sep).join("/");
-}
 
 function normalizeCoreToolInputPath(path = "."): string {
   const trimmed = path.trim();

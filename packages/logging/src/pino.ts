@@ -6,6 +6,7 @@ import { redactSecrets } from "./redact";
 import {
   createAgentEventLogFields,
   eventLogLevel,
+  formatLocalIso,
   shouldWriteEvent,
   type AgentEventLogLevel,
 } from "./record";
@@ -58,17 +59,7 @@ export function pinoAgentEventLogger(
     logger = pino({
       level,
       base: null,
-      timestamp: () => {
-        const date = new Date();
-        const offset = date.getTimezoneOffset();
-        const local = new Date(date.getTime() - offset * 60_000);
-        const iso = local.toISOString().slice(0, -1);
-        const sign = offset <= 0 ? "+" : "-";
-        const abs = Math.abs(offset);
-        const hh = String(Math.floor(abs / 60)).padStart(2, "0");
-        const mm = String(abs % 60).padStart(2, "0");
-        return `,"time":"${iso}${sign}${hh}:${mm}"`;
-      },
+      timestamp: () => `,"time":"${formatLocalIso()}"`,
     }, destination);
     writtenPath = eventPath;
     return logger;

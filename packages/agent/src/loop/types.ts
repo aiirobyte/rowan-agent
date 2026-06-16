@@ -81,8 +81,6 @@ export type AgentConfig = {
   sessionState?: SessionState;
 };
 
-/** Runtime loop state — pure alias for SessionState. */
-export type AgentRunState = SessionState;
 
 export type ToolRunnerInput = {
   config: AgentConfig;

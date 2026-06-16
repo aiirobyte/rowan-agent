@@ -7,12 +7,35 @@ import type { PhaseExecution } from "../loop/execution";
 import type { AgentContext } from "../types";
 import type { ProviderConfig } from "@rowan-agent/models";
 import type { Outcome } from "../types";
-import type { SourceInfo } from "./source-info";
 import type { ExtensionFactory } from "./context";
 
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
-export type { SourceInfo } from "./source-info";
-export { createSourceInfo } from "./source-info";
+
+// ---------------------------------------------------------------------------
+// Source info — tracks where an extension registration came from.
+// ---------------------------------------------------------------------------
+
+export interface SourceInfo {
+  source: string;
+  baseDir?: string;
+  displayName?: string;
+}
+
+export function createSourceInfo(
+  extensionPath: string,
+  options: { source?: string; baseDir?: string } = {},
+): SourceInfo {
+  const source = options.source ?? (extensionPath.startsWith("<") ? "synthetic" : "local");
+  const displayName = extensionPath.startsWith("<")
+    ? extensionPath.slice(1, -1)
+    : extensionPath.split("/").pop() ?? extensionPath;
+
+  return {
+    source,
+    baseDir: options.baseDir,
+    displayName,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Phase registration
