@@ -116,7 +116,7 @@ async function completeRun(
 
 function buildToolsWithRouting(
   config: AgentConfig,
-  availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills'>[],
+  availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[],
   runLoop: (input: AgentConfig) => Promise<RunResult>,
 ) {
   const tools = [...config.context.tools];
@@ -347,9 +347,9 @@ async function runPhase(
   let previousPayload: unknown = undefined;
 
   // Build available phases list for route tool
-  const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills'>[] = [];
+  const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[] = [];
   for (const [, phase] of freshRegistry.phases) {
-    availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills });
+    availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input });
   }
 
   while (currentPhaseId) {
@@ -404,8 +404,9 @@ async function runPhase(
 
     // Build PhaseInput for hooks
     // undefined = all available; explicit [] = none available
+    // route tool is always available regardless of phase.tools config
     const phaseTools = phase.tools
-      ? allTools.filter(t => phase.tools!.includes(t.name))
+      ? allTools.filter(t => t.name === PhaseRouteTool || phase.tools!.includes(t.name))
       : allTools;
     const phaseSkills = phase.skills
       ? config.context.skills.filter(s => phase.skills!.includes(s.name))
@@ -706,8 +707,9 @@ function createPhaseExecution(
   // Build PhaseInput from AgentContext + phase config
   function buildPhaseInput(context: AgentContext): PhaseInput {
     // undefined = all available; explicit [] = none available
+    // route tool is always available regardless of phase.tools config
     const phaseTools = phase.tools
-      ? context.tools.filter(t => phase.tools!.includes(t.name))
+      ? context.tools.filter(t => t.name === PhaseRouteTool || phase.tools!.includes(t.name))
       : context.tools;
     const phaseSkills = phase.skills
       ? context.skills.filter(s => phase.skills!.includes(s.name))

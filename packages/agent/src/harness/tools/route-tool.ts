@@ -11,7 +11,7 @@ export type RouteToolArgs = {
   payload?: unknown;
 };
 
-function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills'>): Record<string, string> {
+function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>): Record<string, string> {
   const entry: Record<string, string> = { id: p.id, description: p.description };
   if (p.tools && p.tools.length > 0) {
     entry.available_tools = p.tools.join(", ");
@@ -19,10 +19,15 @@ function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' 
   if (p.skills && p.skills.length > 0) {
     entry.available_skills = p.skills.join(", ");
   }
+  if (p.input && Object.keys(p.input).length > 0) {
+    entry.expected_input = Object.entries(p.input)
+      .map(([key, desc]) => `${key}: ${desc}`)
+      .join("; ");
+  }
   return entry;
 }
 
-function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills'>[]): string {
+function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[]): string {
   const phasesBlock = buildStructuredSection("phase", [
     ...availablePhases.map(buildPhaseEntry),
     { id: "stop", description: "End execution and return the result to the user" },
@@ -42,7 +47,7 @@ function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'des
  * The execute function is a no-op placeholder - phase routing is handled by
  * intercepting route tool calls in each phase's run function.
  */
-export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills'>[]): Tool<RouteToolArgs> {
+export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[]): Tool<RouteToolArgs> {
   return {
     name: PhaseRouteTool,
     description: buildRouteDescription(availablePhases),

@@ -18,6 +18,8 @@ export interface PhaseFrontmatter {
   "tool-choice"?: string;
   /** Forced next phase id */
   target?: string;
+  /** Expected input fields (key → description) */
+  input?: Record<string, string>;
 }
 
 /**
@@ -34,6 +36,7 @@ export interface PhaseConfig {
   filePath?: string;
   baseDir?: string;
   content: string;
+  input?: Record<string, string>;
   buildLlmRequest?: (input: PhaseInput) => LlmRequest;
 }
 
@@ -55,6 +58,8 @@ export interface Phase {
   toolChoice?: string;
   /** Forced next phase */
   target?: string;
+  /** Expected input fields (key → description) */
+  input?: Record<string, string>;
   /** Path to PHASE.md file */
   filePath: string;
   /** Phase directory path */

@@ -41,6 +41,7 @@ export async function loadPhase(
     skills: frontmatter.skills,
     toolChoice: frontmatter["tool-choice"],
     target: frontmatter.target,
+    input: frontmatter.input,
     filePath: resolved,
     baseDir,
     content: body,
