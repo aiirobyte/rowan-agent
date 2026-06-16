@@ -299,6 +299,67 @@ describe("Phase payload flow", () => {
     const payloadMessages = messages.filter(m => m.includes("phase_input"));
     expect(payloadMessages.length).toBe(0);
   });
+
+  test("string payload is normalized to object for jsonToXml", async () => {
+    const planPhase = await loadPhase("plan", testWorkspace);
+    const verifyPhase = await loadPhase("verify", testWorkspace);
+    const registry = buildPhaseRegistry([planPhase, verifyPhase]);
+
+    const messages: string[] = [];
+
+    let requestCount = 0;
+    const stream: StreamFn = async function* (request) {
+      requestCount++;
+      // Capture the messages sent to the model
+      for (const msg of request.messages) {
+        if (msg.role === "tool") {
+          if (typeof msg.content === "string") {
+            messages.push(msg.content);
+          } else if (Array.isArray(msg.content)) {
+            // Extract content from tool_result blocks
+            for (const block of msg.content) {
+              if (block.type === "tool_result" && typeof block.content === "string") {
+                messages.push(block.content);
+              }
+            }
+          }
+        }
+      }
+
+      if (requestCount === 1) {
+        const text = "Plan ready.";
+        // Send payload as a JSON string (simulating LLM behavior)
+        const stringPayload = JSON.stringify({ prompt: "test image", style: "oil painting", quality: "high" });
+        yield* yieldTextAndRoute(text, "verify", "Routing to verify.", stringPayload);
+        yield { type: "done" };
+        return;
+      }
+      if (requestCount === 2) {
+        const text = "Verified.";
+        yield* yieldTextAndRoute(text, "stop", "Done.");
+        yield { type: "done" };
+        return;
+      }
+    };
+
+    await runAgentLoop({
+      context: createContext({ input: "plan and verify" }),
+      model: { provider: "test", name: "scripted" },
+      stream,
+      phases: registry,
+    });
+
+    // The second request (verify phase) should have the payload in its messages
+    expect(requestCount).toBe(2);
+    const verifyMessages = messages.filter(m => m.includes("phase_input"));
+    expect(verifyMessages.length).toBeGreaterThanOrEqual(1);
+    // Check that the string payload was parsed and converted to XML elements
+    expect(verifyMessages.some(m => m.includes("<prompt>test image</prompt>"))).toBe(true);
+    expect(verifyMessages.some(m => m.includes("<style>oil painting</style>"))).toBe(true);
+    expect(verifyMessages.some(m => m.includes("<quality>high</quality>"))).toBe(true);
+    // Should NOT contain raw JSON string
+    expect(verifyMessages.some(m => m.includes("{&quot;prompt&quot;"))).toBe(false);
+  });
 });
 
 // ============================================================================

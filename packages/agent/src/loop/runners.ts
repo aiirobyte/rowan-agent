@@ -57,6 +57,18 @@ function resolvePhaseOutput(
   };
 }
 
+/** Normalize payload: parse JSON strings to objects for consistent downstream handling. */
+function normalizePayload(payload: unknown): unknown {
+  if (typeof payload === 'string') {
+    try {
+      return JSON.parse(payload);
+    } catch {
+      // Keep as string if not valid JSON
+    }
+  }
+  return payload;
+}
+
 // ============================================================================
 // Event Emission
 // ============================================================================
@@ -514,7 +526,7 @@ async function runPhase(
           output.routeReason = routeDecision.reason;
         }
         if (routeDecision.payload !== undefined) {
-          output.payload = routeDecision.payload;
+          output.payload = normalizePayload(routeDecision.payload);
         }
       }
     }
@@ -536,7 +548,7 @@ async function runPhase(
               output.routeReason = routeDecision.reason;
             }
             if (routeDecision.payload !== undefined) {
-              output.payload = routeDecision.payload;
+              output.payload = normalizePayload(routeDecision.payload);
             }
           }
         }
