@@ -104,6 +104,50 @@ test("route in same turn extracts route normally — no forced routing", async (
 });
 
 
+test("phase tool_result message is cleaned up on route transition", async () => {
+  const phases = buildPhaseRegistry([
+    buildTestPhase({ id: "plan", content: "You are planning." }),
+    buildTestPhase({ id: "execute", content: "You are executing." }),
+  ], "plan");
+
+  let requestCount = 0;
+  const stream: StreamFn = async function* (request) {
+    requestCount++;
+    if (requestCount === 1) {
+      yield { type: "text_delta", text: "Done.", partial: buildTestPartial("Done.") };
+      yield* yieldRouteToolCall("execute", "Move to execute.");
+      yield { type: "done" };
+      return;
+    }
+    if (requestCount === 2) {
+      yield { type: "text_delta", text: "Executed.", partial: buildTestPartial("Executed.") };
+      yield* yieldRouteToolCall("stop", "All done.");
+      yield { type: "done" };
+      return;
+    }
+  };
+
+  const result = await runAgentLoop({
+    context: createContext({ systemPrompt: "Test", input: "do something" }),
+    model: { provider: "test", name: "scripted" },
+    stream,
+    phases,
+  });
+
+  // Both phase transitions happened
+  expect(result.metrics.phaseTransitions).toEqual([
+    expect.objectContaining({ from: "plan", to: "execute" }),
+  ]);
+
+  // Synthetic phase tool_result messages should NOT be in the final messages
+  const phaseMessages = result.messages.filter(
+    m => m.role === "tool" && Array.isArray(m.content) &&
+      m.content.some((c: any) => c.toolUseId?.startsWith("phase_")),
+  );
+  expect(phaseMessages).toHaveLength(0);
+});
+
+
 test("phase with tools restricted to exclude route returns stop gracefully", async () => {
   const phases = buildPhaseRegistry([
     buildTestPhase({

@@ -57,6 +57,13 @@ function resolvePhaseOutput(
   };
 }
 
+/** Remove a phase's synthetic tool_result message from the conversation by id. */
+function removePhaseMessage(messages: AgentMessage[], msgId: string | undefined): void {
+  if (!msgId) return;
+  const idx = messages.findIndex(m => m.id === msgId);
+  if (idx !== -1) messages.splice(idx, 1);
+}
+
 /** Normalize payload: parse JSON strings to objects for consistent downstream handling. */
 function normalizePayload(payload: unknown): unknown {
   if (typeof payload === 'string') {
@@ -357,6 +364,7 @@ async function runPhase(
   let currentPhaseId = freshRegistry.entryPhaseId!;
   let isContinuing = false;
   let previousPayload: unknown = undefined;
+  let previousPhaseMsgId: string | undefined = undefined;
 
   // Build available phases list for route tool
   const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[] = [];
@@ -465,6 +473,10 @@ async function runPhase(
       }
     }
 
+    // Clean up previous phase's injected message to prevent context leakage
+    removePhaseMessage(config.context.messages, previousPhaseMsgId);
+    previousPhaseMsgId = undefined;
+
     // Inject phase content as tool result when entering a new phase
     if (enteringNewPhase) {
       try {
@@ -486,6 +498,7 @@ async function runPhase(
           }];
           const msgId = messageManager.start("tool", content, { phase: phase.id });
           await messageManager.end(msgId);
+          previousPhaseMsgId = msgId;
         }
       } catch {
         // Phase content formatting failed — continue without content
@@ -518,9 +531,11 @@ async function runPhase(
     }
 
     // Framework-level route check: extract route from tool calls
+    let routeToolCalled = false;
     if (output.toolCalls && output.toolCalls.length > 0) {
       const routeDecision = extractRouteCall(output.toolCalls);
       if (routeDecision) {
+        routeToolCalled = true;
         output.route = routeDecision.route;
         if (routeDecision.reason) {
           output.routeReason = routeDecision.reason;
@@ -578,12 +593,14 @@ async function runPhase(
 
     // Handle stop — end execution
     if (nextRoute === "stop") {
+      if (routeToolCalled) removePhaseMessage(config.context.messages, previousPhaseMsgId);
       return completeRun(config, state, createOutcome.default(output, config.context.messages));
     }
 
     // Validate route target exists
     const targetPhaseId = nextRoute;
     if (!freshRegistry.phases.has(targetPhaseId)) {
+      removePhaseMessage(config.context.messages, previousPhaseMsgId);
       return completeRun(config, state, createOutcome.phase());
     }
 

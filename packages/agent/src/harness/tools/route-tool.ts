@@ -20,9 +20,9 @@ function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' 
     entry.available_skills = p.skills.join(", ");
   }
   if (p.input && Object.keys(p.input).length > 0) {
-    entry.expected_input = Object.entries(p.input)
-      .map(([key, desc]) => `${key}: ${desc}`)
-      .join("; ");
+    entry.required_input = Object.entries(p.input)
+      .map(([key, desc]) => `- ${key}: ${desc}`)
+      .join("\n");
   }
   return entry;
 }
@@ -66,7 +66,7 @@ export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'de
         Type.Literal("stop"),
       ], { description: "Target phase id, or 'stop' to end" }),
       reason: Type.Optional(Type.String({ description: "Brief reason for the routing decision" })),
-      payload: Type.Optional(Type.Unknown({ description: "Structured data to pass to the next phase. Include all context the target phase needs, e.g. { templatePath: '...', outputPath: '...' }. The next phase receives this as its input." })),
+      payload: Type.Optional(Type.Unknown({ description: "Structured data matching the target phase's required_input. Pass as a JSON object with the fields listed in required_input." })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution
     execute: async (args, context) => ({
