@@ -17,6 +17,7 @@ export interface SystemPromptOptions {
     name: string;
     description: string;
     filePath: string;
+    disableModelInvocation?: boolean;
   }>;
   /** Working directory. */
   cwd?: string;
@@ -63,21 +64,25 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 
   const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
+  const skillsSection = skillsBlock
+    ? `The following skills provide specialized instructions for specific tasks.
+Read the full skill file when the task matches its description.
+When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md) and use that absolute path in tool commands.
+
+${skillsBlock}
+`
+    : "";
+
   let prompt = `${systemPrompt}
 
 **Important:** Tool and skill availability varies by phase. Only use tools that are available in your current phase context.
 
-Skills are listed with their name, description, and file location. When a task matches a skill's description, use the read tool to load the full skill file before proceeding.
-
 Available tools:
 ${toolsList}
 
+${skillsSection}
 Guidelines:
 ${guidelines}`;
-
-  if (skillsBlock) {
-    prompt += `\n\n${skillsBlock}`;
-  }
 
   if (date || cwd) {
     const contextParts: string[] = [];

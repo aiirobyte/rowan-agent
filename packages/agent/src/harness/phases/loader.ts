@@ -44,7 +44,6 @@ export async function loadPhase(
     filePath: resolved,
     baseDir,
     content: body,
-    buildPrompt: () => buildPhasePrompt(phase),
   };
 
   // Try to load execution code
@@ -185,28 +184,3 @@ export async function reloadPhases(
   return { phases: reloaded, entryPhaseId: registry.entryPhaseId };
 }
 
-/**
- * Build prompt string from phase definition.
- * Combines description, tool/skill restrictions, and content.
- */
-function buildPhasePrompt(phase: Phase): string {
-  const parts: string[] = [];
-
-  if (phase.description) {
-    parts.push(phase.description);
-  }
-
-  if (phase.tools && phase.tools.length > 0) {
-    parts.push(`Available tools: ${phase.tools.join(", ")}`);
-  }
-
-  if (phase.skills && phase.skills.length > 0) {
-    parts.push(`Available skills: ${phase.skills.join(", ")}`);
-  }
-
-  if (phase.content) {
-    parts.push(phase.content);
-  }
-
-  return parts.join("\n\n");
-}

@@ -10,7 +10,6 @@
  */
 
 import { execFile } from "node:child_process";
-import { buildModelRequest } from "../harness/context/prompt-builder";
 import type { ProviderConfig } from "@rowan-agent/models";
 import {
   registerModel,
@@ -428,10 +427,6 @@ export class ExtensionRunner {
     );
   }
 
-  getPhaseHandler(id: string): RegisteredPhase["handler"] | undefined {
-    return this.getRegisteredPhase(id)?.handler;
-  }
-
   createPhaseRegistry(
     input: { entryPhaseId?: string | null } = {},
   ): PhaseRegistry {
@@ -458,8 +453,6 @@ export class ExtensionRunner {
       filePath: "",
       baseDir: "",
       content: "",
-      buildPrompt: () => "",
-      buildLlmRequest: reg.handler.buildPrompt,
     };
   }
 
@@ -762,43 +755,22 @@ export class ExtensionRunner {
       throw new Error(`Duplicate phase id: ${registration.id}`);
     }
 
-    let buildPrompt = registration.buildPrompt;
-    if (!buildPrompt) {
-      const promptConfig = registration.prompt;
-      if (promptConfig?.instructions?.length) {
-        buildPrompt = (input) => {
-          const req = buildModelRequest(input);
-          req.messages.push({
-            role: "user",
-            content: promptConfig.instructions!.join("\n"),
-          });
-          return req;
-        };
-      } else {
-        buildPrompt = (input) => buildModelRequest(input);
-      }
-    }
-
     const definition: PhaseDefinition = {
       id: registration.id,
       name: registration.name ?? registration.id,
       description: registration.description ?? "",
       run: registration.run,
-      buildPrompt,
     };
 
-    this.phases.set(registration.id, {
+    const registered: RegisteredPhase = {
       definition,
-      handler: { buildPrompt },
       source: { extensionPath: extension.path },
-    });
+    };
+
+    this.phases.set(registration.id, registered);
 
     // Track in extension object
-    extension.phases.set(registration.id, {
-      definition,
-      handler: { buildPrompt },
-      source: { extensionPath: extension.path },
-    });
+    extension.phases.set(registration.id, registered);
 
     this._phaseCache = null;
   }

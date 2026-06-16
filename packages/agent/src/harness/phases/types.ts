@@ -34,7 +34,6 @@ export interface PhaseConfig {
   filePath?: string;
   baseDir?: string;
   content: string;
-  buildPrompt: () => string;
   buildLlmRequest?: (input: PhaseInput) => LlmRequest;
 }
 
@@ -62,8 +61,6 @@ export interface Phase {
   baseDir: string;
   /** PHASE.md body content */
   content: string;
-  /** Build prompt from phase definition */
-  buildPrompt: () => string;
   /** Custom LLM request builder (for extension-registered phases) */
   buildLlmRequest?: (input: PhaseInput) => LlmRequest;
   /** Optional execution function */

@@ -5,7 +5,7 @@
 import type { PhaseInput, PhaseOutput } from "../protocol/context";
 import type { PhaseExecution } from "../loop/execution";
 import type { AgentContext } from "../types";
-import type { LlmRequest, ProviderConfig } from "@rowan-agent/models";
+import type { ProviderConfig } from "@rowan-agent/models";
 import type { Outcome } from "../types";
 import type { SourceInfo } from "./source-info";
 import type { ExtensionFactory } from "./context";
@@ -18,12 +18,6 @@ export { createSourceInfo } from "./source-info";
 // Phase registration
 // ---------------------------------------------------------------------------
 
-/** Declarative prompt configuration — alternative to implementing buildPrompt. */
-export type PhasePromptConfig = {
-  /** Lines to append as a user message with phase instructions. */
-  instructions?: string[];
-};
-
 /** Phase run function type for extensions */
 export type PhaseRun = (context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 
@@ -33,26 +27,18 @@ export type PhaseDefinition = {
   name: string;
   description: string;
   run?: PhaseRun;
-  buildPrompt?(input: PhaseInput): LlmRequest;
   tools?: string[];
   skills?: string[];
   target?: string;
 };
 
-export type PhaseRegistration = Partial<Omit<PhaseDefinition, 'run' | 'buildPrompt'>> & {
+export type PhaseRegistration = Partial<Omit<PhaseDefinition, 'run'>> & {
   /** Optional execution override — takes over model invocation */
   run?: PhaseRun;
-  /** Declarative prompt config — framework generates buildPrompt from this */
-  prompt?: PhasePromptConfig;
-  /** Custom prompt builder — overrides prompt config if provided */
-  buildPrompt?: (input: PhaseInput) => LlmRequest;
 };
 
 export type RegisteredPhase = {
   definition: PhaseDefinition;
-  handler: {
-    buildPrompt?: (input: PhaseInput) => LlmRequest;
-  };
   source: {
     extensionPath: string;
   };

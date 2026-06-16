@@ -19,7 +19,6 @@ function buildTestPhase(overrides: Partial<Phase> & { id: string }): Phase {
     filePath: "",
     baseDir: "",
     content: "",
-    buildPrompt: () => `You are in the ${overrides.id} phase.`,
     ...overrides,
   };
 }

@@ -34,10 +34,13 @@ export function buildStructuredSection(
 
 /** Build a structured description for skills. */
 export function buildSkillsDescription(
-  skills: Array<{ name: string; description: string; filePath: string }>,
+  skills: Array<{ name: string; description: string; filePath: string; disableModelInvocation?: boolean }>,
 ): string {
+  const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
+  if (visibleSkills.length === 0) return "";
+
   const lines = ["<available_skills>"];
-  for (const skill of skills) {
+  for (const skill of visibleSkills) {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <description>${escapeXml(skill.description)}</description>`);
@@ -89,4 +92,42 @@ export function detectResourceType(filePath: string): ResourceType {
   if (normalized.endsWith(".md")) return "markdown";
   if (/\.(ts|js|tsx|jsx|py|rs|go|java|c|cpp|rb|sh|sql|yaml|yml|json|toml)$/.test(normalized)) return "code";
   return "file";
+}
+
+// ---------------------------------------------------------------------------
+// JSON → XML conversion for phase payload injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Recursively convert a JSON value to XML elements.
+ * Used for phase payload injection.
+ *
+ * @example
+ * jsonToXml({ items: ["a", "b"], count: 2 }, 0)
+ * // → <items><item>a</item><item>b</item></items>\n<count>2</count>
+ */
+export function jsonToXml(value: unknown, depth: number): string {
+  const indent = "  ".repeat(depth);
+
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return `${indent}${escapeXml(String(value))}`;
+
+  // Array → <item> elements
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (typeof item === "object" && item !== null) {
+        return `${indent}<item>\n${jsonToXml(item, depth + 1)}\n${indent}</item>`;
+      }
+      return `${indent}<item>${escapeXml(String(item))}</item>`;
+    }).join("\n");
+  }
+
+  // Object → key-named elements
+  return Object.entries(value).map(([key, val]) => {
+    const tag = escapeXml(key);
+    if (typeof val === "object" && val !== null) {
+      return `${indent}<${tag}>\n${jsonToXml(val, depth + 1)}\n${indent}</${tag}>`;
+    }
+    return `${indent}<${tag}>${escapeXml(String(val))}</${tag}>`;
+  }).join("\n");
 }

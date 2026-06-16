@@ -34,7 +34,7 @@ export async function loadSkill(path: string, workspace?: WorkspacePaths): Promi
     filePath: resolved,
     baseDir: dirname(resolved),
     content: body,
-    disableModelInvocation: (frontmatter["disable-model-invocation"] as string) === "true",
+    disableModelInvocation: frontmatter["disable-model-invocation"] === true,
   };
 }
 
