@@ -564,15 +564,15 @@ test("CLI writes a default log without --log", async () => {
     expect(metadataLines[2]).toMatch(/^Log written to \.rowan\/runs\/.+\.jsonl$/);
     expect(displayedLogPath?.startsWith(".rowan/runs/")).toBe(true);
     expect(displayedLogPath).toMatch(
-      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z-${sessionId}\\.jsonl$`),
+      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}(Z|[+-]\\d{2}:\\d{2})-${sessionId}\\.jsonl$`),
     );
 
     const logPath = join(workspace, displayedLogPath ?? "");
     const logText = await Bun.file(logPath ?? "").text();
     const [firstRecord] = await readLogRecords(logPath);
     const [firstEvent] = await readLogEvents(logPath);
-    expect(firstRecord?.time).toEqual(expect.any(Number));
-    expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(firstRecord?.time).toEqual(expect.any(String));
+    expect(firstEvent?.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(Z|[+-]\d{2}:\d{2})$/);
     expect(firstEvent?.type).toBe("agent_start");
     expect(firstRecord?.timestamp).toBeUndefined();
     expect(firstRecord?.event).toBeUndefined();
@@ -588,7 +588,7 @@ test("CLI writes a default log without --log", async () => {
     expect(logText).not.toContain("\"event\":");
     expect(logText).not.toContain("\"input\":\"hello\"");
     expect(logText).toContain("\"eventType\":\"model_requested\"");
-    expect(logText).toContain("\"phase\":\"none\"");
+    expect(logText).toContain("\"phase\":\"default\"");
     expect(logText).not.toContain("\"eventType\":\"task_created\"");
     expect(logText).toContain("\"eventType\":\"turn_end\"");
 
@@ -741,7 +741,7 @@ test("CLI exposes core bash in the none phase", async () => {
     const logPath = join(workspace, logMatch?.[1] ?? "");
     const logEvents = await readLogEvents(logPath);
     const nonePhaseIndex = logEvents.findIndex(
-      (event) => event.type === "phase_start" && event.phase === "none",
+      (event) => event.type === "phase_start" && event.phase === "default",
     );
     expect(nonePhaseIndex).toBeGreaterThanOrEqual(0);
     expect(logEvents.some((event) => event.type === "tool_execution_start")).toBe(true);

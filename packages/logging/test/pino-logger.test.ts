@@ -162,7 +162,7 @@ test("consoleAgentEventLogger writes Pino-shaped JSONL records to the configured
     eventTs: "2026-05-03T141659-32+08:00",
     phase: "chat",
   });
-  expect(record?.time).toEqual(expect.any(Number));
+  expect(record?.time).toEqual(expect.any(String));
   expect(record?.msg).toBeUndefined();
   expect(record?.event).toBeUndefined();
 });
