@@ -46,13 +46,22 @@ export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'de
   return {
     name: PhaseRouteTool,
     description: buildRouteDescription(availablePhases),
+    promptSnippet: "Signal phase completion and transfer control to the next phase.",
+    promptGuidelines: [
+      "A phase should either complete its own responsibility or transfer control.",
+      "Do not perform work outside the scope of the current phase.",
+      "When another phase is better suited for the next step, transfer control instead of continuing execution.",
+      "When the workflow is complete, route to 'stop'.",
+      "Include a brief reason describing the transition.",
+      "Use the 'payload' field to pass all structured data the next phase needs (e.g. file paths, configuration). Do NOT use free-text fields like 'prompt' — the next phase reads 'payload', not arbitrary fields.",
+    ],
     parameters: Type.Object({
       route: Type.Union([
         ...availablePhases.map(p => Type.Literal(p.id)),
         Type.Literal("stop"),
       ], { description: "Target phase id, or 'stop' to end" }),
       reason: Type.Optional(Type.String({ description: "Brief reason for the routing decision" })),
-      payload: Type.Optional(Type.Unknown({ description: "Structured data to pass to the next phase" })),
+      payload: Type.Optional(Type.Unknown({ description: "Structured data to pass to the next phase. Include all context the target phase needs, e.g. { templatePath: '...', outputPath: '...' }. The next phase receives this as its input." })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution
     execute: async (args, context) => ({

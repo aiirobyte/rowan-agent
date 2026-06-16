@@ -45,14 +45,6 @@ import type { LlmContentPart } from "@rowan-agent/models";
 // Phase State Utilities
 // ============================================================================
 
-/** Phase sentinel states - NOT executable phases, just markers */
-type PhaseState = "none" | "stop";
-
-/** Check if value is a sentinel state (not a real phase) */
-function isPhaseState(value: string): value is PhaseState {
-  return value === "none" || value === "stop";
-}
-
 /** Execute phase run and handle void return by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(
   result: PhaseOutput | void,
@@ -307,134 +299,41 @@ export async function runPhaseLoop(
   state: AgentRunState,
   runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
-  if (config.phases?.entryPhaseId) {
-    return runPhasedLoop(config, state, config.phases, runLoop);
-  }
-  return runDefaultLoop(config, state, runLoop);
-}
+  const entryPhaseId = config.phases?.entryPhaseId ?? "default";
 
-// ============================================================================
-// Default Loop (no phases configured)
-// ============================================================================
+  // Build registry: always include default phase as the first entry
+  const phases = new Map<string, Phase>();
 
-async function runDefaultLoop(
-  config: AgentConfig,
-  state: AgentRunState,
-  runLoop: (input: AgentConfig) => Promise<RunResult>,
-): Promise<RunResult> {
-  state.currentPhase = "none";
-
-  // Build available phases list for route tool so the model can see and route to real phases
-  const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills'>[] = [];
-  if (config.phases) {
-    for (const [, phase] of config.phases.phases) {
-      availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills });
-    }
-  }
-
-  const allTools = buildToolsWithRouting(config, availablePhases, runLoop);
-
-  const nonePhase: Phase = {
-    id: "none",
-    name: "None",
-    description: "",
+  // Add default phase first
+  phases.set("default", {
+    id: "default",
+    name: "Execution Phase",
+    description: "Executes concrete task operations and produces artifacts.",
     filePath: "",
     baseDir: "",
-    content: "",
-  };
-
-  const messageManager = createMessageManager(config.context, config.emit, config.onMessage);
-  const toolExecutionManager = createToolExecutionManager(config.emit);
-
-  const execution = createPhaseExecution(config, state, allTools, nonePhase, messageManager, toolExecutionManager);
-
-  let phaseInput: PhaseInput = {
-    phase: "none",
-    systemPrompt: config.context.systemPrompt,
-    messages: snapshotMessages(config.context.messages),
-    tools: allTools,
-    skills: config.context.skills,
-    phaseTools: allTools,
-    phaseSkills: config.context.skills,
-  };
-
-  config.emit?.({ type: "phase_start", phase: "none", ts: createTimestamp() });
-
-  if (config.beforePhase) {
-    const extBefore = await config.beforePhase("none", phaseInput);
-    if (extBefore.abort) {
-      config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
-      return completeRun(config, state, extBefore.abort);
-    }
-    if (extBefore.skip) {
-      config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
-      return completeRun(config, state, { id: "skip", message: extBefore.skip.message || "Skipped." });
-    }
-    if (extBefore.input) {
-      phaseInput = extBefore.input;
-    }
-  }
-
-  let output = await invokeModelWithToolLoop({
-    config,
-    execution,
-    messageManager,
-    basePhaseInput: phaseInput,
-    phaseId: nonePhase.id,
-    availableTools: allTools,
+    content: "Execute tasks using current context.\nNo planning. No evaluation.\nRoute to next phase or stop when done.",
   });
 
-  if (config.afterPhase) {
-    const extAfter = await config.afterPhase("none", output);
-    if (extAfter.abort) {
-      config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
-      return completeRun(config, state, extAfter.abort);
-    }
-    if (extAfter.retry) {
-      // Convert retry PhaseInput to AgentContext for execution.invokeModel
-      output = await invokeModelWithToolLoop({
-        config,
-        execution,
-        messageManager,
-        basePhaseInput: {
-          ...extAfter.retry,
-          tools: allTools,
-          skills: config.context.skills,
-          phaseTools: allTools,
-          phaseSkills: config.context.skills,
-        },
-        phaseId: nonePhase.id,
-        availableTools: allTools,
-      });
-    }
-    if (extAfter.output) {
-      output = extAfter.output;
+  // Merge configured phases (user-defined "default" overrides built-in)
+  if (config.phases) {
+    for (const [id, phase] of config.phases.phases) {
+      phases.set(id, phase);
     }
   }
 
-  config.emit?.({ type: "phase_end", phase: "none", ts: createTimestamp() });
+  const registry: PhaseRegistry = {
+    phases,
+    entryPhaseId,
+  };
 
-  // Check if the model routed to a real phase — if so, delegate to phased loop
-  if (output.toolCalls && output.toolCalls.length > 0) {
-    const routeDecision = extractRouteCall(output.toolCalls);
-    if (routeDecision && routeDecision.route !== "stop" && config.phases?.phases.has(routeDecision.route)) {
-      // Patch entryPhaseId so runPhasedLoop starts from the routed phase
-      const phasedRegistry: PhaseRegistry = {
-        ...config.phases,
-        entryPhaseId: routeDecision.route,
-      };
-      return runPhasedLoop(config, state, phasedRegistry, runLoop);
-    }
-  }
-
-  return completeRun(config, state, createOutcome.default(output, config.context.messages));
+  return runPhase(config, state, registry, runLoop);
 }
 
 // ============================================================================
-// Phased Loop (phases configured)
+// Unified Phase Execution
 // ============================================================================
 
-async function runPhasedLoop(
+async function runPhase(
   config: AgentConfig,
   state: AgentRunState,
   registry: PhaseRegistry,
@@ -554,9 +453,11 @@ async function runPhasedLoop(
     }
 
     // Inject phase content as tool result when entering a new phase
-    if (enteringNewPhase && phase.filePath) {
+    if (enteringNewPhase) {
       try {
-        let phaseContent = readPhaseContent(phase);
+        let phaseContent = phase.filePath
+          ? readPhaseContent(phase)
+          : (phase.content ?? phase.description ?? "");
 
         // Append payload as XML to phase content
         if (phaseInput.payload !== undefined) {
@@ -567,7 +468,7 @@ async function runPhasedLoop(
           const content: LlmContentPart[] = [{
             type: "tool_result",
             toolUseId: `phase_${phase.id}`,
-            content: phaseContent,
+            content: `<phase name="${phase.id}">\n${phaseContent}\n</phase>`,
             isError: false,
           }];
           const msgId = messageManager.start("tool", content, { phase: phase.id });
@@ -653,7 +554,7 @@ async function runPhasedLoop(
     config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
 
     // Resolve next phase: target > route > stop
-    let nextRoute: string | PhaseState;
+    let nextRoute: string;
     if (phase.target) {
       nextRoute = phase.target;
     } else if (output.route) {
@@ -662,13 +563,13 @@ async function runPhasedLoop(
       nextRoute = "stop";
     }
 
-    // Handle sentinel states
-    if (isPhaseState(nextRoute)) {
+    // Handle stop — end execution
+    if (nextRoute === "stop") {
       return completeRun(config, state, createOutcome.default(output, config.context.messages));
     }
 
     // Validate route target exists
-    const targetPhaseId = nextRoute as string;
+    const targetPhaseId = nextRoute;
     if (!freshRegistry.phases.has(targetPhaseId)) {
       return completeRun(config, state, createOutcome.phase());
     }

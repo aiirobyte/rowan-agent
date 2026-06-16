@@ -122,6 +122,7 @@ export function createThreadTool(
   return {
     name: ThreadTool,
     description: buildThreadDescription(availableSkills),
+    promptSnippet: "Spawn a sub-agent to handle an independent subtask in a fresh context.",
     parameters: Type.Object({
       prompt: Type.String({
         description: "Clear, self-contained instructions for the sub-agent. Include all context needed — the sub-agent does NOT see the current conversation.",

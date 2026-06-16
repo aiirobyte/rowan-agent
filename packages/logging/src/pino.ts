@@ -55,7 +55,21 @@ export function pinoAgentEventLogger(
       writeFileSync(eventPath, "", "utf8");
     }
     destination = pino.destination({ dest: eventPath, mkdir: true, sync: true });
-    logger = pino({ level, base: null }, destination);
+    logger = pino({
+      level,
+      base: null,
+      timestamp: () => {
+        const date = new Date();
+        const offset = date.getTimezoneOffset();
+        const local = new Date(date.getTime() - offset * 60_000);
+        const iso = local.toISOString().slice(0, -1);
+        const sign = offset <= 0 ? "+" : "-";
+        const abs = Math.abs(offset);
+        const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+        const mm = String(abs % 60).padStart(2, "0");
+        return `,"time":"${iso}${sign}${hh}:${mm}"`;
+      },
+    }, destination);
     writtenPath = eventPath;
     return logger;
   };

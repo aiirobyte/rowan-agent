@@ -82,11 +82,11 @@ export const createOutcome = {
     return { id: "default", message: "Phase completed." };
   },
 
-  default(output: { message: string }, transcript?: AgentMessage[]): Outcome {
+  default(output: { message: string; routeReason?: string }, transcript?: AgentMessage[]): Outcome {
     const toolResults = transcript ? extractToolResults(transcript) : [];
     const outcome: Outcome = {
       id: createId("out"),
-      message: output.message || toolResults.map(summarizeToolResult).filter(Boolean).join("\n\n") || "Completed.",
+      message: output.message || output.routeReason || toolResults.map(summarizeToolResult).filter(Boolean).join("\n\n") || "Completed.",
     };
     if (toolResults.length > 0) {
       outcome.toolResults = toolResults;
