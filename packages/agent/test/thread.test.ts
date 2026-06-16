@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createSession } from "@rowan-agent/agent";
 import { Agent } from "../src/agent";
 import type { AgentEvent, StreamFn } from "../src/types";
+import { messageContentText } from "../src/types";
 import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { echoTool } from "./support/echo-tool";
@@ -35,7 +36,9 @@ test("Agent does not expose startThread", async () => {
 test("tools can spawn sub-agents via the thread tool and return outcomes", async () => {
   const cwd = await getTestCwd();
   const parentStream: StreamFn = async function* parentStream(request, options) {
-    const threadResult = request.messages.find((message) => message.role === "tool");
+    const threadResult = request.messages.find((message) =>
+      message.role === "tool" && messageContentText(message.content).includes("Sub-agent response.")
+    );
     if (threadResult) {
       expect(JSON.stringify(threadResult.content)).toContain("Sub-agent response.");
       const text = "Parent received sub-agent response.";

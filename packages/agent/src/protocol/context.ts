@@ -24,6 +24,8 @@ export type PhaseOutput = {
   toolCalls?: Array<{ id: string; name: string; args: unknown }>;
   /** Route reason extracted from route tool call (for hooks to inspect) */
   routeReason?: string;
+  /** Structured data from this phase, passed to the next phase */
+  payload?: unknown;
 };
 
 /** Unified phase input — contains everything the model needs. */
@@ -45,4 +47,6 @@ export type PhaseInput = {
   appendSystemPrompt?: string;
   /** Tool choice configuration from phase definition */
   toolChoice?: LlmToolChoice;
+  /** Structured data from previous phase or framework */
+  payload?: unknown;
 };

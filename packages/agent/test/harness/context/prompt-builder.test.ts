@@ -115,7 +115,7 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase buildPrompt integration
+// Phase prompt integration
 // ---------------------------------------------------------------------------
 
 test("buildRequest returns LlmRequest with correct messages", () => {

@@ -8,26 +8,37 @@ export const PhaseRouteTool = "route";
 export type RouteToolArgs = {
   route: string;
   reason?: string;
+  payload?: unknown;
 };
 
-function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'description'>[]): string {
+function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>): Record<string, string> {
+  const entry: Record<string, string> = { id: p.id, description: p.description };
+  if (p.tools && p.tools.length > 0) {
+    entry.available_tools = p.tools.join(", ");
+  }
+  if (p.skills && p.skills.length > 0) {
+    entry.available_skills = p.skills.join(", ");
+  }
+  if (p.input && Object.keys(p.input).length > 0) {
+    entry.expected_input = Object.entries(p.input)
+      .map(([key, desc]) => `${key}: ${desc}`)
+      .join("; ");
+  }
+  return entry;
+}
+
+function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[]): string {
   const phasesBlock = buildStructuredSection("phase", [
-    ...availablePhases.map(p => ({ id: p.id, description: p.description })),
+    ...availablePhases.map(buildPhaseEntry),
     { id: "stop", description: "End execution and return the result to the user" },
   ]);
 
   return [
-    "Decide the next step in the workflow by routing to a specific phase.",
-    "",
-    "You MUST call this tool when you have completed the current phase's work",
-    "and are ready to hand off to the next phase or end execution.",
+    "Route to the next phase when the current phase is complete.",
     "",
     "<available_phases>",
     phasesBlock,
     "</available_phases>",
-    "",
-    "Choose the phase that best matches what needs to happen next.",
-    "Use the 'reason' field to briefly explain your routing decision.",
   ].join("\n");
 }
 
@@ -36,16 +47,26 @@ function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'des
  * The execute function is a no-op placeholder - phase routing is handled by
  * intercepting route tool calls in each phase's run function.
  */
-export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'description'>[]): Tool<RouteToolArgs> {
+export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[]): Tool<RouteToolArgs> {
   return {
     name: PhaseRouteTool,
     description: buildRouteDescription(availablePhases),
+    promptSnippet: "Signal phase completion and transfer control to the next phase.",
+    promptGuidelines: [
+      "A phase should either complete its own responsibility or transfer control.",
+      "Do not perform work outside the scope of the current phase.",
+      "When another phase is better suited for the next step, transfer control instead of continuing execution.",
+      "When the workflow is complete, route to 'stop'.",
+      "Include a brief reason describing the transition.",
+      "Use the 'payload' field to pass all structured data the next phase needs (e.g. file paths, configuration). Do NOT use free-text fields like 'prompt' — the next phase reads 'payload', not arbitrary fields.",
+    ],
     parameters: Type.Object({
       route: Type.Union([
         ...availablePhases.map(p => Type.Literal(p.id)),
         Type.Literal("stop"),
       ], { description: "Target phase id, or 'stop' to end" }),
       reason: Type.Optional(Type.String({ description: "Brief reason for the routing decision" })),
+      payload: Type.Optional(Type.Unknown({ description: "Structured data to pass to the next phase. Include all context the target phase needs, e.g. { templatePath: '...', outputPath: '...' }. The next phase receives this as its input." })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution
     execute: async (args, context) => ({
@@ -66,5 +87,6 @@ export function extractRouteCall(toolCalls: Array<{ name: string; args: unknown 
   return {
     route: typeof args.route === "string" ? args.route : "stop",
     reason: typeof args.reason === "string" ? args.reason : undefined,
+    payload: args.payload,
   };
 }

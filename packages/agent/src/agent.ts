@@ -187,7 +187,7 @@ export class Agent {
   }
 
   /**
-   * Hook for before_prompt — called before buildPrompt, allowing extensions to transform PhaseInput.
+   * Hook for before_prompt — called before model request, allowing extensions to transform PhaseInput.
    * Extensions can transform the PhaseInput (messages, tools, systemPrompt, etc.).
    */
   private async handleBeforePrompt(phaseId: string, input: PhaseInput): Promise<PhaseInput> {

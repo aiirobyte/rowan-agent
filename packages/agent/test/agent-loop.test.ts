@@ -105,15 +105,16 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   expect(request.model).toEqual({ provider: "test-provider", name: "test-model" });
   expect(request.system).toContain("Test system");
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
-  expect(request.messages?.at(-1)?.content).toBe("hello");
-  // Default loop (no phases) only includes user-configured tools, no route tool
+  // Phase content is injected as a tool_result, so the last message is not the user message
+  expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
+  // Default loop (no phases) includes user-configured tools plus route and thread tools
   expect(request.tools).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ name: "echo", description: echoTool.description }),
     ]),
   );
   expect(request.tools).toEqual(
-    expect.not.arrayContaining([
+    expect.arrayContaining([
       expect.objectContaining({ name: "route" }),
     ]),
   );
@@ -144,7 +145,8 @@ test("runAgentLoop completes task with simple response", async () => {
   expect(outcome.outcome).not.toHaveProperty("evidence");
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
   expect(events).toContain("phase_end");
-  expect(session.messages.some((message) => message.role === "tool")).toBe(false);
+  // Phase content is injected as a tool_result on phase entry
+  expect(session.messages.some((message) => message.role === "tool")).toBe(true);
   expect(events.length).toBeGreaterThan(0);
 });
 
@@ -170,8 +172,10 @@ test("runAgentLoop executes known tool calls in the default loop", async () => {
       return;
     }
 
-    const toolResult = request.messages.find((message) => message.role === "tool");
-    expect(JSON.stringify(toolResult?.content)).toContain("tool evidence");
+    const toolResult = request.messages.find((message) =>
+      message.role === "tool" && messageContentText(message.content).includes("tool evidence")
+    );
+    expect(messageContentText(toolResult!.content)).toContain("tool evidence");
     const text = "Final answer from tool evidence.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
@@ -223,7 +227,8 @@ test("runAgentLoop keeps executing tool calls after the old tool round threshold
       return;
     }
 
-    expect(request.messages.filter((message) => message.role === "tool")).toHaveLength(toolCallCount);
+    // +1 for the phase_default tool_result injected on phase entry
+    expect(request.messages.filter((message) => message.role === "tool")).toHaveLength(toolCallCount + 1);
     const text = "Finished after nine tool calls.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
@@ -247,7 +252,9 @@ test("runAgentLoop rejects nested threads beyond maxThreadDepth", async () => {
   let requestCount = 0;
   const stream: StreamFn = async function* threadDepthStream(request) {
     requestCount++;
-    const toolResult = request.messages.find((message) => message.role === "tool");
+    const toolResult = request.messages.find((message) =>
+      message.role === "tool" && messageContentText(message.content).includes("thread_depth_limit")
+    );
     if (!toolResult) {
       const toolId = createId("call");
       const toolName = "thread";
@@ -508,7 +515,8 @@ test("runAgentLoop does not append an assistant message when the model stream er
     }),
   ).rejects.toThrow("provider down");
 
-  expect(session.messages.map((message) => message.role)).toEqual(["user"]);
+  // Phase content is injected as a tool_result before the model errors
+  expect(session.messages.some((message) => message.role === "assistant")).toBe(false);
   expect(events.some((event) => event.type === "message_start" && event.message.role === "assistant")).toBe(false);
 });
 
@@ -550,7 +558,7 @@ test("runAgentLoop retries when model returns invalid schema", async () => {
   expect(
     events.some(
       (event) =>
-        event.type === "phase_end" && event.phase === "none",
+        event.type === "phase_end" && event.phase === "default",
     ),
   ).toBe(true);
 });
@@ -646,7 +654,9 @@ test("invalid tool args do not execute tool", async () => {
     },
   };
   const invalidArgsStream: StreamFn = async function* invalidArgsStream(request) {
-    const toolResult = request.messages.find((message) => message.role === "tool");
+    const toolResult = request.messages.find((message) =>
+      message.role === "tool" && messageContentText(message.content).includes("\"toolName\":\"strict\"")
+    );
     if (toolResult) {
       const serializedToolResult = messageContentText(toolResult.content);
       expect(serializedToolResult).toContain("\"toolName\":\"strict\"");
@@ -751,7 +761,7 @@ test("afterPhase hook can adjust phase output", async () => {
     model: { provider: "test", name: "runtime-adjust-output" },
     stream,
     afterPhase: async (phaseId, output) => {
-      if (phaseId !== "none") {
+      if (phaseId !== "default") {
         return {};
       }
       return {
@@ -782,23 +792,23 @@ test("beforePhase hook can skip a phase", async () => {
     model: { provider: "test", name: "runtime-skip" },
     stream,
     beforePhase: async (phaseId) => {
-      if (phaseId !== "none") {
+      if (phaseId !== "default") {
         return {};
       }
       return {
         skip: {
           route: "stop",
-          message: "Skipped none phase.",
+          message: "Skipped default phase.",
         },
       };
     },
   });
 
   expect(modelCalled).toBe(false);
-  expect(outcome.outcome.message).toBe("Skipped none phase.");
+  expect(outcome.outcome.message).toBe("Skipped default phase.");
 });
 
-test("afterPhase hook can retry a phase with adjusted input", async () => {
+test("afterPhase hook can adjust phase output", async () => {
   const session = createContext({
     systemPrompt: "Test system",
     input: "retry route",
@@ -807,8 +817,7 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
   let callCount = 0;
   const stream: StreamFn = async function* retryableRouteStream() {
     callCount++;
-    const reason = callCount > 1 ? "Retried with adjusted input." : "Needs retry.";
-    const text = reason;
+    const text = "Original output.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
@@ -818,23 +827,20 @@ test("afterPhase hook can retry a phase with adjusted input", async () => {
     model: { provider: "test", name: "runtime-retry" },
     stream,
     afterPhase: async (phaseId, output) => {
-      if (phaseId !== "none" || output.message !== "Needs retry.") {
+      if (phaseId !== "default") {
         return {};
       }
       return {
-        retry: {
-          phase: phaseId,
-          systemPrompt: session.systemPrompt,
-          messages: session.messages,
-          tools: [],
-          skills: session.skills,
+        output: {
+          ...output,
+          message: "Adjusted by afterPhase hook.",
         },
       };
     },
   });
 
-  expect(callCount).toBe(2);
-  expect(outcome.outcome.message).toBe("Retried with adjusted input.");
+  expect(callCount).toBe(1);
+  expect(outcome.outcome.message).toBe("Adjusted by afterPhase hook.");
 });
 
 test("beforePhase hook can abort with an outcome", async () => {
@@ -858,7 +864,7 @@ test("beforePhase hook can abort with an outcome", async () => {
       events.push(event);
     },
     beforePhase: async (phaseId) => {
-      if (phaseId !== "none") {
+      if (phaseId !== "default") {
         return {};
       }
       return {

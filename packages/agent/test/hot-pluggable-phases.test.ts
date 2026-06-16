@@ -97,7 +97,6 @@ describe("ExtensionAPI", () => {
       filePath: "/test/PHASE.md",
       baseDir: "/test",
       content: "Test content",
-      buildPrompt: () => "Test prompt",
     };
   }
 
@@ -236,7 +235,6 @@ describe("PhaseState", () => {
       filePath: "/phases/review/PHASE.md",
       baseDir: "/phases/review",
       content: "Review content",
-      buildPrompt: () => "Review prompt",
       tools: ["read", "grep"],
       skills: ["code-review"],
     };

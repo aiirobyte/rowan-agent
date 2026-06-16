@@ -20,11 +20,13 @@ export function serializeSkills(skills: AgentContextSkill[]): Array<{
   name: string;
   description: string;
   filePath: string;
+  disableModelInvocation?: boolean;
 }> {
   return skills.map((skill) => ({
     name: skill.name,
     description: skill.description,
     filePath: skill.filePath,
+    disableModelInvocation: skill.disableModelInvocation,
   }));
 }
 
