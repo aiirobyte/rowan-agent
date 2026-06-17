@@ -10,37 +10,42 @@ test("public value exports snapshot", () => {
   expect(exportNames).toContain("createId");
   expect(exportNames).toContain("createTimestamp");
 
-  // Session manager
-  expect(exportNames).toContain("InMemorySessionManager");
+  // Session
   expect(exportNames).toContain("LocalJsonlSessionManager");
-  expect(exportNames).toContain("createSessionHeader");
   expect(exportNames).toContain("createSession");
   expect(exportNames).toContain("appendUserTurn");
 
-  // Tools / context
+  // Tools / skills / env
   expect(exportNames).toContain("createCoreTools");
+  expect(exportNames).toContain("loadSkill");
+  expect(exportNames).toContain("loadSkills");
+  expect(exportNames).toContain("resolveSkillPath");
+  expect(exportNames).toContain("resolveWorkspacePaths");
+  expect(exportNames).toContain("resolveInWorkspace");
+
+  // Prompt / context
   expect(exportNames).toContain("buildSystemPrompt");
   expect(exportNames).toContain("buildModelRequest");
   expect(exportNames).toContain("conversationMessages");
+  expect(exportNames).toContain("latestUserInput");
+  expect(exportNames).toContain("serializeSkills");
 
   // Extensions
   expect(exportNames).toContain("ExtensionRunner");
   expect(exportNames).toContain("HooksManager");
-
-  // Event stream
-  expect(exportNames).toContain("EventStream");
-  expect(exportNames).toContain("AgentEventStream");
+  expect(exportNames).toContain("createExtensionAPI");
+  expect(exportNames).toContain("createExtensionRunner");
+  expect(exportNames).toContain("discoverAndLoadExtensions");
 
   // Snapshot total count (value exports only)
   expect(exportNames).toEqual(expect.arrayContaining([
-    "Agent", "AgentEventStream", "AgentMessageSchema",
-    "EventStream", "ExtensionRunner", "HooksManager", "InMemorySessionManager",
-    "LocalJsonlSessionManager", "SESSION_MANAGER_SCHEMA_VERSION", "SESSION_SCHEMA_VERSION",
+    "Agent", "ExtensionRunner", "HooksManager",
+    "LocalJsonlSessionManager",
     "appendUserTurn", "buildModelRequest", "buildSystemPrompt", "conversationMessages",
-    "createCoreTools", "createId", "createMessage",
-    "createSession", "createSessionHeader", "createSourceInfo", "createTimestamp",
-    "latestUserInput", "loadSkill", "loadSkills", "readSkillContent", "resolveInWorkspace",
+    "createCoreTools", "createExtensionAPI", "createExtensionRunner", "createId", "createMessage",
+    "createSession", "createSourceInfo", "createTimestamp",
+    "discoverAndLoadExtensions",
+    "latestUserInput", "loadSkill", "loadSkills", "resolveInWorkspace",
     "resolveSkillPath", "resolveWorkspacePaths", "serializeSkills",
-    "summarizeSessionManagerRecords",
   ]));
 });

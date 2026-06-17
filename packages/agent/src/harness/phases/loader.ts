@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Phase, PhaseFrontmatter, PhaseRegistry } from "./types";
-import type { AgentContext } from "../../types";
 import type { PhaseOutput } from "../../protocol/context";
+import type { PhaseContext } from "./types";
 import type { PhaseExecution } from "../../loop/execution";
+import type { ExtensionAPI } from "../../extensions/api";
 import {
   loadMarkdown,
   resolveResourcePath,
@@ -50,7 +52,12 @@ export async function loadPhase(
   // Try to load execution code
   const codePath = await discoverPhaseCode(baseDir);
   if (codePath) {
-    phase.run = await loadPhaseCode(codePath);
+    const code = await loadPhaseCode(codePath);
+    if (code.factory) {
+      phase.factory = code.factory;
+    } else if (code.run) {
+      phase.run = code.run;
+    }
   }
 
   return phase;
@@ -135,24 +142,39 @@ async function discoverPhaseCode(baseDir: string): Promise<string | null> {
 
 /**
  * Load phase execution code using jiti.
- * Module must export a run() function.
- * The loaded run function accepts AgentContext and PhaseExecution.
+ * Supports two patterns:
+ * - factory: export default function(api: ExtensionAPI) { ... }
+ * - run: export async function run(context, execution) { ... }
  */
 async function loadPhaseCode(
   codePath: string,
-): Promise<(context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>> {
+): Promise<{ factory?: (api: ExtensionAPI) => Promise<void>; run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> }> {
   const { createJiti } = await import("jiti");
   const jiti = createJiti(import.meta.url, {
     moduleCache: false,
+    alias: jitiAliases(),
   });
 
-  const mod = await jiti.import(codePath, { default: true }) as { run?: unknown };
+  const mod = await jiti.import(codePath, { default: true }) as { default?: unknown; run?: unknown };
 
-  if (typeof mod.run !== "function") {
-    throw new Error(`Phase code at "${codePath}" must export a "run" function.`);
+  // Pattern 1: export default function(api) { ... }
+  if (typeof mod.default === "function") {
+    return { factory: mod.default as (api: ExtensionAPI) => Promise<void> };
   }
 
-  return mod.run as (context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
+  // Pattern 2: export async function run(context, execution) { ... }
+  if (typeof mod.run === "function") {
+    return { run: mod.run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> };
+  }
+
+  throw new Error(`Phase code at "${codePath}" must export a default function or a run() function.`);
+}
+
+function jitiAliases(): Record<string, string> {
+  return {
+    "@rowan-agent/agent": fileURLToPath(new URL("../../index.ts", import.meta.url)),
+    "@rowan-agent/models": fileURLToPath(new URL("../../../models/src/index.ts", import.meta.url)),
+  };
 }
 
 /**

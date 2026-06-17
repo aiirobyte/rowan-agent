@@ -60,17 +60,30 @@ export function conversationMessages(messages: AgentContextMessage[]): LlmMessag
 }
 
 // ---------------------------------------------------------------------------
-// buildModelRequest — builds a complete LlmRequest from PhaseInput
+// buildModelRequest — builds a complete LlmRequest
 // ---------------------------------------------------------------------------
 
+/** Input for building an LLM request — generic, not phase-specific. */
+type ModelRequestInput = {
+  systemPrompt: string;
+  messages: AgentContextMessage[];
+  tools: Array<{ name: string; description: string; parameters: unknown; promptSnippet?: string; promptGuidelines?: string[] }>;
+  skills: AgentContextSkill[];
+  /** Filtered tools for this request (optional, defaults to tools) */
+  toolsFilter?: Array<{ name: string; description: string; parameters: unknown }>;
+  /** Filtered skills for this request (optional, defaults to skills) */
+  skillsFilter?: AgentContextSkill[];
+  promptGuidelines?: string[];
+  appendSystemPrompt?: string;
+};
+
 export function buildModelRequest(
-  input: PhaseInput,
+  input: ModelRequestInput,
   options?: { model?: LlmModelRef },
 ): LlmRequest {
-  // Pass only phase-visible tool and skill metadata to the system prompt.
-  const visibleToolNames = input.phaseTools ? new Set(input.phaseTools.map((tool) => tool.name)) : undefined;
+  const visibleToolNames = input.toolsFilter ? new Set(input.toolsFilter.map((t) => t.name)) : undefined;
   const visibleTools = visibleToolNames
-    ? input.tools.filter((tool) => visibleToolNames.has(tool.name))
+    ? input.tools.filter((t) => visibleToolNames.has(t.name))
     : input.tools;
   const toolMeta = visibleTools.map((t) => ({
     name: t.name,
@@ -82,15 +95,14 @@ export function buildModelRequest(
   let systemText = buildSystemPrompt({
     systemPrompt: input.systemPrompt,
     tools: toolMeta,
-    skills: (input.phaseSkills ?? input.skills).length > 0 ? serializeSkills(input.phaseSkills ?? input.skills) : undefined,
+    skills: (input.skillsFilter ?? input.skills).length > 0 ? serializeSkills(input.skillsFilter ?? input.skills) : undefined,
     promptGuidelines: input.promptGuidelines,
     appendSystemPrompt: input.appendSystemPrompt,
   });
 
   const messages: LlmMessage[] = [...conversationMessages(input.messages)];
 
-  // Use phaseTools (filtered) for LlmRequest.tools
-  const modelTools = (input.phaseTools ?? input.tools).map((t) => ({
+  const modelTools = (input.toolsFilter ?? input.tools).map((t) => ({
     name: t.name,
     description: t.description,
     parameters: t.parameters,

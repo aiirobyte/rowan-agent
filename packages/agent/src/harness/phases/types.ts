@@ -1,7 +1,18 @@
-import type { LlmRequest } from "@rowan-agent/models";
-import type { AgentContext } from "../../types";
-import type { PhaseInput, PhaseOutput } from "../../protocol/context";
+import type { AgentMessage } from "../../types";
+import type { PhaseOutput } from "../../protocol/context";
 import type { PhaseExecution } from "../../loop/execution";
+import type { ExtensionAPI } from "../../extensions/api";
+
+/** Phase execution context — passed to phase run() function */
+export interface PhaseContext {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  currentPhase: string;
+  availablePhases: string[];
+  turnNumber: number;
+  payload?: unknown;
+}
+
 /**
  * Frontmatter properties parsed from PHASE.md
  */
@@ -37,7 +48,6 @@ export interface PhaseConfig {
   baseDir?: string;
   content: string;
   input?: Record<string, string>;
-  buildLlmRequest?: (input: PhaseInput) => LlmRequest;
 }
 
 /**
@@ -66,10 +76,10 @@ export interface Phase {
   baseDir: string;
   /** PHASE.md body content */
   content: string;
-  /** Custom LLM request builder (for extension-registered phases) */
-  buildLlmRequest?: (input: PhaseInput) => LlmRequest;
-  /** Optional execution function */
-  run?: (context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
+  /** ExtensionAPI factory function (default export pattern) */
+  factory?: (api: ExtensionAPI) => Promise<void>;
+  /** Legacy run function */
+  run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 }
 
 /**

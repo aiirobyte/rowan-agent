@@ -3,13 +3,21 @@ import Type from "typebox";
 import {
   buildModelRequest,
 } from "../../../src/harness/context/prompt-builder";
+import type { AgentContextMessage, AgentContextSkill } from "@rowan-agent/models";
 import { createId, createMessage } from "@rowan-agent/agent";
-import type { PhaseInput, Skill, Tool } from "@rowan-agent/agent";
+import type { Skill, Tool } from "@rowan-agent/agent";
 
-function buildRequest(input: {
-  context: PhaseInput;
-}) {
-  return buildModelRequest(input.context);
+type TestInput = {
+  systemPrompt: string;
+  messages: AgentContextMessage[];
+  tools: Array<{ name: string; description: string; parameters: unknown }>;
+  skills: AgentContextSkill[];
+  toolsFilter?: Array<{ name: string; description: string; parameters: unknown }>;
+  skillsFilter?: AgentContextSkill[];
+};
+
+function buildRequest(input: TestInput) {
+  return buildModelRequest(input);
 }
 
 const echoTool: Tool<{ message: string }> = {
@@ -26,17 +34,16 @@ const echoTool: Tool<{ message: string }> = {
   },
 };
 
-function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skills?: PhaseInput["skills"] } = {}): PhaseInput {
+function createTestInput(overrides: Partial<TestInput> & { input?: string } = {}): TestInput {
   const skills = overrides.skills ?? [];
   const tools = overrides.tools ?? [];
   return {
-    phase: overrides.phase ?? "chat",
     systemPrompt: overrides.systemPrompt ?? "Test system",
     messages: [createMessage("user", overrides.input ?? "Use echo.")],
     tools,
     skills,
-    phaseTools: overrides.phaseTools ?? tools,
-    phaseSkills: overrides.phaseSkills ?? skills,
+    toolsFilter: overrides.toolsFilter ?? tools,
+    skillsFilter: overrides.skillsFilter ?? skills,
   };
 }
 
@@ -101,9 +108,9 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
   };
   const input = createTestInput({
     tools: [visibleTool, hiddenTool],
-    phaseTools: [visibleTool],
+    toolsFilter: [visibleTool],
     skills: [visibleSkill, hiddenSkill],
-    phaseSkills: [visibleSkill],
+    skillsFilter: [visibleSkill],
   });
   const req = buildModelRequest(input);
 
@@ -119,8 +126,8 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
 // ---------------------------------------------------------------------------
 
 test("buildRequest returns LlmRequest with correct messages", () => {
-  const input = createTestInput({ phase: "review", input: "Review this code." });
-  const req = buildRequest({ context: input });
+  const input = createTestInput({ input: "Review this code." });
+  const req = buildRequest(input);
 
   expect(req.system).toContain("Test system");
   expect(req.messages.length).toBeGreaterThanOrEqual(1);
@@ -141,14 +148,13 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
     }),
   ];
 
-  const testInput: PhaseInput = {
-    phase: "chat",
+  const testInput: TestInput = {
     systemPrompt: "Test system",
     messages,
     tools: [],
     skills: [],
-    phaseTools: [],
-    phaseSkills: [],
+    toolsFilter: [],
+    skillsFilter: [],
   };
 
   const req = buildModelRequest(testInput);
@@ -179,14 +185,13 @@ test("prompt builder includes execution-scoped tool messages as native tool_resu
     }),
   ];
 
-  const testInput: PhaseInput = {
-    phase: "chat",
+  const testInput: TestInput = {
     systemPrompt: "Test system",
     messages,
     tools: [],
     skills: [],
-    phaseTools: [],
-    phaseSkills: [],
+    toolsFilter: [],
+    skillsFilter: [],
   };
 
   const req = buildModelRequest(testInput);

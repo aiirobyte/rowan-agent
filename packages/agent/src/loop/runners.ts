@@ -7,8 +7,9 @@ import type {
   Tool,
   ToolCall,
   ToolResult,
+  Skill,
 } from "../types";
-import { createMessage, messageContentText } from "../types";
+import { createMessage } from "../types";
 import { createTimestamp } from "../utils";
 import type { SessionState, AgentConfig } from "./types";
 import { resolveThreadLimits } from "./types";
@@ -23,6 +24,8 @@ import type {
 } from "./execution";
 import { invokeModel } from "./stream-collector";
 import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseContext } from "../harness/phases/types";
+import { createExtensionAPI } from "../extensions/api";
 
 // Phase system types
 import type {
@@ -48,11 +51,11 @@ import type { LlmContentPart } from "@rowan-agent/models";
 /** Execute phase run and handle void return by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(
   result: PhaseOutput | void,
-  context: AgentContext,
+  phaseName: string,
 ): PhaseOutput {
   if (result) return result;
   return {
-    message: messageContentText(context.messages.filter(m => m.role === "assistant").pop()?.content ?? ""),
+    message: `${phaseName} phase completed.`,
     route: "stop",
   };
 }
@@ -237,16 +240,10 @@ function createToolResultContent(result: ToolResult): LlmContentPart[] {
   ];
 }
 
-async function invokeModelWithToolLoop(input: {
-  config: AgentConfig;
-  execution: PhaseExecution;
-  messageManager: PhaseMessageManager;
-  basePhaseInput: PhaseInput;
-  phaseId: string;
-  availableTools: Tool[];
-}): Promise<PhaseOutput> {
+async function executePhaseWithModel(ctx: PhaseExecutionContext): Promise<PhaseOutput> {
+  const { config, execution, messageManager, phase, phaseInput, phaseTools, phaseSkills } = ctx;
   const executableToolNames = new Set(
-    input.availableTools
+    phaseTools
       .filter((tool) => tool.name !== PhaseRouteTool)
       .map((tool) => tool.name),
   );
@@ -258,20 +255,20 @@ async function invokeModelWithToolLoop(input: {
 
   while (true) {
     const roundContext: AgentContext = {
-      systemPrompt: input.config.context.systemPrompt,
-      messages: input.messageManager.visible(),
-      tools: input.availableTools,
-      skills: input.basePhaseInput.phaseSkills ?? input.config.context.skills,
+      systemPrompt: config.context.systemPrompt,
+      messages: messageManager.visible(),
+      tools: phaseTools,
+      skills: phaseSkills,
     };
     const roundInput: PhaseInput = {
-      ...input.basePhaseInput,
+      ...phaseInput,
       messages: snapshotMessages(roundContext.messages),
-      tools: input.basePhaseInput.tools,
-      skills: input.basePhaseInput.skills,
-      phaseTools: input.availableTools,
-      phaseSkills: input.basePhaseInput.phaseSkills ?? input.config.context.skills,
+      tools: phaseInput.tools,
+      skills: phaseInput.skills,
+      phaseTools,
+      phaseSkills,
     };
-    const collected = await input.execution.invokeModel(roundContext, { phaseInput: roundInput });
+    const collected = await execution.invokeModel(roundContext, { phaseInput: roundInput });
 
     output = {
       message: collected.text,
@@ -287,11 +284,11 @@ async function invokeModelWithToolLoop(input: {
     }
 
     for (const toolCall of executableToolCalls) {
-      const result = await input.execution.executeTool(roundContext, toolCall);
-      const messageId = input.messageManager.start("tool", createToolResultContent(result), {
-        phase: input.phaseId,
+      const result = await execution.executeTool(roundContext, toolCall);
+      const messageId = messageManager.start("tool", createToolResultContent(result), {
+        phase: phase.id,
       });
-      await input.messageManager.end(messageId);
+      await messageManager.end(messageId);
     }
   }
 }
@@ -505,21 +502,9 @@ async function runPhase(
       }
     }
 
-    // Execute phase — if run is provided, it takes over; otherwise framework calls execution.invokeModel
-    let output: PhaseOutput;
-    if (phase.run) {
-      const result = await phase.run(agentContext, execution);
-      output = resolvePhaseOutput(result, config.context);
-    } else {
-      output = await invokeModelWithToolLoop({
-        config,
-        execution,
-        messageManager,
-        basePhaseInput: phaseInput,
-        phaseId: phase.id,
-        availableTools: phaseTools,
-      });
-    }
+    // Execute phase
+    const execCtx = { phase, config, state, execution, messageManager, registry: freshRegistry, agentContext, currentPhaseId, payload: previousPayload, phaseInput, phaseTools, phaseSkills };
+    let output = await executePhase(execCtx);
 
     // ToolChoice fallback
     if (phaseInput.toolChoice && typeof phaseInput.toolChoice === 'object' && phaseInput.toolChoice.type === 'tool') {
@@ -553,8 +538,8 @@ async function runPhase(
         config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         return completeRun(config, state, extAfter.abort);
       }
-      if (extAfter.retry && phase.run) {
-        output = resolvePhaseOutput(await phase.run(agentContext, execution), config.context);
+      if (extAfter.retry && (phase.run || phase.factory)) {
+        output = await executePhase(execCtx);
         if (output.toolCalls && output.toolCalls.length > 0) {
           const routeDecision = extractRouteCall(output.toolCalls);
           if (routeDecision) {
@@ -695,6 +680,85 @@ async function withRetry<T>(
 // Phase Capabilities
 // ============================================================================
 
+// ============================================================================
+// Phase Execution
+// ============================================================================
+
+/** Context for phase execution — everything needed to run a phase. */
+interface PhaseExecutionContext {
+  phase: Phase;
+  config: AgentConfig;
+  state: SessionState;
+  execution: PhaseExecution;
+  messageManager: PhaseMessageManager;
+  registry: PhaseRegistry;
+  agentContext: AgentContext;
+  currentPhaseId: string;
+  payload: unknown;
+  phaseInput: PhaseInput;
+  phaseTools: Tool[];
+  phaseSkills: Skill[];
+}
+
+/** Execute phase code — factory (ExtensionAPI) or run (PhaseContext) or LLM-driven. */
+async function executePhase(ctx: PhaseExecutionContext): Promise<PhaseOutput> {
+  const { phase, config, state, execution, messageManager, registry, agentContext, currentPhaseId, payload } = ctx;
+
+  if (phase.factory) {
+    const api = createExtensionAPI(undefined, undefined, {
+      registerPhase: () => {},
+      registerProvider: () => {},
+      unregisterProvider: () => {},
+      registerTool: () => {},
+      context: {
+        cwd: process.cwd(),
+        signal: config.signal,
+        isIdle: () => false,
+        abort: () => config.signal?.dispatchEvent(new Event("abort")),
+        exec: async () => ({ exitCode: 1, stdout: "", stderr: "not available in phase context" }),
+        getSystemPrompt: () => config.context.systemPrompt,
+        setSystemPrompt: () => {},
+        getMessages: () => agentContext.messages as Array<{ role: string; content: string }>,
+        addMessage: (role, content) => { config.context.messages.push(createMessage(role, content)); },
+        getAvailableTools: () => config.context.tools.map(t => ({ name: t.name, description: t.description })),
+        getAvailableSkills: () => config.context.skills.map(s => ({ name: s.name, description: s.description })),
+        getPhaseContent: (id) => registry.phases.get(id)?.content ?? "",
+        getAvailablePhases: () => Array.from(registry.phases.keys()),
+      },
+      phase: {
+        systemPrompt: config.context.systemPrompt,
+        messages: messageManager.visible(),
+        currentPhase: currentPhaseId,
+        availablePhases: Array.from(registry.phases.keys()),
+        turnNumber: state.metrics.iterations,
+        payload,
+      },
+      session: config.context,
+    });
+    await phase.factory(api);
+    return {
+      message: api.phase.getMessage() ?? `${phase.name} phase completed.`,
+      route: api.phase.getNextPhase() || "stop",
+      payload: api.phase.getPayload(),
+    };
+  }
+
+  if (phase.run) {
+    const runCtx: PhaseContext = {
+      systemPrompt: config.context.systemPrompt,
+      messages: messageManager.visible(),
+      currentPhase: currentPhaseId,
+      availablePhases: Array.from(registry.phases.keys()),
+      turnNumber: state.metrics.iterations,
+      payload,
+    };
+    return resolvePhaseOutput(await phase.run(runCtx, execution), phase.name);
+  }
+
+  // LLM-driven fallback
+  return executePhaseWithModel(ctx);
+}
+
 async function executeToolCall(input: {
   config: AgentConfig;
   tools: Tool[];
@@ -774,9 +838,16 @@ function createPhaseExecution(
       }
 
       // Build LlmRequest
-      const request = phase.buildLlmRequest
-        ? phase.buildLlmRequest(phaseInput)
-        : buildModelRequest(phaseInput, { model: config.model });
+      const request = buildModelRequest({
+        systemPrompt: phaseInput.systemPrompt,
+        messages: phaseInput.messages,
+        tools: phaseInput.tools,
+        skills: phaseInput.skills,
+        toolsFilter: phaseInput.phaseTools,
+        skillsFilter: phaseInput.phaseSkills,
+        promptGuidelines: phaseInput.promptGuidelines,
+        appendSystemPrompt: phaseInput.appendSystemPrompt,
+      }, { model: config.model });
 
       // Ensure tools are available
       if (!request.tools) {

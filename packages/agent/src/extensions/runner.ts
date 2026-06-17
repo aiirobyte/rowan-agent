@@ -40,12 +40,11 @@ import type {
   HookResultMap,
 } from "./hooks";
 import {
-  createExtensionAPI,
   type ExtensionAPI,
-  type ExtensionContext,
-  type ExtensionManifest,
-  type LoadedExtension,
-} from "./context";
+  createExtensionAPI,
+} from "./api";
+import type { ExtensionContext } from "./context";
+import type { LoadedExtension, ExtensionManifest } from "./types";
 import { createSourceInfo } from "./types";
 import { createEventBus, type EventBus } from "./context";
 
@@ -450,6 +449,8 @@ export class ExtensionRunner {
       tools: def.tools,
       skills: def.skills,
       target: def.target,
+      input: def.input,
+      run: def.run as Phase["run"],
       filePath: "",
       baseDir: "",
       content: "",
