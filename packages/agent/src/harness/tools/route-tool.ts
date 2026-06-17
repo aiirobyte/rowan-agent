@@ -30,11 +30,15 @@ function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' 
 function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[]): string {
   const phasesBlock = buildStructuredSection("phase", [
     ...availablePhases.map(buildPhaseEntry),
-    { id: "stop", description: "End execution and return the result to the user" },
+    { id: "stop", description: "Terminate the workflow and return final result to the user" },
   ]);
 
   return [
-    "Route to the next phase when the current phase is complete.",
+    "Route to next phase or stop execution.",
+    "",
+    "Rules:",
+    "- Always route to exactly one target phase id or 'stop'.",
+    "- 'payload' must be JSON matching target phase input.",
     "",
     "<available_phases>",
     phasesBlock,
@@ -51,22 +55,17 @@ export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'de
   return {
     name: PhaseRouteTool,
     description: buildRouteDescription(availablePhases),
-    promptSnippet: "Signal phase completion and transfer control to the next phase.",
+    promptSnippet: "Route to next phase on completion.",
     promptGuidelines: [
-      "A phase should either complete its own responsibility or transfer control.",
-      "Do not perform work outside the scope of the current phase.",
-      "When another phase is better suited for the next step, transfer control instead of continuing execution.",
-      "When the workflow is complete, route to 'stop'.",
-      "Include a brief reason describing the transition.",
-      "Use the 'payload' field to pass all structured data the next phase needs (e.g. file paths, configuration). Do NOT use free-text fields like 'prompt' — the next phase reads 'payload', not arbitrary fields.",
+      "Call route immediately when the phase is complete.",
     ],
     parameters: Type.Object({
       route: Type.Union([
         ...availablePhases.map(p => Type.Literal(p.id)),
         Type.Literal("stop"),
-      ], { description: "Target phase id, or 'stop' to end" }),
-      reason: Type.Optional(Type.String({ description: "Brief reason for the routing decision" })),
-      payload: Type.Optional(Type.Unknown({ description: "Structured data matching the target phase's required_input. Pass as a JSON object with the fields listed in required_input." })),
+      ], { description: "Target phase id or 'stop' to end" }),
+      reason: Type.Optional(Type.String({ description: "Brief reason for routing decision" })),
+      payload: Type.Optional(Type.Unknown({ description: "Structured input for next phase (must match required schema)" })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution
     execute: async (args, context) => ({
