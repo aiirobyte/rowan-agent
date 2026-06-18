@@ -20,7 +20,7 @@ export function appendUserMessage(context: AgentContext, input: string): AgentCo
     ...context,
     messages: [
       ...context.messages,
-      createMessage("user", input, { scope: "conversation" }),
+      createMessage("user", input),
     ],
   };
 }

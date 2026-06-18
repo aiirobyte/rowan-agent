@@ -48,16 +48,20 @@ import type { LlmContentPart } from "@rowan-agent/models";
 // Phase State Utilities
 // ============================================================================
 
-/** Execute phase run and handle void return by auto-assembling PhaseOutput. */
+/** Execute phase run and handle void/empty-message by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(
   result: PhaseOutput | void,
   phaseName: string,
 ): PhaseOutput {
-  if (result) return result;
-  return {
-    message: `${phaseName} phase completed.`,
-    route: "stop",
-  };
+  const output: PhaseOutput = result
+    ? { ...result }
+    : { message: "", route: "stop" };
+
+  if (!output.message) {
+    output.message = `${phaseName} phase completed.`;
+  }
+
+  return output;
 }
 
 /** Remove a phase's synthetic tool_result message from the conversation by id. */

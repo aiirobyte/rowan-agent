@@ -54,7 +54,7 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
     context: {
       systemPrompt: "Test system",
       messages: [
-        createMessage("user", "hello", { scope: "conversation" }),
+        createMessage("user", "hello"),
       ],
       tools: [echoTool],
       skills: [],
@@ -86,7 +86,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   await runAgentLoop({
     context: {
       systemPrompt: "Test system",
-      messages: [createMessage("user", "hello", { scope: "conversation" })],
+      messages: [createMessage("user", "hello")],
       tools: [echoTool],
       skills: [],
     },

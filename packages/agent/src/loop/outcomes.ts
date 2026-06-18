@@ -86,7 +86,7 @@ export const createOutcome = {
     const toolResults = transcript ? extractToolResults(transcript) : [];
     const outcome: Outcome = {
       id: createId("out"),
-      message: output.message || output.routeReason || toolResults.map(summarizeToolResult).filter(Boolean).join("\n\n") || "Completed.",
+      message: output.message || output.routeReason || "",
     };
     if (toolResults.length > 0) {
       outcome.toolResults = toolResults;

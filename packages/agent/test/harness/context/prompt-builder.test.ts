@@ -135,7 +135,7 @@ test("buildRequest returns LlmRequest with correct messages", () => {
   expect(userMsg?.content).toBe("Review this code.");
 });
 
-test("prompt builder excludes execution-scoped messages from conversation", () => {
+test("prompt builder includes tool and routing messages in conversation", () => {
   const messages = [
     createMessage("user", "Use echo."),
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating.\"}", {
@@ -144,7 +144,6 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
     }),
     createMessage("tool", "{\"ok\":true,\"content\":\"tool evidence\"}", {
       toolName: "echo",
-      scope: "execution",
     }),
   ];
 
@@ -165,23 +164,21 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
   const allContent = req.messages.map(extractText).join("\n");
 
   expect(allContent).toContain("Use echo.");
-  // Execution-scoped tool messages are now included for native tool_call format
+  // Tool messages are included for native tool_call format
   expect(allContent).toContain("tool evidence");
   // Routing decisions are now included (kind filter removed)
   expect(allContent).toContain("Creating.");
 });
 
-test("prompt builder includes execution-scoped tool messages as native tool_result", () => {
+test("prompt builder includes tool messages as native tool_result", () => {
   const messages = [
     createMessage("user", "Use echo."),
     createMessage("assistant", "", {
-      scope: "execution",
       toolCalls: [{ id: "call_1", name: "echo", args: { message: "hello" } }],
     }),
     createMessage("tool", "hello", {
       toolCallId: "call_1",
       toolName: "echo",
-      scope: "execution",
     }),
   ];
 

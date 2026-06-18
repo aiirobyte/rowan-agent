@@ -27,7 +27,7 @@ test("LocalJsonlSessionManager writes append-only JSONL sessions", async () => {
       input: "hello",
       title: "Local session",
     });
-    await manager.appendMessage(createMessage("user", "hello", { scope: "conversation" }));
+    await manager.appendMessage(createMessage("user", "hello"));
     await manager.appendExecutionTurn(executionTurn(manager.getSessionId()));
     await manager.appendOutcome({ id: "out_test", message: "ok" });
 
@@ -62,7 +62,7 @@ test("LocalJsonlSessionManager lists and deletes only JSONL sessions", async () 
       input: "first",
       title: "First",
     });
-    await first.appendMessage(createMessage("user", "first", { scope: "conversation" }));
+    await first.appendMessage(createMessage("user", "first"));
     await Bun.sleep(20);
 
     const second = await LocalJsonlSessionManager.create(sessionsDir, {
@@ -70,7 +70,7 @@ test("LocalJsonlSessionManager lists and deletes only JSONL sessions", async () 
       input: "second",
       title: "Second",
     });
-    await second.appendMessage(createMessage("user", "second", { scope: "conversation" }));
+    await second.appendMessage(createMessage("user", "second"));
 
     const sessions = await LocalJsonlSessionManager.list(sessionsDir);
     expect(sessions.map((session) => session.id)).toEqual([second.getSessionId(), first.getSessionId()]);

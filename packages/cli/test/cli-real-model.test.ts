@@ -346,16 +346,16 @@ test("CLI list returns saved sessions in the current workspace", async () => {
     input: "old hello",
     title: "Older session",
   });
-  await older.appendMessage(createMessage("user", "old hello", { scope: "conversation" }));
-  await older.appendMessage(createMessage("assistant", "Older answer", { scope: "conversation" }));
+  await older.appendMessage(createMessage("user", "old hello"));
+  await older.appendMessage(createMessage("assistant", "Older answer"));
   await Bun.sleep(20);
   const newer = await LocalJsonlSessionManager.create(join(workspace, ".rowan", "sessions"), {
     systemPrompt: "Test system",
     input: "new hello",
     title: "Newer session",
   });
-  await newer.appendMessage(createMessage("user", "new hello", { scope: "conversation" }));
-  await newer.appendMessage(createMessage("assistant", "Newer answer", { scope: "conversation" }));
+  await newer.appendMessage(createMessage("user", "new hello"));
+  await newer.appendMessage(createMessage("assistant", "Newer answer"));
 
   try {
     const result = await runCli(["list"], {

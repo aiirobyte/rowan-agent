@@ -613,7 +613,7 @@ async function promptWithLog(input: {
 
     unsubscribe = input.agent.subscribe(listener);
 
-    const userMessage = createMessage("user", input.prompt, { scope: "conversation" });
+    const userMessage = createMessage("user", input.prompt);
     await sessionManager.appendMessage(userMessage);
     const context = await sessionManager.buildAgentContext({
       tools: input.agent.state.tools,
