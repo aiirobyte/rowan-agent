@@ -158,16 +158,15 @@ async function loadPhaseCode(
   const mod = await jiti.import(codePath, { default: true }) as unknown;
 
   // Pattern 1: export default function(api) { ... }
-  // jiti with { default: true } returns the default export directly,
-  // so mod itself may be the function (not mod.default)
-  const fn = typeof mod === "function" ? mod : typeof (mod as { default?: unknown })?.default === "function" ? (mod as { default: Function }).default : undefined;
-  if (fn) {
+  // jiti with { default: true } may return the function directly
+  const fn = typeof mod === "function" ? mod : (mod as any)?.default;
+  if (typeof fn === "function") {
     return { factory: fn as (api: ExtensionAPI) => Promise<void> };
   }
 
   // Pattern 2: export async function run(context, execution) { ... }
-  if (typeof (mod as { run?: unknown })?.run === "function") {
-    return { run: (mod as { run: Function }).run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> };
+  if (typeof (mod as any)?.run === "function") {
+    return { run: (mod as any).run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> };
   }
 
   throw new Error(`Phase code at "${codePath}" must export a default function or a run() function.`);
