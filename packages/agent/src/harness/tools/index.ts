@@ -8,11 +8,9 @@ import { formatResourceOutput, detectResourceType, type ResourceType } from "../
 import { parseFrontmatter, inferResourceName } from "../loader";
 import { normalizeRelativePath } from "../env/path";
 
-// Re-export route and thread tools
+// Re-export route tool
 export { createRouteTool, extractRouteCall, PhaseRouteTool } from "./route-tool";
 export type { RouteToolArgs } from "./route-tool";
-export { createThreadTool, ThreadTool } from "./thread-tool";
-export type { ThreadToolArgs, SpawnThreadFn } from "./thread-tool";
 
 const DEFAULT_MAX_READ_BYTES = 64_000;
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;

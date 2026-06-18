@@ -71,13 +71,6 @@ export const createOutcome = {
     return { id: createId("out"), message: "Agent run aborted." };
   },
 
-  threadDepthLimit(input: { threadDepth: number; maxThreadDepth: number }): Outcome {
-    return {
-      id: "thread_depth_limit",
-      message: `Thread depth limit exceeded (${input.threadDepth}/${input.maxThreadDepth}).`,
-    };
-  },
-
   error(message: string): Outcome {
     return { id: createId("out"), message };
   },

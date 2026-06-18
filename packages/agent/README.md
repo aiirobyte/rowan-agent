@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Phase-Based Loop** — configurable execution phases (route, thread, plan, execute, verify)
+- **Phase-Based Loop** — configurable execution phases (route, plan, execute, verify)
 - **Event Streaming** — subscribe to typed agent events for logging and UI integration
 - **Tool Registration** — register and execute tools within the agent loop
 - **Session Support** — resume conversations with session IDs
@@ -25,10 +25,9 @@ src/
 ├── utils.ts           # Internal helpers
 └── loop/              # Phase definitions and runners
     ├── phase-config.ts     # Phase configuration types and validation
-    ├── built-in-phases.ts  # Default route/thread/plan/execute/verify phases
+    ├── built-in-phases.ts  # Default route/plan/execute/verify phases
     ├── phases.ts           # Base phase runners
-    ├── routing.ts          # Route scheduling helper
-    └── thread.ts           # Thread execution helper
+    └── routing.ts          # Route scheduling helper
 ```
 
 ### Execution Flow

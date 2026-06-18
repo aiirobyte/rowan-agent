@@ -12,7 +12,6 @@ import type {
 import { createMessage } from "../types";
 import { createTimestamp } from "../utils";
 import type { SessionState, AgentConfig } from "./types";
-import { resolveThreadLimits } from "./types";
 
 // Execution types (loop-level)
 import type {
@@ -34,12 +33,11 @@ import type {
 } from "../harness/phases";
 import { reloadPhases, readPhaseContent } from "../harness/phases";
 
-import { executeRuntimeToolCall } from "../harness/tools";
+import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
 import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessage, snapshotMessages } from "./state";
-import { createRouteTool, extractRouteCall, createThreadTool, PhaseRouteTool } from "../harness/tools";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
 import { jsonToXml } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
@@ -134,43 +132,12 @@ async function completeRun(
 function buildToolsWithRouting(
   config: AgentConfig,
   availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[],
-  runLoop: (input: AgentConfig) => Promise<RunResult>,
 ) {
   const tools = [...config.context.tools];
   if (availablePhases.length > 0) {
     tools.push(createRouteTool(availablePhases));
   }
-  const threadTool = createThreadTool(config.context.tools, config.context.skills, async (input) => {
-    const runtime = resolveThreadLimits(config.limits);
-    const result = await runLoop({
-      context: {
-        systemPrompt: config.context.systemPrompt,
-        messages: [createMessage("user", input.prompt)],
-        tools: input.tools?.slice() ?? config.context.tools.slice(),
-        skills: input.skills?.slice() ?? config.context.skills.slice(),
-      },
-      sessionId: config.sessionId!,
-      model: config.model,
-      stream: config.stream,
-      maxAttempts: config.maxAttempts,
-      limits: {
-        ...config.limits,
-        threadDepth: runtime.threadDepth + 1,
-        maxThreadDepth: runtime.maxThreadDepth,
-      },
-      signal: config.signal,
-      runtime: config.runtime,
-      beforeToolCall: config.beforeToolCall,
-      afterToolCall: config.afterToolCall,
-      beforePhase: config.beforePhase,
-      afterPhase: config.afterPhase,
-      beforePrompt: config.beforePrompt,
-      emit: config.emit,
-      phases: config.phases,
-    });
-    return result;
-  });
-  return [...tools, threadTool];
+  return tools;
 }
 
 function createMessageManager(
@@ -310,7 +277,6 @@ async function runTurn<T>(
 export async function runPhaseLoop(
   config: AgentConfig,
   state: SessionState,
-  runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
   const entryPhaseId = config.phases?.entryPhaseId ?? "default";
 
@@ -339,7 +305,7 @@ export async function runPhaseLoop(
     entryPhaseId,
   };
 
-  return runPhase(config, state, registry, runLoop);
+  return runPhase(config, state, registry);
 }
 
 // ============================================================================
@@ -350,7 +316,6 @@ async function runPhase(
   config: AgentConfig,
   state: SessionState,
   registry: PhaseRegistry,
-  runLoop: (input: AgentConfig) => Promise<RunResult>,
 ): Promise<RunResult> {
   // Hot-reload: re-read phase files from disk before each run
   const freshRegistry = await reloadPhases(registry);
@@ -401,7 +366,7 @@ async function runPhase(
 
     state.currentPhase = currentPhaseId;
 
-    const allTools = buildToolsWithRouting(config, availablePhases, runLoop);
+    const allTools = buildToolsWithRouting(config, availablePhases);
 
     const messageManager = createMessageManager(config.context, config.emit, config.onMessage);
     const toolExecutionManager = createToolExecutionManager(config.emit);
@@ -605,7 +570,6 @@ async function runPhase(
 // Retry Logic
 // ============================================================================
 
-const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 1_000;
 const DEFAULT_MAX_DELAY_MS = 30_000;
@@ -672,10 +636,6 @@ async function withRetry<T>(
   }
   throw lastError;
 }
-
-// ============================================================================
-// Phase Capabilities
-// ============================================================================
 
 // ============================================================================
 // Phase Execution

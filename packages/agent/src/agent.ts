@@ -10,7 +10,6 @@ import type { PhaseInput, PhaseOutput } from "./protocol/context";
 import type {
   AgentMessage,
   LlmModelRef,
-  AgentRunLimits,
   StreamFn,
   BeforeToolCall,
   Tool,
@@ -39,7 +38,6 @@ export type AgentOptions = {
   extensionRunnerRef?: ExtensionRunnerRef;
   sessionId?: string;
   maxAttempts?: number;
-  limits?: AgentRunLimits;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   onMessage?: (message: AgentMessage) => Promise<void>;
@@ -345,7 +343,6 @@ export class Agent {
         model: resolved.model,
         stream: resolved.stream,
         maxAttempts: resolved.maxAttempts,
-        limits: resolved.limits,
         signal,
         beforeToolCall,
         afterToolCall,

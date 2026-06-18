@@ -17,7 +17,6 @@ export type {
   AgentRuntimePort,
   LoopMetrics,
   ToolRunner,
-  AgentRunLimits,
 } from "./loop/types";
 export type { PhaseInput, PhaseOutput } from "./protocol/context";
 

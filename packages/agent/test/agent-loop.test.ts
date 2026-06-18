@@ -107,7 +107,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
   // Phase content is injected as a tool_result, so the last message is not the user message
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
-  // Default loop (no phases) includes user-configured tools plus route and thread tools
+  // Default loop (no phases) includes user-configured tools plus route tool
   expect(request.tools).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ name: "echo", description: echoTool.description }),
@@ -242,55 +242,6 @@ test("runAgentLoop keeps executing tool calls after the old tool round threshold
 
   expect(requestCount).toBe(toolCallCount + 1);
   expect(result.outcome.message).toBe("Finished after nine tool calls.");
-});
-
-test("runAgentLoop rejects nested threads beyond maxThreadDepth", async () => {
-  const session = createContext({
-    systemPrompt: "Test system",
-    input: "delegate once",
-  });
-  let requestCount = 0;
-  const stream: StreamFn = async function* threadDepthStream(request) {
-    requestCount++;
-    const toolResult = request.messages.find((message) =>
-      message.role === "tool" && messageContentText(message.content).includes("thread_depth_limit")
-    );
-    if (!toolResult) {
-      const toolId = createId("call");
-      const toolName = "thread";
-      const toolArgs = JSON.stringify({ prompt: "nested work" });
-      const partial = buildToolCallPartial(toolId, toolName, toolArgs);
-      yield { type: "tool_call_start", id: toolId, name: toolName, partial };
-      yield { type: "tool_call_delta", id: toolId, arguments: toolArgs, partial };
-      yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial };
-      yield { type: "done" };
-      return;
-    }
-
-    const serializedToolResult = JSON.stringify(toolResult.content);
-    expect(serializedToolResult).toContain("thread_depth_limit");
-    expect(serializedToolResult).toContain("Thread depth limit exceeded (1/0).");
-    const text = "Thread depth limit reported.";
-    yield { type: "text_delta", text, partial: buildTestPartial(text) };
-    yield { type: "done" };
-  };
-
-  const result = await runAgentLoop({
-    context: session,
-    model: { provider: "test", name: "thread-depth" },
-    stream,
-    limits: { maxThreadDepth: 0 },
-  });
-
-  expect(requestCount).toBe(2);
-  expect(result.outcome.message).toBe("Thread depth limit reported.");
-  expect(result.outcome.toolResults).toEqual([
-    expect.objectContaining({
-      toolName: "thread",
-      ok: false,
-      error: "Thread depth limit exceeded (1/0).",
-    }),
-  ]);
 });
 
 test("runAgentLoop preserves assistant text with tool calls for the follow-up request", async () => {
