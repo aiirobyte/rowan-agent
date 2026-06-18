@@ -155,16 +155,19 @@ async function loadPhaseCode(
     alias: jitiAliases(),
   });
 
-  const mod = await jiti.import(codePath, { default: true }) as { default?: unknown; run?: unknown };
+  const mod = await jiti.import(codePath, { default: true }) as unknown;
 
   // Pattern 1: export default function(api) { ... }
-  if (typeof mod.default === "function") {
-    return { factory: mod.default as (api: ExtensionAPI) => Promise<void> };
+  // jiti with { default: true } returns the default export directly,
+  // so mod itself may be the function (not mod.default)
+  const fn = typeof mod === "function" ? mod : typeof (mod as { default?: unknown })?.default === "function" ? (mod as { default: Function }).default : undefined;
+  if (fn) {
+    return { factory: fn as (api: ExtensionAPI) => Promise<void> };
   }
 
   // Pattern 2: export async function run(context, execution) { ... }
-  if (typeof mod.run === "function") {
-    return { run: mod.run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> };
+  if (typeof (mod as { run?: unknown })?.run === "function") {
+    return { run: (mod as { run: Function }).run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> };
   }
 
   throw new Error(`Phase code at "${codePath}" must export a default function or a run() function.`);
@@ -173,7 +176,7 @@ async function loadPhaseCode(
 function jitiAliases(): Record<string, string> {
   return {
     "@rowan-agent/agent": fileURLToPath(new URL("../../index.ts", import.meta.url)),
-    "@rowan-agent/models": fileURLToPath(new URL("../../../models/src/index.ts", import.meta.url)),
+    "@rowan-agent/models": fileURLToPath(new URL("../../../../models/src/index.ts", import.meta.url)),
   };
 }
 
