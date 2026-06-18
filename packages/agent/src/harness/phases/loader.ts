@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Phase, PhaseFrontmatter, PhaseRegistry } from "./types";
 import type { PhaseOutput } from "../../protocol/context";
 import type { PhaseContext } from "./types";
@@ -152,7 +151,6 @@ async function loadPhaseCode(
   const { createJiti } = await import("jiti");
   const jiti = createJiti(import.meta.url, {
     moduleCache: false,
-    alias: jitiAliases(),
   });
 
   const mod = await jiti.import(codePath, { default: true }) as unknown;
@@ -172,12 +170,6 @@ async function loadPhaseCode(
   throw new Error(`Phase code at "${codePath}" must export a default function or a run() function.`);
 }
 
-function jitiAliases(): Record<string, string> {
-  return {
-    "@rowan-agent/agent": fileURLToPath(new URL("../../index.ts", import.meta.url)),
-    "@rowan-agent/models": fileURLToPath(new URL("../../../../models/src/index.ts", import.meta.url)),
-  };
-}
 
 /**
  * Re-read all file-based phases from disk and rebuild the registry.
