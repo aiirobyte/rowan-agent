@@ -49,19 +49,10 @@ import type { LlmContentPart } from "@rowan-agent/models";
 // ============================================================================
 
 /** Execute phase run and handle void/empty-message by auto-assembling PhaseOutput. */
-function resolvePhaseOutput(
-  result: PhaseOutput | void,
-  phaseName: string,
-): PhaseOutput {
-  const output: PhaseOutput = result
+function resolvePhaseOutput(result: PhaseOutput | void): PhaseOutput {
+  return result
     ? { ...result }
-    : { message: "", route: "stop" };
-
-  if (!output.message) {
-    output.message = `${phaseName} phase completed.`;
-  }
-
-  return output;
+    : { message: "Phase completed.", route: "stop" };
 }
 
 /** Remove a phase's synthetic tool_result message from the conversation by id. */
@@ -254,6 +245,7 @@ async function executePhaseWithModel(ctx: PhaseExecutionContext): Promise<PhaseO
   let output: PhaseOutput = {
     message: "",
     route: "stop",
+    phase: phase.name,
     toolCalls: [],
   };
 
@@ -277,6 +269,7 @@ async function executePhaseWithModel(ctx: PhaseExecutionContext): Promise<PhaseO
     output = {
       message: collected.text,
       route: "stop",
+      phase: phase.name,
       toolCalls: collected.toolCalls,
     };
 
@@ -590,7 +583,7 @@ async function runPhase(
     const targetPhaseId = nextRoute;
     if (!freshRegistry.phases.has(targetPhaseId)) {
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
-      return completeRun(config, state, createOutcome.phase());
+      return completeRun(config, state, createOutcome.phaseNotFound(output));
     }
 
     state.metrics.phaseTransitions.push({
@@ -743,6 +736,7 @@ async function executePhase(ctx: PhaseExecutionContext): Promise<PhaseOutput> {
     return {
       message: api.phase.getMessage() ?? `${phase.name} phase completed.`,
       route: api.phase.getNextPhase() || "stop",
+      phase: phase.name,
       payload: api.phase.getPayload(),
     };
   }
@@ -756,7 +750,12 @@ async function executePhase(ctx: PhaseExecutionContext): Promise<PhaseOutput> {
       turnNumber: state.metrics.iterations,
       payload,
     };
-    return resolvePhaseOutput(await phase.run(runCtx, execution), phase.name);
+    const output = resolvePhaseOutput(await phase.run(runCtx, execution));
+    output.phase = phase.name;
+    if (output.message === "Phase completed.") {
+      output.message = `${phase.name} phase completed.`;
+    }
+    return output;
   }
 
   // LLM-driven fallback

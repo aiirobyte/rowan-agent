@@ -1,26 +1,8 @@
 import type { Outcome, AgentMessage } from "../types";
+import type { PhaseOutput } from "../protocol/context";
 import { createId } from "../utils";
-import type { LoopResult } from "./errors";
 
 type ExtractedToolResult = NonNullable<Outcome["toolResults"]>[number];
-
-function summarizeToolResult(result: ExtractedToolResult): string {
-  if (typeof result.content === "string") {
-    return result.content;
-  }
-  if (result.content && typeof result.content === "object") {
-    const content = result.content as Record<string, unknown>;
-    const stdout = typeof content.stdout === "string" ? content.stdout : "";
-    const stderr = typeof content.stderr === "string" ? content.stderr : "";
-    const text = [stdout, stderr].filter(Boolean).join("\n").trim();
-    if (text) {
-      return text;
-    }
-  }
-  return result.ok
-    ? `${result.toolName} completed.`
-    : `${result.toolName} failed${result.error ? `: ${result.error}` : "."}`;
-}
 
 function parseToolResult(content: string): ExtractedToolResult | undefined {
   try {
@@ -68,25 +50,16 @@ function extractToolResults(transcript: AgentMessage[]): NonNullable<Outcome["to
 }
 
 export const createOutcome = {
-  fromResult(result: LoopResult): Outcome {
-    if (result.stopReason === "none") {
-      return { id: createId("out"), message: "Completed." };
-    }
-    if (result.stopReason === "aborted") {
-      return createOutcome.aborted();
-    }
-    return createOutcome.error(result.message);
+  phaseNotFound(output: PhaseOutput): Outcome {
+    return { id: createId("out"), message: `Phase "${output.phase ?? "Unknown"}" not found.` };
   },
 
-  phase(): Outcome {
-    return { id: "default", message: "Phase completed." };
-  },
-
-  default(output: { message: string; routeReason?: string }, transcript?: AgentMessage[]): Outcome {
+  default(output: PhaseOutput, transcript?: AgentMessage[]): Outcome {
     const toolResults = transcript ? extractToolResults(transcript) : [];
+    const message = output.message || output.routeReason || `${output.phase ?? "Unknown"} phase completed.`;
     const outcome: Outcome = {
       id: createId("out"),
-      message: output.message || output.routeReason || "",
+      message,
     };
     if (toolResults.length > 0) {
       outcome.toolResults = toolResults;

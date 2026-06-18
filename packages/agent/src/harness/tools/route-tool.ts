@@ -82,7 +82,17 @@ export function extractRouteCall(toolCalls: Array<{ name: string; args: unknown 
   const routeCall = toolCalls.find(t => t.name === PhaseRouteTool);
   if (!routeCall) return undefined;
 
-  const args = routeCall.args as Record<string, unknown>;
+  let args: Record<string, unknown>;
+  if (typeof routeCall.args === "string") {
+    try {
+      args = JSON.parse(routeCall.args);
+    } catch {
+      return undefined;
+    }
+  } else {
+    args = routeCall.args as Record<string, unknown>;
+  }
+
   return {
     route: typeof args.route === "string" ? args.route : "stop",
     reason: typeof args.reason === "string" ? args.reason : undefined,
