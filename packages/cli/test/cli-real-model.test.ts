@@ -273,8 +273,6 @@ test("CLI config reports resolved flags without exposing API key material", asyn
         "test-model",
         "--timeout-ms",
         "1234",
-        "--max-thread-depth",
-        "7",
         "--session",
         "ses_example",
         "--log",
