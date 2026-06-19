@@ -305,21 +305,24 @@ async function runPhaseLoop(
   state: SessionState,
   registry: PhaseRegistry,
 ): Promise<RunResult> {
-  // Hot-reload: re-read phase files from disk before each run
-  const freshRegistry = await reloadPhases(registry);
-
-  let currentPhaseId = freshRegistry.entryPhaseId!;
+  let currentPhaseId = registry.entryPhaseId!;
   let isContinuing = false;
   let previousPayload: unknown = undefined;
   let previousPhaseMsgId: string | undefined = undefined;
 
-  // Build available phases list for route tool
-  const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[] = [];
-  for (const [, phase] of freshRegistry.phases) {
-    availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input });
-  }
-
   while (currentPhaseId) {
+    // Hot-reload: re-read phase files from disk each iteration
+    await reloadPhases(registry);
+    if (config.phases) {
+      config.phases.phases = registry.phases;
+    }
+
+    // Build available phases list for route tool (rebuild each iteration for hot-reload)
+    const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[] = [];
+    for (const [, phase] of registry.phases) {
+      availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input });
+    }
+
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
       return completeRun(config, state, createOutcome.aborted());
@@ -347,9 +350,9 @@ async function runPhaseLoop(
       }
     }
 
-    const phase = freshRegistry.phases.get(currentPhaseId);
+    const phase = registry.phases.get(currentPhaseId);
     if (!phase) {
-      throw new Error(`Phase "${currentPhaseId}" not found in registry`);
+      throw new Error(`Phase "${currentPhaseId}" not found`);
     }
 
     state.currentPhase = currentPhaseId;
@@ -359,7 +362,7 @@ async function runPhaseLoop(
     const messageManager = createMessageManager(config.context, config.emit, config.onMessage);
     const toolExecutionManager = createToolExecutionManager(config.emit);
 
-    const execution = createPhaseExecution(config, state, allTools, phase, messageManager, toolExecutionManager, freshRegistry);
+    const execution = createPhaseExecution(config, state, allTools, phase, messageManager, toolExecutionManager, registry);
 
     // Build PhaseContext for this phase
     // phase-filtered tools/skills; route tool always included
@@ -377,7 +380,7 @@ async function runPhaseLoop(
       skills: phaseSkills,
       state: {
         current: currentPhaseId,
-        available: Array.from(freshRegistry.phases.keys()),
+        available: Array.from(registry.phases.keys()),
         iterations: state.metrics.iterations,
         payload: previousPayload,
       },
@@ -446,7 +449,7 @@ async function runPhaseLoop(
     }
 
     // Execute phase
-    const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: freshRegistry, context: phaseContext };
+    const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext };
     let output = await executePhase(runtime);
 
     // Framework-level route check: extract route from tool calls
@@ -518,7 +521,7 @@ async function runPhaseLoop(
 
     // Validate route target exists
     const targetPhaseId = nextRoute;
-    if (!freshRegistry.phases.has(targetPhaseId)) {
+    if (!registry.phases.has(targetPhaseId)) {
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
       return completeRun(config, state, createOutcome.phaseNotFound(output));
     }

@@ -171,32 +171,26 @@ async function loadPhaseCode(
 
 
 /**
- * Re-read all file-based phases from disk and rebuild the registry.
+ * Re-read all file-based phases from disk and update the registry in place.
  * Extension-registered phases (with empty filePath) are preserved as-is.
  */
 export async function reloadPhases(
   registry: PhaseRegistry,
   workspace?: WorkspacePaths,
-): Promise<PhaseRegistry> {
-  const reloaded = new Map<string, Phase>();
-
+): Promise<void> {
   for (const [id, phase] of registry.phases) {
     // Skip extension-registered phases (no file path)
     if (!phase.filePath) {
-      reloaded.set(id, phase);
       continue;
     }
 
     try {
       const fresh = await loadPhase(phase.filePath, workspace);
-      reloaded.set(id, fresh);
+      registry.phases.set(id, fresh);
     } catch (error) {
       // Keep stale version on error
       console.warn(`Failed to reload phase "${id}":`, error);
-      reloaded.set(id, phase);
     }
   }
-
-  return { phases: reloaded, entryPhaseId: registry.entryPhaseId };
 }
 
