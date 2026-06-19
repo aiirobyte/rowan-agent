@@ -1,5 +1,4 @@
-import type { AgentContextMessage, AgentContextSkill } from "../../protocol";
-import type { PhaseInput } from "../../protocol/context";
+import type { AgentMessage, Skill } from "../../protocol";
 import type { LlmRequest, LlmMessage, LlmModelRef } from "@rowan-agent/models";
 import { buildSystemPrompt } from "./system-prompt";
 import { messageContentText } from "../../types";
@@ -16,7 +15,7 @@ export type SerializableTool = {
 // Internal utilities
 // ---------------------------------------------------------------------------
 
-export function serializeSkills(skills: AgentContextSkill[]): Array<{
+export function serializeSkills(skills: Skill[]): Array<{
   name: string;
   description: string;
   filePath: string;
@@ -30,9 +29,9 @@ export function serializeSkills(skills: AgentContextSkill[]): Array<{
   }));
 }
 
-export function latestUserInput(input: PhaseInput): string {
-  for (let index = input.messages.length - 1; index >= 0; index -= 1) {
-    const message = input.messages[index];
+export function latestUserInput(messages: AgentMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
     if (message.role === "user") {
       return messageContentText(message.content);
     }
@@ -41,7 +40,7 @@ export function latestUserInput(input: PhaseInput): string {
   return "";
 }
 
-export function conversationMessages(messages: AgentContextMessage[]): LlmMessage[] {
+export function conversationMessages(messages: AgentMessage[]): LlmMessage[] {
   return messages.flatMap((message): LlmMessage[] => {
     if (message.role === "user") {
       return [{ role: "user", content: message.content }];
@@ -60,19 +59,24 @@ export function conversationMessages(messages: AgentContextMessage[]): LlmMessag
 }
 
 // ---------------------------------------------------------------------------
-// buildModelRequest — builds a complete LlmRequest from PhaseInput
+// buildModelRequest — builds a complete LlmRequest
 // ---------------------------------------------------------------------------
 
+/** Input for building an LLM request — generic, not phase-specific. */
+type ModelRequestInput = {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  tools: Array<{ name: string; description: string; parameters: unknown; promptSnippet?: string; promptGuidelines?: string[] }>;
+  skills: Skill[];
+  promptGuidelines?: string[];
+  appendSystemPrompt?: string;
+};
+
 export function buildModelRequest(
-  input: PhaseInput,
+  input: ModelRequestInput,
   options?: { model?: LlmModelRef },
 ): LlmRequest {
-  // Pass only phase-visible tool and skill metadata to the system prompt.
-  const visibleToolNames = input.phaseTools ? new Set(input.phaseTools.map((tool) => tool.name)) : undefined;
-  const visibleTools = visibleToolNames
-    ? input.tools.filter((tool) => visibleToolNames.has(tool.name))
-    : input.tools;
-  const toolMeta = visibleTools.map((t) => ({
+  const toolMeta = input.tools.map((t) => ({
     name: t.name,
     description: t.description,
     promptSnippet: t.promptSnippet,
@@ -82,15 +86,14 @@ export function buildModelRequest(
   let systemText = buildSystemPrompt({
     systemPrompt: input.systemPrompt,
     tools: toolMeta,
-    skills: (input.phaseSkills ?? input.skills).length > 0 ? serializeSkills(input.phaseSkills ?? input.skills) : undefined,
+    skills: input.skills.length > 0 ? serializeSkills(input.skills) : undefined,
     promptGuidelines: input.promptGuidelines,
     appendSystemPrompt: input.appendSystemPrompt,
   });
 
   const messages: LlmMessage[] = [...conversationMessages(input.messages)];
 
-  // Use phaseTools (filtered) for LlmRequest.tools
-  const modelTools = (input.phaseTools ?? input.tools).map((t) => ({
+  const modelTools = input.tools.map((t) => ({
     name: t.name,
     description: t.description,
     parameters: t.parameters,

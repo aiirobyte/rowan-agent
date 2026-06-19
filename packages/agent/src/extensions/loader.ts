@@ -9,7 +9,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, resolve } from "node:path";
 import { createJiti } from "jiti";
-import type { ExtensionFactory } from "./context";
+import type { ExtensionFactory } from "./api";
 import type { ExtensionManifest, LoadedExtension, ExtensionPackageManifest } from "./types";
 
 const ROWAN_DIR = ".rowan";

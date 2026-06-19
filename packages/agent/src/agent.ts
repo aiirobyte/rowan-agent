@@ -5,12 +5,10 @@ import { snapshotMessages } from "./loop/state";
 import { loadPhases } from "./harness/phases/loader";
 import { loadSkills, readSkillContent } from "./harness/skills";
 import { resolveWorkspacePaths } from "./harness/env/path";
-import type { PhaseRegistry } from "./harness/phases/types";
-import type { PhaseInput, PhaseOutput } from "./protocol/context";
+import type { PhaseContext, PhaseOutput, PhaseRegistry } from "./harness/phases/types";
 import type {
   AgentMessage,
   LlmModelRef,
-  AgentRunLimits,
   StreamFn,
   BeforeToolCall,
   Tool,
@@ -39,7 +37,6 @@ export type AgentOptions = {
   extensionRunnerRef?: ExtensionRunnerRef;
   sessionId?: string;
   maxAttempts?: number;
-  limits?: AgentRunLimits;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   onMessage?: (message: AgentMessage) => Promise<void>;
@@ -170,7 +167,7 @@ export class Agent {
    * Hook for before_phase — called before a phase executes.
    * Extensions can abort, skip, or replace the phase input.
    */
-  private async handleBeforePhase(phaseId: string, input: PhaseInput): Promise<BeforePhaseHookResult> {
+  private async handleBeforePhase(phaseId: string, input: PhaseContext): Promise<BeforePhaseHookResult> {
     const runner = this.options.extensionRunnerRef?.current;
     if (!runner) return {};
     return runner.emitBeforePhase(phaseId, input);
@@ -187,10 +184,10 @@ export class Agent {
   }
 
   /**
-   * Hook for before_prompt — called before model request, allowing extensions to transform PhaseInput.
-   * Extensions can transform the PhaseInput (messages, tools, systemPrompt, etc.).
+   * Hook for before_prompt — called before model request, allowing extensions to transform PhaseContext.
+   * Extensions can transform the PhaseContext (messages, tools, systemPrompt, etc.).
    */
-  private async handleBeforePrompt(phaseId: string, input: PhaseInput): Promise<PhaseInput> {
+  private async handleBeforePrompt(phaseId: string, input: PhaseContext): Promise<PhaseContext> {
     const runner = this.options.extensionRunnerRef?.current;
     if (!runner) return input;
     return runner.emitBeforePrompt(phaseId, input);
@@ -345,13 +342,12 @@ export class Agent {
         model: resolved.model,
         stream: resolved.stream,
         maxAttempts: resolved.maxAttempts,
-        limits: resolved.limits,
         signal,
         beforeToolCall,
         afterToolCall,
-        beforePhase: (phaseId: string, input: PhaseInput) => this.handleBeforePhase(phaseId, input),
+        beforePhase: (phaseId: string, input: PhaseContext) => this.handleBeforePhase(phaseId, input),
         afterPhase: (phaseId: string, output: PhaseOutput) => this.handleAfterPhase(phaseId, output),
-        beforePrompt: (phaseId: string, input: PhaseInput) => this.handleBeforePrompt(phaseId, input),
+        beforePrompt: (phaseId: string, input: PhaseContext) => this.handleBeforePrompt(phaseId, input),
         phases,
         emit,
         onMessage: resolved.onMessage,

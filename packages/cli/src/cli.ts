@@ -50,7 +50,6 @@ type CliArgs = {
   apiKey?: string;
   model?: string;
   timeoutMs?: number;
-  maxThreadDepth?: number;
   prompt?: string;
 };
 
@@ -155,7 +154,6 @@ Examples:
   bun run rowan --skill example "summarize the example skill"
   bun run rowan --log runs/real.jsonl "list workspace files"
   bun run rowan --log-level debug "inspect full event payloads"
-  bun run rowan --max-thread-depth 6 "delegate deeply"
 
 Commands:
 ${formatCommandHelp()}
@@ -184,7 +182,6 @@ Environment:
   ROWAN_OPENAI_API_KEY   Required unless --api-key is passed
   ROWAN_MODEL            Required unless --model is passed
   ROWAN_OPENAI_TIMEOUT_MS Optional request timeout in milliseconds, defaults to 60000
-  ROWAN_MAX_THREAD_DEPTH Optional maximum nested thread depth, defaults to 4
   ROWAN_LOG_LEVEL        Optional run log detail: debug, info, warn, error, or silent
   ROWAN_RUNTIME          Optional override: source or binary
   ROWAN_WORKSPACE        Optional cwd override
@@ -195,14 +192,6 @@ function parsePositiveInteger(value: string, source: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${source} must be a positive integer.`);
-  }
-  return parsed;
-}
-
-function parseNonNegativeInteger(value: string, source: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error(`${source} must be a non-negative integer.`);
   }
   return parsed;
 }
@@ -327,11 +316,6 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
-    if (next === "--max-thread-depth") {
-      parsed.maxThreadDepth = parseNonNegativeInteger(readOptionValue(args, "--max-thread-depth"), "--max-thread-depth");
-      continue;
-    }
-
     if (next.startsWith("--")) {
       throw new Error(`Unknown option: ${next}`);
     }
@@ -367,13 +351,6 @@ function configuredValue(flagValue: string | undefined, envValue: string | undef
   return nonEmpty(flagValue) ?? nonEmpty(envValue) ?? defaultValue;
 }
 
-function resolveMaxThreadDepth(args: CliArgs): number {
-  const env = process.env as Record<string, string | undefined>;
-  return args.maxThreadDepth ??
-    (env.ROWAN_MAX_THREAD_DEPTH ? parseNonNegativeInteger(env.ROWAN_MAX_THREAD_DEPTH, "ROWAN_MAX_THREAD_DEPTH") : undefined) ??
-    4;
-}
-
 function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<string, unknown> {
   const env = process.env as Record<string, string | undefined>;
   const baseUrl = configuredValue(args.baseUrl, env.ROWAN_OPENAI_BASE_URL, "https://api.openai.com/v1");
@@ -386,7 +363,6 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
   const logPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args);
   const tools = createCoreTools({ root: workspace.cwd });
-  const maxThreadDepth = resolveMaxThreadDepth(args);
 
   return {
     command: "config",
@@ -432,13 +408,6 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
       path: formatWorkspacePathForDisplay(resolveSkillPath(skill, workspace), workspace),
     })),
     tools: tools.map((tool) => tool.name),
-    maxThreadDepth,
-    maxThreadDepthSource:
-      args.maxThreadDepth !== undefined
-        ? "flag"
-        : env.ROWAN_MAX_THREAD_DEPTH
-          ? "env"
-          : "default",
   };
 }
 
@@ -516,9 +485,6 @@ async function createConfiguredAgent(
     context,
     model: { provider: "openai-compatible", name: config.model },
     stream: createOpenAICompletionsStream(config),
-    limits: {
-      maxThreadDepth: resolveMaxThreadDepth(args),
-    },
     phases,
     extensionRunnerRef,
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
@@ -613,7 +579,7 @@ async function promptWithLog(input: {
 
     unsubscribe = input.agent.subscribe(listener);
 
-    const userMessage = createMessage("user", input.prompt, { scope: "conversation" });
+    const userMessage = createMessage("user", input.prompt);
     await sessionManager.appendMessage(userMessage);
     const context = await sessionManager.buildAgentContext({
       tools: input.agent.state.tools,

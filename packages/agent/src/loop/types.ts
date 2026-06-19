@@ -8,30 +8,13 @@ import type {
   ToolResult,
   AgentEventListener,
 } from "../types";
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
-import type { PhaseRegistry } from "../harness/phases/types";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
-export type AgentRunLimits = {
-  /** Current nested thread depth. Root agent runs start at 0. */
-  threadDepth?: number;
-  /** Maximum nested thread depth. Default: 4. */
-  maxThreadDepth?: number;
-};
-
-export const DEFAULT_MAX_THREAD_DEPTH = 4;
-
-export function resolveThreadLimits(limits?: AgentRunLimits): Required<AgentRunLimits> {
-  return {
-    threadDepth: limits?.threadDepth ?? 0,
-    maxThreadDepth: limits?.maxThreadDepth ?? DEFAULT_MAX_THREAD_DEPTH,
-  };
-}
-
-export type BeforePhaseHook = (phaseId: string, input: PhaseInput) => Promise<BeforePhaseHookResult>;
+export type BeforePhaseHook = (phaseId: string, input: PhaseContext) => Promise<BeforePhaseHookResult>;
 export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;
-export type BeforePromptHook = (phaseId: string, input: PhaseInput) => Promise<PhaseInput>;
+export type BeforePromptHook = (phaseId: string, input: PhaseContext) => Promise<PhaseContext>;
 
 export type LoopMetrics = {
   /** Number of phase iterations executed. */
@@ -64,7 +47,6 @@ export type AgentConfig = {
   sessionId?: string;
   model: LlmModelRef;
   stream: StreamFn;
-  limits?: AgentRunLimits;
   signal?: AbortSignal;
   emit?: AgentEventListener;
   phases?: PhaseRegistry;

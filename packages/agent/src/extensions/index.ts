@@ -28,8 +28,11 @@
 // Unified API for extension
 export type {
   ExtensionAPI,
-  ExtensionContext,
   ExtensionFactory,
+} from "./api";
+export { createExtensionAPI } from "./api";
+export type {
+  ExtensionContext,
   ExtensionManifest,
   ExtensionUtils,
   LoadedExtension,
@@ -96,6 +99,8 @@ export type {
   ExecResult,
   ExtensionPackageManifest,
   PhaseRegistration,
+  PhaseRun,
+  PhaseDefinition,
   RegisteredPhase,
   ToolDefinition,
   ToolExecutionResult,

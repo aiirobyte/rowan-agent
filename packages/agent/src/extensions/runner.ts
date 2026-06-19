@@ -31,8 +31,7 @@ import type {
 } from "./types";
 import { createExtension, createExtensionRuntime } from "./types";
 import type { Tool, ToolResult, AgentContext } from "../types";
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
-import type { Phase, PhaseRegistry } from "../harness/phases/types";
+import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import { HooksManager } from "./hooks";
 import type {
   HookEventType,
@@ -40,12 +39,11 @@ import type {
   HookResultMap,
 } from "./hooks";
 import {
-  createExtensionAPI,
   type ExtensionAPI,
-  type ExtensionContext,
-  type ExtensionManifest,
-  type LoadedExtension,
-} from "./context";
+  createExtensionAPI,
+} from "./api";
+import type { ExtensionContext } from "./context";
+import type { LoadedExtension, ExtensionManifest } from "./types";
 import { createSourceInfo } from "./types";
 import { createEventBus, type EventBus } from "./context";
 
@@ -450,6 +448,8 @@ export class ExtensionRunner {
       tools: def.tools,
       skills: def.skills,
       target: def.target,
+      input: def.input,
+      run: def.run as Phase["run"],
       filePath: "",
       baseDir: "",
       content: "",
@@ -508,8 +508,8 @@ export class ExtensionRunner {
 
   async emitBeforePhase(
     phaseId: string,
-    input: PhaseInput,
-  ): Promise<{ abort?: any; skip?: any; input?: PhaseInput }> {
+    input: PhaseContext,
+  ): Promise<{ abort?: any; skip?: any; input?: PhaseContext }> {
     const result = await this.emitHook("before_phase", {
       type: "before_phase",
       phaseId,
@@ -521,7 +521,7 @@ export class ExtensionRunner {
   async emitAfterPhase(
     phaseId: string,
     output: PhaseOutput,
-  ): Promise<{ abort?: any; retry?: PhaseInput; output?: PhaseOutput }> {
+  ): Promise<{ abort?: any; retry?: PhaseContext; output?: PhaseOutput }> {
     const result = await this.emitHook("after_phase", {
       type: "after_phase",
       phaseId,
@@ -532,8 +532,8 @@ export class ExtensionRunner {
 
   async emitBeforePrompt(
     phaseId: string,
-    input: PhaseInput,
-  ): Promise<PhaseInput> {
+    input: PhaseContext,
+  ): Promise<PhaseContext> {
     const result = await this.emitHook("before_prompt", {
       type: "before_prompt",
       phaseId,

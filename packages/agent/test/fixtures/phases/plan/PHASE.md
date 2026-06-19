@@ -1,6 +1,9 @@
 ---
 name: Plan
 description: Analyze the user's request and create a task plan
+input:
+  task: User request or task description
+  context: Additional context or constraints
 ---
 
 You are in the **plan** phase. Your job is to analyze the user's request and create a clear, actionable task plan.

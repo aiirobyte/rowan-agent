@@ -3,13 +3,19 @@ import Type from "typebox";
 import {
   buildModelRequest,
 } from "../../../src/harness/context/prompt-builder";
+import type { AgentMessage } from "@rowan-agent/models";
 import { createId, createMessage } from "@rowan-agent/agent";
-import type { PhaseInput, Skill, Tool } from "@rowan-agent/agent";
+import type { Skill, Tool } from "@rowan-agent/agent";
 
-function buildRequest(input: {
-  context: PhaseInput;
-}) {
-  return buildModelRequest(input.context);
+type TestInput = {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  tools: Array<{ name: string; description: string; parameters: unknown }>;
+  skills: Skill[];
+};
+
+function buildRequest(input: TestInput) {
+  return buildModelRequest(input);
 }
 
 const echoTool: Tool<{ message: string }> = {
@@ -26,17 +32,14 @@ const echoTool: Tool<{ message: string }> = {
   },
 };
 
-function createTestInput(overrides: Partial<PhaseInput> & { input?: string; skills?: PhaseInput["skills"] } = {}): PhaseInput {
+function createTestInput(overrides: Partial<TestInput> & { input?: string } = {}): TestInput {
   const skills = overrides.skills ?? [];
   const tools = overrides.tools ?? [];
   return {
-    phase: overrides.phase ?? "chat",
     systemPrompt: overrides.systemPrompt ?? "Test system",
     messages: [createMessage("user", overrides.input ?? "Use echo.")],
     tools,
     skills,
-    phaseTools: overrides.phaseTools ?? tools,
-    phaseSkills: overrides.phaseSkills ?? skills,
   };
 }
 
@@ -72,18 +75,12 @@ test("buildModelRequest omits tools when empty", () => {
   expect(req.tools).toBeUndefined();
 });
 
-test("buildModelRequest only exposes phase-visible tools and skills", () => {
-  const visibleTool: Tool<{ message: string }> = {
+test("buildModelRequest renders passed tools and skills in output", () => {
+  const tool: Tool<{ message: string }> = {
     ...echoTool,
     promptSnippet: "Visible echo tool.",
   };
-  const hiddenTool: Tool<{ message: string }> = {
-    ...echoTool,
-    name: "hidden",
-    description: "Hidden tool.",
-    promptSnippet: "Hidden tool.",
-  };
-  const visibleSkill: Skill = {
+  const skill: Skill = {
     name: "visible-skill",
     description: "Visible skill.",
     filePath: "/skills/visible/SKILL.md",
@@ -91,27 +88,15 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
     content: "",
     disableModelInvocation: false,
   };
-  const hiddenSkill: Skill = {
-    name: "hidden-skill",
-    description: "Hidden skill.",
-    filePath: "/skills/hidden/SKILL.md",
-    baseDir: "/skills/hidden",
-    content: "",
-    disableModelInvocation: false,
-  };
   const input = createTestInput({
-    tools: [visibleTool, hiddenTool],
-    phaseTools: [visibleTool],
-    skills: [visibleSkill, hiddenSkill],
-    phaseSkills: [visibleSkill],
+    tools: [tool],
+    skills: [skill],
   });
   const req = buildModelRequest(input);
 
-  expect(req.tools?.map((tool) => tool.name)).toEqual(["echo"]);
+  expect(req.tools?.map((t) => t.name)).toEqual(["echo"]);
   expect(req.system).toContain("visible-skill");
-  expect(req.system).not.toContain("hidden-skill");
   expect(req.system).toContain("Visible echo tool.");
-  expect(req.system).not.toContain("Hidden tool.");
 });
 
 // ---------------------------------------------------------------------------
@@ -119,8 +104,8 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
 // ---------------------------------------------------------------------------
 
 test("buildRequest returns LlmRequest with correct messages", () => {
-  const input = createTestInput({ phase: "review", input: "Review this code." });
-  const req = buildRequest({ context: input });
+  const input = createTestInput({ input: "Review this code." });
+  const req = buildRequest(input);
 
   expect(req.system).toContain("Test system");
   expect(req.messages.length).toBeGreaterThanOrEqual(1);
@@ -128,7 +113,7 @@ test("buildRequest returns LlmRequest with correct messages", () => {
   expect(userMsg?.content).toBe("Review this code.");
 });
 
-test("prompt builder excludes execution-scoped messages from conversation", () => {
+test("prompt builder includes tool and routing messages in conversation", () => {
   const messages = [
     createMessage("user", "Use echo."),
     createMessage("assistant", "{\"route\":\"task\",\"message\":\"Creating.\"}", {
@@ -137,18 +122,14 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
     }),
     createMessage("tool", "{\"ok\":true,\"content\":\"tool evidence\"}", {
       toolName: "echo",
-      scope: "execution",
     }),
   ];
 
-  const testInput: PhaseInput = {
-    phase: "chat",
+  const testInput: TestInput = {
     systemPrompt: "Test system",
     messages,
     tools: [],
     skills: [],
-    phaseTools: [],
-    phaseSkills: [],
   };
 
   const req = buildModelRequest(testInput);
@@ -159,34 +140,29 @@ test("prompt builder excludes execution-scoped messages from conversation", () =
   const allContent = req.messages.map(extractText).join("\n");
 
   expect(allContent).toContain("Use echo.");
-  // Execution-scoped tool messages are now included for native tool_call format
+  // Tool messages are included for native tool_call format
   expect(allContent).toContain("tool evidence");
   // Routing decisions are now included (kind filter removed)
   expect(allContent).toContain("Creating.");
 });
 
-test("prompt builder includes execution-scoped tool messages as native tool_result", () => {
+test("prompt builder includes tool messages as native tool_result", () => {
   const messages = [
     createMessage("user", "Use echo."),
     createMessage("assistant", "", {
-      scope: "execution",
       toolCalls: [{ id: "call_1", name: "echo", args: { message: "hello" } }],
     }),
     createMessage("tool", "hello", {
       toolCallId: "call_1",
       toolName: "echo",
-      scope: "execution",
     }),
   ];
 
-  const testInput: PhaseInput = {
-    phase: "chat",
+  const testInput: TestInput = {
     systemPrompt: "Test system",
     messages,
     tools: [],
     skills: [],
-    phaseTools: [],
-    phaseSkills: [],
   };
 
   const req = buildModelRequest(testInput);

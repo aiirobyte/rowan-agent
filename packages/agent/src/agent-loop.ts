@@ -10,8 +10,7 @@ import { LoopGuard } from "./loop/errors";
 import { createOutcome } from "./loop/outcomes";
 import { snapshotMessages } from "./loop/state";
 import type { SessionState, AgentConfig } from "./loop/types";
-import { resolveThreadLimits } from "./loop/types";
-import { runPhaseLoop } from "./loop/runners";
+import { startPhaseLoop } from "./loop/runners";
 
 // ============================================================================
 // Main Loop
@@ -51,12 +50,7 @@ export async function runAgentLoop(input: AgentConfig): Promise<RunResult> {
       return completeRun(config, state, createOutcome.aborted());
     }
 
-    const threadLimits = resolveThreadLimits(config.limits);
-    if (threadLimits.threadDepth > threadLimits.maxThreadDepth) {
-      return completeRun(config, state, createOutcome.threadDepthLimit(threadLimits));
-    }
-
-    return await runPhaseLoop(config, state, runAgentLoop);
+    return await startPhaseLoop(config, state);
   } finally {
     emitEvent({
       type: "agent_end",

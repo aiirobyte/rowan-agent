@@ -13,7 +13,6 @@ function executionTurn(sessionId: string): ExecutionTurn {
     requestedAtMs: 1,
     completedAtMs: 2,
     model: { provider: "test", name: "model" },
-    entries: [{ kind: "assistant_text", text: "internal route output" }],
   };
 }
 
@@ -24,8 +23,8 @@ test("InMemorySessionManager appends entries and rebuilds conversation context",
     skills: [{ name: "skill", description: "Use the skill.", filePath: "SKILL.md", baseDir: ".", content: "", disableModelInvocation: false }],
   });
 
-  await manager.appendMessage(createMessage("user", "hello", { scope: "conversation" }));
-  await manager.appendMessage(createMessage("assistant", "visible answer", { scope: "conversation" }));
+  await manager.appendMessage(createMessage("user", "hello"));
+  await manager.appendMessage(createMessage("assistant", "visible answer"));
   await manager.appendMessage(createMessage("assistant", "hidden phase", { kind: "model_message" }));
   await manager.appendExecutionTurn(executionTurn(manager.getSessionId()));
 
@@ -47,11 +46,11 @@ test("InMemorySessionManager branches by changing the active leaf without deleti
     systemPrompt: "Test system",
     input: "root",
   });
-  const rootMessageId = await manager.appendMessage(createMessage("user", "root", { scope: "conversation" }));
-  await manager.appendMessage(createMessage("assistant", "branch A", { scope: "conversation" }));
+  const rootMessageId = await manager.appendMessage(createMessage("user", "root"));
+  await manager.appendMessage(createMessage("assistant", "branch A"));
 
   await manager.branch(rootMessageId);
-  await manager.appendMessage(createMessage("assistant", "branch B", { scope: "conversation" }));
+  await manager.appendMessage(createMessage("assistant", "branch B"));
 
   const context = await manager.buildAgentContext();
   const entries = await manager.listEntries();

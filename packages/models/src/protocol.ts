@@ -296,7 +296,7 @@ export type ApiStreamFn = (
 // dependency).  The agent package re-exports them for backward compat.
 // ---------------------------------------------------------------------------
 
-export type AgentContextMessage = {
+export type AgentMessage = {
   id: string;
   role: "system" | "user" | "assistant" | "tool";
   content: string | LlmContentPart[];
@@ -306,7 +306,7 @@ export type AgentContextMessage = {
   };
 };
 
-export type AgentContextSkill = {
+export type Skill = {
   name: string;
   description: string;
   /** Absolute path to the SKILL.md file */
@@ -346,24 +346,24 @@ export type ToolResult = {
 
 export type AgentEvent =
   | { type: "agent_start"; sessionId: string; ts: string }
-  | { type: "agent_end"; sessionId: string; messages: AgentContextMessage[]; ts: string }
+  | { type: "agent_end"; sessionId: string; messages: AgentMessage[]; ts: string }
   | {
       type: "turn_start";
-      content: AgentContextMessage[];
+      content: AgentMessage[];
       ts: string;
     }
   | {
       type: "turn_end";
-      content: AgentContextMessage[];
+      content: AgentMessage[];
       outcome?: Outcome;
       ts: string;
     }
   | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage; ts: string }
   | { type: "phase_start"; phase: string; ts: string }
   | { type: "phase_end"; phase: string; ts: string }
-  | { type: "message_start"; message: AgentContextMessage; ts: string }
-  | { type: "message_update"; message: AgentContextMessage; delta: string; ts: string }
-  | { type: "message_end"; message: AgentContextMessage; ts: string }
+  | { type: "message_start"; message: AgentMessage; ts: string }
+  | { type: "message_update"; message: AgentMessage; delta: string; ts: string }
+  | { type: "message_end"; message: AgentMessage; ts: string }
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; ts: string }
   | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; ts: string }
   | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean; ts: string };

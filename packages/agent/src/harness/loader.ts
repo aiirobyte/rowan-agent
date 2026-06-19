@@ -18,19 +18,43 @@ export interface MarkdownLoadResult<T = Record<string, unknown>> {
 
 /**
  * Parse YAML frontmatter from markdown content.
- * Simple parser - handles key: value pairs, arrays in brackets.
+ * Simple parser - handles key: value pairs, arrays in brackets, and single-level nested maps.
  */
 export function parseFrontmatter<T = Record<string, unknown>>(raw: string): FrontmatterResult<T> {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   if (!match) return { frontmatter: {} as T, body: raw };
 
+  const lines = match[1].split("\n");
   const frontmatter: Record<string, unknown> = {};
-  for (const line of match[1].split("\n")) {
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const idx = line.indexOf(":");
     if (idx === -1) continue;
     const key = line.slice(0, idx).trim();
     const value = line.slice(idx + 1).trim();
-    if (key) frontmatter[key] = parseValue(value);
+    if (!key) continue;
+
+    // Empty value → check for single-level nested map
+    if (value === "" && i + 1 < lines.length) {
+      const nested: Record<string, string> = {};
+      while (i + 1 < lines.length) {
+        const next = lines[i + 1];
+        if (!next.startsWith("  ") || next.trim() === "") break;
+        const nIdx = next.indexOf(":");
+        if (nIdx === -1) break;
+        const nKey = next.slice(0, nIdx).trim();
+        const nValue = next.slice(nIdx + 1).trim();
+        nested[nKey] = nValue;
+        i++;
+      }
+      if (Object.keys(nested).length) {
+        frontmatter[key] = nested;
+      }
+      continue;
+    }
+
+    frontmatter[key] = parseValue(value);
   }
 
   return { frontmatter: frontmatter as T, body: raw.slice(match[0].length) };

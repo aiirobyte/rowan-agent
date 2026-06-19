@@ -2,12 +2,11 @@
  * Extension types — simplified for the new hook-based system.
  */
 
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
-import type { AgentContext } from "../types";
 import type { ProviderConfig } from "@rowan-agent/models";
 import type { Outcome } from "../types";
-import type { ExtensionFactory } from "./context";
+import type { ExtensionFactory } from "./api";
 
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
 
@@ -42,7 +41,7 @@ export function createSourceInfo(
 // ---------------------------------------------------------------------------
 
 /** Phase run function type for extensions */
-export type PhaseRun = (context: AgentContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
+export type PhaseRun = (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 
 /** Phase definition shape used by extensions */
 export type PhaseDefinition = {
@@ -53,6 +52,7 @@ export type PhaseDefinition = {
   tools?: string[];
   skills?: string[];
   target?: string;
+  input?: Record<string, string>;
 };
 
 export type PhaseRegistration = Partial<Omit<PhaseDefinition, 'run'>> & {
@@ -197,12 +197,12 @@ export type PendingProviderUnregistration = {
 export type BeforePhaseHookResult = {
   abort?: Outcome;
   skip?: { route: string; message: string };
-  input?: PhaseInput;
+  input?: PhaseContext;
 };
 
 export type AfterPhaseHookResult = {
   abort?: Outcome;
-  retry?: PhaseInput;
+  retry?: PhaseContext;
   output?: PhaseOutput;
 };
 

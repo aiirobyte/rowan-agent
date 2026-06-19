@@ -6,7 +6,7 @@ import type {
 } from "../types";
 import type { LlmContentPart } from "@rowan-agent/models";
 import type { ContentBlock } from "@rowan-agent/models";
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseOutput, PhaseContext } from "../harness/phases/types";
 
 export type { PhaseOutput };
 
@@ -17,16 +17,21 @@ export type ModelInvokeOutput = {
   stopReason?: string;
 };
 
-/** Snapshot of AgentContext for restore */
-export type AgentContextSnapshot = {
-  messagesLength: number;
+/** Snapshot of phase-level context for restore */
+export type PhaseContextSnapshot = {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  currentPhase: string;
+  availablePhases: string[];
+  turnNumber: number;
+  payload?: unknown;
 };
 
-/** Execution capabilities for a phase — operates on AgentContext, not a state container. */
+/** Execution capabilities for a phase — operates on PhaseContext. */
 export type PhaseExecution = {
-  snapshot(context: AgentContext): AgentContextSnapshot;
-  restore(context: AgentContext, snapshot: AgentContextSnapshot): void;
-  invokeModel(context: AgentContext, options?: { maxToolRounds?: number; phaseInput?: PhaseInput }): Promise<ModelInvokeOutput>;
+  snapshot(): PhaseContextSnapshot;
+  restore(snapshot: PhaseContextSnapshot): void;
+  invokeModel(context: PhaseContext): Promise<ModelInvokeOutput>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
 };
 
