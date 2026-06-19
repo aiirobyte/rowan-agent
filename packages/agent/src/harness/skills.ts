@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { AgentContextSkill as Skill } from "../protocol";
+import type { Skill } from "../protocol";
 import { type WorkspacePaths, resolveWorkspacePaths } from "./env/path";
 import {
   loadMarkdown,

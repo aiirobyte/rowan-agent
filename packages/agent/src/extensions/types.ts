@@ -2,9 +2,8 @@
  * Extension types — simplified for the new hook-based system.
  */
 
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
-import type { PhaseContext } from "../harness/phases/types";
 import type { ProviderConfig } from "@rowan-agent/models";
 import type { Outcome } from "../types";
 import type { ExtensionFactory } from "./api";
@@ -198,12 +197,12 @@ export type PendingProviderUnregistration = {
 export type BeforePhaseHookResult = {
   abort?: Outcome;
   skip?: { route: string; message: string };
-  input?: PhaseInput;
+  input?: PhaseContext;
 };
 
 export type AfterPhaseHookResult = {
   abort?: Outcome;
-  retry?: PhaseInput;
+  retry?: PhaseContext;
   output?: PhaseOutput;
 };
 

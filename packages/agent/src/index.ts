@@ -58,12 +58,7 @@ export type {
   Phase,
 } from "./harness/phases/types";
 
-export type {
-  PhaseInput,
-  PhaseOutput,
-} from "./protocol/context";
-
-export type { PhaseContext } from "./harness/phases/types";
+export type { PhaseContext, PhaseState, PhaseOutput } from "./harness/phases/types";
 
 export type {
   PhaseExecution,

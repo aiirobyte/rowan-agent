@@ -74,7 +74,7 @@
  */
 
 import type { Outcome, Tool, ToolResult } from "../types";
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { AgentMessage } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -93,7 +93,7 @@ export interface BeforePhaseEvent {
   /** Phase ID about to execute */
   phaseId: string;
   /** Phase input */
-  input: PhaseInput;
+  input: PhaseContext;
 }
 
 /**
@@ -121,7 +121,7 @@ export interface BeforePromptEvent {
   /** Current phase ID */
   phaseId: string;
   /** Phase input (modifiable) */
-  input: PhaseInput;
+  input: PhaseContext;
 }
 
 /**
@@ -336,7 +336,7 @@ export interface BeforePhaseResult {
   /** Skip current phase */
   skip?: { route: string; message: string };
   /** Replace phase input */
-  input?: PhaseInput;
+  input?: PhaseContext;
 }
 
 /**
@@ -350,7 +350,7 @@ export interface AfterPhaseResult {
   /** Abort agent */
   abort?: Outcome;
   /** Re-execute phase */
-  retry?: PhaseInput;
+  retry?: PhaseContext;
   /** Replace phase output */
   output?: PhaseOutput;
 }
@@ -362,7 +362,7 @@ export interface AfterPhaseResult {
  */
 export interface BeforePromptResult {
   /** Replace phase input */
-  input?: PhaseInput;
+  input?: PhaseContext;
 }
 
 /**

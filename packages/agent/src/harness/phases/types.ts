@@ -1,16 +1,45 @@
-import type { AgentMessage } from "../../types";
-import type { PhaseOutput } from "../../protocol/context";
+import type { AgentMessage } from "@rowan-agent/models";
+import type { Tool, Skill } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
 
-/** Phase execution context — passed to phase run() function */
+/** Unified phase output — model decides routing via route. */
+export type PhaseOutput = {
+  message: string;
+  /** Route to next phase, or "continue" to re-execute current phase, or "stop" to end */
+  route: string;
+  /** Phase name that produced this output */
+  phase?: string;
+  /** Tool calls from the model invocation (used by framework for route extraction) */
+  toolCalls?: Array<{ id: string; name: string; args: unknown }>;
+  /** Route reason extracted from route tool call (for hooks to inspect) */
+  routeReason?: string;
+  /** Structured data from this phase, passed to the next phase */
+  payload?: unknown;
+};
+
+/** Phase machine state — tracks position and inter-phase data */
+export interface PhaseState {
+  current: string;
+  available: string[];
+  iterations: number;
+  payload?: unknown;
+}
+
+/** Everything a phase needs to execute */
 export interface PhaseContext {
   systemPrompt: string;
   messages: AgentMessage[];
-  currentPhase: string;
-  availablePhases: string[];
-  turnNumber: number;
-  payload?: unknown;
+  /** Phase-filtered tools */
+  tools: Tool[];
+  /** Phase-filtered skills */
+  skills: Skill[];
+  /** Phase machine state */
+  state: PhaseState;
+  /** Additional guideline bullets appended to the system prompt */
+  promptGuidelines?: string[];
+  /** Text to append after the system prompt */
+  appendSystemPrompt?: string;
 }
 
 /**
@@ -25,8 +54,6 @@ export interface PhaseFrontmatter {
   tools?: string[];
   /** Restrict available skills */
   skills?: string[];
-  /** Tool choice strategy */
-  "tool-choice"?: string;
   /** Forced next phase id */
   target?: string;
   /** Expected input fields (key → description) */
@@ -42,7 +69,6 @@ export interface PhaseConfig {
   description: string;
   tools?: string[];
   skills?: string[];
-  toolChoice?: string;
   target?: string;
   filePath?: string;
   baseDir?: string;
@@ -64,8 +90,6 @@ export interface Phase {
   tools?: string[];
   /** Restricted skills (undefined = all skills available) */
   skills?: string[];
-  /** Tool choice strategy */
-  toolChoice?: string;
   /** Forced next phase */
   target?: string;
   /** Expected input fields (key → description) */

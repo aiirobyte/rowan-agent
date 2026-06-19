@@ -148,7 +148,7 @@ export function createExtensionAPI(
   const phaseIn = options?.phase;
 
   // Phase state — API holds it, runner reads after execution
-  let outputPayload: unknown = phaseIn?.payload;
+  let outputPayload: unknown = phaseIn?.state?.payload;
   let nextPhase: string | undefined;
   let outputMessage: string | undefined;
 
@@ -194,7 +194,7 @@ export function createExtensionAPI(
       getPayload: () => outputPayload,
       setPayload: (p) => { outputPayload = p; },
       setMessage: (msg) => { outputMessage = msg; },
-      getCurrentPhase: () => phaseIn?.currentPhase ?? "",
+      getCurrentPhase: () => phaseIn?.state?.current ?? "",
       setNextPhase: (id) => { nextPhase = id; },
       getNextPhase: () => nextPhase,
       getMessage: () => outputMessage,

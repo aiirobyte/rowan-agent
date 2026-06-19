@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Phase, PhaseFrontmatter, PhaseRegistry } from "./types";
-import type { PhaseOutput } from "../../protocol/context";
+import type { PhaseOutput } from "./types";
 import type { PhaseContext } from "./types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
@@ -40,7 +40,6 @@ export async function loadPhase(
     description: frontmatter.description ?? "",
     tools: frontmatter.tools,
     skills: frontmatter.skills,
-    toolChoice: frontmatter["tool-choice"],
     target: frontmatter.target,
     input: frontmatter.input,
     filePath: resolved,

@@ -1,5 +1,6 @@
 import Type from "typebox";
-import type { AgentContextMessage } from "../../protocol";
+import type { AgentMessage } from "../../protocol";
+export type { AgentMessage } from "../../protocol";
 import { createId, createTimestamp } from "../../utils";
 export { createId };
 
@@ -21,8 +22,6 @@ export const AgentMessageSchema = Type.Object({
   createdAt: Type.String(),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
-
-export type AgentMessage = AgentContextMessage;
 
 export const SkillSchema = Type.Object({
   name: Type.String(),

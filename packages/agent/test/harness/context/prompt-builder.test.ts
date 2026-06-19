@@ -3,17 +3,15 @@ import Type from "typebox";
 import {
   buildModelRequest,
 } from "../../../src/harness/context/prompt-builder";
-import type { AgentContextMessage, AgentContextSkill } from "@rowan-agent/models";
+import type { AgentMessage } from "@rowan-agent/models";
 import { createId, createMessage } from "@rowan-agent/agent";
 import type { Skill, Tool } from "@rowan-agent/agent";
 
 type TestInput = {
   systemPrompt: string;
-  messages: AgentContextMessage[];
+  messages: AgentMessage[];
   tools: Array<{ name: string; description: string; parameters: unknown }>;
-  skills: AgentContextSkill[];
-  toolsFilter?: Array<{ name: string; description: string; parameters: unknown }>;
-  skillsFilter?: AgentContextSkill[];
+  skills: Skill[];
 };
 
 function buildRequest(input: TestInput) {
@@ -42,8 +40,6 @@ function createTestInput(overrides: Partial<TestInput> & { input?: string } = {}
     messages: [createMessage("user", overrides.input ?? "Use echo.")],
     tools,
     skills,
-    toolsFilter: overrides.toolsFilter ?? tools,
-    skillsFilter: overrides.skillsFilter ?? skills,
   };
 }
 
@@ -79,18 +75,12 @@ test("buildModelRequest omits tools when empty", () => {
   expect(req.tools).toBeUndefined();
 });
 
-test("buildModelRequest only exposes phase-visible tools and skills", () => {
-  const visibleTool: Tool<{ message: string }> = {
+test("buildModelRequest renders passed tools and skills in output", () => {
+  const tool: Tool<{ message: string }> = {
     ...echoTool,
     promptSnippet: "Visible echo tool.",
   };
-  const hiddenTool: Tool<{ message: string }> = {
-    ...echoTool,
-    name: "hidden",
-    description: "Hidden tool.",
-    promptSnippet: "Hidden tool.",
-  };
-  const visibleSkill: Skill = {
+  const skill: Skill = {
     name: "visible-skill",
     description: "Visible skill.",
     filePath: "/skills/visible/SKILL.md",
@@ -98,27 +88,15 @@ test("buildModelRequest only exposes phase-visible tools and skills", () => {
     content: "",
     disableModelInvocation: false,
   };
-  const hiddenSkill: Skill = {
-    name: "hidden-skill",
-    description: "Hidden skill.",
-    filePath: "/skills/hidden/SKILL.md",
-    baseDir: "/skills/hidden",
-    content: "",
-    disableModelInvocation: false,
-  };
   const input = createTestInput({
-    tools: [visibleTool, hiddenTool],
-    toolsFilter: [visibleTool],
-    skills: [visibleSkill, hiddenSkill],
-    skillsFilter: [visibleSkill],
+    tools: [tool],
+    skills: [skill],
   });
   const req = buildModelRequest(input);
 
-  expect(req.tools?.map((tool) => tool.name)).toEqual(["echo"]);
+  expect(req.tools?.map((t) => t.name)).toEqual(["echo"]);
   expect(req.system).toContain("visible-skill");
-  expect(req.system).not.toContain("hidden-skill");
   expect(req.system).toContain("Visible echo tool.");
-  expect(req.system).not.toContain("Hidden tool.");
 });
 
 // ---------------------------------------------------------------------------
@@ -152,8 +130,6 @@ test("prompt builder includes tool and routing messages in conversation", () => 
     messages,
     tools: [],
     skills: [],
-    toolsFilter: [],
-    skillsFilter: [],
   };
 
   const req = buildModelRequest(testInput);
@@ -187,8 +163,6 @@ test("prompt builder includes tool messages as native tool_result", () => {
     messages,
     tools: [],
     skills: [],
-    toolsFilter: [],
-    skillsFilter: [],
   };
 
   const req = buildModelRequest(testInput);

@@ -6,7 +6,7 @@ import type {
 } from "../types";
 import type { LlmContentPart } from "@rowan-agent/models";
 import type { ContentBlock } from "@rowan-agent/models";
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseOutput, PhaseContext } from "../harness/phases/types";
 
 export type { PhaseOutput };
 
@@ -27,11 +27,11 @@ export type PhaseContextSnapshot = {
   payload?: unknown;
 };
 
-/** Execution capabilities for a phase — operates on AgentContext, not a state container. */
+/** Execution capabilities for a phase — operates on PhaseContext. */
 export type PhaseExecution = {
   snapshot(): PhaseContextSnapshot;
   restore(snapshot: PhaseContextSnapshot): void;
-  invokeModel(context: AgentContext, options?: { maxToolRounds?: number; phaseInput?: PhaseInput }): Promise<ModelInvokeOutput>;
+  invokeModel(context: PhaseContext): Promise<ModelInvokeOutput>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
 };
 

@@ -1,8 +1,8 @@
 import Type from "typebox";
 import type { LoopMetrics } from "./loop/types";
 import type {
-  AgentContextMessage,
-  AgentContextSkill,
+  AgentMessage,
+  Skill,
   LlmModelUsage,
   LlmRequest,
   LlmStreamEvent,
@@ -18,9 +18,11 @@ export type {
   LoopMetrics,
   ToolRunner,
 } from "./loop/types";
-export type { PhaseInput, PhaseOutput } from "./protocol/context";
+export type { PhaseContext, PhaseState, PhaseOutput } from "./harness/phases/types";
 
 export type {
+  AgentMessage,
+  Skill,
   LlmModelRef,
   LlmModelUsage,
   LlmRequest,
@@ -33,9 +35,6 @@ export type {
 } from "./protocol";
 
 export type { AgentEvent, AgentEventListener };
-
-export type AgentMessage = AgentContextMessage;
-export type Skill = AgentContextSkill;
 
 export type ToolContext = Pick<AgentContext, "skills"> & { toolCallId: string };
 

@@ -1,5 +1,5 @@
 import type { Outcome, AgentMessage } from "../types";
-import type { PhaseOutput } from "../protocol/context";
+import type { PhaseOutput } from "../harness/phases/types";
 import { createId } from "../utils";
 
 type ExtractedToolResult = NonNullable<Outcome["toolResults"]>[number];

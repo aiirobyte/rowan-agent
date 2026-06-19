@@ -8,14 +8,13 @@ import type {
   ToolResult,
   AgentEventListener,
 } from "../types";
-import type { PhaseInput, PhaseOutput } from "../protocol/context";
+import type { PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
-import type { PhaseRegistry } from "../harness/phases/types";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
-export type BeforePhaseHook = (phaseId: string, input: PhaseInput) => Promise<BeforePhaseHookResult>;
+export type BeforePhaseHook = (phaseId: string, input: PhaseContext) => Promise<BeforePhaseHookResult>;
 export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;
-export type BeforePromptHook = (phaseId: string, input: PhaseInput) => Promise<PhaseInput>;
+export type BeforePromptHook = (phaseId: string, input: PhaseContext) => Promise<PhaseContext>;
 
 export type LoopMetrics = {
   /** Number of phase iterations executed. */
