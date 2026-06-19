@@ -436,7 +436,7 @@ async function runPhaseLoop(
           const content: LlmContentPart[] = [{
             type: "tool_result",
             toolUseId: `phase_${phase.id}`,
-            content: `<phase name="${phase.id}">\n${phaseContent}\n</phase>`,
+            content: `<phase name="${phase.name}">\n${phaseContent}\n</phase>`,
             isError: false,
           }];
           const msgId = messageManager.start("tool", content, { phase: phase.id });
