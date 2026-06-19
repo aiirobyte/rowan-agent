@@ -19,7 +19,7 @@ import type {
   PhaseToolExecutionManager,
   ModelInvokeOutput,
   PhaseExecution,
-  AgentContextSnapshot,
+  PhaseContextSnapshot,
 } from "./execution";
 import { invokeModel } from "./stream-collector";
 import type { PhaseInput, PhaseOutput } from "../protocol/context";
@@ -203,40 +203,32 @@ function createToolResultContent(result: ToolResult): LlmContentPart[] {
 }
 
 async function executePhaseWithModel(ctx: PhaseExecutionContext): Promise<PhaseOutput> {
-  const { config, execution, messageManager, phase, phaseInput, phaseTools, phaseSkills } = ctx;
   const executableToolNames = new Set(
-    phaseTools
+    ctx.phaseTools
       .filter((tool) => tool.name !== PhaseRouteTool)
       .map((tool) => tool.name),
   );
   let output: PhaseOutput = {
     message: "",
     route: "stop",
-    phase: phase.name,
+    phase: ctx.phase.name,
     toolCalls: [],
   };
 
   while (true) {
+    // context.tools = full set; invokeModel's buildPhaseInput filters to phaseTools for the LLM
     const roundContext: AgentContext = {
-      systemPrompt: config.context.systemPrompt,
-      messages: messageManager.visible(),
-      tools: phaseTools,
-      skills: phaseSkills,
+      systemPrompt: ctx.config.context.systemPrompt,
+      messages: ctx.messageManager.visible(),
+      tools: ctx.config.context.tools,
+      skills: ctx.config.context.skills,
     };
-    const roundInput: PhaseInput = {
-      ...phaseInput,
-      messages: snapshotMessages(roundContext.messages),
-      tools: phaseInput.tools,
-      skills: phaseInput.skills,
-      phaseTools,
-      phaseSkills,
-    };
-    const collected = await execution.invokeModel(roundContext, { phaseInput: roundInput });
+    const collected = await ctx.execution.invokeModel(roundContext);
 
     output = {
       message: collected.text,
       route: "stop",
-      phase: phase.name,
+      phase: ctx.phase.name,
       toolCalls: collected.toolCalls,
     };
 
@@ -248,11 +240,11 @@ async function executePhaseWithModel(ctx: PhaseExecutionContext): Promise<PhaseO
     }
 
     for (const toolCall of executableToolCalls) {
-      const result = await execution.executeTool(roundContext, toolCall);
-      const messageId = messageManager.start("tool", createToolResultContent(result), {
-        phase: phase.id,
+      const result = await ctx.execution.executeTool(roundContext, toolCall);
+      const messageId = ctx.messageManager.start("tool", createToolResultContent(result), {
+        phase: ctx.phase.id,
       });
-      await messageManager.end(messageId);
+      await ctx.messageManager.end(messageId);
     }
   }
 }
@@ -274,7 +266,7 @@ async function runTurn<T>(
 // Unified Phase Loop
 // ============================================================================
 
-export async function runPhaseLoop(
+export async function startPhaseLoop(
   config: AgentConfig,
   state: SessionState,
 ): Promise<RunResult> {
@@ -305,14 +297,14 @@ export async function runPhaseLoop(
     entryPhaseId,
   };
 
-  return runPhase(config, state, registry);
+  return runPhaseLoop(config, state, registry);
 }
 
 // ============================================================================
 // Unified Phase Execution
 // ============================================================================
 
-async function runPhase(
+async function runPhaseLoop(
   config: AgentConfig,
   state: SessionState,
   registry: PhaseRegistry,
@@ -371,7 +363,7 @@ async function runPhase(
     const messageManager = createMessageManager(config.context, config.emit, config.onMessage);
     const toolExecutionManager = createToolExecutionManager(config.emit);
 
-    const execution = createPhaseExecution(config, state, allTools, phase, messageManager, toolExecutionManager);
+    const execution = createPhaseExecution(config, state, allTools, phase, messageManager, toolExecutionManager, freshRegistry);
 
     // Build AgentContext for this phase
     const agentContext: AgentContext = {
@@ -759,6 +751,7 @@ function createPhaseExecution(
   phase: Phase,
   messageManager: PhaseMessageManager,
   toolExecutionManager: PhaseToolExecutionManager,
+  registry: PhaseRegistry,
 ): PhaseExecution {
   // Build PhaseInput from AgentContext + phase config
   function buildPhaseInput(context: AgentContext): PhaseInput {
@@ -783,13 +776,22 @@ function createPhaseExecution(
   }
 
   return {
-    snapshot(context: AgentContext): AgentContextSnapshot {
-      return { messagesLength: context.messages.length };
+    snapshot(): PhaseContextSnapshot {
+      return {
+        systemPrompt: config.context.systemPrompt,
+        messages: [...config.context.messages],
+        currentPhase: state.currentPhase ?? "",
+        availablePhases: Array.from(registry.phases.keys()),
+        turnNumber: state.metrics.iterations,
+      };
     },
 
-    restore(context: AgentContext, snapshot: AgentContextSnapshot): void {
-      context.messages.length = snapshot.messagesLength;
-      config.context.messages.length = Math.min(config.context.messages.length, snapshot.messagesLength);
+    restore(snapshot: PhaseContextSnapshot): void {
+      config.context.systemPrompt = snapshot.systemPrompt;
+      config.context.messages.length = 0;
+      config.context.messages.push(...snapshot.messages);
+      state.currentPhase = snapshot.currentPhase;
+      state.metrics.iterations = snapshot.turnNumber;
     },
 
     async invokeModel(context: AgentContext, options?: { phaseInput?: PhaseInput }): Promise<ModelInvokeOutput> {
