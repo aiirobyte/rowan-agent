@@ -42,6 +42,7 @@ export async function loadPhase(
     skills: frontmatter.skills,
     target: frontmatter.target,
     input: frontmatter.input,
+    isolated: frontmatter.isolated,
     filePath: resolved,
     baseDir,
     content: body,

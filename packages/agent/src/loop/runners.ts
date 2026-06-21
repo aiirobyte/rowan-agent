@@ -32,12 +32,13 @@ import type {
 import { reloadPhases, readPhaseContent } from "../harness/phases";
 
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
+import type { RouteToolArgs } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
 import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessage, snapshotMessages } from "./state";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
-import { jsonToXml } from "../harness/context/resource-formatter";
+import { buildPhaseResultMessage } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
 
 // ============================================================================
@@ -68,6 +69,51 @@ function normalizePayload(payload: unknown): unknown {
     }
   }
   return payload;
+}
+
+/** Apply the first decision target's fields to the output. */
+function applyFirstDecision(route: RouteToolArgs, output: PhaseOutput): void {
+  const first = route.decision[0];
+  if (!first) return;
+  output.route = first.phase;
+  if (first.reason) output.routeReason = first.reason;
+  if (first.payload !== undefined) output.payload = normalizePayload(first.payload);
+}
+
+/** Inject phase content as a tool_result message. Returns message id, or undefined on failure. */
+function injectPhaseContent(phase: Phase, payload: unknown, messageManager: PhaseMessageManager): string | undefined {
+  try {
+    const phaseContent = phase.filePath
+      ? readPhaseContent(phase)
+      : (phase.content ?? phase.description ?? "");
+    const content = buildPhaseResultMessage([{ name: phase.name, content: phaseContent, output: payload }], `phase_${phase.id}`);
+    const msgId = messageManager.start("tool", content, { phase: phase.id });
+    messageManager.end(msgId);
+    return msgId;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Build instance IDs for parallel targets.
+ * Unique phases get plain id; duplicates get #1, #2, ...
+ * e.g. ["research", "analyze", "research"] → ["research#1", "analyze", "research#2"]
+ */
+function buildInstanceIds(phases: string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const p of phases) {
+    counts.set(p, (counts.get(p) ?? 0) + 1);
+  }
+  const hasDupes = [...counts.values()].some(c => c > 1);
+  if (!hasDupes) return phases;
+
+  const idx = new Map<string, number>();
+  return phases.map(p => {
+    const n = (idx.get(p) ?? 0) + 1;
+    idx.set(p, n);
+    return `${p}#${n}`;
+  });
 }
 
 // ============================================================================
@@ -129,7 +175,7 @@ async function completeRun(
 
 function buildToolsWithRouting(
   config: AgentConfig,
-  availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[],
+  availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
 ) {
   const tools = [...config.context.tools];
   if (availablePhases.length > 0) {
@@ -318,9 +364,9 @@ async function runPhaseLoop(
     }
 
     // Build available phases list for route tool (rebuild each iteration for hot-reload)
-    const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input'>[] = [];
+    const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[] = [];
     for (const [, phase] of registry.phases) {
-      availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input });
+      availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input, isolated: phase.isolated });
     }
 
     const abortResult = LoopGuard.checkAbort(config.signal);
@@ -422,49 +468,21 @@ async function runPhaseLoop(
 
     // Inject phase content as tool result when entering a new phase
     if (enteringNewPhase) {
-      try {
-        let phaseContent = phase.filePath
-          ? readPhaseContent(phase)
-          : (phase.content ?? phase.description ?? "");
-
-        // Append payload as XML to phase content
-        if (phaseContext.state.payload !== undefined) {
-          phaseContent += `\n\n<phase_input>\n${jsonToXml(phaseContext.state.payload, 1)}\n</phase_input>`;
-        }
-
-        if (phaseContent) {
-          const content: LlmContentPart[] = [{
-            type: "tool_result",
-            toolUseId: `phase_${phase.id}`,
-            content: `<phase name="${phase.name}">\n${phaseContent}\n</phase>`,
-            isError: false,
-          }];
-          const msgId = messageManager.start("tool", content, { phase: phase.id });
-          await messageManager.end(msgId);
-          previousPhaseMsgId = msgId;
-        }
-      } catch {
-        // Phase content formatting failed — continue without content
-      }
+      previousPhaseMsgId = injectPhaseContent(phase, phaseContext.state.payload, messageManager);
     }
 
     // Execute phase
     const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext };
     let output = await executePhase(runtime);
 
-    // Framework-level route check: extract route from tool calls
+    // Extract route from tool calls
     let routeToolCalled = false;
+    let routeDecision: RouteToolArgs | undefined;
     if (output.toolCalls && output.toolCalls.length > 0) {
-      const routeDecision = extractRouteCall(output.toolCalls);
+      routeDecision = extractRouteCall(output.toolCalls);
       if (routeDecision) {
         routeToolCalled = true;
-        output.route = routeDecision.route;
-        if (routeDecision.reason) {
-          output.routeReason = routeDecision.reason;
-        }
-        if (routeDecision.payload !== undefined) {
-          output.payload = normalizePayload(routeDecision.payload);
-        }
+        applyFirstDecision(routeDecision, output);
       }
     }
 
@@ -477,18 +495,8 @@ async function runPhaseLoop(
       }
       if (extAfter.retry && (phase.run || phase.factory)) {
         output = await executePhase(runtime);
-        if (output.toolCalls && output.toolCalls.length > 0) {
-          const routeDecision = extractRouteCall(output.toolCalls);
-          if (routeDecision) {
-            output.route = routeDecision.route;
-            if (routeDecision.reason) {
-              output.routeReason = routeDecision.reason;
-            }
-            if (routeDecision.payload !== undefined) {
-              output.payload = normalizePayload(routeDecision.payload);
-            }
-          }
-        }
+        routeDecision = output.toolCalls ? extractRouteCall(output.toolCalls) : undefined;
+        if (routeDecision) applyFirstDecision(routeDecision, output);
       }
       if (extAfter.output) {
         output = extAfter.output;
@@ -502,6 +510,57 @@ async function runPhaseLoop(
     }
 
     config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+
+    // Parallel dispatch: when route tool returns multiple targets, execute all concurrently.
+    // Each target gets its own PhaseContext (isolated=true → fresh, otherwise fork of current).
+    // After all complete, results are merged and injected into the entry phase's context.
+    if (routeDecision && routeDecision.decision.length > 1) {
+      const contextSnapshot = snapshotMessages(config.context.messages);
+      const parallelTasks = new Map<string, { promise: Promise<ParallelResult>; phaseId: string }>();
+
+      // Build instance IDs: unique phases get plain id, duplicates get #1, #2, ...
+      const instanceIds = buildInstanceIds(routeDecision.decision.map(t => t.phase));
+
+      // Launch all targets concurrently — each as an independent execution
+      for (let i = 0; i < routeDecision.decision.length; i++) {
+        const target = routeDecision.decision[i];
+        const pt = registry.phases.get(target.phase);
+        if (!pt) continue;
+
+        const instanceId = instanceIds[i];
+        // isolated=true → empty context; otherwise fork current messages
+        const context = pt.isolated ? [] : contextSnapshot;
+        const payload = target.payload !== undefined ? normalizePayload(target.payload) : previousPayload;
+
+        const promise = executeParallelPhase(config, state, registry, pt, payload, context, availablePhases);
+        parallelTasks.set(instanceId, { promise, phaseId: target.phase });
+      }
+
+      // Wait for all parallel phases to complete
+      const successfulResults = await waitForBackgroundTasks(parallelTasks);
+
+      // Inject merged results into the entry phase's context as a tool_result message.
+      // The entry phase (next iteration) will see <phase_results> with all outputs.
+      if (successfulResults.length > 0) {
+        const phaseResults = successfulResults.map(r => ({ name: r.phaseId, content: r.content, output: r.payload }));
+        const content = buildPhaseResultMessage(phaseResults, `phase_results`, routeDecision.instruction);
+        const msgId = messageManager.start("tool", content, { phase: "parallel_group" });
+        await messageManager.end(msgId);
+        previousPhaseMsgId = msgId;
+      }
+
+      // Determine entry phase: original phase's target > registry entry > "default".
+      // In parallel mode, the original phase's target field determines where to go after
+      // all parallel phases complete. If "stop", end the run.
+      const entryPhaseId = phase.target ?? registry.entryPhaseId ?? "default";
+      if (entryPhaseId === "stop") {
+        removePhaseMessage(config.context.messages, previousPhaseMsgId);
+        return completeRun(config, state, createOutcome.default(output, config.context.messages));
+      }
+      currentPhaseId = entryPhaseId;
+      previousPayload = undefined; // payloads already injected as message
+      continue;
+    }
 
     // Resolve next phase: target > route > stop
     let nextRoute: string;
@@ -804,4 +863,93 @@ function createPhaseExecution(
       });
     },
   };
+}
+
+// ============================================================================
+// Parallel Phase Execution
+// ============================================================================
+
+type ParallelResult = {
+  phaseId: string;
+  payload: unknown;
+  content: string;
+};
+
+
+async function executeParallelPhase(
+  config: AgentConfig,
+  state: SessionState,
+  registry: PhaseRegistry,
+  phase: Phase,
+  parentPayload: unknown,
+  context: AgentMessage[],
+  availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
+): Promise<ParallelResult> {
+  const messages = [...context];
+
+  const allTools = buildToolsWithRouting(config, availablePhases);
+  const phaseTools = phase.tools
+    ? allTools.filter(t => t.name === PhaseRouteTool || phase.tools!.includes(t.name))
+    : allTools;
+  const phaseSkills = phase.skills
+    ? config.context.skills.filter(s => phase.skills!.includes(s.name))
+    : config.context.skills;
+
+  // isolated=true: fresh systemPrompt from phase content, no prior messages
+  // isolated=false (forked): use main systemPrompt, inject phase content as message (same as serial)
+  const systemPrompt = phase.isolated
+    ? readPhaseContent(phase)
+    : config.context.systemPrompt;
+
+  const phaseContext: PhaseContext = {
+    systemPrompt,
+    messages,
+    tools: phaseTools,
+    skills: phaseSkills,
+    state: {
+      current: phase.id,
+      available: Array.from(registry.phases.keys()),
+      iterations: 0,
+      payload: parentPayload,
+    },
+  };
+
+  const messageManager = createMessageManager({ messages } as AgentContext, config.emit, config.onMessage);
+
+  // For forked (non-isolated) phases: inject phase content as message, same as serial path
+  // For forked (non-isolated) phases: inject phase content as message, same as serial path
+  const phaseMsgId = phase.isolated ? undefined : injectPhaseContent(phase, parentPayload, messageManager);
+
+  const toolExecutionManager = createToolExecutionManager(config.emit);
+  const execution = createPhaseExecution(config, state, phaseTools, phase, messageManager, toolExecutionManager, registry);
+
+  const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry, context: phaseContext };
+  const output = await executePhase(runtime);
+
+  // Clean up injected phase message
+  if (phaseMsgId) removePhaseMessage(messages, phaseMsgId);
+
+  // Extract payload from route tool call if present, fallback to output.payload
+  const decision = output.toolCalls ? extractRouteCall(output.toolCalls) : undefined;
+  const payload = (decision?.decision[0]?.payload !== undefined
+    ? normalizePayload(decision.decision[0].payload)
+    : output.payload);
+
+  return { phaseId: phase.id, payload, content: output.message };
+}
+
+async function waitForBackgroundTasks(
+  backgroundTasks: Map<string, { promise: Promise<ParallelResult>; phaseId: string }>,
+): Promise<ParallelResult[]> {
+  const entries = Array.from(backgroundTasks.entries());
+  const results = await Promise.allSettled(entries.map(([, t]) => t.promise));
+  const successful: ParallelResult[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "fulfilled") {
+      successful.push(r.value);
+    }
+  }
+  backgroundTasks.clear();
+  return successful;
 }
