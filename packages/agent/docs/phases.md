@@ -166,8 +166,8 @@ isolated: true               # Fresh context when executed in parallel
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | No | Display name. Defaults to directory name |
-| `description` | string | No | One-line description shown in route tool |
+| `name` | string | Yes | Display name |
+| `description` | string | Yes | One-line description shown in route tool |
 | `tools` | string[] | No | Tool names allowed in this phase. `undefined` = all tools |
 | `skills` | string[] | No | Skill names available. `undefined` = all skills |
 | `target` | string | No | Forced next phase ID. Overrides route tool |

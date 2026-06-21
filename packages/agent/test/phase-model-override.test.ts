@@ -35,6 +35,8 @@ test("PhaseFrontmatter model is optional", () => {
 
 test("PhaseFrontmatter model parses bare id as wildcard", () => {
   const fm: PhaseFrontmatter = {
+    name: "test",
+    description: "test phase",
     model: "gpt-4.1-mini",
   };
   const ref = parseModelRef(fm.model);

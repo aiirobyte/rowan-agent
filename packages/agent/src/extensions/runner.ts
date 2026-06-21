@@ -752,6 +752,12 @@ export class ExtensionRunner {
     if (!registration.id) {
       throw new Error(`Phase registration requires an "id" field.`);
     }
+    if (!registration.name) {
+      throw new Error(`Phase registration "${registration.id}" requires a "name" field.`);
+    }
+    if (!registration.description) {
+      throw new Error(`Phase registration "${registration.id}" requires a "description" field.`);
+    }
 
     if (this.phases.has(registration.id)) {
       throw new Error(`Duplicate phase id: ${registration.id}`);
@@ -759,8 +765,8 @@ export class ExtensionRunner {
 
     const definition: PhaseDefinition = {
       id: registration.id,
-      name: registration.name ?? registration.id,
-      description: registration.description ?? "",
+      name: registration.name,
+      description: registration.description,
       run: registration.run,
       ...(registration.model ? { model: registration.model } : {}),
     };

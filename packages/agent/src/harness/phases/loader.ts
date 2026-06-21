@@ -34,11 +34,20 @@ export async function loadPhase(
   const resolved = resolveResourcePath(input, PHASE_DIR, PHASE_MARKER, workspace);
   const { frontmatter, body } = await loadMarkdown<PhaseFrontmatter>(resolved);
 
+  const id = inferResourceName(resolved, PHASE_MARKER);
+
+  if (!frontmatter.name) {
+    throw new Error(`Phase "${id}" at "${resolved}" is missing required field "name" in PHASE.md frontmatter.`);
+  }
+  if (!frontmatter.description) {
+    throw new Error(`Phase "${id}" at "${resolved}" is missing required field "description" in PHASE.md frontmatter.`);
+  }
+
   const baseDir = dirname(resolved);
   const phase: Phase = {
-    id: inferResourceName(resolved, PHASE_MARKER),
-    name: frontmatter.name ?? inferResourceName(resolved, PHASE_MARKER),
-    description: frontmatter.description ?? "",
+    id,
+    name: frontmatter.name,
+    description: frontmatter.description,
     tools: frontmatter.tools,
     skills: frontmatter.skills,
     target: frontmatter.target,
@@ -91,8 +100,12 @@ export async function loadPhases(
   if (paths && paths.length > 0) {
     // Load from explicit paths
     for (const path of paths) {
-      const phase = await loadPhase(path, workspace);
-      phases.set(phase.id, phase);
+      try {
+        const phase = await loadPhase(path, workspace);
+        phases.set(phase.id, phase);
+      } catch (error) {
+        console.warn(`Failed to load phase "${path}":`, error);
+      }
     }
     return { phases, entryPhaseId: null };
   }

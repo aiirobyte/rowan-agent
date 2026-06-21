@@ -46,10 +46,10 @@ export interface PhaseContext {
  * Frontmatter properties parsed from PHASE.md
  */
 export interface PhaseFrontmatter {
-  /** Display name, defaults to id */
-  name?: string;
-  /** Phase description */
-  description?: string;
+  /** Display name */
+  name: string;
+  /** Phase description (shown in route tool) */
+  description: string;
   /** Restrict available tools */
   tools?: string[];
   /** Restrict available skills */
