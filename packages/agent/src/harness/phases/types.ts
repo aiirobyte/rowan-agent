@@ -58,6 +58,8 @@ export interface PhaseFrontmatter {
   target?: string;
   /** Expected input fields (key → description) */
   input?: Record<string, string>;
+  /** If true, phase gets a fresh context (empty messages) when executed in parallel */
+  isolated?: boolean;
 }
 
 /**
@@ -94,6 +96,8 @@ export interface Phase {
   target?: string;
   /** Expected input fields (key → description) */
   input?: Record<string, string>;
+  /** If true, phase gets a fresh context when executed in parallel */
+  isolated?: boolean;
   /** Path to PHASE.md file */
   filePath: string;
   /** Phase directory path */

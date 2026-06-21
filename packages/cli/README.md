@@ -1,123 +1,133 @@
 # @rowan-agent/cli
 
-## Overview
-
-`@rowan-agent/cli` provides the `rowan` command-line interface for running Rowan agents from the terminal. It supports one-shot prompts, interactive multi-turn sessions, session resume, skill loading, and run logging.
-
-## Features
-
-- **One-Shot Prompts** — run a single prompt and exit
-- **Interactive Mode** — continue with stdin/TTY input after the initial prompt
-- **Session Management** — resume previous sessions with `--session`
-- **Skill System** — load custom skills with `--skill`
-- **Run Logging** — automatic JSONL logs with configurable verbosity
-- **Configuration** — inspect resolved config with `rowan config`
-
-## Architecture
-
-```
-src/
-├── cli.ts     # Command implementation, arg parsing, agent setup
-├── output.ts  # JSON formatting for outcomes
-└── index.ts   # Package entry point
-```
-
-### Composition
-
-The CLI integrates these packages:
-
-| Package | Role |
-|---------|------|
-| `@rowan-agent/models` | Model configuration and streaming |
-| `@rowan-agent/agent` | Core agent runtime |
-| `@rowan-agent/logging` | Event logging (file + stderr) |
+Command-line interface for Rowan Agent. Supports one-shot prompts, interactive multi-turn sessions, session management, skill loading, extension discovery, and JSONL run logging.
 
 ## Setup
 
 ```bash
-# From the repository root
 bun install
-
-# Configure environment
 cp .env.example .env
 # Set ROWAN_OPENAI_API_KEY and ROWAN_MODEL in .env
 ```
 
 ## Usage
 
-### One-Shot Prompt
-
 ```bash
+# One-shot prompt
 bun run rowan "what files are in this directory?"
-```
 
-### Interactive Session
-
-```bash
+# Interactive session (continues on stdin, :exit to quit)
 bun run rowan "hello"
-# Continues reading from stdin after initial response
-```
 
-### Resume a Session
-
-```bash
+# Resume a session
 bun run rowan --session ses_12345678 "continue the previous topic"
-```
 
-### Load a Skill
+# Load skills
+bun run rowan --skill code-review --skill test-gen "review and test this code"
 
-```bash
-bun run rowan --skill example "summarize what this skill does"
-```
+# Override model
+bun run rowan --model gpt-4o "use a different model"
 
-### Inspect Configuration
+# Debug logging
+bun run rowan --log-level debug "show full event payloads"
 
-```bash
+# Inspect resolved config (secrets redacted)
 bun run rowan config
-```
 
-### List Saved Sessions
-
-```bash
+# List saved sessions
 bun run rowan list
-```
-
-### Debug Logging
-
-```bash
-bun run rowan --log-level debug "show me all the details"
 ```
 
 ## CLI Options
 
-| Option | Description |
-|--------|-------------|
-| `--session <id>` | Resume a previous session |
-| `--skill <id>` | Load a skill from `<workspace>/skills/<id>/SKILL.md` |
-| `--log <path>` | Custom log file path (relative to workspace) |
-| `--log-level <level>` | Set verbosity: `debug`, `info`, `warn`, `error`, `silent` |
+| Option | Description | Env Fallback | Default |
+|--------|-------------|--------------|---------|
+| `--session <id>` | Resume a previous session | — | — |
+| `--skill <name>` | Load a skill (repeatable) | — | — |
+| `--log <path>` | Custom log file path (relative to `.rowan/`) | — | Auto-generated |
+| `--log-level <level>` | `debug`, `info`, `warn`, `error`, `silent` | `ROWAN_LOG_LEVEL` | `info` |
+| `--model <name>` | Model name | `ROWAN_MODEL` | — |
+| `--base-url <url>` | API base URL | `ROWAN_OPENAI_BASE_URL` | `https://api.openai.com/v1` |
+| `--api-key <key>` | API key | `ROWAN_OPENAI_API_KEY` | — |
+| `--timeout-ms <ms>` | Request timeout in milliseconds | `ROWAN_OPENAI_TIMEOUT_MS` | `60000` |
+| `--help`, `-h` | Print help and exit | — | — |
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `rowan config` | Print resolved configuration (redacted) |
-| `rowan list` | List saved session metadata |
+| `rowan config` | Print resolved configuration as JSON (secrets redacted) |
+| `rowan list` | List all saved sessions |
+
+When no command is given, positional arguments are joined as the prompt.
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ROWAN_OPENAI_API_KEY` | API key (required unless `--api-key`) | — |
+| `ROWAN_MODEL` | Model name (required unless `--model`) | — |
+| `ROWAN_OPENAI_BASE_URL` | OpenAI-compatible base URL | `https://api.openai.com/v1` |
+| `ROWAN_OPENAI_TIMEOUT_MS` | Request timeout in ms | `60000` |
+| `ROWAN_LOG_LEVEL` | Run log detail level | `info` |
+| `ROWAN_RUNTIME` | Runtime override (`source` or `binary`) | Auto-detected |
+| `ROWAN_WORKSPACE` | Override current working directory | `cwd` |
 
 ## Interactive Controls
 
 | Control | Action |
 |---------|--------|
-| `:session` | Show current session ID |
-| `:exit` | Exit the CLI |
-| `:quit` | Exit the CLI |
+| `:session` | Print current session ID |
+| `:exit` / `:quit` | Exit the CLI |
 
 ## Output Behavior
 
-- **stdout** — reserved for final command results (JSON)
-- **stderr** — runtime events and metadata
-- **Logs** — JSONL files under `<workspace>/runs/`
+- **stdout** — assistant text (streamed as it arrives), `config`/`list` JSON output, `:session` ID
+- **stderr** — session/message IDs, log path, tool execution status, loop metrics, errors
+
+Tool execution is shown on stderr: `⚙ read { path: "..." }` when started, `✓ read` / `✗ bash` when completed.
+
+## Run Logs & Sessions
+
+- Logs auto-generated at `.rowan/runs/<timestamp>-<session-id>.jsonl`
+- Sessions saved to `.rowan/sessions/<session-id>.jsonl`
+- `--log` overrides log path; `--session` resumes a session; `rowan list` lists all sessions
+
+## How It Wires Together
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│  models   │◄────│   cli    │────►│  logging │
+│ (stream)  │     │ (wiring) │     │ (JSONL)  │
+└──────────┘     └────┬─────┘     └──────────┘
+                      │
+                      ▼
+                ┌──────────┐
+                │   agent   │
+                │  (loop)   │
+                └──────────┘
+```
+
+1. Parse args → resolve workspace, load skills, create core tools
+2. Optionally resume session via `LocalJsonlSessionManager`
+3. Discover and load extensions from `.rowan/extensions`
+4. Create `Agent` with OpenAI completions stream
+5. Stream assistant text to stdout, tool status to stderr
+6. Write JSONL run logs via `pinoAgentEventLogger`
+7. In interactive mode, loop on stdin input
+
+## Output Formatting (Programmatic)
+
+```ts
+import {
+  formatJsonOutput,
+  formatToolArgsPreview,
+  formatToolResultOutput,
+  formatMessageContent,
+  formatOutcomeOutput,
+} from "@rowan-agent/cli";
+```
 
 ## Version
 
-Current version: **0.4.4**
+Current version: **0.4.6**

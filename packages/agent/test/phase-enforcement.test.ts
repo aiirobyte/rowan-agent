@@ -44,7 +44,7 @@ function createContext(input: { systemPrompt: string; input: string; tools?: Too
 /** Yield events for a route tool call */
 function* yieldRouteToolCall(route: string, reason?: string): Generator<any> {
   const toolId = createId("route");
-  const toolArgs = JSON.stringify({ route, reason });
+  const toolArgs = JSON.stringify({ decision: [{ phase: route, reason }], instruction: undefined });
   const partial: AssistantMessagePartial = {
     role: "assistant",
     contentBlocks: [

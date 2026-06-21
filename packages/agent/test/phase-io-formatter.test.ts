@@ -52,10 +52,11 @@ function* yieldTextAndRoute(text: string, route: string, reason?: string, payloa
 
 /** Yield events for a route tool call with payload */
 function* yieldRouteToolCallWithPayload(route: string, reason: string, text: string, payload?: unknown): Generator<any> {
-  const args: Record<string, unknown> = { route, reason };
+  const target: Record<string, unknown> = { phase: route, reason };
   if (payload !== undefined) {
-    args.payload = payload;
+    target.payload = payload;
   }
+  const args = { decision: [target], instruction: undefined };
   const argsJson = JSON.stringify(args);
   const toolId = "route_1";
   const contentBlocks: any[] = [];
@@ -79,38 +80,38 @@ function* yieldRouteToolCallWithPayload(route: string, reason: string, text: str
 describe("Route tool payload", () => {
   test("extractRouteCall extracts payload from tool calls", () => {
     const toolCalls = [
-      { name: "route", args: { route: "verify", reason: "done", payload: { items: ["a", "b"], count: 2 } } },
+      { name: "route", args: { decision: [{ phase: "verify", reason: "done", payload: { items: ["a", "b"], count: 2 } }] } },
     ];
     const result = extractRouteCall(toolCalls);
     expect(result).toBeDefined();
-    expect(result!.route).toBe("verify");
-    expect(result!.payload).toEqual({ items: ["a", "b"], count: 2 });
+    expect(result!.decision[0].phase).toBe("verify");
+    expect(result!.decision[0].payload).toEqual({ items: ["a", "b"], count: 2 });
   });
 
   test("extractRouteCall returns undefined payload when not provided", () => {
     const toolCalls = [
-      { name: "route", args: { route: "stop", reason: "done" } },
+      { name: "route", args: { decision: [{ phase: "stop", reason: "done" }] } },
     ];
     const result = extractRouteCall(toolCalls);
     expect(result).toBeDefined();
-    expect(result!.route).toBe("stop");
-    expect(result!.payload).toBeUndefined();
+    expect(result!.decision[0].phase).toBe("stop");
+    expect(result!.decision[0].payload).toBeUndefined();
   });
 
   test("extractRouteCall handles array payload", () => {
     const toolCalls = [
-      { name: "route", args: { route: "next", payload: ["x", "y"] } },
+      { name: "route", args: { decision: [{ phase: "next", payload: ["x", "y"] }] } },
     ];
     const result = extractRouteCall(toolCalls);
-    expect(result!.payload).toEqual(["x", "y"]);
+    expect(result!.decision[0].payload).toEqual(["x", "y"]);
   });
 
   test("extractRouteCall handles primitive payload", () => {
     const toolCalls = [
-      { name: "route", args: { route: "next", payload: "hello" } },
+      { name: "route", args: { decision: [{ phase: "next", payload: "hello" }] } },
     ];
     const result = extractRouteCall(toolCalls);
-    expect(result!.payload).toBe("hello");
+    expect(result!.decision[0].payload).toBe("hello");
   });
 });
 
@@ -252,9 +253,9 @@ describe("Phase payload flow", () => {
 
     // The second request (verify phase) should have the payload in its messages
     expect(requestCount).toBe(2);
-    const verifyMessages = messages.filter(m => m.includes("phase_input"));
+    const verifyMessages = messages.filter(m => m.includes("<output>"));
     expect(verifyMessages.length).toBeGreaterThanOrEqual(1);
-    // Check that the payload content is present (jsonToXml converts to XML elements)
+    // Check that the payload content is present (XML format)
     expect(verifyMessages.some(m => m.includes("<result>ok</result>"))).toBe(true);
   });
 
@@ -351,7 +352,7 @@ describe("Phase payload flow", () => {
 
     // The second request (verify phase) should have the payload in its messages
     expect(requestCount).toBe(2);
-    const verifyMessages = messages.filter(m => m.includes("phase_input"));
+    const verifyMessages = messages.filter(m => m.includes("<output>"));
     expect(verifyMessages.length).toBeGreaterThanOrEqual(1);
     // Check that the string payload was parsed and converted to XML elements
     expect(verifyMessages.some(m => m.includes("<prompt>test image</prompt>"))).toBe(true);

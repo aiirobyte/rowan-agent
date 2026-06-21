@@ -1,128 +1,516 @@
 # @rowan-agent/agent
 
-## Overview
-
-`@rowan-agent/agent` is the core agent runtime for Rowan. It provides the public `Agent` facade and implements a configurable phase-based execution loop with route → plan → execute → verify semantics.
-
-## Features
-
-- **Phase-Based Loop** — configurable execution phases (route, plan, execute, verify)
-- **Event Streaming** — subscribe to typed agent events for logging and UI integration
-- **Tool Registration** — register and execute tools within the agent loop
-- **Session Support** — resume conversations with session IDs
-- **Cancellation** — abort running agent tasks gracefully
-- **Custom Phases** — extend or replace built-in phases with custom definitions
-
-## Architecture
-
-```
-src/
-├── index.ts           # Package entry point
-├── agent.ts           # Agent class — public facade
-├── agent-loop.ts      # Loop runner with phase iteration
-├── event-stream.ts    # Event subscription and emission
-├── types.ts           # Public types: AgentState, AgentRunResult, etc.
-├── utils.ts           # Internal helpers
-└── loop/              # Phase definitions and runners
-    ├── phase-config.ts     # Phase configuration types and validation
-    ├── built-in-phases.ts  # Default route/plan/execute/verify phases
-    ├── phases.ts           # Base phase runners
-    └── routing.ts          # Route scheduling helper
-```
-
-### Execution Flow
-
-```
-┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
-│  Route   │───▶│  Plan   │───▶│ Execute │───▶│ Verify  │
-└─────────┘    └─────────┘    └─────────┘    └─────────┘
-     │                                            │
-     └────────────────────────────────────────────┘
-                   (loop on failure)
-```
+Core agent runtime for Rowan. Provides a configurable phase-based execution loop, tool calling, session persistence, event streaming, skills, and an extension system for plugins.
 
 ## Installation
 
 ```bash
-npm install @rowan-agent/agent
-# or
 bun add @rowan-agent/agent
 ```
 
-## Usage
-
-### Basic Agent Setup
+## Quick Start
 
 ```ts
-import { Agent, createMessage } from "@rowan-agent/agent";
-import { createCoreTools } from "@rowan-agent/runtime";
+import {
+  Agent,
+  createMessage,
+  createCoreTools,
+  resolveModel,
+} from "@rowan-agent/agent";
 
-const tools = createCoreTools({ root: process.cwd() });
 const agent = new Agent({
   context: {
     systemPrompt: "You are a helpful coding assistant.",
     messages: [createMessage("user", "list the files in this project")],
-    tools,
+    tools: createCoreTools({ root: process.cwd() }),
+    skills: [],
   },
-  model: { provider: "openai-compatible", name: "gpt-4.1-mini" },
+  model: { provider: "openai", name: "gpt-4.1-mini" },
   stream,
 });
 
-// Subscribe to events
-agent.subscribe((event) => {
-  console.log(event.type, event.data);
-});
+agent.subscribe((event) => console.log(event.type));
 
-// Run the agent
 const result = await agent.run();
-console.log(result.outcome.message);
+console.log(result.outcome?.message);
 ```
 
-### Resume a Session
+## Agent
+
+The `Agent` class is the public facade. It drives the entire execution loop — from receiving context and tools, through phase-based iteration, to producing a terminal `Outcome`.
+
+```ts
+class Agent {
+  constructor(options: AgentOptions);
+  run(options?: RunOptions): Promise<AgentRunResult>;
+  abort(): void;
+  subscribe(listener: AgentEventListener): () => void;
+  skill(name: string): Promise<void>;
+  phase(name: string): Promise<string>;
+  waitForIdle(): Promise<void>;
+  flushEvents(): Promise<void>;
+  readonly status: AgentStatus;
+}
+```
+
+### AgentOptions
+
+```ts
+type AgentOptions = {
+  context: AgentContext;
+  model: LlmModelRef;
+  stream: StreamFn;
+  sessionId?: string;
+  phases?: PhaseRegistry;
+  extensions?: ExtensionRunnerRef;
+  signal?: AbortSignal;
+  maxAttempts?: number;
+
+  // Lifecycle hooks
+  beforeToolCall?: BeforeToolCall;
+  afterToolCall?: AfterToolCall;
+  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
+  onMessage?: (message: AgentMessage) => Promise<void>;
+  onOutcome?: (outcome: Outcome) => Promise<void>;
+};
+```
+
+### AgentRunResult
+
+```ts
+type AgentRunResult = {
+  status: AgentStatus;
+  outcome?: Outcome;
+  metrics?: LoopMetrics;
+  messages: AgentMessage[];
+  sessionId: string;
+};
+```
+
+## AgentContext
+
+The context snapshot that defines what the agent can see and do — the system prompt sets the role, messages form the conversation history, and tools/skills define the capability boundary.
+
+```ts
+type AgentContext = {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  tools: Tool[];
+  skills: Skill[];
+};
+```
+
+### AgentMessage
+
+```ts
+type AgentMessage = {
+  id: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | LlmContentPart[];
+  createdAt: string;
+  metadata?: Record<string, unknown> & { phase?: string };
+};
+```
+
+### Outcome
+
+The terminal result produced when the loop completes — carries the final message and all tool call results from the run.
+
+```ts
+type Outcome = {
+  id: string;
+  message: string;
+  toolResults?: Array<{
+    toolCallId: string;
+    toolName: string;
+    ok: boolean;
+    content: unknown;
+    error?: string;
+  }>;
+};
+```
+
+## Tools
+
+Four built-in tools cover file read/write and shell execution — the minimum needed for code-related agent work.
+
+```ts
+import { createCoreTools } from "@rowan-agent/agent";
+
+const tools = createCoreTools({
+  root: process.cwd(),
+  maxReadBytes?,
+  bashTimeoutMs?,
+  maxBashOutputBytes?,
+});
+// Returns: read, write, edit, bash
+```
+
+### Custom Tools
+
+```ts
+import type { Tool, ToolResult } from "@rowan-agent/agent";
+
+const myTool: Tool = {
+  name: "search",
+  description: "Search project docs",
+  parameters: Type.Object({ query: Type.String() }),
+  executionMode: "parallel",  // "parallel" | "sequential"
+  async execute(args, context, signal): Promise<ToolResult> {
+    return { toolCallId: context.toolCallId, toolName: "search", ok: true, content: "..." };
+  },
+};
+```
+
+### Tool Execution Hooks
+
+`beforeToolCall` can intercept or reject tool calls (e.g. for approval flows); `afterToolCall` can modify results before they reach the model.
 
 ```ts
 const agent = new Agent({
-  sessionId: "ses_abc123",
-  context: { /* reconstructed context */ },
-  model,
-  stream,
-});
-
-const result = await agent.run({
-  context: {
-    ...agent.state.context,
-    messages: [
-      ...agent.state.context.messages,
-      createMessage("user", "continue where we left off"),
-    ],
+  async beforeToolCall({ tool, args }) {
+    return { allow: true };  // or { allow: false, reason: "blocked" }
+  },
+  async afterToolCall({ tool, result }) {
+    return result;
   },
 });
 ```
 
-### Abort a Running Task
+## Events
+
+13 event types are emitted during execution — useful for logging, UI updates, or external monitoring.
 
 ```ts
-const agent = new Agent({ /* config */ });
+agent.subscribe((event: AgentEvent) => {
+  switch (event.type) {
+    case "agent_start":       // { sessionId }
+    case "agent_end":         // { sessionId, messages }
+    case "turn_start":        // { content }
+    case "turn_end":          // { content, outcome? }
+    case "model_requested":   // { model, usage }
+    case "phase_start":       // { phase }
+    case "phase_end":         // { phase }
+    case "message_start":     // { message }
+    case "message_update":    // { message, delta }
+    case "message_end":       // { message }
+    case "tool_execution_start":   // { toolCallId, toolName, args }
+    case "tool_execution_update":  // { toolCallId, toolName, args, partialResult }
+    case "tool_execution_end":     // { toolCallId, toolName, result, isError }
+  }
+});
+```
 
-// Start in background
-const runPromise = agent.run();
+## Session
 
-// Cancel after 5 seconds
-setTimeout(() => agent.abort(), 5000);
+JSONL-based session persistence — lets multi-turn conversations survive across process restarts. Supports create, resume, branch, and history replay.
 
-const result = await runPromise;
-console.log(result.status); // "aborted"
+```ts
+import { LocalJsonlSessionManager } from "@rowan-agent/agent";
+
+const session = await LocalJsonlSessionManager.create(sessionsDir, { workspaceRoot: process.cwd() });
+const session = await LocalJsonlSessionManager.open(sessionsDir, sessionId);
+const sessions = await LocalJsonlSessionManager.list(sessionsDir);
+
+await session.appendMessage(message);
+await session.appendOutcome(outcome);
+await session.appendExecutionTurn(turn);
+const context = await session.buildAgentContext({ tools });
+await session.branch(entryId);
+```
+
+## Skills
+
+Skills are `SKILL.md` knowledge bundles that get injected into the agent context, extending its domain knowledge without changing code.
+
+```ts
+import { loadSkill, loadSkills, resolveSkillPath } from "@rowan-agent/agent";
+
+const skills = await loadSkills(workspace);
+const skill = await loadSkill(path, workspace);
+const path = resolveSkillPath("example", workspace);
+// → <rowanDir>/skills/example/SKILL.md
+```
+
+## Phases
+
+Phases are the basic units of the execution loop. There are no built-in phases — when none are configured, a `"default"` phase lets the LLM drive execution and routing directly.
+
+### How It Works
+
+Each phase's `PHASE.md` content is injected as a system message, giving the LLM phase-specific instructions. A `route` tool is automatically added — the LLM calls it to decide what happens next: continue, stop, or transition to another phase.
+
+```
+Per iteration:
+  1. Hot-reload phase configs from disk (PHASE.md)
+  2. Inject phase instructions as system message
+  3. Execute phase (factory | run | LLM fallback)
+  4. Extract routing decision from route tool call
+  5. Transition, continue, or stop
+```
+
+### Example Phase Flow
+
+```
+┌────────────┐
+│ User Input │
+└─────┬──────┘
+      ▼
+┌────────────┐  route("plan")   ┌────────────┐
+│  default   │ ────────────────▶│    plan     │
+└────────────┘                  └─────┬──────┘
+                                      │
+                              route("execute")
+                                      │
+                                      ▼
+                              ┌────────────┐
+                              │  execute   │◀──────────────┐
+                              └─────┬──────┘               │
+                                    │                      │
+                            route("review")         route("execute")
+                                    │              (loop: fix issues)
+                                    ▼
+                              ┌────────────┐
+                              │   review   │
+                              └─────┬──────┘
+                                    │
+                     route({ decision: [{ phase: "lint" }, { phase: "typecheck" }] })
+                                    │
+                          ┌─────────┴─────────┐
+                          ▼                   ▼
+                    ┌──────────┐        ┌──────────┐
+                    │   lint   │        │typecheck │
+                    └────┬─────┘        └────┬─────┘
+                         └─────────┬─────────┘
+                                   ▼
+                          <phase_results> merged
+                                   │
+                            route("stop")
+                                   │
+                                   ▼
+                             ┌──────────┐
+                             │  Outcome │
+                             └──────────┘
+```
+
+Each arrow is an LLM routing decision via the `route` tool. Parallel branches run concurrently and merge back before the next transition.
+
+### Providing Phases
+
+Two sources, merged by priority:
+
+**File-based** — `<workspace>/.rowan/phases/*/PHASE.md`
+
+```
+.rowan/phases/review/
+├── PHASE.md       # YAML frontmatter + markdown body
+└── index.ts       # optional: factory or run function
+```
+
+```yaml
+---
+name: Code Review
+description: Review code for correctness and style
+tools: [read, bash]
+target: execute
+---
+
+Review the current implementation for bugs and style issues.
+```
+
+**Extension-registered** — via `api.registerPhase()`. Same id overrides file-based phases.
+
+```ts
+import type { ExtensionAPI } from "@rowan-agent/agent";
+
+export default function myPlugin(api: ExtensionAPI) {
+  api.registerPhase({
+    id: "review",
+    name: "Code Review",
+    description: "Review code for correctness",
+    tools: ["read", "bash"],
+    async run(context, execution) {
+      const result = await execution.invokeModel(context);
+      return { message: result.text, route: "stop" };
+    },
+  });
+}
+```
+
+### Phase
+
+```ts
+interface Phase {
+  id: string;
+  name: string;
+  description: string;
+  tools?: string[];              // restrict tools (undefined = all)
+  skills?: string[];             // restrict skills
+  target?: string;               // forced next phase (overrides route tool)
+  isolated?: boolean;            // empty context when run in parallel
+  content: string;               // PHASE.md body
+  factory?: (api: ExtensionAPI) => Promise<void>;
+  run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
+}
+```
+
+### PhaseContext / PhaseOutput
+
+```ts
+interface PhaseContext {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  tools: Tool[];
+  skills: Skill[];
+  state: PhaseState;             // { current, available, iterations, payload }
+}
+
+type PhaseOutput = {
+  message: string;
+  route: string;                 // "continue" | "stop" | <phase-id>
+  payload?: unknown;             // data passed to the next phase
+};
+```
+
+### Parallel Execution (Fork/Join)
+
+When the route tool returns multiple targets, phases run concurrently:
+
+```ts
+route({ decision: [{ phase: "research" }, { phase: "analyze" }] });
+```
+
+Each target gets a forked copy of the current messages (or empty if `isolated: true`), runs concurrently via `Promise.allSettled()`, and results are merged back into the conversation. See [docs/phases.md](docs/phases.md).
+
+## Extensions
+
+The extension system lets plugins register lifecycle hooks, tools, phases, model providers, and cross-plugin events. Plugins are discovered from `<workspace>/.rowan/extensions`.
+
+```ts
+import { createExtensionRunner, discoverAndLoadExtensions } from "@rowan-agent/agent";
+
+const { extensions } = await discoverAndLoadExtensions(cwd);
+const runner = createExtensionRunner({ cwd });
+await runner.loadExtensions(extensions);
+```
+
+### ExtensionRunner
+
+```ts
+class ExtensionRunner {
+  readonly hooks: HooksManager;  // 19 lifecycle hook types
+  readonly events: EventBus;     // cross-plugin event channel
+
+  loadExtensions(extensions: LoadedExtension[]): Promise<void>;
+  getAllRegisteredTools(): RegisteredTool[];
+  getPhases(): Phase[];
+  createPhaseRegistry(): PhaseRegistry;
+  signal: AbortSignal;
+  abort(): void;
+}
+```
+
+### Hook Types
+
+| Category | Hooks |
+|----------|-------|
+| Agent | `agent_start`, `agent_end` |
+| Turn | `turn_start`, `turn_end` |
+| Phase | `before_phase`, `after_phase` |
+| Prompt | `before_prompt` |
+| Message | `message_start`, `message_update`, `message_end` |
+| Tool | `before_tool_call`, `after_tool_call`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end` |
+| Lifecycle | `queue_update`, `save_point`, `abort`, `settled` |
+
+### Plugin Format
+
+```
+<workspace>/.rowan/extensions/my-plugin/
+├── package.json     # { "rowan": { "extensions": ["./index.ts"] } }
+└── index.ts
+```
+
+```ts
+import type { ExtensionAPI } from "@rowan-agent/agent";
+
+export default function myPlugin(rowan: ExtensionAPI) {
+  rowan.on("agent_start", (event) => { ... });
+  rowan.registerTool({ name: "my_tool", description: "...", parameters: {...}, execute: async (args) => {...} });
+  rowan.registerPhase({ id: "review", description: "...", run: async (ctx) => {...} });
+  rowan.events.emit("my-plugin:ready", {});
+}
+```
+
+> **Full reference:** [Extensions Documentation](docs/extensions.md)
+
+## Context & Prompt
+
+Helpers for assembling system prompts and building model requests.
+
+```ts
+import {
+  buildSystemPrompt,
+  buildModelRequest,
+  conversationMessages,
+  latestUserInput,
+  serializeSkills,
+} from "@rowan-agent/agent";
+
+const prompt = buildSystemPrompt({ systemPrompt, tools, skills, cwd });
+const messages = conversationMessages(agentMessages);
+const request = buildModelRequest({ systemPrompt, messages, tools });
+```
+
+## Workspace
+
+Workspace resolution — dev mode uses the project root, packaged binary uses `~/.rowan`.
+
+```ts
+import { resolveWorkspacePaths, resolveInWorkspace } from "@rowan-agent/agent";
+
+const workspace = resolveWorkspacePaths();
+// → { mode: "source" | "binary", cwd: string, rowanDir: string }
+```
+
+## Loop Metrics
+
+```ts
+type LoopMetrics = {
+  iterations: number;
+  phaseTransitions: Array<{ from: string; to: string; ts: string }>;
+  compactionCount: number;
+  retryCount: number;
+  startedAt: string;
+  durationMs?: number;
+};
 ```
 
 ## Key Types
 
 | Type | Description |
 |------|-------------|
-| `Agent` | Main agent class with run/abort/subscribe |
-| `AgentState` | Current agent state (context, model, session) |
-| `AgentRunResult` | Result of a completed or aborted run |
-| `AgentEvent` | Typed events emitted during execution |
-| `PhaseDefinition` | Custom phase configuration |
+| `Agent` | Main agent facade |
+| `AgentContext` | System prompt, messages, tools, skills |
+| `AgentMessage` | Typed message with role, content, metadata |
+| `AgentEvent` | Discriminated union of 13 event types |
+| `Tool` / `ToolResult` | Tool definition and execution result |
+| `Skill` | Loaded skill bundle |
+| `Phase` | Phase definition with content, execution, and routing config |
+| `PhaseContext` / `PhaseOutput` | Phase input and output |
+| `PhaseRegistry` | Map of phase ids to Phase objects plus entry phase id |
+| `Outcome` | Terminal result with message and tool results |
+| `LoopMetrics` | Loop iteration, timing, and phase transition stats |
+| `LocalJsonlSessionManager` | JSONL session manager |
+| `ExtensionRunner` | Extension runtime with hooks and events |
+| `HooksManager` / `EventBus` | Hook registry and cross-plugin event channel |
+| `StreamFn` / `LlmModelRef` | Model stream function and model reference |
+
+## Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [Phases](docs/phases.md) | Phase lifecycle, PHASE.md format, parallel execution, routing, payload |
+| [Extensions](docs/extensions.md) | Extension API, 19 hooks, custom tools/phases, model providers, event bus |
 
 ## Version
 

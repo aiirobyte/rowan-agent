@@ -1,3 +1,5 @@
+import type { LlmContentPart } from "@rowan-agent/models";
+
 /**
  * Structured formatting utilities for system prompt sections.
  *
@@ -130,4 +132,41 @@ export function jsonToXml(value: unknown, depth: number): string {
     }
     return `${indent}<${tag}>${escapeXml(String(val))}</${tag}>`;
   }).join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Phase result message construction
+// ---------------------------------------------------------------------------
+
+/** Construct phase result message as LlmContentPart[] — shared by parallel and serial paths. */
+export function buildPhaseResultMessage(
+  phases: Array<{ name: string; content?: string; output?: unknown }>,
+  toolUseId: string,
+  instruction?: string,
+): LlmContentPart[] {
+  const parts: string[] = [];
+  if (instruction) {
+    parts.push(`<instruction>${instruction}</instruction>`);
+  }
+  parts.push(`<phase_results>`);
+  for (const p of phases) {
+    parts.push(`  <phase name="${p.name}">`);
+    if (p.content) {
+      parts.push(`    <content>${p.content}</content>`);
+    }
+    if (p.output !== undefined) {
+      parts.push(`    <output>${jsonToXml(p.output, 2)}</output>`);
+    }
+    if (!p.content && p.output === undefined) {
+      parts.push(`    <content>Phase "${p.name}" completed with no output.</content>`);
+    }
+    parts.push(`  </phase>`);
+  }
+  parts.push(`</phase_results>`);
+  return [{
+    type: "tool_result",
+    toolUseId,
+    content: parts.join("\n"),
+    isError: false,
+  }];
 }

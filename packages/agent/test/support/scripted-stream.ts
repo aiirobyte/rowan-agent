@@ -21,7 +21,7 @@ export function buildToolCallPartial(toolId: string, toolName: string, toolArgs:
 /** Yield events for a route tool call */
 export function* yieldRouteToolCall(route: string, reason?: string, existingText?: string): Generator<any> {
   const toolId = createId("route");
-  const toolArgs = JSON.stringify({ route, reason });
+  const toolArgs = JSON.stringify({ decision: [{ phase: route, reason }], instruction: undefined });
   const contentBlocks: AssistantMessagePartial["contentBlocks"] = [];
   if (existingText) {
     contentBlocks.push({ type: "text", text: existingText });
@@ -113,7 +113,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     // Output route tool call
     const toolId = createId("route");
-    const toolArgs = JSON.stringify({ route, reason });
+    const toolArgs = JSON.stringify({ decision: [{ phase: route, reason }], instruction: undefined });
     const withRoute: AssistantMessagePartial = {
       role: "assistant",
       contentBlocks: [
@@ -135,7 +135,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     // Output route tool call to execute
     const toolId = createId("route");
-    const toolArgs = JSON.stringify({ route: "execute", reason: "Task planned." });
+    const toolArgs = JSON.stringify({ decision: [{ phase: "execute", reason: "Task planned." }], instruction: undefined });
     const withRoute: AssistantMessagePartial = {
       role: "assistant",
       contentBlocks: [
@@ -164,7 +164,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
     yield { type: "tool_call_end", id: toolId, name: toolName, arguments: toolArgs, partial: withTool };
     // Output route tool call to verify
     const routeId = createId("route");
-    const routeArgs = JSON.stringify({ route: "verify", reason: "Execution complete." });
+    const routeArgs = JSON.stringify({ decision: [{ phase: "verify", reason: "Execution complete." }], instruction: undefined });
     const withRoute: AssistantMessagePartial = {
       role: "assistant",
       contentBlocks: [
@@ -219,7 +219,7 @@ export const scriptedStream: StreamFn = async function* scriptedStream(request, 
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     // Output route tool call
     const toolId = createId("route");
-    const toolArgs = JSON.stringify({ route: "stop", reason });
+    const toolArgs = JSON.stringify({ decision: [{ phase: "stop", reason }], instruction: undefined });
     const withRoute: AssistantMessagePartial = {
       role: "assistant",
       contentBlocks: [
