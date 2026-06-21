@@ -1,141 +1,142 @@
 # @rowan-agent/logging
 
-## Overview
-
-`@rowan-agent/logging` converts Rowan `AgentEvent` values into observable log records. It supports console JSONL output, Pino file logs, log-level filtering, and automatic secret redaction.
-
-## Features
-
-- **JSONL Output** — structured log records for easy parsing
-- **Pino Integration** — high-performance file logging with Pino
-- **Log Levels** — `debug`, `info`, `warn`, `error`, `silent`
-- **Secret Redaction** — automatic redaction of API keys and sensitive patterns
-- **Dual Output** — console (stderr) and file logging simultaneously
-
-## Architecture
-
-```
-src/
-├── index.ts      # Package entry point
-├── record.ts     # Event-to-log-record mapping with level assignment
-├── redact.ts     # Secret pattern redaction (API keys, env vars)
-├── console.ts    # Console logger (writes JSONL to any stream)
-└── pino.ts       # Pino logger (writes JSONL files)
-```
-
-### Log Level Behavior
-
-| Level | Records |
-|-------|---------|
-| `debug` | Full redacted event payloads |
-| `info` | Event summaries only (default) |
-| `warn` | Warnings and errors |
-| `error` | Errors only |
-| `silent` | No output |
+Converts `AgentEvent` values into structured JSONL log records. Provides console (stderr) and file (Pino) loggers with level-based filtering and automatic secret redaction.
 
 ## Installation
 
 ```bash
-npm install @rowan-agent/logging
-# or
 bun add @rowan-agent/logging
 ```
 
-## Usage
+## Quick Start
 
-### Console Logger
+```ts
+import { consoleAgentEventLogger, pinoAgentEventLogger } from "@rowan-agent/logging";
+
+const consoleLog = consoleAgentEventLogger({ level: "info" });
+agent.subscribe(consoleLog);
+
+const fileLog = pinoAgentEventLogger("runs/session.jsonl", { level: "debug" });
+agent.subscribe(fileLog);
+
+await agent.run();
+await fileLog.flush();
+```
+
+## Console Logger
+
+Writes redacted, level-filtered JSONL records to any writable stream (defaults to `process.stderr`). Useful for real-time CLI output.
 
 ```ts
 import { consoleAgentEventLogger } from "@rowan-agent/logging";
 
-const logger = consoleAgentEventLogger(process.stderr, {
-  level: "info",
+const logger = consoleAgentEventLogger({
+  level: "info",          // "debug" | "info" | "warn" | "error" | "silent"
+  stream: process.stderr, // any { write(chunk: string) }
 });
-
 agent.subscribe(logger);
-await agent.run();
+await logger.flush();
 ```
 
-### Pino File Logger
+- `silent` disables all output.
+- `debug` includes the full redacted event payload in each record.
+- On write error, all subsequent events are silently dropped.
+
+## Pino File Logger
+
+Writes JSONL records to files via Pino with lazy initialization. Supports static paths or dynamic path resolution from each event.
 
 ```ts
 import { pinoAgentEventLogger } from "@rowan-agent/logging";
 
-const logger = pinoAgentEventLogger("runs/session.jsonl", {
-  level: "debug", // Include full redacted payloads
-});
+// Static path
+const logger = pinoAgentEventLogger("runs/session.jsonl", { level: "info", mode: "replace" });
+
+// Dynamic path — resolved from first event
+const logger = pinoAgentEventLogger(
+  (event) => `runs/${event.sessionId}.jsonl`,
+  { level: "debug" },
+);
 
 agent.subscribe(logger);
-await agent.run();
-
-// Ensure all logs are flushed
 await logger.flush();
+logger.path(); // resolved file path (available after first event)
 ```
 
-### Auto-Resolved Log Path
+- `mode: "replace"` (default) truncates on creation; `"append"` appends.
+- Directory created recursively.
+
+## Log Levels
 
 ```ts
-import { pinoAgentEventLogger } from "@rowan-agent/logging";
-
-// Path resolves from the first event's timestamp
-const logger = pinoAgentEventLogger(undefined, { level: "info" });
-
-agent.subscribe(logger);
-await agent.run();
-await logger.flush();
+type AgentEventLogLevel = "debug" | "info" | "warn" | "error" | "silent";
 ```
 
-### Complete Example
+The configured level is a minimum threshold — `info` writes `info` + `warn` + `error` but suppresses `debug`.
+
+| `event.type` | Mapped Level |
+|---|---|
+| `message_update`, `tool_execution_update` | debug |
+| `tool_execution_end` (when `isError`) | warn |
+| All others | info |
+
+## Secret Redaction
+
+All loggers automatically redact sensitive patterns before writing:
+
+- OpenAI-style keys: `sk-<12+ chars>` → `[REDACTED]`
+- Env var patterns: `OPENAI_API_KEY=...`, `ANTHROPIC_API_KEY=...`, `GEMINI_API_KEY=...` → value replaced
 
 ```ts
-import { Agent, createMessage } from "@rowan-agent/agent";
-import { pinoAgentEventLogger } from "@rowan-agent/logging";
-
-const agent = new Agent({ /* config */ });
-const logger = pinoAgentEventLogger("runs/agent.jsonl", {
-  level: "info",
-});
-
-agent.subscribe(logger);
-
-await agent.run({
-  context: {
-    ...agent.state.context,
-    messages: [
-      ...agent.state.context.messages,
-      createMessage("user", "hello"),
-    ],
-  },
-});
-
-await logger.flush();
+import { redactSecrets } from "@rowan-agent/logging";
+const safe = redactSecrets(event);
 ```
 
 ## Log Record Format
 
-Each log record is a JSON object with these fields:
+Each record is a single JSON line with Pino-compatible fields:
 
 ```json
 {
   "level": 30,
-  "time": 1777791428515,
-  "eventType": "session_created",
-  "sessionId": "ses_12345678",
-  "eventTs": "2026-05-03T14:57:08.515+08:00"
+  "time": "2026-06-21T14:30:45.120+08:00",
+  "eventType": "phase_start",
+  "eventTs": "2026-06-21T14:30:45.120+08:00",
+  "sessionId": "ses_abc123",
+  "phase": "execute",
+  "event": { ... }
 }
 ```
 
-### Common Event Types
+| Field | Always | Notes |
+|-------|--------|-------|
+| `level` | Yes | Pino numeric level (20/30/40/50) |
+| `time` | Yes | Local ISO-8601 with timezone offset |
+| `eventType` | Yes | `AgentEvent.type` |
+| `sessionId` | When available | From event payload |
+| `event` | Debug only | Full redacted event payload |
+
+## AgentEvent Types
 
 | Event | Description |
 |-------|-------------|
-| `session_created` | New session started |
-| `turn_started` | Agent turn began |
-| `turn_completed` | Agent turn finished |
-| `tool_call` | Tool execution started |
-| `tool_result` | Tool execution completed |
-| `error` | Error occurred |
+| `agent_start` / `agent_end` | Agent run lifecycle |
+| `turn_start` / `turn_end` | Agent turn (includes outcome) |
+| `model_requested` | LLM request sent |
+| `phase_start` / `phase_end` | Phase execution lifecycle |
+| `message_start` / `message_update` / `message_end` | Model message streaming |
+| `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | Tool call lifecycle |
+
+## Source Structure
+
+```
+src/
+├── record.ts     # Event-to-level mapping, log record construction
+├── redact.ts     # Secret pattern redaction
+├── console.ts    # Console logger (JSONL to any stream)
+└── pino.ts       # Pino file logger
+```
 
 ## Version
 
-Current version: **0.4.4**
+Current version: **0.4.6**
