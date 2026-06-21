@@ -53,6 +53,7 @@ export type PhaseDefinition = {
   skills?: string[];
   target?: string;
   input?: Record<string, string>;
+  model?: string;
 };
 
 export type PhaseRegistration = Partial<Omit<PhaseDefinition, 'run'>> & {

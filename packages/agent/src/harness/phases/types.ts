@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@rowan-agent/models";
+import type { AgentMessage, LlmModelRef } from "@rowan-agent/models";
 import type { Tool, Skill } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
@@ -60,6 +60,8 @@ export interface PhaseFrontmatter {
   input?: Record<string, string>;
   /** If true, phase gets a fresh context (empty messages) when executed in parallel */
   isolated?: boolean;
+  /** Model override for this phase (e.g. "anthropic/claude-sonnet-4-20250514" or "gpt-4.1") */
+  model?: string;
 }
 
 /**
@@ -104,6 +106,8 @@ export interface Phase {
   baseDir: string;
   /** PHASE.md body content */
   content: string;
+  /** Model override for this phase (resolved from frontmatter) */
+  model?: LlmModelRef;
   /** ExtensionAPI factory function (default export pattern) */
   factory?: (api: ExtensionAPI) => Promise<void>;
   /** Legacy run function */

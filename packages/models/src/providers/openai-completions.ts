@@ -20,7 +20,6 @@ import {
   normalizeBaseUrl,
   nonEmpty,
   requireValue,
-  defaultEnv,
   createRequestSignal,
   readErrorBody,
   isRetryableStatus,
@@ -57,22 +56,19 @@ export type ResolveOpenAICompletionsConfigInput = {
   retryDelayMs?: number;
   fetch?: ProviderFetch;
   responseFormat?: boolean;
-  env?: Record<string, string | undefined>;
 };
 
 export function resolveOpenAICompletionsConfig(
   input: ResolveOpenAICompletionsConfigInput = {},
 ): OpenAICompletionsConfig {
-  const env = input.env ?? defaultEnv();
-  const baseUrl =
-    nonEmpty(input.baseUrl) ?? nonEmpty(env.ROWAN_OPENAI_BASE_URL) ?? "https://api.openai.com/v1";
-  const apiKey = nonEmpty(input.apiKey) ?? nonEmpty(env.ROWAN_OPENAI_API_KEY);
-  const model = nonEmpty(input.model) ?? nonEmpty(env.ROWAN_MODEL);
+  const baseUrl = nonEmpty(input.baseUrl) ?? "https://api.openai.com/v1";
+  const apiKey = nonEmpty(input.apiKey);
+  const model = nonEmpty(input.model);
 
   return {
     baseUrl: normalizeBaseUrl(baseUrl),
-    apiKey: requireValue("API key", apiKey, "set ROWAN_OPENAI_API_KEY or pass --api-key"),
-    model: requireValue("model", model, "set ROWAN_MODEL or pass --model"),
+    apiKey: requireValue("API key", apiKey, "model.apiKey is required (set apiKey in config.yaml or pass --api-key)"),
+    model: requireValue("model", model, "model.id is required"),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
     ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -522,6 +518,10 @@ export const streamOpenAICompletions: ApiStreamFn = (model, request, options) =>
   const config = resolveOpenAICompletionsConfig({
     baseUrl: model.baseUrl,
     model: model.id,
+    apiKey: model.apiKey,
+    timeoutMs: model.timeoutMs,
+    maxRetries: model.maxRetries,
+    retryDelayMs: model.retryDelayMs,
   });
   return streamChatCompletions(config, request, options);
 };

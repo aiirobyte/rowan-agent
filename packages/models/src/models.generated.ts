@@ -10,7 +10,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "claude-sonnet-4-20250514": {
       id: "claude-sonnet-4-20250514",
       name: "Claude Sonnet 4",
-      api: "anthropic-messages",
+      protocol: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
       reasoning: true,
@@ -22,7 +22,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "claude-opus-4-20250514": {
       id: "claude-opus-4-20250514",
       name: "Claude Opus 4",
-      api: "anthropic-messages",
+      protocol: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
       reasoning: true,
@@ -34,7 +34,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "claude-haiku-4-20250514": {
       id: "claude-haiku-4-20250514",
       name: "Claude Haiku 4",
-      api: "anthropic-messages",
+      protocol: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
       reasoning: false,
@@ -48,7 +48,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "gpt-4o": {
       id: "gpt-4o",
       name: "GPT-4o",
-      api: "openai-completions",
+      protocol: "openai-completions",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: false,
@@ -60,7 +60,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "gpt-4o-mini": {
       id: "gpt-4o-mini",
       name: "GPT-4o Mini",
-      api: "openai-completions",
+      protocol: "openai-completions",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: false,
@@ -72,7 +72,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "o3": {
       id: "o3",
       name: "o3",
-      api: "openai-responses",
+      protocol: "openai-responses",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: true,
@@ -84,7 +84,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "o4-mini": {
       id: "o4-mini",
       name: "o4-mini",
-      api: "openai-responses",
+      protocol: "openai-responses",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: true,
@@ -96,7 +96,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "gpt-4.1": {
       id: "gpt-4.1",
       name: "GPT-4.1",
-      api: "openai-completions",
+      protocol: "openai-completions",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: false,
@@ -108,7 +108,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "gpt-4.1-mini": {
       id: "gpt-4.1-mini",
       name: "GPT-4.1 Mini",
-      api: "openai-completions",
+      protocol: "openai-completions",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: false,
@@ -122,7 +122,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "deepseek-chat": {
       id: "deepseek-chat",
       name: "DeepSeek V3",
-      api: "openai-completions",
+      protocol: "openai-completions",
       provider: "deepseek",
       baseUrl: "https://api.deepseek.com/v1",
       reasoning: false,
@@ -134,7 +134,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "deepseek-reasoner": {
       id: "deepseek-reasoner",
       name: "DeepSeek R1",
-      api: "openai-completions",
+      protocol: "openai-completions",
       provider: "deepseek",
       baseUrl: "https://api.deepseek.com/v1",
       reasoning: true,
@@ -148,7 +148,7 @@ export const MODELS: Record<string, Record<string, Model>> = {
     "anthropic/claude-sonnet-4": {
       id: "anthropic/claude-sonnet-4",
       name: "Claude Sonnet 4 (OpenRouter)",
-      api: "openai-completions",
+      protocol: "openai-completions",
       provider: "openrouter",
       baseUrl: "https://openrouter.ai/api/v1",
       reasoning: true,

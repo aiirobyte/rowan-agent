@@ -36,7 +36,7 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
   };
   const agent = new Agent({
     context: createTestContext(),
-    model: { provider: "test", name: "direct-multiturn" },
+    model: { provider: "test", id: "direct-multiturn" },
     stream,
   });
   const events: string[] = [];
@@ -74,7 +74,7 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   };
   const agent = new Agent({
     context: createTestContext({ tools: createEchoTools() }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream,
   });
   agent.subscribe((event) => {
@@ -121,7 +121,7 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
   };
   const agent = new Agent({
     context: createTestContext(),
-    model: { provider: "test", name: "failed-then-direct" },
+    model: { provider: "test", id: "failed-then-direct" },
     stream,
     maxAttempts: 1,
   });

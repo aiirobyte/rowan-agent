@@ -30,7 +30,7 @@ test("Agent.run returns a run result and emits events", async () => {
   const agent = new Agent({
     cwd,
     context: createTestContext({ tools: createEchoTools() }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
   });
   const events: string[] = [];
@@ -84,7 +84,7 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
     const agent = new Agent({
       cwd: root,
       context: createTestContext(),
-      model: { provider: "test", name: "extension" },
+      model: { provider: "test", id: "extension" },
       stream,
     });
 
@@ -102,7 +102,7 @@ test("Agent.run does not wait for async event listeners", async () => {
   const agent = new Agent({
     cwd,
     context: createTestContext({ tools: createEchoTools() }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
   });
   let release: (() => void) | undefined;
@@ -130,7 +130,7 @@ test("Agent rejects concurrent runs", async () => {
   const agent = new Agent({
     cwd,
     context: createTestContext({ tools: createEchoTools() }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
   });
 
@@ -151,7 +151,7 @@ test("Agent.abort stops an active run", async () => {
   const agent = new Agent({
     cwd,
     context: createTestContext({ tools: createEchoTools() }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: hangingStream,
   });
 

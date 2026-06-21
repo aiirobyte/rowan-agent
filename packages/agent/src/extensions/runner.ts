@@ -30,6 +30,7 @@ import type {
   ToolDefinition,
 } from "./types";
 import { createExtension, createExtensionRuntime } from "./types";
+import { parseModelRef } from "../harness/config";
 import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import { HooksManager } from "./hooks";
@@ -98,14 +99,14 @@ async function execCommand(
 
 function applyProviderRegistration(config: ProviderConfig): void {
   if (config.streamSimple) {
-    registerApiProvider({ api: config.api, stream: config.streamSimple });
+    registerApiProvider({ protocol: config.protocol, stream: config.streamSimple });
   }
   for (const modelConfig of config.models) {
     registerModel({
       id: modelConfig.id,
       name: modelConfig.name,
-      api: config.api,
-      provider: config.name,
+      protocol: config.protocol,
+      provider: config.id,
       baseUrl: config.baseUrl,
       reasoning: modelConfig.reasoning,
       input: modelConfig.input,
@@ -453,6 +454,7 @@ export class ExtensionRunner {
       filePath: "",
       baseDir: "",
       content: "",
+      ...(def.model ? { model: parseModelRef(def.model) } : {}),
     };
   }
 
@@ -760,6 +762,7 @@ export class ExtensionRunner {
       name: registration.name ?? registration.id,
       description: registration.description ?? "",
       run: registration.run,
+      ...(registration.model ? { model: registration.model } : {}),
     };
 
     const registered: RegisteredPhase = {

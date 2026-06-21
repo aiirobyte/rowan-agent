@@ -139,12 +139,21 @@ import { createCoreTools } from "@rowan-agent/agent";
 
 const tools = createCoreTools({
   root: process.cwd(),
-  maxReadBytes?,
-  bashTimeoutMs?,
-  maxBashOutputBytes?,
+  maxReadBytes?,       // default: 64KB
+  bashTimeoutMs?,      // default: 30s
+  maxBashOutputBytes?, // default: 64KB
 });
 // Returns: read, write, edit, bash
 ```
+
+### Built-in Tools
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `read` | Reads a text file within the workspace | `path` (required), `maxBytes?`, `type?` ("skill" \| "phase" \| "markdown" \| "code" \| "file") |
+| `write` | Writes content to a file, creating parent directories as needed | `path` (required), `content` (required) |
+| `edit` | Replaces exact `oldText` with `newText` in a file | `path` (required), `oldText` (required), `newText` (required), `replaceAll?` |
+| `bash` | Runs a bash command within the workspace | `command` (required), `cwd?`, `timeoutMs?`, `maxOutputBytes?` |
 
 ### Custom Tools
 
@@ -200,6 +209,10 @@ agent.subscribe((event: AgentEvent) => {
   }
 });
 ```
+
+### Parallel Phase Events
+
+When multiple phases run concurrently (via multi-target `route`), each branch emits its own `turn_*`, `message_*`, and `tool_execution_*` events into the shared event stream — they are interleaved, not sequenced. Individual parallel phases do **not** emit `phase_start`/`phase_end`; those only fire for serial phases. After all branches complete, a merged `<phase_results>` message is injected and `message_start`/`message_end` fire for it.
 
 ## Session
 
@@ -443,6 +456,162 @@ export default function myPlugin(rowan: ExtensionAPI) {
 
 > **Full reference:** [Extensions Documentation](docs/extensions.md)
 
+## Configuration
+
+Multi-provider model configuration via `.rowan/config.yaml`. Supports multiple API providers, per-model settings, environment variable interpolation, and per-phase model overrides.
+
+### Config File
+
+Place `config.yaml` in your `.rowan/` directory (alongside `phases/`, `skills/`, etc.):
+
+```
+<workspace>/
+└── .rowan/
+    ├── config.yaml      # model configuration
+    ├── phases/           # phase definitions
+    ├── skills/           # skill bundles
+    └── extensions/       # plugins
+```
+
+### Schema
+
+```yaml
+model:                    # optional: explicit default model override
+  provider: <string>      # → providers[].id
+  id: <string>            # → providers[].models[].id
+
+logLevel: <string>        # optional: run log detail (default: "info")
+                          # one of: debug, info, warn, error, silent
+                          # priority: --log-level flag > config > ROWAN_LOG_LEVEL env > "info"
+
+providers:                # required: at least one provider
+  - id: <string>          # required: provider identifier
+    name: <string>        # optional: display name
+    baseUrl: <string>     # required: API base URL
+    apiKey: <string>      # required: API key (supports ${VAR} interpolation)
+    protocol: <string>    # required: API protocol (see table below)
+    timeoutMs: <number>   # optional: request timeout (default: 60000)
+    maxRetries: <number>  # optional: retry count (default: 4)
+    retryDelayMs: <number># optional: delay between retries (default: 1000)
+    headers:              # optional: extra HTTP headers
+      <string>: <string>
+    models:               # required: at least one model
+      - id: <string>      # required: model identifier
+        name: <string>    # optional: display name (defaults to id)
+        primary: <bool>   # optional: mark as default agent model
+        reasoning: <bool> # optional: reasoning model (default: false)
+        input:            # optional: supported input types (default: ["text"])
+          - "text"
+          - "image"
+        contextWindow: <number>  # optional: max context tokens (default: 128000)
+        maxTokens: <number>      # optional: max output tokens (default: 16384)
+        cost:                    # optional: per-token costs (default: all 0)
+          input: <number>
+          output: <number>
+          cacheRead: <number>
+          cacheWrite: <number>
+```
+
+### Protocols
+
+| Protocol | Description |
+|----------|-------------|
+| `openai-completions` | OpenAI Chat Completions API (`/v1/chat/completions`) |
+| `openai-responses` | OpenAI Responses API (`/v1/responses`) |
+| `anthropic-messages` | Anthropic Messages API (`/v1/messages`) |
+
+### Environment Variable Interpolation
+
+Use `${VAR_NAME}` syntax in any string value to reference environment variables:
+
+```yaml
+apiKey: ${OPENAI_API_KEY}
+```
+
+Undefined or empty variables throw an error at config load time.
+
+### Default Model Resolution
+
+When no `--model` flag is passed, the default model is resolved in order:
+
+1. **Top-level `model:`** — explicit override in config
+2. **`primary: true`** — first model marked primary (by file order)
+3. **First model** — first model in config (by parse order)
+
+### Per-Phase Model Override
+
+Override the model for a specific phase via PHASE.md frontmatter:
+
+```yaml
+---
+name: Review
+description: Deep code review
+model: anthropic/claude-sonnet-4-20250514   # format: provider/id or just id
+---
+
+Review the implementation for correctness...
+```
+
+- `model: gpt-4.1` — wildcard provider, resolved by model ID
+- `model: anthropic/claude-sonnet-4-20250514` — specific provider + model
+
+### Loading Config
+
+```ts
+import {
+  loadConfigFile,
+  registerConfigModels,
+  resolveDefaultModel,
+  parseModelRef,
+} from "@rowan-agent/agent";
+
+// Load from .rowan/config.yaml (returns undefined if missing)
+const config = await loadConfigFile(workspace);
+
+// Register all configured models into the global registry
+if (config) registerConfigModels(config);
+
+// Resolve default model
+const defaultModel = config ? resolveDefaultModel(config) : undefined;
+
+// Parse a model reference string
+const ref = parseModelRef("anthropic/claude-sonnet-4-20250514");
+// → { provider: "anthropic", id: "claude-sonnet-4-20250514" }
+```
+
+### Config Types
+
+```ts
+type AgentConfigFile = {
+  model?: { provider: string; id: string };
+  providers: ProviderConfigFromFile[];
+};
+
+type ProviderConfigFromFile = {
+  id: string;
+  name?: string;
+  baseUrl: string;
+  apiKey: string;
+  protocol: Protocol;
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  headers?: Record<string, string>;
+  models: ModelConfigFromFile[];
+};
+
+type ModelConfigFromFile = {
+  id: string;
+  name?: string;
+  primary?: boolean;
+  reasoning?: boolean;
+  input?: ("text" | "image")[];
+  contextWindow?: number;
+  maxTokens?: number;
+  cost?: Partial<ModelCost>;
+};
+```
+
 ## Context & Prompt
 
 Helpers for assembling system prompts and building model requests.
@@ -504,6 +673,10 @@ type LoopMetrics = {
 | `ExtensionRunner` | Extension runtime with hooks and events |
 | `HooksManager` / `EventBus` | Hook registry and cross-plugin event channel |
 | `StreamFn` / `LlmModelRef` | Model stream function and model reference |
+| `AgentConfigFile` | Parsed `.rowan/config.yaml` structure |
+| `ProviderConfigFromFile` / `ModelConfigFromFile` | Provider and model config entries |
+| `loadConfigFile` / `registerConfigModels` / `resolveDefaultModel` | Config loading and model registration |
+| `parseModelRef` | Parse `"provider/id"` or `"id"` strings to `LlmModelRef` |
 
 ## Documentation
 

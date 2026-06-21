@@ -14,11 +14,12 @@
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.4.4",
+      "version": "0.4.6",
       "dependencies": {
-        "@rowan-agent/models": "workspace:*",
+        "@rowan-agent/models": "0.4.6",
         "jiti": "2.7.0",
         "typebox": "^1.0.0",
+        "yaml": "^2.7.0",
       },
       "devDependencies": {
         "tsup": "^8.5.1",
@@ -26,7 +27,7 @@
     },
     "packages/cli": {
       "name": "@rowan-agent/cli",
-      "version": "0.4.4",
+      "version": "0.4.6",
       "bin": {
         "rowan": "./src/cli.ts",
       },
@@ -38,7 +39,7 @@
     },
     "packages/logging": {
       "name": "@rowan-agent/logging",
-      "version": "0.4.4",
+      "version": "0.4.6",
       "dependencies": {
         "@rowan-agent/models": "workspace:*",
         "pino": "^10.3.1",
@@ -46,7 +47,7 @@
     },
     "packages/models": {
       "name": "@rowan-agent/models",
-      "version": "0.4.4",
+      "version": "0.4.6",
       "devDependencies": {
         "tsup": "^8.5.1",
       },
@@ -294,5 +295,7 @@
     "ufo": ["ufo@1.6.4", "", {}, "sha512-JFNbkD1Svwe0KvGi8GOeLcP4kAWQ609twvCdcHxq1oSL8svv39ZuSvajcD8B+5D0eL4+s1Is2D/O6KN3qcTeRA=="],
 
     "undici-types": ["undici-types@7.19.2", "", {}, "sha512-qYVnV5OEm2AW8cJMCpdV20CDyaN3g0AjDlOGf1OW4iaDEx8MwdtChUp4zu4H0VP3nDRF/8RKWH+IPp9uW0YGZg=="],
+
+    "yaml": ["yaml@2.9.0", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="],
   }
 }

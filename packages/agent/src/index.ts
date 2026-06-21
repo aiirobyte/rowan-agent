@@ -40,6 +40,18 @@ export {
   type WorkspacePaths,
 } from "./harness/env";
 
+// ── config ─────────────────────────────────────────────────────
+export {
+  loadConfigFile,
+  registerConfigModels,
+  resolveDefaultModel,
+  parseModelRef,
+  interpolateEnvVars,
+  type AgentConfigFile,
+  type ProviderConfigFromFile,
+  type ModelConfigFromFile,
+} from "./harness/config";
+
 // ── events ─────────────────────────────────────────────────────
 export { EventStream, AgentEventStream } from "./event-stream";
 

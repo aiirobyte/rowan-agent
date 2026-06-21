@@ -89,15 +89,11 @@ const echoToolDefinition = {
 // Config resolution tests
 // ---------------------------------------------------------------------------
 
-test("resolveOpenAICompletionsConfig uses flags over env and defaults base URL", () => {
+test("resolveOpenAICompletionsConfig uses flags and defaults base URL", () => {
   const config = resolveOpenAICompletionsConfig({
     apiKey: "flag-key",
     model: "flag-model",
-    env: {
-      ROWAN_OPENAI_BASE_URL: "https://env.example/v1",
-      ROWAN_OPENAI_API_KEY: "env-key",
-      ROWAN_MODEL: "env-model",
-    },
+    baseUrl: "https://env.example/v1",
   });
 
   expect(config.baseUrl).toBe("https://env.example/v1");
@@ -109,7 +105,6 @@ test("resolveOpenAICompletionsConfig reports missing API key", () => {
   expect(() =>
     resolveOpenAICompletionsConfig({
       model: "test-model",
-      env: {},
     }),
   ).toThrow("Missing API key");
 });
@@ -136,7 +131,7 @@ test("callOpenAICompletions posts chat completions request", async () => {
       model: "test-model",
       fetch: fetchMock,
     },
-    { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hello" }] },
+    { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
   );
 
   expect(result.content).toBe("{\"ok\":true}");
@@ -157,7 +152,7 @@ test("callOpenAICompletions returns provider token usage", async () => {
       model: "test-model",
       fetch: fetchMock,
     },
-    { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hello" }] },
+    { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
   );
 
   expect(result.usage).toEqual({
@@ -183,7 +178,7 @@ test("callOpenAICompletions normalizes HTTP errors", async () => {
         model: "test-model",
         fetch: fetchMock,
       },
-      { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hello" }] },
+      { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
     );
     throw new Error("Expected request to fail.");
   } catch (error) {
@@ -213,7 +208,7 @@ test("callOpenAICompletions retries retryable request failures", async () => {
       retryDelayMs: 0,
       fetch: fetchMock,
     },
-    { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hello" }] },
+    { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
   );
 
   expect(result.content).toBe("{\"ok\":true}");
@@ -236,7 +231,7 @@ test("callOpenAICompletions can disable retries", async () => {
         maxRetries: 0,
         fetch: fetchMock,
       },
-      { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hello" }] },
+      { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
     ),
   ).rejects.toThrow("Unable to connect");
   expect(attempts).toBe(1);
@@ -258,7 +253,7 @@ test("callOpenAICompletions supports abort signal", async () => {
       model: "test-model",
       fetch: fetchMock,
     },
-    { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hello" }] },
+    { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
     { signal: controller.signal },
   );
   controller.abort(new Error("test abort"));
@@ -284,7 +279,7 @@ test("createOpenAICompletionsStream yields SSE streaming events", async () => {
   });
 
   const request: LlmRequest = {
-    model: { provider: "openai-compatible", name: "test-model" },
+    model: { provider: "openai-compatible", id: "test-model" },
     system: "Test system",
     messages: [
       { role: "user", content: "hello" },
@@ -327,7 +322,7 @@ test("createOpenAICompletionsStream sends tools in request body", async () => {
   await collect(
     stream(
       {
-        model: { provider: "test", name: "test-model" },
+        model: { provider: "test", id: "test-model" },
         system: "Test system",
         messages: [{ role: "user", content: "hello" }],
         tools: [{ name: "echo", description: "Echoes input.", parameters: { type: "object", properties: {} } }],
@@ -398,7 +393,7 @@ test("createOpenAICompletionsStream handles tool calls from SSE stream", async (
   const events = await collect(
     stream(
       {
-        model: { provider: "test", name: "test-model" },
+        model: { provider: "test", id: "test-model" },
         messages: [{ role: "user", content: "hello" }],
         tools: [{ name: "echo", description: "Echoes input.", parameters: {} }],
       },
@@ -452,7 +447,7 @@ test("createOpenAICompletionsStream yields error event on HTTP failure", async (
 
   const events = await collect(
     stream(
-      { model: { provider: "test", name: "test" }, messages: [{ role: "user", content: "hi" }] },
+      { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hi" }] },
       {},
     ),
   );
@@ -478,7 +473,7 @@ test("createOpenAICompletionsStream yields text_delta for non-JSON text", async 
   });
 
   const request: LlmRequest = {
-    model: { provider: "openai-compatible", name: "test-model" },
+    model: { provider: "openai-compatible", id: "test-model" },
     system: "Test system",
     messages: [
       { role: "user", content: "hello" },

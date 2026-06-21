@@ -28,6 +28,10 @@ type LogSummary = {
   sessionIds: string[];
 };
 
+function modelFlags(server: { url: URL }): string[] {
+  return ["--base-url", server.url.toString().replace(/\/$/, ""), "--api-key", "test-key", "--model", "test-model"];
+}
+
 async function runCli(
   args: string[],
   env: Record<string, string | undefined> = {},
@@ -37,10 +41,6 @@ async function runCli(
     cwd: process.cwd(),
     env: {
       ...process.env,
-      ROWAN_OPENAI_API_KEY: "",
-      ROWAN_MODEL: "",
-      ROWAN_OPENAI_BASE_URL: "",
-      ROWAN_OPENAI_TIMEOUT_MS: "",
       ROWAN_LOG_LEVEL: "",
       ...env,
     },
@@ -157,18 +157,32 @@ async function summarizeLogFile(filePath: string): Promise<LogSummary> {
   return { filePath, eventTypes, sessionIds: [...sessionIds] };
 }
 
-test("CLI requires OpenAI-compatible API key", async () => {
-  const result = await runCli(["--model", "test-model", "hello"]);
+test("CLI requires API key when no config file", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-no-apikey-"));
+  try {
+    const result = await runCli(["--model", "test-model", "hello"], {
+      ROWAN_WORKSPACE: workspace,
+    });
 
-  expect(result.exitCode).toBe(1);
-  expect(result.stderr).toContain("Missing API key");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("API key is required");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
-test("CLI requires OpenAI-compatible model", async () => {
-  const result = await runCli(["--api-key", "test-key", "hello"]);
+test("CLI requires model when no config file", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-no-model-"));
+  try {
+    const result = await runCli(["--api-key", "test-key", "hello"], {
+      ROWAN_WORKSPACE: workspace,
+    });
 
-  expect(result.exitCode).toBe(1);
-  expect(result.stderr).toContain("Missing model");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Model is required");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("CLI rejects removed fake runtime flag", async () => {
@@ -206,7 +220,7 @@ test("CLI rejects invalid log level", async () => {
   expect(result.stderr).toContain("--log-level must be one of: debug, info, warn, error, silent.");
 });
 
-test("CLI config shows missing and default configuration without requiring model credentials", async () => {
+test("CLI config shows missing config file and default configuration without requiring model credentials", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-config-missing-"));
 
   try {
@@ -215,38 +229,26 @@ test("CLI config shows missing and default configuration without requiring model
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).not.toContain("Missing API key");
-    expect(result.stderr).not.toContain("Missing model");
+    expect(result.stderr).not.toContain("API key is required");
+    expect(result.stderr).not.toContain("Model is required");
     const config = JSON.parse(result.stdout) as {
       command?: string;
       workspace?: { cwd?: string; rowanDir?: string };
-      openaiCompatible?: {
-        baseUrl?: string;
-        baseUrlSource?: string;
-        apiKey?: string | null;
-        apiKeyConfigured?: boolean;
-        apiKeySource?: string;
-        modelConfigured?: boolean;
-        modelSource?: string;
-        timeoutMs?: number;
-        timeoutMsSource?: string;
-      };
+      configFile?: { loaded?: boolean; path?: string | null };
+      model?: { flag?: string | null; apiKeyConfigured?: boolean; apiKey?: string | null; baseUrl?: string | null; timeoutMs?: number | null };
       logging?: Record<string, unknown>;
     };
 
     expect(config.command).toBe("config");
     expect(config.workspace?.cwd).toBe(workspace);
     expect(config.workspace?.rowanDir).toBe(join(workspace, ".rowan"));
-    expect(config.openaiCompatible).toMatchObject({
-      baseUrl: "https://api.openai.com/v1",
-      baseUrlSource: "default",
-      apiKey: null,
+    expect(config.configFile).toEqual({ loaded: false, path: null });
+    expect(config.model).toMatchObject({
+      flag: null,
       apiKeyConfigured: false,
-      apiKeySource: "missing",
-      modelConfigured: false,
-      modelSource: "missing",
-      timeoutMs: 60000,
-      timeoutMsSource: "default",
+      apiKey: null,
+      baseUrl: null,
+      timeoutMs: null,
     });
     expect(config.logging).toEqual({
       automatic: true,
@@ -291,25 +293,21 @@ test("CLI config reports resolved flags without exposing API key material", asyn
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain("super-secret-key");
     const config = JSON.parse(result.stdout) as {
-      openaiCompatible?: Record<string, unknown>;
-      agent?: Record<string, unknown>;
+      configFile?: Record<string, unknown>;
+      model?: Record<string, unknown>;
       session?: Record<string, unknown>;
       logging?: Record<string, unknown>;
       skills?: Array<Record<string, unknown>>;
       tools?: string[];
     };
 
-    expect(config.openaiCompatible).toMatchObject({
-      baseUrl: "https://api.example/v1",
-      baseUrlSource: "flag",
+    expect(config.configFile).toEqual({ loaded: false, path: null });
+    expect(config.model).toMatchObject({
+      flag: "test-model",
       apiKeyConfigured: true,
       apiKey: "super********key",
-      apiKeySource: "flag",
-      model: "test-model",
-      modelConfigured: true,
-      modelSource: "flag",
+      baseUrl: "https://api.example/v1",
       timeoutMs: 1234,
-      timeoutMsSource: "flag",
     });
     expect(config.session).toEqual({ id: "ses_example", source: "flag" });
     expect(config.logging).toEqual({
@@ -415,10 +413,7 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
   }
 
   try {
-    const result = await runCli(["--timeout-ms", "1", "hello"], {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
+    const result = await runCli([...modelFlags(server), "--timeout-ms", "1", "hello"], {
       ROWAN_WORKSPACE: workspace,
     });
 
@@ -466,11 +461,8 @@ test("CLI interactive prompt reports model errors once", async () => {
     }
 
     const result = await runCli(
-      [],
+      [...modelFlags(server)],
       {
-        ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-        ROWAN_OPENAI_API_KEY: "test-key",
-        ROWAN_MODEL: "test-model",
         ROWAN_WORKSPACE: workspace,
       },
       "hello\nagain\n",
@@ -534,10 +526,7 @@ test("CLI writes a default log without --log", async () => {
   }
 
   try {
-    const result = await runCli(["hello"], {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
+    const result = await runCli([...modelFlags(server), "hello"], {
       ROWAN_WORKSPACE: workspace,
     });
 
@@ -625,10 +614,7 @@ test("CLI --log-level debug writes redacted event payloads", async () => {
       throw error;
     }
 
-    const result = await runCli(["--log-level", "Debug", "hello"], {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
+    const result = await runCli([...modelFlags(server), "--log-level", "Debug", "hello"], {
       ROWAN_WORKSPACE: workspace,
     });
 
@@ -666,10 +652,7 @@ test("CLI --log-level silent suppresses run log files", async () => {
       throw error;
     }
 
-    const result = await runCli(["--log-level", "silent", "hello"], {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
+    const result = await runCli([...modelFlags(server), "--log-level", "silent", "hello"], {
       ROWAN_WORKSPACE: workspace,
     });
 
@@ -721,10 +704,7 @@ test("CLI exposes core bash in the none phase", async () => {
   }
 
   try {
-    const result = await runCli(["use bash"], {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
+    const result = await runCli([...modelFlags(server), "use bash"], {
       ROWAN_WORKSPACE: workspace,
     });
 
@@ -777,18 +757,11 @@ test("CLI --session continues a saved one-shot session", async () => {
       throw error;
     }
 
-    const env = {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
-      ROWAN_WORKSPACE: workspace,
-    };
-
-    const first = await runCli(["hello"], env);
+    const first = await runCli([...modelFlags(server), "hello"], { ROWAN_WORKSPACE: workspace });
     expect(first.exitCode).toBe(0);
     const sessionId = sessionIdFrom(first.stderr);
 
-    const second = await runCli(["--session", sessionId, "continue"], env);
+    const second = await runCli([...modelFlags(server), "--session", sessionId, "continue"], { ROWAN_WORKSPACE: workspace });
     expect(second.exitCode).toBe(0);
     expect(sessionIdFrom(second.stderr)).toBe(sessionId);
     expect(countMatches(second.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
@@ -845,11 +818,8 @@ test("CLI initial prompt continues into the default interactive session", async 
     }
 
     const result = await runCli(
-      ["hello"],
+      [...modelFlags(server), "hello"],
       {
-        ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-        ROWAN_OPENAI_API_KEY: "test-key",
-        ROWAN_MODEL: "test-model",
         ROWAN_WORKSPACE: workspace,
       },
       ":session\nagain\n:quit\n",
@@ -911,18 +881,11 @@ test("CLI --session can continue with additional interactive turns", async () =>
       }
       throw error;
     }
-
-    const env = {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
-      ROWAN_WORKSPACE: workspace,
-    };
-    const initial = await runCli(["hello"], env);
+    const initial = await runCli([...modelFlags(server), "hello"], { ROWAN_WORKSPACE: workspace });
     expect(initial.exitCode).toBe(0);
     const sessionId = sessionIdFrom(initial.stderr);
 
-    const chat = await runCli(["--session", sessionId, "again"], env, "more\n:quit\n");
+    const chat = await runCli([...modelFlags(server), "--session", sessionId, "again"], { ROWAN_WORKSPACE: workspace }, "more\n:quit\n");
     expect(chat.exitCode).toBe(0);
     expect(sessionIdFrom(chat.stderr)).toBe(sessionId);
     expect(countMatches(chat.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
@@ -988,10 +951,7 @@ test("CLI treats chat as a prompt instead of a command", async () => {
       throw error;
     }
 
-    const result = await runCli(["chat"], {
-      ROWAN_OPENAI_BASE_URL: server.url.toString().replace(/\/$/, ""),
-      ROWAN_OPENAI_API_KEY: "test-key",
-      ROWAN_MODEL: "test-model",
+    const result = await runCli([...modelFlags(server), "chat"], {
       ROWAN_WORKSPACE: workspace,
     });
 

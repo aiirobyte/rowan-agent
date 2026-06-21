@@ -12,7 +12,7 @@ function executionTurn(sessionId: string): ExecutionTurn {
     phase: "execute",
     requestedAtMs: 1,
     completedAtMs: 2,
-    model: { provider: "test", name: "model" },
+    model: { provider: "test", id: "model" },
   };
 }
 
