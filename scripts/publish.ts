@@ -52,14 +52,8 @@ function compareVersions(v1: string, v2: string): number {
 }
 
 async function ensureNpmAuth() {
-  try {
-    const username = execSync("npm whoami", { encoding: "utf-8" }).trim();
-    console.log(`✓ Logged in as: ${username}\n`);
-  } catch {
-    console.log("🔐 Not logged in. Starting npm login...\n");
-    execSync("npm login", { stdio: "inherit" });
-    console.log("");
-  }
+  // Trusted Publishing uses OIDC — no interactive login needed
+  // npm will authenticate automatically via id-token in CI
 }
 
 async function publishPackage(packageDir: string, packages: Map<string, string>) {
@@ -108,8 +102,8 @@ async function publishPackage(packageDir: string, packages: Map<string, string>)
       console.log("   ✓ Replaced workspace:* references");
     }
 
-    // Publish
-    execSync("npm publish --access public", {
+    // Publish with provenance (Trusted Publishing via OIDC)
+    execSync("npx npm publish --access public --provenance", {
       cwd: packageDir,
       stdio: "inherit",
     });

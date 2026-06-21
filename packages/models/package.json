@@ -2,6 +2,11 @@
   "name": "@rowan-agent/models",
   "version": "0.4.7",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aiirobyte/rowan-agent.git",
+    "directory": "packages/models"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

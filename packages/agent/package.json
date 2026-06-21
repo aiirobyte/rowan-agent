@@ -2,6 +2,11 @@
   "name": "@rowan-agent/agent",
   "version": "0.4.7",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aiirobyte/rowan-agent.git",
+    "directory": "packages/agent"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -20,7 +25,7 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@rowan-agent/models": "0.4.6",
+    "@rowan-agent/models": "workspace:*",
     "jiti": "2.7.0",
     "typebox": "^1.0.0",
     "yaml": "^2.7.0"

@@ -104,7 +104,7 @@ export function messageContentText(content: AgentMessage["content"]): string {
   }
 
   return content
-    .map((part) => {
+    .map((part: LlmContentPart) => {
       if (part.type === "text") return part.text;
       if (part.type === "thinking") return part.thinking;
       if (part.type === "tool_result") return part.content;
