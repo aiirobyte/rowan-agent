@@ -19,7 +19,6 @@ import {
   normalizeBaseUrl,
   nonEmpty,
   requireValue,
-  defaultEnv,
   createRequestSignal,
   readErrorBody,
   isRetryableStatus,
@@ -60,22 +59,19 @@ export type ResolveAnthropicConfigInput = {
   retryDelayMs?: number;
   fetch?: ProviderFetch;
   thinking?: { budgetTokens: number };
-  env?: Record<string, string | undefined>;
 };
 
 const DEFAULT_MAX_TOKENS = 8192;
 
 export function resolveAnthropicConfig(input: ResolveAnthropicConfigInput = {}): AnthropicConfig {
-  const env = input.env ?? defaultEnv();
-  const baseUrl =
-    nonEmpty(input.baseUrl) ?? nonEmpty(env.ROWAN_ANTHROPIC_BASE_URL) ?? "https://api.anthropic.com";
-  const apiKey = nonEmpty(input.apiKey) ?? nonEmpty(env.ROWAN_ANTHROPIC_API_KEY) ?? nonEmpty(env.ANTHROPIC_API_KEY);
-  const model = nonEmpty(input.model) ?? nonEmpty(env.ROWAN_MODEL);
+  const baseUrl = nonEmpty(input.baseUrl) ?? "https://api.anthropic.com";
+  const apiKey = nonEmpty(input.apiKey);
+  const model = nonEmpty(input.model);
 
   return {
     baseUrl: normalizeBaseUrl(baseUrl),
-    apiKey: requireValue("API key", apiKey, "set ROWAN_ANTHROPIC_API_KEY or pass --api-key"),
-    model: requireValue("model", model, "set ROWAN_MODEL or pass --model"),
+    apiKey: requireValue("API key", apiKey, "model.apiKey is required (set apiKey in config.yaml or pass --api-key)"),
+    model: requireValue("model", model, "model.id is required"),
     ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
     ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     ...(input.maxRetries !== undefined ? { maxRetries: input.maxRetries } : {}),
@@ -447,6 +443,10 @@ export const streamAnthropic: ApiStreamFn = (model, request, options) => {
   const config = resolveAnthropicConfig({
     baseUrl: model.baseUrl,
     model: model.id,
+    apiKey: model.apiKey,
+    timeoutMs: model.timeoutMs,
+    maxRetries: model.maxRetries,
+    retryDelayMs: model.retryDelayMs,
   });
   return streamAnthropicMessages(config, request, options);
 };

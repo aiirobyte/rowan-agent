@@ -808,7 +808,7 @@ function createPhaseExecution(
         skills: phaseContext.skills,
         promptGuidelines: phaseContext.promptGuidelines,
         appendSystemPrompt: phaseContext.appendSystemPrompt,
-      }, { model: config.model });
+      }, { model: phase.model ?? config.model });
 
       // Ensure tools are available
       if (!request.tools) {
@@ -850,7 +850,7 @@ function createPhaseExecution(
         ),
       );
 
-      await config.onModelTranscript?.(result.transcript, { phase: phase.id, model: config.model });
+      await config.onModelTranscript?.(result.transcript, { phase: phase.id, model: phase.model ?? config.model });
       return result;
     },
 

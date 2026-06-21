@@ -11,6 +11,7 @@ import {
   resolveResourcePath,
   inferResourceName,
 } from "../loader";
+import { parseModelRef } from "../config";
 import type { WorkspacePaths } from "../env/path";
 import { formatResourceOutput } from "../context/resource-formatter";
 
@@ -46,6 +47,7 @@ export async function loadPhase(
     filePath: resolved,
     baseDir,
     content: body,
+    model: parseModelRef(frontmatter.model),
   };
 
   // Try to load execution code

@@ -1,0 +1,13 @@
+{
+  "name": "rowan-ext-database",
+  "version": "0.1.0",
+  "rowan": {
+    "extensions": ["./index.ts"],
+    "phase": {
+      "id": "db-query",
+      "name": "Database Query",
+      "description": "Execute read-only database queries",
+      "tools": ["run_command"]
+    }
+  }
+}

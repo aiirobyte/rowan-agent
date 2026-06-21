@@ -1,4 +1,4 @@
-import type { Api, Model, Provider, LlmTokenUsage } from "./protocol";
+import type { Model, Provider, LlmTokenUsage } from "./protocol";
 
 // ---------------------------------------------------------------------------
 // Model registry

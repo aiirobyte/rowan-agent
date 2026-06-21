@@ -2,12 +2,12 @@
 // API protocol identifiers
 // ---------------------------------------------------------------------------
 
-export type KnownApi =
+export type KnownProtocol =
   | "openai-completions"
   | "openai-responses"
   | "anthropic-messages";
 
-export type Api = KnownApi | (string & {});
+export type Protocol = KnownProtocol | (string & {});
 
 // ---------------------------------------------------------------------------
 // Provider identifiers
@@ -39,8 +39,8 @@ export interface ModelCost {
 
 export interface Model {
   id: string;
-  name: string;
-  api: Api;
+  name?: string;
+  protocol: Protocol;
   provider: Provider;
   baseUrl: string;
   reasoning: boolean;
@@ -49,6 +49,10 @@ export interface Model {
   contextWindow: number;
   maxTokens: number;
   headers?: Record<string, string>;
+  apiKey?: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,8 +61,8 @@ export interface Model {
 
 export type ProviderModelConfig = {
   id: string;
-  name: string;
-  api: Api;
+  name?: string;
+  protocol: Protocol;
   reasoning: boolean;
   input: ("text" | "image")[];
   cost: ModelCost;
@@ -67,10 +71,10 @@ export type ProviderModelConfig = {
 };
 
 export type ProviderConfig = {
-  name: string;
+  id: string;
   baseUrl: string;
-  apiKey?: string;
-  api: Api;
+  apiKey: string;
+  protocol: Protocol;
   streamSimple?: ApiStreamFn;
   headers?: Record<string, string>;
   authHeader?: string;
@@ -88,7 +92,7 @@ export type ProviderConfig = {
 
 export type LlmModelRef = {
   provider: string;
-  name: string;
+  id: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -281,7 +285,7 @@ export type StreamFn = (
 
 /**
  * API-level stream function: receives a resolved Model and yields events.
- * Providers implement this signature. The registry dispatches by model.api.
+ * Providers implement this signature. The registry dispatches by model.protocol.
  */
 export type ApiStreamFn = (
   model: Model,

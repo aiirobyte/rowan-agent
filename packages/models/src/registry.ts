@@ -1,15 +1,15 @@
-import type { Api, ApiStreamFn, Model, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
+import type { Protocol, ApiStreamFn, Model, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
 import { getModel, resolveModel } from "./models";
 import { streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
 import { streamAnthropic } from "./providers/anthropic";
 
 // ---------------------------------------------------------------------------
-// API Provider Registry (dispatches by model.api, not model.provider)
+// API Provider Registry (dispatches by model.protocol, not model.provider)
 // ---------------------------------------------------------------------------
 
 export interface ApiProvider {
-  api: Api;
+  protocol: Protocol;
   stream: ApiStreamFn;
 }
 
@@ -17,23 +17,23 @@ const apiProviderRegistry = new Map<string, ApiProvider>();
 
 /**
  * Register a provider for a given API protocol.
- * When a model with `api === provider.api` is used, this provider handles it.
+ * When a model with `protocol === provider.protocol` is used, this provider handles it.
  */
 export function registerApiProvider(provider: ApiProvider): void {
-  apiProviderRegistry.set(provider.api, provider);
+  apiProviderRegistry.set(provider.protocol, provider);
 }
 
 /**
  * Look up a registered API provider by protocol name.
  */
-export function getApiProvider(api: Api): ApiProvider | undefined {
-  return apiProviderRegistry.get(api);
+export function getApiProvider(protocol: Protocol): ApiProvider | undefined {
+  return apiProviderRegistry.get(protocol);
 }
 
 /**
  * List all registered API protocol names.
  */
-export function listApiProviders(): Api[] {
+export function listApiProviders(): Protocol[] {
   return [...apiProviderRegistry.keys()];
 }
 
@@ -48,8 +48,8 @@ export function clearApiProviders(): void {
  * Unregister an API provider by protocol name.
  * Returns true if a provider was removed.
  */
-export function unregisterApiProvider(api: Api): boolean {
-  return apiProviderRegistry.delete(api);
+export function unregisterApiProvider(protocol: Protocol): boolean {
+  return apiProviderRegistry.delete(protocol);
 }
 
 // ---------------------------------------------------------------------------
@@ -61,9 +61,9 @@ export function unregisterApiProvider(api: Api): boolean {
  * Each provider resolves its config from the Model descriptor and environment.
  */
 export function registerBuiltInApiProviders(): void {
-  registerApiProvider({ api: "openai-completions", stream: streamOpenAICompletions });
-  registerApiProvider({ api: "openai-responses", stream: streamOpenAIResponses });
-  registerApiProvider({ api: "anthropic-messages", stream: streamAnthropic });
+  registerApiProvider({ protocol: "openai-completions", stream: streamOpenAICompletions });
+  registerApiProvider({ protocol: "openai-responses", stream: streamOpenAIResponses });
+  registerApiProvider({ protocol: "anthropic-messages", stream: streamAnthropic });
 }
 
 // ---------------------------------------------------------------------------
@@ -75,10 +75,10 @@ export function registerBuiltInApiProviders(): void {
  * This is the main entry point for model-based dispatch.
  */
 export function stream(model: Model, request: LlmRequest, options: LlmStreamOptions): AsyncIterable<LlmStreamEvent> {
-  const provider = apiProviderRegistry.get(model.api);
+  const provider = apiProviderRegistry.get(model.protocol);
   if (!provider) {
     throw new Error(
-      `No API provider registered for api "${model.api}". ` +
+      `No API provider registered for protocol "${model.protocol}". ` +
       `Registered: ${[...apiProviderRegistry.keys()].join(", ") || "(none)"}. ` +
       `Call registerBuiltInApiProviders() or registerApiProvider() first.`,
     );
@@ -91,27 +91,27 @@ export function stream(model: Model, request: LlmRequest, options: LlmStreamOpti
  * then stream.
  */
 export function streamByRef(
-  ref: string | { provider: string; name: string },
+  ref: string | { provider: string; id: string },
   request: Omit<LlmRequest, "model">,
   options: LlmStreamOptions = {},
 ): AsyncIterable<LlmStreamEvent> {
   const model = typeof ref === "string"
     ? resolveModel(ref)
-    : getModel(ref.provider, ref.name);
+    : getModel(ref.provider, ref.id);
 
   if (!model) {
-    const key = typeof ref === "string" ? ref : `${ref.provider}/${ref.name}`;
+    const key = typeof ref === "string" ? ref : `${ref.provider}/${ref.id}`;
     throw new Error(`Model not found: "${key}". Register it with registerModel() first.`);
   }
 
-  return stream(model, { ...request, model: { provider: model.provider, name: model.id } }, options);
+  return stream(model, { ...request, model: { provider: model.provider, id: model.id } }, options);
 }
 
 // ---------------------------------------------------------------------------
 // Legacy provider factory (backward compat with CLI)
 // ---------------------------------------------------------------------------
 
-export type ProviderFactory = (model: { provider: string; name: string }) => StreamFn;
+export type ProviderFactory = (model: { provider: string; id: string }) => StreamFn;
 
 const legacyProviders = new Map<string, ProviderFactory>();
 
@@ -127,8 +127,8 @@ export function createDispatchStream(): StreamFn {
 
   return async function* dispatchStream(request, options) {
     // Try to resolve a full Model from the registry
-    const model = getModel(request.model.provider, request.model.name)
-      ?? resolveModel(request.model.name);
+    const model = getModel(request.model.provider, request.model.id)
+      ?? resolveModel(request.model.id);
 
     if (model) {
       yield* stream(model, request, options);
@@ -144,7 +144,7 @@ export function createDispatchStream(): StreamFn {
     }
 
     throw new Error(
-      `No provider for "${request.model.provider}/${request.model.name}". ` +
+      `No provider for "${request.model.provider}/${request.model.id}". ` +
       `Register a model with registerModel() or a provider with registerProvider().`,
     );
   };

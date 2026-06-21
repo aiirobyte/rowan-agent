@@ -59,7 +59,7 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
       tools: [echoTool],
       skills: [],
     },
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream,
   });
 
@@ -90,7 +90,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
       tools: [echoTool],
       skills: [],
     },
-    model: { provider: "test-provider", name: "test-model" },
+    model: { provider: "test-provider", id: "test-model" },
     stream,
     signal: controller.signal,
   });
@@ -102,7 +102,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
     messages?: Array<{ role: string; content: string }>;
     tools?: Array<{ name: string; description: string }>;
   };
-  expect(request.model).toEqual({ provider: "test-provider", name: "test-model" });
+  expect(request.model).toEqual({ provider: "test-provider", id: "test-model" });
   expect(request.system).toContain("Test system");
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
   // Phase content is injected as a tool_result, so the last message is not the user message
@@ -135,7 +135,7 @@ test("runAgentLoop completes task with simple response", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream,
     emit: (event) => {
       events.push(event.type);
@@ -183,7 +183,7 @@ test("runAgentLoop executes known tool calls in the default loop", async () => {
 
   const result = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "tool-calling" },
+    model: { provider: "test", id: "tool-calling" },
     stream,
     emit: (event) => {
       events.push(event);
@@ -236,7 +236,7 @@ test("runAgentLoop keeps executing tool calls after the old tool round threshold
 
   const result = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "tool-rounds" },
+    model: { provider: "test", id: "tool-rounds" },
     stream,
   });
 
@@ -287,7 +287,7 @@ test("runAgentLoop preserves assistant text with tool calls for the follow-up re
 
   const result = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "text-and-tool" },
+    model: { provider: "test", id: "text-and-tool" },
     stream,
   });
 
@@ -310,7 +310,7 @@ test("runAgentLoop preserves message order", async () => {
 
   await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "ordered" },
+    model: { provider: "test", id: "ordered" },
     stream,
     maxAttempts: 1,
     emit: (event) => {
@@ -340,7 +340,7 @@ test("runAgentLoop does not emit prompt messages as events", async () => {
 
   await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "prompt-recording" },
+    model: { provider: "test", id: "prompt-recording" },
     stream,
     emit: (event) => {
       emittedEvents.push(event);
@@ -366,7 +366,7 @@ test("runAgentLoop can return a direct response without creating a task", async 
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
     emit: (event) => {
       emittedEvents.push(event);
@@ -401,7 +401,7 @@ test("runAgentLoop returns structured error for unknown tool without crashing", 
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream,
     maxAttempts: 1,
     emit: (event) => {
@@ -437,7 +437,7 @@ test("runAgentLoop throws provider errors to the caller", async () => {
   await expect(
     runAgentLoop({
       context: session,
-      model: { provider: "test", name: "failing" },
+      model: { provider: "test", id: "failing" },
       stream,
     }),
   ).rejects.toThrow("Invalid model");
@@ -458,7 +458,7 @@ test("runAgentLoop does not append an assistant message when the model stream er
   await expect(
     runAgentLoop({
       context: session,
-      model: { provider: "test", name: "failing" },
+      model: { provider: "test", id: "failing" },
       stream,
       emit: (event) => {
         events.push(event);
@@ -485,7 +485,7 @@ test("runAgentLoop retries when model returns invalid schema", async () => {
   let callCount = 0;
   const stream: StreamFn = async function* retryStream() {
     callCount++;
-    yield { type: "model_requested", model: { provider: "test", name: "retry" }, usage: { inputMessages: 1 } };
+    yield { type: "model_requested", model: { provider: "test", id: "retry" }, usage: { inputMessages: 1 } };
     if (callCount === 1) {
       throw invalidModelSchemaError("Model output did not match the expected schema.");
     }
@@ -496,7 +496,7 @@ test("runAgentLoop retries when model returns invalid schema", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "retry" },
+    model: { provider: "test", id: "retry" },
     stream,
     maxAttempts: 2,
     emit: (event) => {
@@ -523,7 +523,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
   let callCount = 0;
   const stream: StreamFn = async function* retryStream() {
     callCount++;
-    yield { type: "model_requested", model: { provider: "test", name: "retry" }, usage: { inputMessages: 1 } };
+    yield { type: "model_requested", model: { provider: "test", id: "retry" }, usage: { inputMessages: 1 } };
     if (callCount === 1) {
       throw invalidModelSchemaError("Model output did not include expected fields.");
     }
@@ -534,7 +534,7 @@ test("runAgentLoop retries when execute returns invalid model schema", async () 
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "retry-execute" },
+    model: { provider: "test", id: "retry-execute" },
     stream,
     maxAttempts: 2,
   });
@@ -554,7 +554,7 @@ test("beforeToolCall hook can block execution", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
     maxAttempts: 1,
     beforeToolCall: async () => ({ allow: false, reason: "blocked in test" }),
@@ -575,7 +575,7 @@ test("afterToolCall hook review is logged with original and reviewed result", as
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
     afterToolCall: async ({ result }) => ({
       ...result,
@@ -643,7 +643,7 @@ test("invalid tool args do not execute tool", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream: invalidArgsStream,
     maxAttempts: 1,
     emit: (event) => {
@@ -682,7 +682,7 @@ test("beforePhase hook can adjust phase input", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "runtime-adjust-input" },
+    model: { provider: "test", id: "runtime-adjust-input" },
     stream,
     beforePhase: async (phaseId, input) => {
       if (phaseId !== "chat") {
@@ -709,7 +709,7 @@ test("afterPhase hook can adjust phase output", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "runtime-adjust-output" },
+    model: { provider: "test", id: "runtime-adjust-output" },
     stream,
     afterPhase: async (phaseId, output) => {
       if (phaseId !== "default") {
@@ -740,7 +740,7 @@ test("beforePhase hook can skip a phase", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "runtime-skip" },
+    model: { provider: "test", id: "runtime-skip" },
     stream,
     beforePhase: async (phaseId) => {
       if (phaseId !== "default") {
@@ -775,7 +775,7 @@ test("afterPhase hook can adjust phase output", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "runtime-retry" },
+    model: { provider: "test", id: "runtime-retry" },
     stream,
     afterPhase: async (phaseId, output) => {
       if (phaseId !== "default") {
@@ -809,7 +809,7 @@ test("beforePhase hook can abort with an outcome", async () => {
 
   const outcome = await runAgentLoop({
     context: session,
-    model: { provider: "test", name: "runtime-abort" },
+    model: { provider: "test", id: "runtime-abort" },
     stream,
     emit: (event) => {
       events.push(event);

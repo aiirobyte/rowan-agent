@@ -1,0 +1,70 @@
+# Rowan Agent — Example Configuration
+# Copy to .rowan/config.yaml and adjust for your setup.
+# Docs: packages/agent/README.md#configuration
+
+# ── Default model ────────────────────────────────────────────────────────────
+# Explicit override. Takes priority over primary: true on any model entry.
+model:
+  provider: openai
+  id: gpt-4.1
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+# Levels: debug | info | warn | error | silent
+logLevel: info
+
+# ── Providers ────────────────────────────────────────────────────────────────
+providers:
+  # --- OpenAI (openai-responses protocol) ---
+  - id: openai
+    protocol: openai-responses
+    baseUrl: https://api.openai.com/v1
+    apiKey: ${OPENAI_API_KEY}
+    # Optional tuning:
+    # timeoutMs: 60000      # default: 60s
+    # maxRetries: 2
+    # retryDelayMs: 1000
+    # headers:              # extra headers sent with every request
+    #   X-Custom: value
+    models:
+      - id: gpt-4.1
+        primary: true           # selected when model: override is absent
+        contextWindow: 1048576
+        maxTokens: 32768
+        reasoning: false
+        input: ["text", "image"]
+        cost:                    # per-token pricing (optional, for tracking)
+          input: 2
+          output: 8
+          cacheRead: 0.5
+          cacheWrite: 0
+
+      - id: o3
+        reasoning: true          # enables reasoning mode
+        contextWindow: 200000
+        maxTokens: 100000
+
+  # --- Anthropic (anthropic protocol) ---
+  - id: anthropic
+    protocol: anthropic
+    baseUrl: https://api.anthropic.com
+    apiKey: ${ANTHROPIC_API_KEY}
+    models:
+      - id: claude-sonnet-4-20250514
+        primary: true
+        contextWindow: 200000
+        maxTokens: 16384
+        input: ["text", "image"]
+
+  # --- OpenAI-compatible endpoint (e.g. local, proxy, or third-party) ---
+  - id: local
+    protocol: openai-completions     # Chat Completions API
+    baseUrl: http://localhost:8080/v1
+    apiKey: ${LOCAL_API_KEY}         # can be a dummy value for local servers
+    models:
+      - id: qwen3-235b-a22b
+        contextWindow: 131072
+
+# ── Model resolution order ──────────────────────────────────────────────────
+# 1. Top-level model.provider + model.id (explicit override)
+# 2. First model with primary: true (by file order)
+# 3. First model in the first provider (fallback)

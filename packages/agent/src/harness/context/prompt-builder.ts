@@ -100,7 +100,7 @@ export function buildModelRequest(
   }));
 
   return {
-    model: options?.model ?? { provider: "", name: "" },
+    model: options?.model ?? { provider: "", id: "" },
     system: systemText,
     messages,
     tools: modelTools.length > 0 ? modelTools : undefined,

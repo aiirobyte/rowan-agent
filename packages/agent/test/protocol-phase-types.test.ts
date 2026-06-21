@@ -9,7 +9,7 @@ const chatOutput: PhaseOutput = {
 void chatOutput;
 
 const llmRequest: LlmRequest = {
-  model: { provider: "test", name: "model" },
+  model: { provider: "test", id: "model" },
   messages: [{ role: "user", content: "hello" }],
 };
 const llmEvent: LlmStreamEvent = { type: "done" };

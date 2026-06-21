@@ -108,7 +108,7 @@ describe("Plan phase execution", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "plan this task" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -146,7 +146,7 @@ describe("Plan phase execution", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "plan and verify" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -175,7 +175,7 @@ describe("Verify phase execution", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "verify this" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -196,7 +196,7 @@ describe("Verify phase execution", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "verify" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -239,7 +239,7 @@ describe("Plan → Verify full flow", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "plan and verify this task" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -281,7 +281,7 @@ describe("Plan → Verify full flow", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "plan and verify" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });

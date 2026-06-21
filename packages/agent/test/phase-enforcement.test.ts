@@ -92,7 +92,7 @@ test("route in same turn extracts route normally — no forced routing", async (
 
   const result = await runAgentLoop({
     context: createContext({ systemPrompt: "Test", input: "do something", tools: [echoTool] }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream,
     phases,
   });
@@ -129,7 +129,7 @@ test("phase tool_result message is cleaned up on route transition", async () => 
 
   const result = await runAgentLoop({
     context: createContext({ systemPrompt: "Test", input: "do something" }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream,
     phases,
   });
@@ -168,7 +168,7 @@ test("phase with tools restricted to exclude route returns stop gracefully", asy
 
   const result = await runAgentLoop({
     context: createContext({ systemPrompt: "Test", input: "plan this", tools: [echoTool] }),
-    model: { provider: "test", name: "scripted" },
+    model: { provider: "test", id: "scripted" },
     stream,
     phases,
   });

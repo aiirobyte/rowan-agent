@@ -3,8 +3,9 @@
 import { createInterface } from "node:readline";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
-  createOpenAICompletionsStream,
-  resolveOpenAICompletionsConfig,
+  createDispatchStream,
+  registerBuiltInApiProviders,
+  registerModel,
 } from "@rowan-agent/models";
 import {
   Agent,
@@ -15,6 +16,7 @@ import {
   type AgentMessage,
   type Outcome,
   type ExtensionRunnerRef,
+  type LlmModelRef,
 } from "@rowan-agent/agent";
 import {
   pinoAgentEventLogger,
@@ -31,6 +33,10 @@ import {
   type WorkspacePaths,
   resolveInWorkspace,
   resolveWorkspacePaths,
+  loadConfigFile,
+  registerConfigModels,
+  resolveDefaultModel,
+  type AgentConfigFile,
 } from "@rowan-agent/agent";
 import {
   createExtensionRunner,
@@ -177,11 +183,13 @@ Sessions:
 Skills:
   --skill example resolves to <cwd>/.rowan/skills/example/SKILL.md.
 
+Config:
+  Model providers are configured in <cwd>/.rowan/config.yaml.
+  The file defines providers, models, api keys, and the default model.
+  See config-improving-plan.md for the full schema.
+  Without a config file, --model and --api-key are required.
+
 Environment:
-  ROWAN_OPENAI_BASE_URL  Defaults to https://api.openai.com/v1
-  ROWAN_OPENAI_API_KEY   Required unless --api-key is passed
-  ROWAN_MODEL            Required unless --model is passed
-  ROWAN_OPENAI_TIMEOUT_MS Optional request timeout in milliseconds, defaults to 60000
   ROWAN_LOG_LEVEL        Optional run log detail: debug, info, warn, error, or silent
   ROWAN_RUNTIME          Optional override: source or binary
   ROWAN_WORKSPACE        Optional cwd override
@@ -199,16 +207,6 @@ function parsePositiveInteger(value: string, source: string): number {
 function nonEmpty(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
-}
-
-function configSource(flagValue: string | undefined, envValue: string | undefined, defaultValue?: string): "flag" | "env" | "default" | "missing" {
-  if (nonEmpty(flagValue)) {
-    return "flag";
-  }
-  if (nonEmpty(envValue)) {
-    return "env";
-  }
-  return defaultValue === undefined ? "missing" : "default";
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -237,11 +235,6 @@ function readOptionValue(args: string[], option: string): string {
   return value;
 }
 
-function parseOptionalTimeoutMs(value: string | undefined): number | undefined {
-  const normalized = value?.trim();
-  return normalized ? parsePositiveInteger(normalized, "ROWAN_OPENAI_TIMEOUT_MS") : undefined;
-}
-
 function parseLogLevel(value: string, source: string): AgentEventLogLevel {
   const normalized = value.trim().toLowerCase();
   if ((LOG_LEVELS as readonly string[]).includes(normalized)) {
@@ -255,8 +248,8 @@ function parseOptionalLogLevel(value: string | undefined, source: string): Agent
   return normalized ? parseLogLevel(normalized, source) : undefined;
 }
 
-function configuredLogLevel(args: CliArgs): AgentEventLogLevel {
-  return args.logLevel ?? parseOptionalLogLevel(process.env.ROWAN_LOG_LEVEL, "ROWAN_LOG_LEVEL") ?? "info";
+function configuredLogLevel(args: CliArgs, config?: AgentConfigFile): AgentEventLogLevel {
+  return args.logLevel ?? (config?.logLevel as AgentEventLogLevel | undefined) ?? parseOptionalLogLevel(process.env.ROWAN_LOG_LEVEL, "ROWAN_LOG_LEVEL") ?? "info";
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -345,24 +338,41 @@ type CliSessionListItem = Pick<SessionListItem, "id" | "title" | "createdAt" | "
 type ConfiguredAgent = {
   agent: Agent;
   sessionManager?: LocalJsonlSessionManager;
+  configFile?: AgentConfigFile;
 };
 
-function configuredValue(flagValue: string | undefined, envValue: string | undefined, defaultValue?: string): string | undefined {
-  return nonEmpty(flagValue) ?? nonEmpty(envValue) ?? defaultValue;
-}
-
-function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<string, unknown> {
+function createConfigSnapshot(
+  args: CliArgs,
+  workspace: WorkspacePaths,
+  configFile: AgentConfigFile | undefined,
+): Record<string, unknown> {
   const env = process.env as Record<string, string | undefined>;
-  const baseUrl = configuredValue(args.baseUrl, env.ROWAN_OPENAI_BASE_URL, "https://api.openai.com/v1");
-  const apiKey = configuredValue(args.apiKey, env.ROWAN_OPENAI_API_KEY);
-  const model = configuredValue(args.model, env.ROWAN_MODEL);
-  const timeoutMs =
-    args.timeoutMs ??
-    parseOptionalTimeoutMs(env.ROWAN_OPENAI_TIMEOUT_MS) ??
-    DEFAULT_OPENAI_TIMEOUT_MS;
   const logPath = resolveOptionalWorkspacePath(args.log, workspace);
-  const logLevel = configuredLogLevel(args);
+  const logLevel = configuredLogLevel(args, configFile);
   const tools = createCoreTools({ root: workspace.cwd });
+
+  const configFileSummary = configFile
+    ? {
+      loaded: true,
+      path: formatWorkspacePathForDisplay(join(workspace.rowanDir, "config.yaml"), workspace),
+      providers: configFile.providers.map((p) => ({
+        id: p.id,
+        ...(p.name ? { name: p.name } : {}),
+        baseUrl: p.baseUrl,
+        protocol: p.protocol,
+        modelCount: p.models.length,
+      })),
+      defaultModel: configFile.model ?? resolveDefaultModel(configFile),
+      ...(configFile.logLevel ? { logLevel: configFile.logLevel } : {}),
+    }
+    : {
+      loaded: false,
+      path: null,
+    };
+
+  const modelFlag = nonEmpty(args.model);
+  const apiKeyFlag = nonEmpty(args.apiKey);
+  const baseUrlFlag = nonEmpty(args.baseUrl);
 
   return {
     command: "config",
@@ -371,22 +381,13 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
       cwd: workspace.cwd,
       rowanDir: workspace.rowanDir,
     },
-    openaiCompatible: {
-      baseUrl: baseUrl ? normalizeBaseUrl(baseUrl) : undefined,
-      baseUrlSource: configSource(args.baseUrl, env.ROWAN_OPENAI_BASE_URL, "https://api.openai.com/v1"),
-      apiKeyConfigured: Boolean(apiKey),
-      apiKey: maskSecret(apiKey),
-      apiKeySource: configSource(args.apiKey, env.ROWAN_OPENAI_API_KEY),
-      model,
-      modelConfigured: Boolean(model),
-      modelSource: configSource(args.model, env.ROWAN_MODEL),
-      timeoutMs,
-      timeoutMsSource:
-        args.timeoutMs !== undefined
-          ? "flag"
-          : nonEmpty(env.ROWAN_OPENAI_TIMEOUT_MS)
-            ? "env"
-            : "default",
+    configFile: configFileSummary,
+    model: {
+      flag: modelFlag ?? null,
+      apiKeyConfigured: Boolean(apiKeyFlag),
+      apiKey: maskSecret(apiKeyFlag),
+      baseUrl: baseUrlFlag ? normalizeBaseUrl(baseUrlFlag) : null,
+      timeoutMs: args.timeoutMs ?? null,
     },
     session: {
       id: args.sessionId ?? null,
@@ -399,9 +400,11 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
       levelSource:
         args.logLevel !== undefined
           ? "flag"
-          : nonEmpty(env.ROWAN_LOG_LEVEL)
-            ? "env"
-            : "default",
+          : configFile?.logLevel
+            ? "config"
+            : nonEmpty(env.ROWAN_LOG_LEVEL)
+              ? "env"
+              : "default",
     },
     skills: args.skills.map((skill) => ({
       idOrPath: skill,
@@ -413,7 +416,8 @@ function createConfigSnapshot(args: CliArgs, workspace: WorkspacePaths): Record<
 
 async function runConfigCommand(args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  console.log(formatJsonOutput(createConfigSnapshot(args, workspace)));
+  const configFile = await loadConfigFile(workspace);
+  console.log(formatJsonOutput(createConfigSnapshot(args, workspace, configFile)));
 }
 
 async function runListCommand(_args: CliArgs): Promise<void> {
@@ -441,15 +445,70 @@ async function createConfiguredAgent(
   if (args.sessionId && !sessionManager) {
     throw new Error(`Session not found: ${args.sessionId}`);
   }
-  const config = resolveOpenAICompletionsConfig({
-    baseUrl: args.baseUrl,
-    apiKey: args.apiKey,
-    model: args.model,
-    timeoutMs:
-      args.timeoutMs ??
-      parseOptionalTimeoutMs(process.env.ROWAN_OPENAI_TIMEOUT_MS) ??
-      DEFAULT_OPENAI_TIMEOUT_MS,
-  });
+
+  // Load config file and register providers/models
+  const configFile = await loadConfigFile(workspace);
+
+  let defaultModelRef: LlmModelRef;
+
+  if (configFile) {
+    registerConfigModels(configFile);
+    const resolved = resolveDefaultModel(configFile);
+    if (!resolved) {
+      throw new Error("No models found in .rowan/config.yaml.");
+    }
+    defaultModelRef = resolved;
+  } else {
+    // No config file — require --model and --api-key
+    if (!args.model) {
+      throw new Error("Model is required. Pass --model or create .rowan/config.yaml.");
+    }
+    if (!args.apiKey) {
+      throw new Error("API key is required. Pass --api-key or create .rowan/config.yaml.");
+    }
+    const virtualModelId = args.model;
+    const slashIndex = virtualModelId.indexOf("/");
+    const provider = slashIndex === -1 ? "openai" : virtualModelId.slice(0, slashIndex);
+    const modelId = slashIndex === -1 ? virtualModelId : virtualModelId.slice(slashIndex + 1);
+    registerBuiltInApiProviders();
+    registerModel({
+      id: modelId,
+      name: modelId,
+      protocol: "openai-completions",
+      provider,
+      baseUrl: args.baseUrl ?? "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      apiKey: args.apiKey,
+      timeoutMs: args.timeoutMs ?? DEFAULT_OPENAI_TIMEOUT_MS,
+    });
+    defaultModelRef = { provider, id: modelId };
+  }
+
+  // CLI flags override the selected default model's fields
+  if (args.model && configFile) {
+    const slashIndex = args.model.indexOf("/");
+    const provider = slashIndex === -1 ? defaultModelRef.provider : args.model.slice(0, slashIndex);
+    const modelId = slashIndex === -1 ? args.model : args.model.slice(slashIndex + 1);
+    defaultModelRef = { provider, id: modelId };
+  }
+  if (configFile) {
+    const { getModel } = await import("@rowan-agent/models");
+    const existing = getModel(defaultModelRef.provider, defaultModelRef.id);
+    if (!existing) {
+      throw new Error(`Model "${defaultModelRef.provider}/${defaultModelRef.id}" not found in registry.`);
+    }
+    registerModel({
+      ...existing,
+      ...(args.apiKey ? { apiKey: args.apiKey } : {}),
+      ...(args.baseUrl ? { baseUrl: args.baseUrl } : {}),
+      ...(args.timeoutMs ? { timeoutMs: args.timeoutMs } : {}),
+    });
+  }
+
   const context = sessionManager
     ? await sessionManager.buildAgentContext({
       tools,
@@ -483,14 +542,14 @@ async function createConfiguredAgent(
   const agent = new Agent({
     cwd: workspace.cwd,
     context,
-    model: { provider: "openai-compatible", name: config.model },
-    stream: createOpenAICompletionsStream(config),
+    model: defaultModelRef,
+    stream: createDispatchStream(),
     phases,
     extensionRunnerRef,
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
   });
 
-  return { agent, sessionManager };
+  return { agent, sessionManager, configFile };
 }
 
 async function promptWithLog(input: {
@@ -618,7 +677,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   let sessionManager = configured.sessionManager;
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
-  const logLevel = configuredLogLevel(args);
+  const logLevel = configuredLogLevel(args, configured.configFile);
   let activeLogPath: string | undefined = explicitLogPath;
   let hasWrittenLog = false;
   let hasPrintedSession = false;

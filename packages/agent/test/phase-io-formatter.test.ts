@@ -194,7 +194,7 @@ describe("Phase payload flow", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "plan and verify" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -246,7 +246,7 @@ describe("Phase payload flow", () => {
 
     await runAgentLoop({
       context: createContext({ input: "plan and verify" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -291,7 +291,7 @@ describe("Phase payload flow", () => {
 
     await runAgentLoop({
       context: createContext({ input: "plan and verify" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -345,7 +345,7 @@ describe("Phase payload flow", () => {
 
     await runAgentLoop({
       context: createContext({ input: "plan and verify" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -392,7 +392,7 @@ describe("Backward compatibility", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "plan and verify this task" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
       phases: registry,
     });
@@ -413,7 +413,7 @@ describe("Backward compatibility", () => {
 
     const result = await runAgentLoop({
       context: createContext({ input: "say hello" }),
-      model: { provider: "test", name: "scripted" },
+      model: { provider: "test", id: "scripted" },
       stream,
     });
 
