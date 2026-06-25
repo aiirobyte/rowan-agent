@@ -8,7 +8,9 @@
 
 Rowan replaces opaque prompt loops with explicit, controllable workflows — structured `phases` that improve over time.
 
-Key Highlights:
+![Rowan Agent Execution Flow](docs/assets/rowan-agent-flow.png)
+
+Key Principles:
 - **Composable, programmable loop**: Standardizes agent loop into structured `phases` like research, planning, verification — each defined by executable code or prompt, no more hallucination.
 - **Self-improving workflow**: Phases are composable, reusable, and evolvable — runtime feedback iterates on them over time.
 - **Extensible by design**: Add custom phases, tools, skills, and providers without touching the core runtime.
@@ -65,30 +67,6 @@ rowan-agent/
     ├── @rowan-agent/models
     └── @rowan-agent/logging
             └── @rowan-agent/models
-```
-
-### Execution Flow
-
-```
-User prompt
-    │
-    ▼
-Agent context
-    ├── system prompt
-    ├── messages
-    ├── tools
-    └── skills
-    │
-    ▼
-Phase loop
-    ├── load .rowan/phases when present
-    ├── run phase code or LLM fallback
-    ├── execute tools
-    ├── route to the next phase, continue, branch, or stop
-    └── emit structured events
-    │
-    ▼
-Outcome
 ```
 
 ## CLI & Configuration Examples
