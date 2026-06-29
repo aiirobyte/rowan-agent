@@ -60,6 +60,8 @@ type AgentOptions = {
   context: AgentContext;
   model: LlmModelRef;
   stream: StreamFn;
+  cwd?: string;
+  rowanDir?: string;     // project-local Rowan directory, default: ".rowan"
   sessionId?: string;
   phases?: PhaseRegistry;
   extensions?: ExtensionRunnerRef;
@@ -460,6 +462,8 @@ export default function myPlugin(rowan: ExtensionAPI) {
 
 Multi-provider model configuration via `.rowan/config.yaml`. Supports multiple API providers, per-model settings, environment variable interpolation, and per-phase model overrides.
 
+Config is loaded from the runtime Rowan directory, which defaults to `.rowan` and can be set when constructing `Agent` via `rowanDir`.
+
 ### Config File
 
 Place `config.yaml` in your `.rowan/` directory (alongside `phases/`, `skills/`, etc.):
@@ -632,13 +636,16 @@ const request = buildModelRequest({ systemPrompt, messages, tools });
 
 ## Workspace
 
-Workspace resolution — dev mode uses the project root, packaged binary uses `~/.rowan`.
+Workspace resolution uses the current project for both source and binary runs. The project Rowan directory defaults to `<cwd>/.rowan`; pass `rowanDir` to resolve another project-local directory.
 
 ```ts
 import { resolveWorkspacePaths, resolveInWorkspace } from "@rowan-agent/agent";
 
 const workspace = resolveWorkspacePaths();
 // → { mode: "source" | "binary", cwd: string, rowanDir: string }
+
+const custom = resolveWorkspacePaths({ rowanDir: ".rowan-project" });
+// → custom.rowanDir is <cwd>/.rowan-project
 ```
 
 ## Loop Metrics

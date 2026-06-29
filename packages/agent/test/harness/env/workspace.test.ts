@@ -50,26 +50,34 @@ test("source runtime resolves workspace to the project root", async () => {
   expect("skillsDir" in paths).toBe(false);
 });
 
-test("binary runtime resolves workspace to ~/.rowan", () => {
+test("binary runtime resolves workspace from the current project", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-binary-"));
+  await mkdir(join(root, "packages", "app"), { recursive: true });
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "example-app", workspaces: ["packages/*"] }));
+
   const paths = resolveWorkspacePaths({
+    cwd: join(root, "packages", "app"),
     env: {},
     execPath: "/usr/local/bin/rowan",
     homeDir: "/Users/tester",
   });
 
   expect(paths.mode).toBe("binary");
-  expect(paths.cwd).toBe("/Users/tester");
-  expect(paths.rowanDir).toBe("/Users/tester/.rowan");
+  expect(paths.cwd).toBe(root);
+  expect(paths.rowanDir).toBe(join(root, ".rowan"));
 });
 
-test("source runtime can resolve workspace from the running entrypoint path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-entrypoint-"));
-  const entrypointDir = join(root, "packages", "cli", "src");
+test("source runtime uses cwd before the running entrypoint path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-cwd-"));
+  const otherRoot = await mkdtemp(join(tmpdir(), "rowan-workspace-entrypoint-"));
+  const entrypointDir = join(otherRoot, "packages", "cli", "src");
   await mkdir(entrypointDir, { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
+  await writeFile(join(otherRoot, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
   await writeFile(join(entrypointDir, "cli.ts"), "");
 
   const paths = resolveWorkspacePaths({
+    cwd: root,
     env: {},
     execPath: "/usr/local/bin/bun",
     entrypoint: join(entrypointDir, "cli.ts"),
@@ -90,6 +98,53 @@ test("runtime and workspace env vars can override detection", () => {
   });
   expect(paths.cwd).toBe("/Users/tester/custom-rowan");
   expect(paths.rowanDir).toBe("/Users/tester/custom-rowan/.rowan");
+});
+
+test("project rowan dir can be customized relative to the workspace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-rowan-dir-"));
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
+
+  const paths = resolveWorkspacePaths({
+    cwd: root,
+    env: {},
+    execPath: "/usr/local/bin/bun",
+    homeDir: "/Users/tester",
+    rowanDir: ".rowan-project",
+  });
+
+  expect(paths.cwd).toBe(root);
+  expect(paths.rowanDir).toBe(join(root, ".rowan-project"));
+
+  const defaulted = resolveWorkspacePaths({
+    cwd: root,
+    env: {},
+    execPath: "/usr/local/bin/bun",
+    rowanDir: "",
+  });
+  expect(defaulted.rowanDir).toBe(join(root, ".rowan"));
+});
+
+test("project rowan dir cannot escape the workspace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-rowan-dir-escape-"));
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
+
+  expect(() =>
+    resolveWorkspacePaths({
+      cwd: root,
+      env: {},
+      execPath: "/usr/local/bin/bun",
+      rowanDir: join(root, ".rowan-absolute"),
+    }),
+  ).toThrow("Project Rowan dir must be a relative path");
+
+  expect(() =>
+    resolveWorkspacePaths({
+      cwd: root,
+      env: {},
+      execPath: "/usr/local/bin/bun",
+      rowanDir: "../outside",
+    }),
+  ).toThrow("Path escapes workspace root");
 });
 
 test("relative paths resolve inside the workspace", () => {

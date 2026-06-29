@@ -6,8 +6,6 @@ Command-line interface for Rowan Agent. Supports one-shot prompts, interactive m
 
 ```bash
 bun install
-cp .env.example .env
-# Set ROWAN_OPENAI_API_KEY and ROWAN_MODEL in .env
 ```
 
 ## Usage
@@ -40,17 +38,17 @@ bun run rowan list
 
 ## CLI Options
 
-| Option | Description | Env Fallback | Default |
-|--------|-------------|--------------|---------|
-| `--session <id>` | Resume a previous session | — | — |
-| `--skill <name>` | Load a skill (repeatable) | — | — |
-| `--log <path>` | Custom log file path (relative to `.rowan/`) | — | Auto-generated |
-| `--log-level <level>` | `debug`, `info`, `warn`, `error`, `silent` | `ROWAN_LOG_LEVEL` | `info` |
-| `--model <name>` | Model name | `ROWAN_MODEL` | — |
-| `--base-url <url>` | API base URL | `ROWAN_OPENAI_BASE_URL` | `https://api.openai.com/v1` |
-| `--api-key <key>` | API key | `ROWAN_OPENAI_API_KEY` | — |
-| `--timeout-ms <ms>` | Request timeout in milliseconds | `ROWAN_OPENAI_TIMEOUT_MS` | `60000` |
-| `--help`, `-h` | Print help and exit | — | — |
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--session <id>` | Resume a previous session | — |
+| `--skill <name>` | Load a skill (repeatable) | — |
+| `--log <path>` | Custom log file path (relative to `.rowan/`) | Auto-generated |
+| `--log-level <level>` | `debug`, `info`, `warn`, `error`, `silent`; can also be set with `ROWAN_LOG_LEVEL` | `info` |
+| `--model <name>` | Model name | — |
+| `--base-url <url>` | API base URL | `https://api.openai.com/v1` |
+| `--api-key <key>` | API key | — |
+| `--timeout-ms <ms>` | Request timeout in milliseconds | `60000` |
+| `--help`, `-h` | Print help and exit | — |
 
 ## Commands
 
@@ -65,10 +63,6 @@ When no command is given, positional arguments are joined as the prompt.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ROWAN_OPENAI_API_KEY` | API key (required unless `--api-key`) | — |
-| `ROWAN_MODEL` | Model name (required unless `--model`) | — |
-| `ROWAN_OPENAI_BASE_URL` | OpenAI-compatible base URL | `https://api.openai.com/v1` |
-| `ROWAN_OPENAI_TIMEOUT_MS` | Request timeout in ms | `60000` |
 | `ROWAN_LOG_LEVEL` | Run log detail level | `info` |
 | `ROWAN_RUNTIME` | Runtime override (`source` or `binary`) | Auto-detected |
 | `ROWAN_WORKSPACE` | Override current working directory | `cwd` |

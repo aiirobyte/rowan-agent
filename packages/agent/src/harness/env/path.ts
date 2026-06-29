@@ -33,6 +33,7 @@ export type ResolveWorkspaceOptions = {
   entrypoint?: string;
   homeDir?: string;
   mode?: RuntimeMode;
+  rowanDir?: string;
 };
 
 function nonEmptyEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -107,17 +108,9 @@ export function detectRuntimeMode(
   return executable === "bun" ? "source" : "binary";
 }
 
-function defaultSourceStartDir(options: Pick<ResolveWorkspaceOptions, "cwd" | "entrypoint">): string {
+function defaultWorkspaceStartDir(options: Pick<ResolveWorkspaceOptions, "cwd">): string {
   if (options.cwd) {
     return options.cwd;
-  }
-
-  const entrypoint = options.entrypoint ?? process.argv[1];
-  if (entrypoint) {
-    const entrypointPath = resolve(process.cwd(), entrypoint);
-    if (existsSync(entrypointPath)) {
-      return dirname(entrypointPath);
-    }
   }
 
   return process.cwd();
@@ -132,12 +125,7 @@ export function resolveWorkspaceRoot(options: ResolveWorkspaceOptions = {}): str
     return resolveUserPath(override, homeDir);
   }
 
-  const mode = options.mode ?? detectRuntimeMode(options);
-  if (mode === "binary") {
-    return homeDir;
-  }
-
-  return findSourceWorkspaceRoot(defaultSourceStartDir(options));
+  return findSourceWorkspaceRoot(defaultWorkspaceStartDir(options));
 }
 
 export function resolveWorkspacePaths(options: ResolveWorkspaceOptions = {}): WorkspacePaths {
@@ -146,8 +134,16 @@ export function resolveWorkspacePaths(options: ResolveWorkspaceOptions = {}): Wo
   return {
     mode,
     cwd,
-    rowanDir: join(cwd, BINARY_WORKSPACE_DIR),
+    rowanDir: resolveProjectRowanDir(cwd, options.rowanDir),
   };
+}
+
+export function resolveProjectRowanDir(cwd: string, rowanDir = BINARY_WORKSPACE_DIR): string {
+  const inputPath = rowanDir.trim() || BINARY_WORKSPACE_DIR;
+  if (isAbsolute(inputPath)) {
+    throw new Error(`Project Rowan dir must be a relative path: ${rowanDir}`);
+  }
+  return resolveWorkspacePath({ root: cwd }, inputPath).absolutePath;
 }
 
 export function resolveInWorkspace(path: string, rootOrPaths: string | Pick<WorkspacePaths, "cwd">): string {

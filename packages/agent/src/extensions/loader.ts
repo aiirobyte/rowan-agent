@@ -69,17 +69,22 @@ async function readManifest(dir: string): Promise<ExtensionManifest | undefined>
 }
 
 function jitiAliases(): Record<string, string> {
-  return {
-    "@rowan-agent/agent": fileURLToPath(new URL("../index.ts", import.meta.url)),
-    "@rowan-agent/models": fileURLToPath(new URL("../../../models/src/index.ts", import.meta.url)),
-  };
+  const moduleUrl = import.meta.url;
+  if (!moduleUrl) {
+    return {};
+  }
+  const agentSourcePath = fileURLToPath(new URL("../index.ts", moduleUrl));
+  if (!existsSync(agentSourcePath)) {
+    return {};
+  }
+  return { "@rowan-agent/agent": agentSourcePath };
 }
 
 /** Shared jiti instance — created once, reused across all extension loads. */
 let sharedJiti: ReturnType<typeof createJiti> | undefined;
 
 function getJiti(): ReturnType<typeof createJiti> {
-  sharedJiti ??= createJiti(import.meta.url, {
+  sharedJiti ??= createJiti(import.meta.url || process.cwd(), {
     moduleCache: false,
     alias: jitiAliases(),
   });

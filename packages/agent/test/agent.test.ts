@@ -97,6 +97,43 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
   }
 });
 
+test("Agent discovers file phases from configured project rowan dir", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-rowan-dir-"));
+  try {
+    const phaseDir = join(root, ".rowan-project", "phases", "default");
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: Custom Default
+description: Uses the configured project Rowan directory.
+---
+
+Custom phase content.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+      export async function run() {
+        return { message: "configured project Rowan dir phase ran", route: "stop" };
+      }
+    `);
+
+    const stream: StreamFn = async function* unusedStream() {
+      throw new Error("configured phase should run without invoking the model");
+    };
+    const agent = new Agent({
+      cwd: root,
+      rowanDir: ".rowan-project",
+      context: createTestContext(),
+      model: { provider: "test", id: "configured-rowan-dir" },
+      stream,
+    });
+
+    const outcome = await runAgentTurn(agent, "use configured phase");
+
+    expect(outcome.outcome.message).toBe("configured project Rowan dir phase ran");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Agent.run does not wait for async event listeners", async () => {
   const cwd = await getTestCwd();
   const agent = new Agent({
@@ -162,4 +199,3 @@ test("Agent.abort stops an active run", async () => {
   await expect(run).rejects.toThrow("aborted");
   expect(agent.state.isRunning).toBe(false);
 });
-

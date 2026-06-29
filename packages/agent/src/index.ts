@@ -68,13 +68,16 @@ export type { ExtensionRunnerRef } from "./agent";
 export type {
   PhaseRegistry,
   Phase,
+  PhaseContext,
+  PhaseState,
+  PhaseOutput,
 } from "./harness/phases/types";
-
-export type { PhaseContext, PhaseState, PhaseOutput } from "./harness/phases/types";
 
 export type {
   PhaseExecution,
 } from "./loop/execution";
+
+export { loadPhases } from "./harness/phases/loader";
 
 // ── prompt / context ───────────────────────────────────────────
 export {

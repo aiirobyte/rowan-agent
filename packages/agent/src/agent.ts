@@ -33,6 +33,7 @@ export type AgentOptions = {
   model: LlmModelRef;
   stream: StreamFn;
   cwd?: string;
+  rowanDir?: string;
   phases?: PhaseRegistry;
   extensionRunnerRef?: ExtensionRunnerRef;
   sessionId?: string;
@@ -210,7 +211,7 @@ export class Agent {
     phases?: PhaseRegistry;
     skills: AgentContext["skills"];
   }> {
-    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd });
+    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd, rowanDir: this.options.rowanDir });
 
     // Discover file-based phases
     const filePhases = await loadPhases(workspace);
@@ -403,7 +404,7 @@ export class Agent {
    * @returns Formatted phase content string, or empty string if not found
    */
   async phase(name: string): Promise<string> {
-    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd });
+    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd, rowanDir: this.options.rowanDir });
     const { loadPhase, readPhaseContent } = await import("./harness/phases/loader");
 
     try {
