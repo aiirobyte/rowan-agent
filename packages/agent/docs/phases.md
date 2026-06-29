@@ -380,7 +380,26 @@ input:
 
 ### Joining Results
 
-When parallel phases complete, the loop collects all their outputs. The next iteration receives the combined results. Use the `route` tool to merge or continue.
+When parallel phases complete, the loop collects all their outputs and stashes them. The next iteration's phase entry message surfaces them under `<prev_phase_outputs>`:
+
+```
+<phase name="Execution Phase">
+  <content>
+    ...
+  </content>
+  <prev_phase_outputs>
+    <instruction>Review the changes for correctness</instruction>
+    <phase name="lint#1">
+      <errors>2</errors>
+    </phase>
+    <phase name="typecheck">
+      <ok>true</ok>
+    </phase>
+  </prev_phase_outputs>
+</phase>
+```
+
+The `<instruction>` field appears only when the `route` tool call included one (shared guidance for all targets). The `<phase name="...">` entries use the parallel instance id: unique phases get plain id (`lint`), duplicates get `lint#1`, `lint#2`, etc. The entry phase can then `route` onward (e.g. to `stop`).
 
 ---
 

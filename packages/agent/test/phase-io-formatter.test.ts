@@ -253,7 +253,7 @@ describe("Phase payload flow", () => {
 
     // The second request (verify phase) should have the payload in its messages
     expect(requestCount).toBe(2);
-    const verifyMessages = messages.filter(m => m.includes("<output>"));
+    const verifyMessages = messages.filter(m => m.includes("<prev_phase_outputs>"));
     expect(verifyMessages.length).toBeGreaterThanOrEqual(1);
     // Check that the payload content is present (XML format)
     expect(verifyMessages.some(m => m.includes("<result>ok</result>"))).toBe(true);
@@ -352,7 +352,7 @@ describe("Phase payload flow", () => {
 
     // The second request (verify phase) should have the payload in its messages
     expect(requestCount).toBe(2);
-    const verifyMessages = messages.filter(m => m.includes("<output>"));
+    const verifyMessages = messages.filter(m => m.includes("<prev_phase_outputs>"));
     expect(verifyMessages.length).toBeGreaterThanOrEqual(1);
     // Check that the string payload was parsed and converted to XML elements
     expect(verifyMessages.some(m => m.includes("<prompt>test image</prompt>"))).toBe(true);

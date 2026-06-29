@@ -38,7 +38,7 @@ import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessage, snapshotMessages } from "./state";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
-import { buildPhaseResultMessage } from "../harness/context/resource-formatter";
+import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
 
 // ============================================================================
@@ -80,13 +80,22 @@ function applyFirstDecision(route: RouteToolArgs, output: PhaseOutput): void {
   if (first.payload !== undefined) output.payload = normalizePayload(first.payload);
 }
 
-/** Inject phase content as a tool_result message. Returns message id, or undefined on failure. */
-function injectPhaseContent(phase: Phase, payload: unknown, messageManager: PhaseMessageManager): string | undefined {
+/** Inject phase content (plus optional prior-phase outputs) as a tool_result message.
+ * Returns message id, or undefined on failure. */
+function injectPhaseContent(
+  phase: Phase,
+  output: { instruction?: string; results: Array<{ name: string; output?: unknown }> },
+  messageManager: PhaseMessageManager,
+): string | undefined {
   try {
     const phaseContent = phase.filePath
       ? readPhaseContent(phase)
       : (phase.content ?? phase.description ?? "");
-    const content = buildPhaseResultMessage([{ name: phase.name, content: phaseContent, output: payload }], `phase_${phase.id}`);
+const content = buildPhaseDirectiveMessage(
+      { name: phase.id, content: phaseContent },
+      output,
+      `phase_${phase.id}`,
+    );
     const msgId = messageManager.start("tool", content, { phase: phase.id });
     messageManager.end(msgId);
     return msgId;
@@ -355,6 +364,8 @@ async function runPhaseLoop(
   let isContinuing = false;
   let previousPayload: unknown = undefined;
   let previousPhaseMsgId: string | undefined = undefined;
+  let previousResults: Array<{ name: string; output?: unknown }> = [];
+  let pendingInstruction: string | undefined = undefined;
 
   while (currentPhaseId) {
     // Hot-reload: re-read phase files from disk each iteration
@@ -466,9 +477,12 @@ async function runPhaseLoop(
     removePhaseMessage(config.context.messages, previousPhaseMsgId);
     previousPhaseMsgId = undefined;
 
-    // Inject phase content as tool result when entering a new phase
+    // Inject phase content as tool result when entering a new phase.
+    // Carries prior phase(s)' results (route payload) and optional instruction.
     if (enteringNewPhase) {
-      previousPhaseMsgId = injectPhaseContent(phase, phaseContext.state.payload, messageManager);
+      previousPhaseMsgId = injectPhaseContent(phase, { results: previousResults, instruction: pendingInstruction }, messageManager);
+      previousResults = [];
+      pendingInstruction = undefined;
     }
 
     // Execute phase
@@ -513,7 +527,8 @@ async function runPhaseLoop(
 
     // Parallel dispatch: when route tool returns multiple targets, execute all concurrently.
     // Each target gets its own PhaseContext (isolated=true → fresh, otherwise fork of current).
-    // After all complete, results are merged and injected into the entry phase's context.
+    // After all complete, results are stashed as previousResults for the next iteration's
+    // phase entry injection (so the entry phase sees them inside its <phase_directive> message).
     if (routeDecision && routeDecision.decision.length > 1) {
       const contextSnapshot = snapshotMessages(config.context.messages);
       const parallelTasks = new Map<string, { promise: Promise<ParallelResult>; phaseId: string }>();
@@ -530,35 +545,29 @@ async function runPhaseLoop(
         const instanceId = instanceIds[i];
         // isolated=true → empty context; otherwise fork current messages
         const context = pt.isolated ? [] : contextSnapshot;
-        const payload = target.payload !== undefined ? normalizePayload(target.payload) : previousPayload;
+        const payload = target.payload !== undefined ? normalizePayload(target.payload) : undefined;
 
-        const promise = executeParallelPhase(config, state, registry, pt, payload, context, availablePhases);
+        const promise = executeParallelPhase(config, state, registry, pt, payload, context, availablePhases, currentPhaseId);
         parallelTasks.set(instanceId, { promise, phaseId: target.phase });
       }
 
       // Wait for all parallel phases to complete
       const successfulResults = await waitForBackgroundTasks(parallelTasks);
 
-      // Inject merged results into the entry phase's context as a tool_result message.
-      // The entry phase (next iteration) will see <phase_results> with all outputs.
-      if (successfulResults.length > 0) {
-        const phaseResults = successfulResults.map(r => ({ name: r.phaseId, content: r.content, output: r.payload }));
-        const content = buildPhaseResultMessage(phaseResults, `phase_results`, routeDecision.instruction);
-        const msgId = messageManager.start("tool", content, { phase: "parallel_group" });
-        await messageManager.end(msgId);
-        previousPhaseMsgId = msgId;
-      }
+      // Stash merged results + instruction; the next iteration's entry injection will
+      // assemble them into the entry phase's directive message (under <phase_results>).
+      previousResults = successfulResults.map(r => ({ name: r.instanceId, output: r.payload }));
+      pendingInstruction = routeDecision.instruction;
 
       // Determine entry phase: original phase's target > registry entry > "default".
       // In parallel mode, the original phase's target field determines where to go after
       // all parallel phases complete. If "stop", end the run.
       const entryPhaseId = phase.target ?? registry.entryPhaseId ?? "default";
       if (entryPhaseId === "stop") {
-        removePhaseMessage(config.context.messages, previousPhaseMsgId);
         return completeRun(config, state, createOutcome.default(output, config.context.messages));
       }
       currentPhaseId = entryPhaseId;
-      previousPayload = undefined; // payloads already injected as message
+      previousPayload = undefined; // payloads stashed in previousResults instead
       continue;
     }
 
@@ -591,8 +600,9 @@ async function runPhaseLoop(
       ts: createTimestamp(),
     });
 
-    // Pass payload to next phase
+    // Pass payload to next phase (also surfaced as previousResults for entry injection)
     previousPayload = output.payload;
+    previousResults = output.payload !== undefined ? [{ name: phase.id, output: output.payload }] : [];
 
     currentPhaseId = targetPhaseId;
   }
@@ -870,20 +880,21 @@ function createPhaseExecution(
 // ============================================================================
 
 type ParallelResult = {
+  instanceId: string;
   phaseId: string;
   payload: unknown;
   content: string;
 };
-
 
 async function executeParallelPhase(
   config: AgentConfig,
   state: SessionState,
   registry: PhaseRegistry,
   phase: Phase,
-  parentPayload: unknown,
+  payload: unknown,
   context: AgentMessage[],
   availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
+  currentPhaseId: string,
 ): Promise<ParallelResult> {
   const messages = [...context];
 
@@ -910,15 +921,22 @@ async function executeParallelPhase(
       current: phase.id,
       available: Array.from(registry.phases.keys()),
       iterations: 0,
-      payload: parentPayload,
+      payload,
     },
   };
 
   const messageManager = createMessageManager({ messages } as AgentContext, config.emit, config.onMessage);
 
-  // For forked (non-isolated) phases: inject phase content as message, same as serial path
-  // For forked (non-isolated) phases: inject phase content as message, same as serial path
-  const phaseMsgId = phase.isolated ? undefined : injectPhaseContent(phase, parentPayload, messageManager);
+  // For forked (non-isolated) phases: inject phase content as message, same as serial path.
+  // Outer <phase> is the executing (child) phase; inner <prev_phase_outputs><phase> is
+  // the parent phase that issued the route call, carrying the payload it supplied.
+  const phaseMsgId = phase.isolated
+    ? undefined
+    : injectPhaseContent(
+        phase,
+        { results: payload !== undefined ? [{ name: currentPhaseId, output: payload }] : [] },
+        messageManager,
+      );
 
   const toolExecutionManager = createToolExecutionManager(config.emit);
   const execution = createPhaseExecution(config, state, phaseTools, phase, messageManager, toolExecutionManager, registry);
@@ -931,11 +949,11 @@ async function executeParallelPhase(
 
   // Extract payload from route tool call if present, fallback to output.payload
   const decision = output.toolCalls ? extractRouteCall(output.toolCalls) : undefined;
-  const payload = (decision?.decision[0]?.payload !== undefined
+  const resultPayload = (decision?.decision[0]?.payload !== undefined
     ? normalizePayload(decision.decision[0].payload)
     : output.payload);
 
-  return { phaseId: phase.id, payload, content: output.message };
+  return { instanceId: "", phaseId: phase.id, payload: resultPayload, content: output.message };
 }
 
 async function waitForBackgroundTasks(
@@ -947,7 +965,7 @@ async function waitForBackgroundTasks(
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     if (r.status === "fulfilled") {
-      successful.push(r.value);
+      successful.push({ ...r.value, instanceId: entries[i][0] });
     }
   }
   backgroundTasks.clear();

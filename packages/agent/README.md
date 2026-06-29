@@ -214,7 +214,7 @@ agent.subscribe((event: AgentEvent) => {
 
 ### Parallel Phase Events
 
-When multiple phases run concurrently (via multi-target `route`), each branch emits its own `turn_*`, `message_*`, and `tool_execution_*` events into the shared event stream — they are interleaved, not sequenced. Individual parallel phases do **not** emit `phase_start`/`phase_end`; those only fire for serial phases. After all branches complete, a merged `<phase_results>` message is injected and `message_start`/`message_end` fire for it.
+When multiple phases run concurrently (via multi-target `route`), each branch emits its own `turn_*`, `message_*`, and `tool_execution_*` events into the shared event stream — they are interleaved, not sequenced. Individual parallel phases do **not** emit `phase_start`/`phase_end`; those only fire for serial phases. After all branches complete, their outputs are stashed and surfaced in the next iteration's phase entry message (under `<prev_phase_outputs>`); the `message_start`/`message_end` you observe for that entry message carry the merged results.
 
 ## Session
 
@@ -296,11 +296,11 @@ Per iteration:
                     ┌──────────┐        ┌──────────┐
                     │   lint   │        │typecheck │
                     └────┬─────┘        └────┬─────┘
-                         └─────────┬─────────┘
-                                   ▼
-                          <phase_results> merged
-                                   │
-                            route("stop")
+└─────────┬─────────┘
+                                    ▼
+                       merged into <prev_phase_outputs>
+                                    │
+                             route("stop")
                                    │
                                    ▼
                              ┌──────────┐

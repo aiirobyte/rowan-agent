@@ -138,31 +138,40 @@ export function jsonToXml(value: unknown, depth: number): string {
 // Phase result message construction
 // ---------------------------------------------------------------------------
 
-/** Construct phase result message as LlmContentPart[] — shared by parallel and serial paths. */
-export function buildPhaseResultMessage(
-  phases: Array<{ name: string; content?: string; output?: unknown }>,
+/** Construct phase directive message as LlmContentPart[] — shared by parallel and serial paths.
+ *
+ * Output structure:
+ *   <phase name="{name}">
+ *     <content>{content}</content>
+ *     [<prev_phase_outputs>                       (only when results non-empty)
+ *        [<instruction>...</instruction>]         (only when instruction set)
+ *        <phase name="{source}">{payload xml}</phase>
+ *     </prev_phase_outputs>]
+ *   </phase>
+ */
+export function buildPhaseDirectiveMessage(
+  phase: { name: string; content: string },
+  output: { instruction?: string; results?: Array<{ name: string; output?: unknown }> },
   toolUseId: string,
-  instruction?: string,
 ): LlmContentPart[] {
   const parts: string[] = [];
-  if (instruction) {
-    parts.push(`<instruction>${instruction}</instruction>`);
+  parts.push(`<phase name="${escapeXml(phase.name)}">`);
+  parts.push(`  <content>${phase.content}</content>`);
+  if (output.results && output.results.length > 0) {
+    parts.push(`  <prev_phase_outputs>`);
+    if (output.instruction) {
+      parts.push(`    <instruction>${escapeXml(output.instruction)}</instruction>`);
+    }
+    for (const r of output.results) {
+      parts.push(`    <phase name="${escapeXml(r.name)}">`);
+      if (r.output !== undefined) {
+        parts.push(jsonToXml(r.output, 3));
+      }
+      parts.push(`    </phase>`);
+    }
+    parts.push(`  </prev_phase_outputs>`);
   }
-  parts.push(`<phase_results>`);
-  for (const p of phases) {
-    parts.push(`  <phase name="${p.name}">`);
-    if (p.content) {
-      parts.push(`    <content>${p.content}</content>`);
-    }
-    if (p.output !== undefined) {
-      parts.push(`    <output>${jsonToXml(p.output, 2)}</output>`);
-    }
-    if (!p.content && p.output === undefined) {
-      parts.push(`    <content>Phase "${p.name}" completed with no output.</content>`);
-    }
-    parts.push(`  </phase>`);
-  }
-  parts.push(`</phase_results>`);
+  parts.push(`</phase>`);
   return [{
     type: "tool_result",
     toolUseId,
