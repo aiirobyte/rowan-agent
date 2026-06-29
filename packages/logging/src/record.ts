@@ -47,6 +47,11 @@ export function shouldWriteEvent(eventLevel: WritableAgentEventLogLevel, configu
   return AGENT_EVENT_LOG_LEVEL_VALUES[eventLevel] >= AGENT_EVENT_LOG_LEVEL_VALUES[configuredLevel];
 }
 
+/** Whether the event is a streaming fragment that should never become its own JSONL line. */
+export function isMessageStreamEvent(event: AgentEvent): boolean {
+  return event.type === "message_start" || event.type === "message_update";
+}
+
 export function createAgentEventLogFields(event: AgentEvent, includeEventPayload: boolean): Record<string, unknown> {
   const sessionId = eventSessionId(event);
   const phase = eventPhase(event);

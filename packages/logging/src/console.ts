@@ -4,6 +4,7 @@ import {
   createAgentEventLogFields,
   eventLogLevel,
   formatLocalIso,
+  isMessageStreamEvent,
   shouldWriteEvent,
   type AgentEventLogLevel,
 } from "./record";
@@ -39,6 +40,9 @@ export function consoleAgentEventLogger(
 
     try {
       const snapshot = redactSecrets(event) as AgentEvent;
+      if (isMessageStreamEvent(snapshot)) {
+        return;
+      }
       const eventLevel = eventLogLevel(snapshot);
       if (!shouldWriteEvent(eventLevel, level)) {
         return;

@@ -7,6 +7,7 @@ import {
   createAgentEventLogFields,
   eventLogLevel,
   formatLocalIso,
+  isMessageStreamEvent,
   shouldWriteEvent,
   type AgentEventLogLevel,
 } from "./record";
@@ -75,6 +76,9 @@ export function pinoAgentEventLogger(
 
     try {
       const snapshot = redactSecrets(event) as AgentEvent;
+      if (isMessageStreamEvent(snapshot)) {
+        return;
+      }
       if (typeof path !== "string") {
         resolvedPath ??= path(snapshot);
       }
