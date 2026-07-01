@@ -94,3 +94,9 @@ export type {
   Outcome,
   ModelTranscript,
 } from "./protocol";
+
+// ── model dispatch ──────────────────────────────────────────────
+export {
+  createDispatchStream,
+  registerBuiltInApiProviders,
+} from "@rowan-agent/models";

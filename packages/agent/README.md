@@ -15,7 +15,7 @@ import {
   Agent,
   createMessage,
   createCoreTools,
-  resolveModel,
+  createDispatchStream,
 } from "@rowan-agent/agent";
 
 const agent = new Agent({
@@ -25,8 +25,8 @@ const agent = new Agent({
     tools: createCoreTools({ root: process.cwd() }),
     skills: [],
   },
-  model: { provider: "openai", name: "gpt-4.1-mini" },
-  stream,
+  model: { provider: "openai", id: "gpt-4.1-mini" },
+  stream: createDispatchStream(),
 });
 
 agent.subscribe((event) => console.log(event.type));
