@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { inferResourceName, isExplicitPath, parseFrontmatter } from "../../src/harness/loader";
+import { inferResourceName, parseFrontmatter } from "../../src/harness/loader";
 
 // --- parseFrontmatter ---
 
@@ -77,20 +77,6 @@ test("stops nested parsing at non-indented line", () => {
     nested: { a: "1" },
     notnested: 2,
   });
-});
-
-// --- isExplicitPath ---
-
-test("isExplicitPath returns false for bare name", () => {
-  expect(isExplicitPath("plan")).toBe(false);
-});
-
-test("isExplicitPath returns true for path with slash", () => {
-  expect(isExplicitPath("phases/plan")).toBe(true);
-});
-
-test("isExplicitPath returns true for file with extension", () => {
-  expect(isExplicitPath("plan.md")).toBe(true);
 });
 
 // --- inferResourceName ---

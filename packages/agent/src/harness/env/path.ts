@@ -1,16 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 export const WORKSPACE_ENV = "ROWAN_WORKSPACE";
-export const RUNTIME_ENV = "ROWAN_RUNTIME";
-export const PACKAGED_ENV = "ROWAN_PACKAGED";
 export const BINARY_WORKSPACE_DIR = ".rowan";
 
-export type RuntimeMode = "source" | "binary";
-
 export type WorkspacePaths = {
-  mode: RuntimeMode;
   cwd: string;
   rowanDir: string;
 };
@@ -29,20 +24,13 @@ export type ResolvedWorkspacePath = {
 export type ResolveWorkspaceOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  execPath?: string;
-  entrypoint?: string;
   homeDir?: string;
-  mode?: RuntimeMode;
   rowanDir?: string;
 };
 
 function nonEmptyEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const value = env[key]?.trim();
   return value ? value : undefined;
-}
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
 }
 
 function resolveUserPath(path: string, homeDir: string): string {
@@ -91,23 +79,6 @@ export function findSourceWorkspaceRoot(startDir = process.cwd()): string {
   }
 }
 
-export function detectRuntimeMode(
-  input: Pick<ResolveWorkspaceOptions, "env" | "execPath"> = {},
-): RuntimeMode {
-  const env = input.env ?? process.env;
-  const explicitMode = nonEmptyEnv(env, RUNTIME_ENV)?.toLowerCase();
-  if (explicitMode === "source" || explicitMode === "binary") {
-    return explicitMode;
-  }
-
-  if (isTruthyEnvValue(nonEmptyEnv(env, PACKAGED_ENV))) {
-    return "binary";
-  }
-
-  const executable = basename(input.execPath ?? process.execPath).toLowerCase().replace(/\.exe$/, "");
-  return executable === "bun" ? "source" : "binary";
-}
-
 function defaultWorkspaceStartDir(options: Pick<ResolveWorkspaceOptions, "cwd">): string {
   if (options.cwd) {
     return options.cwd;
@@ -129,10 +100,8 @@ export function resolveWorkspaceRoot(options: ResolveWorkspaceOptions = {}): str
 }
 
 export function resolveWorkspacePaths(options: ResolveWorkspaceOptions = {}): WorkspacePaths {
-  const mode = options.mode ?? detectRuntimeMode(options);
-  const cwd = resolveWorkspaceRoot({ ...options, mode });
+  const cwd = resolveWorkspaceRoot(options);
   return {
-    mode,
     cwd,
     rowanDir: resolveProjectRowanDir(cwd, options.rowanDir),
   };

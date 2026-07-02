@@ -120,7 +120,6 @@ export interface Phase {
 export interface PhaseRegistry {
   /** Map of phase id to Phase object */
   phases: Map<string, Phase>;
-  /** Entry phase id (null if no phases defined) */
+  /** Entry phase id (null until Agent applies its default phase) */
   entryPhaseId: string | null;
 }
-

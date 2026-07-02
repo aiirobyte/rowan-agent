@@ -218,10 +218,8 @@ type HandlerFn = (...args: unknown[]) => Promise<unknown>;
  * Tracks what each extension registered for attribution and cleanup.
  */
 export interface Extension {
-  /** Extension path (may be synthetic like `<builtin:phase:chat>`) */
+  /** Extension path (may be synthetic like `<inline>`) */
   path: string;
-  /** Resolved absolute path */
-  resolvedPath: string;
   /** Source info for error messages */
   sourceInfo: SourceInfo;
   /** Event handlers registered by this extension */
@@ -237,12 +235,10 @@ export interface Extension {
  */
 export function createExtension(
   extensionPath: string,
-  resolvedPath: string,
   sourceInfo: SourceInfo,
 ): Extension {
   return {
     path: extensionPath,
-    resolvedPath,
     sourceInfo,
     handlers: new Map(),
     tools: new Map(),
@@ -338,7 +334,6 @@ export type LoadExtensionsResult = {
  */
 export interface LoadedExtension {
   path: string;
-  resolvedPath: string;
   name: string;
   factory: ExtensionFactory;
   manifest?: ExtensionManifest;
@@ -356,4 +351,3 @@ export interface ExtensionManifest {
     skills?: string[];
   };
 }
-

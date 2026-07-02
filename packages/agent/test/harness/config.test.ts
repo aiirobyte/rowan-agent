@@ -16,7 +16,7 @@ import {
 import { getModel, clearModels } from "@rowan-agent/models";
 
 function ws(dir: string): WorkspacePaths {
-  return { mode: "source", cwd: dir, rowanDir: join(dir, ".rowan") };
+  return { cwd: dir, rowanDir: join(dir, ".rowan") };
 }
 
 // ---------------------------------------------------------------------------

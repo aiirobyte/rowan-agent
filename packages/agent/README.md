@@ -50,6 +50,11 @@ class Agent {
   waitForIdle(): Promise<void>;
   flushEvents(): Promise<void>;
   readonly status: AgentStatus;
+
+  // Resource loading — replaces standalone loadSkills/loadPhases/loadExtensions
+  static loadSkills(targetPath: string): Promise<Skill[]>;
+  static loadPhases(targetPath: string): Promise<PhaseRegistry>;
+  static loadExtensions(targetPath: string): Promise<LoadExtensionsResult>;
 }
 ```
 
@@ -60,12 +65,8 @@ type AgentOptions = {
   context: AgentContext;
   model: LlmModelRef;
   stream: StreamFn;
-  cwd?: string;
-  rowanDir?: string;     // project-local Rowan directory, default: ".rowan"
+  extensions?: LoadedExtension[];
   sessionId?: string;
-  phases?: PhaseRegistry;
-  extensions?: ExtensionRunnerRef;
-  signal?: AbortSignal;
   maxAttempts?: number;
 
   // Lifecycle hooks
@@ -99,6 +100,8 @@ type AgentContext = {
   messages: AgentMessage[];
   tools: Tool[];
   skills: Skill[];
+  // Optional custom phases; Agent merges them with its built-in "default" phase.
+  phases?: PhaseRegistry;
 };
 ```
 
@@ -239,12 +242,9 @@ await session.branch(entryId);
 Skills are `SKILL.md` knowledge bundles that get injected into the agent context, extending its domain knowledge without changing code.
 
 ```ts
-import { loadSkill, loadSkills, resolveSkillPath } from "@rowan-agent/agent";
+import { Agent } from "@rowan-agent/agent";
 
-const skills = await loadSkills(workspace);
-const skill = await loadSkill(path, workspace);
-const path = resolveSkillPath("example", workspace);
-// → <rowanDir>/skills/example/SKILL.md
+const skills = await Agent.loadSkills("/User/Skills");
 ```
 
 ## Phases
@@ -257,7 +257,7 @@ Each phase's `PHASE.md` content is injected as a system message, giving the LLM 
 
 ```
 Per iteration:
-  1. Hot-reload phase configs from disk (PHASE.md)
+  1. Read Agent-normalized `context.phases`
   2. Inject phase instructions as system message
   3. Execute phase (factory | run | LLM fallback)
   4. Extract routing decision from route tool call
@@ -402,14 +402,16 @@ Each target gets a forked copy of the current messages (or empty if `isolated: t
 The extension system lets plugins register lifecycle hooks, tools, phases, model providers, and cross-plugin events. Plugins are discovered from `<workspace>/.rowan/extensions`.
 
 ```ts
-import { createExtensionRunner, discoverAndLoadExtensions } from "@rowan-agent/agent";
+import { Agent } from "@rowan-agent/agent";
 
-const { extensions } = await discoverAndLoadExtensions(cwd);
-const runner = createExtensionRunner({ cwd });
-await runner.loadExtensions(extensions);
+const { extensions } = await Agent.loadExtensions(`${cwd}/.rowan/extensions`);
+// Pass extensions to the Agent constructor — they are loaded and bound internally
+const agent = new Agent({ context, model, stream, extensions });
 ```
 
 ### ExtensionRunner
+
+`ExtensionRunner` is used internally by Agent when extensions are passed via the constructor or `run()`. The Agent manages the runner lifecycle — load, bind, invalidate — automatically.
 
 ```ts
 class ExtensionRunner {
@@ -462,7 +464,7 @@ export default function myPlugin(rowan: ExtensionAPI) {
 
 Multi-provider model configuration via `.rowan/config.yaml`. Supports multiple API providers, per-model settings, environment variable interpolation, and per-phase model overrides.
 
-Config is loaded from the runtime Rowan directory, which defaults to `.rowan` and can be set when constructing `Agent` via `rowanDir`.
+Config is loaded from the runtime Rowan directory, which defaults to `.rowan`.
 
 ### Config File
 
@@ -636,13 +638,13 @@ const request = buildModelRequest({ systemPrompt, messages, tools });
 
 ## Workspace
 
-Workspace resolution uses the current project for both source and binary runs. The project Rowan directory defaults to `<cwd>/.rowan`; pass `rowanDir` to resolve another project-local directory.
+Workspace resolution uses the current project root. The project Rowan directory defaults to `<cwd>/.rowan`; pass `rowanDir` to resolve another project-local directory.
 
 ```ts
 import { resolveWorkspacePaths, resolveInWorkspace } from "@rowan-agent/agent";
 
 const workspace = resolveWorkspacePaths();
-// → { mode: "source" | "binary", cwd: string, rowanDir: string }
+// → { cwd: string, rowanDir: string }
 
 const custom = resolveWorkspacePaths({ rowanDir: ".rowan-project" });
 // → custom.rowanDir is <cwd>/.rowan-project
@@ -666,7 +668,7 @@ type LoopMetrics = {
 | Type | Description |
 |------|-------------|
 | `Agent` | Main agent facade |
-| `AgentContext` | System prompt, messages, tools, skills |
+| `AgentContext` | System prompt, messages, tools, skills, phases |
 | `AgentMessage` | Typed message with role, content, metadata |
 | `AgentEvent` | Discriminated union of 13 event types |
 | `Tool` / `ToolResult` | Tool definition and execution result |
@@ -694,4 +696,4 @@ type LoopMetrics = {
 
 ## Version
 
-Current version: **0.4.6**
+Current version: **0.4.11**

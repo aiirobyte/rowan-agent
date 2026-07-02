@@ -3,19 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { Agent } from "../src/agent";
+import type { LoadedExtension } from "../src/extensions";
 import type { AgentEventListener, LlmRequest, StreamFn } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { buildTestPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
-
-// Create a temp directory without phases to avoid auto-discovery
-let testCwd: string;
-async function getTestCwd(): Promise<string> {
-  if (!testCwd) {
-    testCwd = await mkdtemp(join(tmpdir(), "rowan-test-"));
-  }
-  return testCwd;
-}
 
 function detectPhase(messages: LlmRequest["messages"]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -26,9 +18,7 @@ function detectPhase(messages: LlmRequest["messages"]): string {
 }
 
 test("Agent.run returns a run result and emits events", async () => {
-  const cwd = await getTestCwd();
   const agent = new Agent({
-    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
@@ -49,7 +39,7 @@ test("Agent.run returns a run result and emits events", async () => {
   expect(events).toContain("phase_end");
 });
 
-test("Agent discovers custom phases from cwd .rowan extensions", async () => {
+test("Agent does not discover custom phases from cwd .rowan extensions", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-agent-extension-"));
   try {
     const extDir = join(root, ".rowan", "extensions", "echo");
@@ -73,8 +63,6 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
       export default extension;
     `);
 
-    // In the new phase system, extensions are loaded but phases need newPhaseRegistry
-    // This test verifies the extension can be loaded without errors
     const stream: StreamFn = async function* simpleStream(request) {
       const text = "Extension test response.";
       yield { type: "text_delta", text, partial: buildTestPartial(text) };
@@ -82,7 +70,6 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
     };
 
     const agent = new Agent({
-      cwd: root,
       context: createTestContext(),
       model: { provider: "test", id: "extension" },
       stream,
@@ -90,14 +77,55 @@ test("Agent discovers custom phases from cwd .rowan extensions", async () => {
 
     const outcome = await runAgentTurn(agent, "use extension");
 
-    // Extension loading doesn't affect the outcome without newPhaseRegistry
     expect(outcome.outcome.message).toBe("Extension test response.");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("Agent discovers file phases from configured project rowan dir", async () => {
+test("Agent loads phases from LoadedExtension list", async () => {
+  let capturedCwd: string | undefined;
+  const extension: LoadedExtension = {
+    path: "<test>",
+    name: "test-extension",
+    factory: (rowan) => {
+      capturedCwd = rowan.context.cwd;
+      rowan.registerPhase({
+        id: "extension",
+        name: "Extension",
+        description: "Extension registered phase.",
+        async run() {
+          return { message: "extension phase ran", route: "stop" };
+        },
+      });
+    },
+  };
+
+  let requestCount = 0;
+  const stream: StreamFn = async function* routeToExtensionStream() {
+    requestCount++;
+    const text = "Routing to extension.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield* yieldRouteToolCall("extension", "Use registered extension phase.", text);
+    yield { type: "done" };
+  };
+
+  const agent = new Agent({
+    context: createTestContext(),
+    model: { provider: "test", id: "extension-runner" },
+    stream,
+    extensions: [extension],
+  });
+
+  const outcome = await runAgentTurn(agent, "use extension");
+
+  expect(requestCount).toBe(1);
+  expect(capturedCwd).toBe(process.cwd());
+  expect(agent.state.context.phases?.phases.has("extension")).toBe(true);
+  expect(outcome.outcome.message).toBe("extension phase ran");
+});
+
+test("Agent runs explicitly supplied file phases from configured project rowan dir", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-agent-rowan-dir-"));
   try {
     const phaseDir = join(root, ".rowan-project", "phases", "default");
@@ -118,14 +146,14 @@ Custom phase content.
     const stream: StreamFn = async function* unusedStream() {
       throw new Error("configured phase should run without invoking the model");
     };
+    const phases = await Agent.loadPhases(join(root, ".rowan-project", "phases"));
     const agent = new Agent({
-      cwd: root,
-      rowanDir: ".rowan-project",
-      context: createTestContext(),
+      context: { ...createTestContext(), phases },
       model: { provider: "test", id: "configured-rowan-dir" },
       stream,
     });
 
+    expect(await agent.phase("default")).toContain("Custom phase content.");
     const outcome = await runAgentTurn(agent, "use configured phase");
 
     expect(outcome.outcome.message).toBe("configured project Rowan dir phase ran");
@@ -134,10 +162,176 @@ Custom phase content.
   }
 });
 
+test("Agent lets a user-defined default phase override the built-in default", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-user-default-phase-"));
+  try {
+    const phaseDir = join(root, "phases", "default");
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: User Default
+description: Overrides the built-in default phase.
+---
+
+User default content.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+      export async function run() {
+        return { message: "user default ran", route: "stop" };
+      }
+    `);
+
+    const phases = await Agent.loadPhases(join(root, "phases"));
+    const agent = new Agent({
+      context: { ...createTestContext(), phases },
+      model: { provider: "test", id: "user-default" },
+      stream: async function* unusedStream() {
+        throw new Error("user default phase should run without invoking the model");
+      },
+    });
+
+    expect(await agent.phase("default")).toContain("User default content.");
+    const outcome = await runAgentTurn(agent, "use user default");
+
+    expect(outcome.outcome.message).toBe("user default ran");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Agent.loadSkills picks up edits on repeated loads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-skill-reload-"));
+  try {
+    const skillDir = join(root, "skills", "writer");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), `---
+name: writer
+description: Writes things.
+---
+
+First version.
+`);
+
+    const [first] = await Agent.loadSkills(join(root, "skills"));
+    expect(first?.content).toContain("First version.");
+
+    await writeFile(join(skillDir, "SKILL.md"), `---
+name: writer
+description: Writes things.
+---
+
+Second version.
+`);
+
+    const [second] = await Agent.loadSkills(join(root, "skills"));
+    expect(second?.content).toContain("Second version.");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Agent.loadPhases picks up markdown and execution edits on repeated loads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-phase-reload-"));
+  try {
+    const phaseDir = join(root, "phases", "default");
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: Reloadable
+description: Reloadable phase.
+---
+
+First phase content.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+      export async function run() {
+        return { message: "first phase run", route: "stop" };
+      }
+    `);
+
+    const first = await Agent.loadPhases(join(root, "phases"));
+    expect(first.phases.get("default")?.content).toContain("First phase content.");
+    await expect(first.phases.get("default")?.run?.({} as never, {} as never)).resolves.toMatchObject({
+      message: "first phase run",
+    });
+
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: Reloadable
+description: Reloadable phase.
+---
+
+Second phase content.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+      export async function run() {
+        return { message: "second phase run", route: "stop" };
+      }
+    `);
+
+    const second = await Agent.loadPhases(join(root, "phases"));
+    expect(second.phases.get("default")?.content).toContain("Second phase content.");
+    await expect(second.phases.get("default")?.run?.({} as never, {} as never)).resolves.toMatchObject({
+      message: "second phase run",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Agent.run can hot reload extensions loaded by Agent.loadExtensions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-extension-reload-"));
+  try {
+    const extensionsDir = join(root, "extensions");
+    const extensionDir = join(extensionsDir, "echo");
+    const extensionPath = join(extensionDir, "index.ts");
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(join(extensionDir, "package.json"), JSON.stringify({
+      name: "rowan-reload-extension",
+      rowan: { extensions: ["./index.ts"] },
+    }));
+    const writeExtension = (message: string) => writeFile(extensionPath, `
+      export default (rowan: any) => {
+        rowan.registerPhase({
+          id: "extension",
+          name: "Extension",
+          description: "Reloadable extension phase.",
+          async run() {
+            return { message: ${JSON.stringify(message)}, route: "stop" };
+          },
+        });
+      };
+    `);
+    await writeExtension("first extension run");
+
+    const stream: StreamFn = async function* routeToExtensionStream() {
+      const text = "Routing to extension.";
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall("extension", "Use registered extension phase.", text);
+      yield { type: "done" };
+    };
+    const firstLoad = await Agent.loadExtensions(extensionsDir);
+    const agent = new Agent({
+      context: createTestContext(),
+      model: { provider: "test", id: "extension-reload" },
+      stream,
+      extensions: firstLoad.extensions,
+    });
+
+    const first = await runAgentTurn(agent, "use extension");
+    expect(first.outcome.message).toBe("first extension run");
+
+    await writeExtension("second extension run");
+    const secondLoad = await Agent.loadExtensions(extensionsDir);
+    const second = await runAgentTurn(agent, "use extension again", {
+      extensions: secondLoad.extensions,
+    });
+
+    expect(second.outcome.message).toBe("second extension run");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Agent.run does not wait for async event listeners", async () => {
-  const cwd = await getTestCwd();
   const agent = new Agent({
-    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
@@ -163,9 +357,7 @@ test("Agent.run does not wait for async event listeners", async () => {
 });
 
 test("Agent rejects concurrent runs", async () => {
-  const cwd = await getTestCwd();
   const agent = new Agent({
-    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
@@ -177,7 +369,6 @@ test("Agent rejects concurrent runs", async () => {
 });
 
 test("Agent.abort stops an active run", async () => {
-  const cwd = await getTestCwd();
   const hangingStream: StreamFn = async function* hangingStream(_request, options) {
     yield { type: "text_delta", text: "working", partial: buildTestPartial("working") };
     await new Promise((_resolve, reject) => {
@@ -186,7 +377,6 @@ test("Agent.abort stops an active run", async () => {
     yield { type: "done" };
   };
   const agent = new Agent({
-    cwd,
     context: createTestContext({ tools: createEchoTools() }),
     model: { provider: "test", id: "scripted" },
     stream: hangingStream,

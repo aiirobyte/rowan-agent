@@ -1,19 +1,20 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Skill } from "../protocol";
-import { type WorkspacePaths, resolveWorkspacePaths } from "./env/path";
 import {
   loadMarkdown,
-  resolveResourcePath,
   inferResourceName,
 } from "./loader";
 import { formatResourceOutput } from "./context/resource-formatter";
 
 const SKILL_MARKER = "SKILL.md";
 
-export function resolveSkillPath(input: string, workspace = resolveWorkspacePaths()): string {
-  return resolveResourcePath(input, "skills", SKILL_MARKER, workspace);
+function resolveSkillPath(input: string): string {
+  const resolved = resolve(input);
+  return existsSync(resolved) && statSync(resolved).isDirectory()
+    ? join(resolved, SKILL_MARKER)
+    : resolved;
 }
 
 /** Format skill content for LLM consumption using unified XML format. */
@@ -24,8 +25,8 @@ export function readSkillContent(skill: Skill): string {
   });
 }
 
-export async function loadSkill(path: string, workspace?: WorkspacePaths): Promise<Skill> {
-  const resolved = resolveSkillPath(path, workspace);
+export async function loadSkill(path: string): Promise<Skill> {
+  const resolved = resolveSkillPath(path);
   const { frontmatter, body } = await loadMarkdown(resolved);
 
   return {
@@ -38,30 +39,28 @@ export async function loadSkill(path: string, workspace?: WorkspacePaths): Promi
   };
 }
 
-export async function loadSkills(workspace?: WorkspacePaths, paths?: string[]): Promise<Skill[]> {
-  if (paths && paths.length > 0) {
-    return Promise.all(paths.map((path) => loadSkill(path, workspace)));
+export async function loadSkills(targetPath: string): Promise<Skill[]> {
+  const skillsDir = resolve(targetPath);
+
+  if (existsSync(skillsDir) && statSync(skillsDir).isFile()) {
+    return [await loadSkill(skillsDir)];
   }
 
-  // Auto-discover from .rowan/skills/ directory
-  const ws = workspace ?? resolveWorkspacePaths();
-  const skillsDir = join(ws.rowanDir, "skills");
-
-  if (!existsSync(skillsDir)) {
-    return [];
+  if (existsSync(join(skillsDir, SKILL_MARKER))) {
+    return [await loadSkill(skillsDir)];
   }
 
   const entries = await readdir(skillsDir, { withFileTypes: true });
   const skills: Skill[] = [];
 
-  for (const entry of entries) {
+  for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue;
 
     const skillFile = join(skillsDir, entry.name, SKILL_MARKER);
     if (!existsSync(skillFile)) continue;
 
     try {
-      const skill = await loadSkill(entry.name, ws);
+      const skill = await loadSkill(skillFile);
       skills.push(skill);
     } catch (error) {
       console.warn(`Failed to load skill "${entry.name}":`, error);

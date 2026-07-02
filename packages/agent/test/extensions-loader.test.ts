@@ -6,9 +6,8 @@ import Type from "typebox";
 import {
   createExtensionRunner,
   createEventBus,
-  discoverAndLoadExtensions,
-  loadExtensionFromFactory,
 } from "../src/extensions";
+import { loadExtensionsFromPath, loadExtensionFromFactory } from "../src/extensions/loader";
 import type { ExtensionAPI, LoadedExtension } from "../src/extensions";
 import { createMessage } from "../src/types";
 
@@ -25,7 +24,6 @@ test("loadExtensionFromFactory creates a LoadedExtension object", () => {
   }, process.cwd(), "<test:factory>");
 
   expect(extension.path).toBe("<test:factory>");
-  expect(extension.resolvedPath).toBe("<test:factory>");
   expect(extension.name).toBe("<test:factory>");
 });
 
@@ -34,7 +32,6 @@ test("ExtensionRunner loads extensions and registers phases", async () => {
 
   const ext: LoadedExtension = {
     path: "<test>",
-    resolvedPath: "<test>",
     name: "test",
     factory: (ctx) => {
       ctx.registerPhase({
@@ -62,7 +59,6 @@ test("ExtensionAPI utils provide helper functions", async () => {
   const runner = createExtensionRunner();
   const ext: LoadedExtension = {
     path: "<test>",
-    resolvedPath: "<test>",
     name: "test",
     factory: (ctx) => {
       capturedCtx = ctx;
@@ -76,7 +72,7 @@ test("ExtensionAPI utils provide helper functions", async () => {
   expect(capturedCtx!.utils.formatJson({ a: 1 })).toBe(JSON.stringify({ a: 1 }, null, 2));
 });
 
-test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", async () => {
+test("loadExtensionsFromPath loads TypeScript extensions from a directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-extension-loader-"));
   try {
     const extDir = join(root, ".rowan", "extensions", "echo");
@@ -100,7 +96,7 @@ test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", as
       export default extension;
     `);
 
-    const result = await discoverAndLoadExtensions(root);
+    const result = await loadExtensionsFromPath(join(root, ".rowan", "extensions"));
 
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
@@ -110,14 +106,14 @@ test("discoverAndLoadExtensions loads TypeScript extensions from cwd .rowan", as
   }
 });
 
-test("discoverAndLoadExtensions reports invalid extension factories", async () => {
+test("loadExtensionsFromPath reports invalid extension factories", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-extension-loader-bad-"));
   try {
     const extensionsDir = join(root, ".rowan", "extensions");
     await mkdir(extensionsDir, { recursive: true });
     await writeFile(join(extensionsDir, "bad.ts"), "export default 123;");
 
-    const result = await discoverAndLoadExtensions(root);
+    const result = await loadExtensionsFromPath(extensionsDir);
 
     expect(result.extensions).toEqual([]);
     expect(result.errors).toHaveLength(1);
@@ -134,7 +130,6 @@ test("HooksManager supports typed event registration", async () => {
 
   const ext: LoadedExtension = {
     path: "<test>",
-    resolvedPath: "<test>",
     name: "test",
     factory: (ctx) => {
       ctx.on("agent_start", () => {
@@ -159,7 +154,6 @@ test("before_tool_call hook can block tool execution", async () => {
 
   const ext: LoadedExtension = {
     path: "<test>",
-    resolvedPath: "<test>",
     name: "test",
     factory: (ctx) => {
       ctx.on("before_tool_call", (event) => {
@@ -191,7 +185,6 @@ test("ExtensionAPI registerTool registers LLM-callable tools", async () => {
 
   const ext: LoadedExtension = {
     path: "<test:tool>",
-    resolvedPath: "<test:tool>",
     name: "test-tool",
     factory: (ctx) => {
       ctx.registerTool({
@@ -246,7 +239,6 @@ test("EventBus is shared across extensions via api.events", async () => {
 
   const ext1: LoadedExtension = {
     path: "<test:ext1>",
-    resolvedPath: "<test:ext1>",
     name: "ext1",
     factory: (ctx) => {
       ctx.events.on("custom:event", (msg) => {
@@ -257,7 +249,6 @@ test("EventBus is shared across extensions via api.events", async () => {
 
   const ext2: LoadedExtension = {
     path: "<test:ext2>",
-    resolvedPath: "<test:ext2>",
     name: "ext2",
     factory: (ctx) => {
       ctx.events.emit("custom:event", "hello");
@@ -295,7 +286,6 @@ test("ExtensionRunner.invalidate makes contexts stale", async () => {
 
   const ext: LoadedExtension = {
     path: "<test>",
-    resolvedPath: "<test>",
     name: "test",
     factory: (ctx) => {
       capturedApi = ctx;
@@ -319,7 +309,6 @@ test("ExtensionRunner hasHandlers queries handler registration", async () => {
 
   const ext: LoadedExtension = {
     path: "<test>",
-    resolvedPath: "<test>",
     name: "test",
     factory: (ctx) => {
       ctx.on("agent_start", () => {});

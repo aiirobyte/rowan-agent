@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSession, messageContentText } from "@rowan-agent/agent";
 import {
-  detectRuntimeMode,
   findSourceWorkspaceRoot,
   resolveInWorkspace,
   resolveWorkspacePaths,
@@ -13,7 +12,7 @@ import {
 import { type Tool, type ToolContext } from "../../../src/types";
 import { createId } from "../../../src/utils";
 import { createCoreTools } from "../../../src/harness/tools";
-import { loadSkill, resolveSkillPath } from "../../../src/harness/skills";
+import { loadSkill, loadSkills } from "../../../src/harness/skills";
 
 function createToolContext(toolCallId = createId("call")): ToolContext {
   return {
@@ -30,8 +29,8 @@ function findTool(tools: Tool[], name: string): Tool {
   return tool;
 }
 
-test("source runtime resolves workspace to the project root", async () => {
-  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-source-"));
+test("workspace paths resolve to the project root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-root-"));
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
   await mkdir(join(root, "packages", "cli"), { recursive: true });
 
@@ -40,9 +39,7 @@ test("source runtime resolves workspace to the project root", async () => {
   const paths = resolveWorkspacePaths({
     cwd: join(root, "packages", "cli"),
     env: {},
-    execPath: "/usr/local/bin/bun",
   });
-  expect(paths.mode).toBe("source");
   expect(paths.cwd).toBe(root);
   expect(paths.rowanDir).toBe(join(root, ".rowan"));
   expect("runsDir" in paths).toBe(false);
@@ -50,50 +47,21 @@ test("source runtime resolves workspace to the project root", async () => {
   expect("skillsDir" in paths).toBe(false);
 });
 
-test("binary runtime resolves workspace from the current project", async () => {
-  const root = await mkdtemp(join(tmpdir(), "rowan-workspace-binary-"));
-  await mkdir(join(root, "packages", "app"), { recursive: true });
-  await writeFile(join(root, "package.json"), JSON.stringify({ name: "example-app", workspaces: ["packages/*"] }));
-
-  const paths = resolveWorkspacePaths({
-    cwd: join(root, "packages", "app"),
-    env: {},
-    execPath: "/usr/local/bin/rowan",
-    homeDir: "/Users/tester",
-  });
-
-  expect(paths.mode).toBe("binary");
-  expect(paths.cwd).toBe(root);
-  expect(paths.rowanDir).toBe(join(root, ".rowan"));
-});
-
-test("source runtime uses cwd before the running entrypoint path", async () => {
+test("workspace resolution uses cwd", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-workspace-cwd-"));
-  const otherRoot = await mkdtemp(join(tmpdir(), "rowan-workspace-entrypoint-"));
-  const entrypointDir = join(otherRoot, "packages", "cli", "src");
-  await mkdir(entrypointDir, { recursive: true });
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
-  await writeFile(join(otherRoot, "package.json"), JSON.stringify({ name: "rowan-agent", workspaces: ["packages/*"] }));
-  await writeFile(join(entrypointDir, "cli.ts"), "");
 
   const paths = resolveWorkspacePaths({
     cwd: root,
     env: {},
-    execPath: "/usr/local/bin/bun",
-    entrypoint: join(entrypointDir, "cli.ts"),
   });
 
   expect(paths.cwd).toBe(root);
 });
 
-test("runtime and workspace env vars can override detection", () => {
-  expect(detectRuntimeMode({ env: { ROWAN_RUNTIME: "binary" }, execPath: "/usr/local/bin/bun" })).toBe(
-    "binary",
-  );
-
+test("workspace env var can override the workspace root", () => {
   const paths = resolveWorkspacePaths({
     env: { ROWAN_WORKSPACE: "~/custom-rowan" },
-    execPath: "/usr/local/bin/rowan",
     homeDir: "/Users/tester",
   });
   expect(paths.cwd).toBe("/Users/tester/custom-rowan");
@@ -107,7 +75,6 @@ test("project rowan dir can be customized relative to the workspace", async () =
   const paths = resolveWorkspacePaths({
     cwd: root,
     env: {},
-    execPath: "/usr/local/bin/bun",
     homeDir: "/Users/tester",
     rowanDir: ".rowan-project",
   });
@@ -118,7 +85,6 @@ test("project rowan dir can be customized relative to the workspace", async () =
   const defaulted = resolveWorkspacePaths({
     cwd: root,
     env: {},
-    execPath: "/usr/local/bin/bun",
     rowanDir: "",
   });
   expect(defaulted.rowanDir).toBe(join(root, ".rowan"));
@@ -132,7 +98,6 @@ test("project rowan dir cannot escape the workspace", async () => {
     resolveWorkspacePaths({
       cwd: root,
       env: {},
-      execPath: "/usr/local/bin/bun",
       rowanDir: join(root, ".rowan-absolute"),
     }),
   ).toThrow("Project Rowan dir must be a relative path");
@@ -141,7 +106,6 @@ test("project rowan dir cannot escape the workspace", async () => {
     resolveWorkspacePaths({
       cwd: root,
       env: {},
-      execPath: "/usr/local/bin/bun",
       rowanDir: "../outside",
     }),
   ).toThrow("Path escapes workspace root");
@@ -182,21 +146,13 @@ test("loadSkill reads SKILL.md and infers id from parent directory", async () =>
   expect(session.messages.some((message) => messageContentText(message.content).includes("Use echo."))).toBe(false);
 });
 
-test("loadSkill resolves skill ids from the workspace skills directory", async () => {
+test("loadSkills loads every skill from the target directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-workspace-skill-"));
   const skillDir = join(root, ".rowan", "skills", "example");
   await mkdir(skillDir, { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), "---\ndescription: Use workspace skill.\n---\n\n# Example\n\nUse workspace skill.");
 
-  const workspace = {
-    mode: "source" as const,
-    cwd: root,
-    rowanDir: join(root, ".rowan"),
-  };
-
-  expect(resolveSkillPath("example", workspace)).toBe(join(skillDir, "SKILL.md"));
-
-  const skill = await loadSkill("example", workspace);
+  const [skill] = await loadSkills(join(root, ".rowan", "skills"));
   expect(skill.name).toBe("example");
   expect(skill.filePath).toBe(join(skillDir, "SKILL.md"));
   expect(skill.description).toBeTruthy();

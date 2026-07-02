@@ -1,11 +1,19 @@
 import { runAgentLoop } from "./agent-loop";
-import { ExtensionRunner } from "./extensions";
-import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
 import { snapshotMessages } from "./loop/state";
-import { loadPhases } from "./harness/phases/loader";
-import { loadSkills, readSkillContent } from "./harness/skills";
-import { resolveWorkspacePaths } from "./harness/env/path";
-import type { PhaseContext, PhaseOutput, PhaseRegistry } from "./harness/phases/types";
+import {
+  loadSkills as loadSkillsFromFiles,
+  readSkillContent,
+} from "./harness/skills";
+import {
+  loadPhases as loadPhasesFromFiles,
+  readPhaseContent,
+} from "./harness/phases/loader";
+import { createExtensionRunner, type ExtensionRunner, type LoadedExtension } from "./extensions";
+import { loadExtensionsFromPath } from "./extensions/loader";
+import type { LoadExtensionsResult } from "./extensions/types";
+import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
+import { DEFAULT_PHASE_ID, createDefaultPhase } from "./harness/phases/default";
+import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "./harness/phases/types";
 import type {
   AgentMessage,
   LlmModelRef,
@@ -24,18 +32,11 @@ import type {
 import type { ModelTranscript } from "./protocol/turn";
 import { createId } from "./utils";
 
-import type { AgentConfig } from "./loop/types";
-
-export type ExtensionRunnerRef = { current?: ExtensionRunner };
-
 export type AgentOptions = {
   context: AgentContext;
   model: LlmModelRef;
   stream: StreamFn;
-  cwd?: string;
-  rowanDir?: string;
-  phases?: PhaseRegistry;
-  extensionRunnerRef?: ExtensionRunnerRef;
+  extensions?: LoadedExtension[];
   sessionId?: string;
   maxAttempts?: number;
   beforeToolCall?: BeforeToolCall;
@@ -45,7 +46,7 @@ export type AgentOptions = {
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
 };
 
-export type RunOptions = Partial<AgentConfig> & Pick<AgentConfig, "context">;
+export type RunOptions = Partial<AgentOptions>;
 
 export type AgentStatus = {
   sessionId?: string;
@@ -64,15 +65,30 @@ export class Agent {
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
   private activeRun?: { promise: Promise<RunResult>; resolve: (result: RunResult) => void; abortController: AbortController };
+  private extensionRunner?: ExtensionRunner;
+  private loadedExtensions?: LoadedExtension[];
+
+  static loadSkills(targetPath: string): Promise<AgentContext["skills"]> {
+    return loadSkillsFromFiles(targetPath);
+  }
+
+  static loadPhases(targetPath: string): Promise<PhaseRegistry> {
+    return loadPhasesFromFiles(targetPath);
+  }
+
+  static loadExtensions(targetPath: string): Promise<LoadExtensionsResult> {
+    return loadExtensionsFromPath(targetPath);
+  }
 
   constructor(options: AgentOptions) {
+    const context = cloneAgentContext(options.context);
     this.options = {
       ...options,
-      context: cloneAgentContext(options.context),
+      context,
     };
     this.state = {
       ...(this.options.sessionId ? { sessionId: this.options.sessionId } : {}),
-      context: cloneAgentContext(this.options.context),
+      context: cloneAgentContext(context),
       model: this.options.model,
       tools: this.options.context.tools ?? [],
       isRunning: false,
@@ -140,8 +156,8 @@ export class Agent {
     // Notify listeners
     this.emitToListeners(event);
 
-    // Dispatch to extension runner via ref
-    this.options.extensionRunnerRef?.current?.emitAgentEvent(event);
+    // Dispatch to the Agent-owned extension runner
+    this.extensionRunner?.emitAgentEvent(event);
   }
 
   /**
@@ -149,7 +165,7 @@ export class Agent {
    * Extensions can block execution by setting allow=false.
    */
   private async handleBeforeToolCall(tool: Tool, args: unknown): Promise<{ allow: boolean; reason?: string }> {
-    const runner = this.options.extensionRunnerRef?.current;
+    const runner = this.extensionRunner;
     if (!runner) return { allow: true };
     return runner.emitBeforeToolCall(tool, args);
   }
@@ -159,7 +175,7 @@ export class Agent {
    * Extensions can mutate the result.
    */
   private async handleAfterToolCall(tool: Tool, result: ToolResult): Promise<ToolResult> {
-    const runner = this.options.extensionRunnerRef?.current;
+    const runner = this.extensionRunner;
     if (!runner) return result;
     return runner.emitAfterToolCall(tool, result);
   }
@@ -169,7 +185,7 @@ export class Agent {
    * Extensions can abort, skip, or replace the phase input.
    */
   private async handleBeforePhase(phaseId: string, input: PhaseContext): Promise<BeforePhaseHookResult> {
-    const runner = this.options.extensionRunnerRef?.current;
+    const runner = this.extensionRunner;
     if (!runner) return {};
     return runner.emitBeforePhase(phaseId, input);
   }
@@ -179,7 +195,7 @@ export class Agent {
    * Extensions can abort, retry, or replace the output.
    */
   private async handleAfterPhase(phaseId: string, output: PhaseOutput): Promise<AfterPhaseHookResult> {
-    const runner = this.options.extensionRunnerRef?.current;
+    const runner = this.extensionRunner;
     if (!runner) return {};
     return runner.emitAfterPhase(phaseId, output);
   }
@@ -189,7 +205,7 @@ export class Agent {
    * Extensions can transform the PhaseContext (messages, tools, systemPrompt, etc.).
    */
   private async handleBeforePrompt(phaseId: string, input: PhaseContext): Promise<PhaseContext> {
-    const runner = this.options.extensionRunnerRef?.current;
+    const runner = this.extensionRunner;
     if (!runner) return input;
     return runner.emitBeforePrompt(phaseId, input);
   }
@@ -198,56 +214,6 @@ export class Agent {
     const message = error instanceof Error ? error.message : "Agent run failed.";
     this.state.error = message;
     // turn_end and agent_end are handled by runAgentLoop's phase turn() and finally block.
-  }
-
-  /**
-   * Discover and load phases and skills from the workspace.
-   *
-   * - Auto-discovers file-based phases from .rowan/phases/
-   * - Auto-discovers skills from .rowan/skills/
-   * - Merges with CLI-provided phases and skills
-   */
-  private async discoverResources(context: AgentContext): Promise<{
-    phases?: PhaseRegistry;
-    skills: AgentContext["skills"];
-  }> {
-    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd, rowanDir: this.options.rowanDir });
-
-    // Discover file-based phases
-    const filePhases = await loadPhases(workspace);
-
-    // Merge with provided phases (provided take priority)
-    let phases: PhaseRegistry | undefined;
-    const providedPhases = this.options.phases;
-
-    if (providedPhases && providedPhases.phases.size > 0) {
-      // Provided phases take priority over file-based
-      const merged = new Map(filePhases.phases);
-      for (const [id, phase] of providedPhases.phases) {
-        merged.set(id, phase);
-      }
-      phases = {
-        phases: merged,
-        entryPhaseId: providedPhases.entryPhaseId ?? filePhases.entryPhaseId,
-      };
-    } else if (filePhases.phases.size > 0) {
-      phases = filePhases;
-    }
-
-    // Discover skills from .rowan/skills/
-    const fileSkills = await loadSkills(workspace);
-
-    // Merge with provided skills (deduplicate by name, provided take priority)
-    const skillMap = new Map<string, AgentContext["skills"][number]>();
-    for (const skill of fileSkills) {
-      skillMap.set(skill.name, skill);
-    }
-    for (const skill of context.skills) {
-      skillMap.set(skill.name, skill);
-    }
-    const skills = Array.from(skillMap.values());
-
-    return { phases, skills };
   }
 
   private async runWithLifecycle(
@@ -283,29 +249,41 @@ export class Agent {
     this.activeRun = undefined;
   }
 
+  private async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
+    if (extensions.length === 0) {
+      this.extensionRunner?.invalidate();
+      this.extensionRunner = undefined;
+      this.loadedExtensions = extensions;
+      return;
+    }
+
+    if (this.extensionRunner && this.loadedExtensions === extensions) {
+      return;
+    }
+
+    const runner = createExtensionRunner();
+    await runner.loadExtensions(extensions);
+    runner.bind();
+    this.extensionRunner?.invalidate();
+    this.extensionRunner = runner;
+    this.loadedExtensions = extensions;
+  }
+
   async run(config?: RunOptions): Promise<RunResult> {
+    const extensions = config?.extensions ?? this.options.extensions ?? [];
+    await this.loadExtensions(extensions);
     const resolved = this.resolveRunConfig(config);
-    const previousSessionId = this.state.sessionId ?? this.options.sessionId;
+    const runContext = cloneAgentContext(resolved.context, this.extensionRunner);
     const sessionId = resolved.sessionId ?? this.state.sessionId;
-    const hadExistingSession = Boolean(sessionId && previousSessionId === sessionId);
     this.options = resolved;
     if (sessionId) {
       this.state.sessionId = sessionId;
     }
-    this.state.context = cloneAgentContext(resolved.context);
+    this.state.context = runContext;
     this.state.model = resolved.model;
-    this.state.tools = resolved.context.tools ?? [];
+    this.state.tools = runContext.tools ?? [];
     this.state.currentResult = undefined;
     this.state.error = undefined;
-
-    // Discover phases and skills from workspace
-    const { phases, skills } = await this.discoverResources(resolved.context);
-
-    // Update context with discovered skills
-    const contextWithSkills: AgentContext = {
-      ...resolved.context,
-      skills,
-    };
 
     return this.runWithLifecycle(async (signal) => {
       const emit = (event: AgentEvent) => {
@@ -338,7 +316,7 @@ export class Agent {
       };
 
       const result = await runAgentLoop({
-        context: contextWithSkills,
+        context: runContext,
         sessionId: sessionId ?? createId("ses"),
         model: resolved.model,
         stream: resolved.stream,
@@ -349,23 +327,23 @@ export class Agent {
         beforePhase: (phaseId: string, input: PhaseContext) => this.handleBeforePhase(phaseId, input),
         afterPhase: (phaseId: string, output: PhaseOutput) => this.handleAfterPhase(phaseId, output),
         beforePrompt: (phaseId: string, input: PhaseContext) => this.handleBeforePrompt(phaseId, input),
-        phases,
         emit,
         onMessage: resolved.onMessage,
         onOutcome: resolved.onOutcome,
         onModelTranscript: resolved.onModelTranscript,
       });
 
-      this.state.sessionId = result.sessionId;
-      this.state.context = {
+      const nextContext = {
         ...cloneAgentContext(resolved.context),
         messages: snapshotMessages(result.messages),
       };
+      this.state.sessionId = result.sessionId;
+      this.state.context = cloneAgentContext(nextContext, this.extensionRunner);
       this.state.currentResult = result;
       this.options = {
         ...resolved,
         sessionId: result.sessionId,
-        context: cloneAgentContext(this.state.context),
+        context: nextContext,
       };
       return result;
     });
@@ -404,15 +382,10 @@ export class Agent {
    * @returns Formatted phase content string, or empty string if not found
    */
   async phase(name: string): Promise<string> {
-    const workspace = resolveWorkspacePaths({ cwd: this.options.cwd, rowanDir: this.options.rowanDir });
-    const { loadPhase, readPhaseContent } = await import("./harness/phases/loader");
-
-    try {
-      const phase = await loadPhase(name, workspace);
-      return readPhaseContent(phase);
-    } catch {
-      return "";
-    }
+    await this.loadExtensions(this.options.extensions ?? []);
+    const registry = cloneAgentContext(this.options.context, this.extensionRunner).phases?.phases;
+    const phase = registry?.get(name) ?? [...(registry?.values() ?? [])].find((candidate) => candidate.name === name);
+    return phase ? readPhaseContent(phase) : "";
   }
 
   async waitForIdle(): Promise<void> {
@@ -434,16 +407,30 @@ export class Agent {
   }
 
   private createContextSnapshot(): AgentContext {
-    return cloneAgentContext(this.state.context);
+    return cloneAgentContext(this.options.context);
   }
 
 }
 
-function cloneAgentContext(context: AgentContext): AgentContext {
+function cloneAgentContext(context: AgentContext, extensionRunner?: ExtensionRunner): AgentContext {
+  const phases = new Map<string, Phase>();
+  phases.set(DEFAULT_PHASE_ID, createDefaultPhase());
+  for (const [id, phase] of context.phases?.phases ?? []) {
+    phases.set(id, phase);
+  }
+  const extensionRegistry = extensionRunner?.createPhaseRegistry();
+  for (const [id, phase] of extensionRegistry?.phases ?? []) {
+    phases.set(id, phase);
+  }
+
   return {
     systemPrompt: context.systemPrompt,
     messages: snapshotMessages(context.messages),
     tools: context.tools.slice(),
     skills: context.skills.slice(),
+    phases: {
+      phases,
+      entryPhaseId: extensionRegistry?.entryPhaseId ?? context.phases?.entryPhaseId ?? DEFAULT_PHASE_ID,
+    },
   };
 }

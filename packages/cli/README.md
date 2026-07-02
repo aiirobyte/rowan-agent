@@ -64,7 +64,6 @@ When no command is given, positional arguments are joined as the prompt.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ROWAN_LOG_LEVEL` | Run log detail level | `info` |
-| `ROWAN_RUNTIME` | Runtime override (`source` or `binary`) | Auto-detected |
 | `ROWAN_WORKSPACE` | Override current working directory | `cwd` |
 
 ## Interactive Controls
@@ -102,13 +101,13 @@ Tool execution is shown on stderr: `⚙ read { path: "..." }` when started, `✓
                 └──────────┘
 ```
 
-1. Parse args → resolve workspace, load skills, create core tools
+1. Parse args → resolve workspace, create core tools
 2. Optionally resume session via `LocalJsonlSessionManager`
-3. Discover and load extensions from `.rowan/extensions`
-4. Create `Agent` with OpenAI completions stream
+3. Load skills, phases, and extensions from `.rowan/` via `Agent.loadSkills()`, `Agent.loadPhases()`, `Agent.loadExtensions()`
+4. Create `Agent` with the loaded resources (skills → context, phases → context, extensions → constructor)
 5. Stream assistant text to stdout, tool status to stderr
 6. Write JSONL run logs via `pinoAgentEventLogger`
-7. In interactive mode, loop on stdin input
+7. Resources are hot-reloaded from disk each turn in interactive mode — edits to skills/phases/extensions apply immediately
 
 ## Output Formatting (Programmatic)
 
@@ -124,4 +123,4 @@ import {
 
 ## Version
 
-Current version: **0.4.6**
+Current version: **0.4.8**

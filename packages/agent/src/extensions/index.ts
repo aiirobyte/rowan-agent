@@ -78,13 +78,6 @@ export type {
 export { ExtensionRunner, createExtensionRunner } from "./runner";
 export type { ExtensionRunnerOptions } from "./runner";
 
-// Loader
-export {
-  discoverAndLoadExtensions,
-  loadExtensionFromFactory,
-  loadExtensions,
-} from "./loader";
-
 // EventBus
 export { createEventBus } from "./event-bus";
 export type { EventBus } from "./event-bus";

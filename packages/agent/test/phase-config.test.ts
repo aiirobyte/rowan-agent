@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 import type { PhaseRegistry } from "../src/harness/phases/types";
-import {
-  createExtensionRunner,
-  loadExtensionFromFactory,
-} from "../src/extensions";
+import { createExtensionRunner } from "../src/extensions";
 import type { LoadedExtension } from "../src/extensions";
 
 test("PhaseRegistry is Map-based with entryPhaseId", () => {
@@ -29,7 +26,6 @@ test("ExtensionRunner loads phases from extensions", async () => {
 
   const ext: LoadedExtension = {
     path: "<test>",
-    resolvedPath: "<test>",
     name: "test",
     factory: (ctx) => {
       ctx.registerPhase({
@@ -58,7 +54,6 @@ test("ExtensionRunner rejects duplicate phase ids", async () => {
 
   const ext1: LoadedExtension = {
     path: "<test1>",
-    resolvedPath: "<test1>",
     name: "test1",
     factory: (ctx) => {
       ctx.registerPhase({
@@ -72,7 +67,6 @@ test("ExtensionRunner rejects duplicate phase ids", async () => {
 
   const ext2: LoadedExtension = {
     path: "<test2>",
-    resolvedPath: "<test2>",
     name: "test2",
     factory: (ctx) => {
       ctx.registerPhase({

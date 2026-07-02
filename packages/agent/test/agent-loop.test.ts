@@ -6,6 +6,7 @@ import type { AgentContext, AgentEvent, LlmRequest, StreamFn, Tool } from "../sr
 import { createMessage } from "../src/types";
 import { messageContentText } from "../src/types";
 import { createId } from "../src/utils";
+import { createDefaultPhase } from "../src/harness/phases";
 import { echoTool } from "./support/echo-tool";
 import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
 
@@ -33,11 +34,13 @@ function extractUserRequest(messages: LlmRequest["messages"]): string {
 }
 
 function createContext(input: { systemPrompt: string; input: string; tools?: Tool[]; skills?: import("../src/types").Skill[] }): AgentContext {
+  const defaultPhase = createDefaultPhase();
   return {
     systemPrompt: input.systemPrompt,
     messages: [createMessage("user", input.input)],
     tools: input.tools?.slice() ?? [],
     skills: input.skills?.slice() ?? [],
+    phases: { phases: new Map([[defaultPhase.id, defaultPhase]]), entryPhaseId: defaultPhase.id },
   };
 }
 
@@ -51,14 +54,7 @@ test("runAgentLoop assembles runtime context for the first message", async () =>
   };
 
   await runAgentLoop({
-    context: {
-      systemPrompt: "Test system",
-      messages: [
-        createMessage("user", "hello"),
-      ],
-      tools: [echoTool],
-      skills: [],
-    },
+    context: createContext({ systemPrompt: "Test system", input: "hello", tools: [echoTool] }),
     model: { provider: "test", id: "scripted" },
     stream,
   });
@@ -84,12 +80,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   };
 
   await runAgentLoop({
-    context: {
-      systemPrompt: "Test system",
-      messages: [createMessage("user", "hello")],
-      tools: [echoTool],
-      skills: [],
-    },
+    context: createContext({ systemPrompt: "Test system", input: "hello", tools: [echoTool] }),
     model: { provider: "test-provider", id: "test-model" },
     stream,
     signal: controller.signal,

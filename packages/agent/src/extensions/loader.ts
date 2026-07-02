@@ -12,9 +12,6 @@ import { createJiti } from "jiti";
 import type { ExtensionFactory } from "./api";
 import type { ExtensionManifest, LoadedExtension, ExtensionPackageManifest } from "./types";
 
-const ROWAN_DIR = ".rowan";
-const EXTENSIONS_DIR = "extensions";
-
 function isExtensionFile(path: string): boolean {
   const extension = extname(path).toLowerCase();
   return extension === ".ts" || extension === ".js";
@@ -34,28 +31,6 @@ function readManifestSync(dir: string): ExtensionManifest | undefined {
   }
   try {
     const content = readFileSync(manifestPath, "utf8");
-    const pkg = JSON.parse(content) as ExtensionPackageManifest;
-    const rowan = pkg.rowan;
-    if (!rowan) return undefined;
-    return {
-      entry: rowan.extensions?.[0],
-      phase: rowan.phase,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Read extension manifest from package.json (async).
- */
-async function readManifest(dir: string): Promise<ExtensionManifest | undefined> {
-  const manifestPath = join(dir, "package.json");
-  if (!existsSync(manifestPath)) {
-    return undefined;
-  }
-  try {
-    const content = await readFile(manifestPath, "utf8");
     const pkg = JSON.parse(content) as ExtensionPackageManifest;
     const rowan = pkg.rowan;
     if (!rowan) return undefined;
@@ -177,8 +152,7 @@ export function loadExtensionFromFactory(
   const manifest = readManifestSync(manifestDir);
 
   return {
-    path: extensionPath,
-    resolvedPath,
+    path: resolvedPath,
     name,
     factory,
     manifest,
@@ -220,12 +194,21 @@ export async function loadExtensions(
 }
 
 /**
- * Discover and load extensions from .rowan/extensions directory.
+ * Load extensions from the exact target path.
+ *
+ * If the target is a directory with its own extension entry, load that extension.
+ * Otherwise, scan its immediate children for extension packages/files.
  */
-export async function discoverAndLoadExtensions(
-  cwd: string,
+export async function loadExtensionsFromPath(
+  path: string,
 ): Promise<{ extensions: LoadedExtension[]; errors: Array<{ path: string; error: string }> }> {
-  const extensionsDir = join(resolve(cwd), ROWAN_DIR, EXTENSIONS_DIR);
-  const paths = await discoverExtensionsInDir(extensionsDir);
-  return loadExtensions(paths, cwd);
+  const resolvedPath = resolve(path);
+  const info = await stat(resolvedPath);
+
+  if (!info.isDirectory()) {
+    return loadExtensions([resolvedPath], dirname(resolvedPath));
+  }
+
+  const entries = await resolveExtensionEntries(resolvedPath) ?? await discoverExtensionsInDir(resolvedPath);
+  return loadExtensions(entries, resolvedPath);
 }

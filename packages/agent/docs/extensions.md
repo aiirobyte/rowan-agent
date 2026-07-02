@@ -723,15 +723,22 @@ interface ExtensionUtils {
 
 ## Extension Loading
 
-### Discovery
+### Loading
 
-`discoverAndLoadExtensions(cwd)` scans `<cwd>/.rowan/extensions/` and returns:
+`Agent.loadExtensions(path)` loads extensions from a file, extension package, or directory and returns:
 
 ```typescript
 {
   extensions: LoadedExtension[];           // successfully loaded
   errors: Array<{ path: string; error: string }>; // load failures
 }
+```
+
+Pass the result to the `Agent` constructor to bind extensions automatically:
+
+```typescript
+const { extensions } = await Agent.loadExtensions("./.rowan/extensions");
+const agent = new Agent({ context, model, stream, extensions });
 ```
 
 Extensions are loaded in sorted order (alphabetical by path).
@@ -755,7 +762,9 @@ import type { ProviderConfig } from "@rowan-agent/models";
 3. **Initialize** — call each factory with an `ExtensionAPI`
 4. **Bind** — flush pending provider registrations, connect to model registry
 5. **Run** — agent loop starts, hooks fire as events occur
-6. **Invalidate** — on session replacement, all extension contexts are marked stale
+6. **Invalidate** — on extension reload or agent reset, old contexts are marked stale
+
+When extensions are passed to the `Agent` constructor (or `agent.run()`), lifecycle steps 1–4 happen automatically inside the Agent.
 
 ### Runtime Protection
 
@@ -874,7 +883,6 @@ Internal tracking object — what the runner uses to manage each loaded extensio
 ```typescript
 interface Extension {
   path: string;
-  resolvedPath: string;
   sourceInfo: SourceInfo;
   handlers: Map<string, HandlerFn[]>;
   tools: Map<string, RegisteredTool>;
@@ -896,7 +904,7 @@ interface SourceInfo {
 
 ```typescript
 // Load extensions from filesystem
-discoverAndLoadExtensions(cwd: string): Promise<LoadExtensionsResult>
+Agent.loadExtensions(path: string): Promise<LoadExtensionsResult>
 
 // Load a single extension from a factory function
 loadExtensionFromFactory(factory: ExtensionFactory, cwd: string, extensionPath?: string): LoadedExtension

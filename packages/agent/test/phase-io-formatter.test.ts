@@ -5,33 +5,35 @@ import type { AgentContext, StreamFn, Tool } from "../src/types";
 import { createMessage } from "../src/types";
 import { loadPhase, loadPhases } from "../src/harness/phases/loader";
 import type { Phase, PhaseRegistry } from "../src/harness/phases/types";
-import type { WorkspacePaths } from "../src/harness/env/path";
 import { echoTool } from "./support/echo-tool";
 import { buildTestPartial, yieldRouteToolCall } from "./support/scripted-stream";
 import { extractRouteCall } from "../src/harness/tools/route-tool";
 import { jsonToXml } from "../src/harness/context/resource-formatter";
+import { createDefaultPhase } from "../src/harness/phases";
 
 // ---------------------------------------------------------------------------
 // Test workspace pointing to checked-in fixtures
 // ---------------------------------------------------------------------------
 
 const FIXTURES_DIR = join(import.meta.dir, "fixtures");
-const testWorkspace: WorkspacePaths = {
-  mode: "source",
-  cwd: FIXTURES_DIR,
-  rowanDir: FIXTURES_DIR,
-};
+const PHASES_DIR = join(FIXTURES_DIR, "phases");
+
+function fixturePhase(name: string): string {
+  return join(PHASES_DIR, name);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function createContext(input: { input: string; tools?: Tool[] }): AgentContext {
+  const defaultPhase = createDefaultPhase();
   return {
     systemPrompt: "You are a helpful assistant.",
     messages: [createMessage("user", input.input)],
     tools: input.tools?.slice() ?? [echoTool],
     skills: [],
+    phases: { phases: new Map([[defaultPhase.id, defaultPhase]]), entryPhaseId: defaultPhase.id },
   };
 }
 
@@ -171,8 +173,8 @@ describe("jsonToXml", () => {
 
 describe("Phase payload flow", () => {
   test("PhaseOutput.payload populated from route tool call", async () => {
-    const planPhase = await loadPhase("plan", testWorkspace);
-    const verifyPhase = await loadPhase("verify", testWorkspace);
+    const planPhase = await loadPhase(fixturePhase("plan"));
+    const verifyPhase = await loadPhase(fixturePhase("verify"));
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     let requestCount = 0;
@@ -193,10 +195,9 @@ describe("Phase payload flow", () => {
     };
 
     const result = await runAgentLoop({
-      context: createContext({ input: "plan and verify" }),
+      context: { ...createContext({ input: "plan and verify" }), phases: registry },
       model: { provider: "test", id: "scripted" },
       stream,
-      phases: registry,
     });
 
     expect(requestCount).toBe(2);
@@ -204,8 +205,8 @@ describe("Phase payload flow", () => {
   });
 
   test("payload passes through phase transition", async () => {
-    const planPhase = await loadPhase("plan", testWorkspace);
-    const verifyPhase = await loadPhase("verify", testWorkspace);
+    const planPhase = await loadPhase(fixturePhase("plan"));
+    const verifyPhase = await loadPhase(fixturePhase("verify"));
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     // Track messages to verify payload injection
@@ -245,10 +246,9 @@ describe("Phase payload flow", () => {
     };
 
     await runAgentLoop({
-      context: createContext({ input: "plan and verify" }),
+      context: { ...createContext({ input: "plan and verify" }), phases: registry },
       model: { provider: "test", id: "scripted" },
       stream,
-      phases: registry,
     });
 
     // The second request (verify phase) should have the payload in its messages
@@ -260,8 +260,8 @@ describe("Phase payload flow", () => {
   });
 
   test("no payload when route tool has no payload", async () => {
-    const planPhase = await loadPhase("plan", testWorkspace);
-    const verifyPhase = await loadPhase("verify", testWorkspace);
+    const planPhase = await loadPhase(fixturePhase("plan"));
+    const verifyPhase = await loadPhase(fixturePhase("verify"));
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     const messages: string[] = [];
@@ -290,10 +290,9 @@ describe("Phase payload flow", () => {
     };
 
     await runAgentLoop({
-      context: createContext({ input: "plan and verify" }),
+      context: { ...createContext({ input: "plan and verify" }), phases: registry },
       model: { provider: "test", id: "scripted" },
       stream,
-      phases: registry,
     });
 
     // No phase_input should appear when no payload
@@ -302,8 +301,8 @@ describe("Phase payload flow", () => {
   });
 
   test("string payload is normalized to object for jsonToXml", async () => {
-    const planPhase = await loadPhase("plan", testWorkspace);
-    const verifyPhase = await loadPhase("verify", testWorkspace);
+    const planPhase = await loadPhase(fixturePhase("plan"));
+    const verifyPhase = await loadPhase(fixturePhase("verify"));
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     const messages: string[] = [];
@@ -344,10 +343,9 @@ describe("Phase payload flow", () => {
     };
 
     await runAgentLoop({
-      context: createContext({ input: "plan and verify" }),
+      context: { ...createContext({ input: "plan and verify" }), phases: registry },
       model: { provider: "test", id: "scripted" },
       stream,
-      phases: registry,
     });
 
     // The second request (verify phase) should have the payload in its messages
@@ -369,8 +367,8 @@ describe("Phase payload flow", () => {
 
 describe("Backward compatibility", () => {
   test("existing plan→verify flow works unchanged", async () => {
-    const planPhase = await loadPhase("plan", testWorkspace);
-    const verifyPhase = await loadPhase("verify", testWorkspace);
+    const planPhase = await loadPhase(fixturePhase("plan"));
+    const verifyPhase = await loadPhase(fixturePhase("verify"));
     const registry = buildPhaseRegistry([planPhase, verifyPhase]);
 
     let requestCount = 0;
@@ -391,10 +389,9 @@ describe("Backward compatibility", () => {
     };
 
     const result = await runAgentLoop({
-      context: createContext({ input: "plan and verify this task" }),
+      context: { ...createContext({ input: "plan and verify this task" }), phases: registry },
       model: { provider: "test", id: "scripted" },
       stream,
-      phases: registry,
     });
 
     expect(requestCount).toBe(2);

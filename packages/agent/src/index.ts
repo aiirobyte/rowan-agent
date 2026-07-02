@@ -33,7 +33,6 @@ export {
 
 // ── tools / skills / env ───────────────────────────────────────
 export { createCoreTools } from "./harness/tools";
-export { resolveSkillPath, loadSkill, loadSkills } from "./harness/skills";
 export {
   resolveWorkspacePaths,
   resolveInWorkspace,
@@ -61,9 +60,6 @@ export type { LoopMetrics } from "./loop/types";
 // ── extensions ─────────────────────────────────────────────────
 export * from "./extensions";
 
-// Re-export ExtensionRunnerRef from agent
-export type { ExtensionRunnerRef } from "./agent";
-
 // ── phases ─────────────────────────────────────────────────────
 export type {
   PhaseRegistry,
@@ -76,8 +72,6 @@ export type {
 export type {
   PhaseExecution,
 } from "./loop/execution";
-
-export { loadPhases } from "./harness/phases/loader";
 
 // ── prompt / context ───────────────────────────────────────────
 export {

@@ -13,7 +13,7 @@ Phases are the core unit of work in Rowan's agent loop. Each phase defines a bou
 - [The Route Tool](#the-route-tool)
 - [Parallel Execution](#parallel-execution)
 - [Inter-Phase Data](#inter-phase-data)
-- [Hot Reload](#hot-reload)
+- [Reloading File Phases](#reloading-file-phases)
 - [API Reference](#api-reference)
 
 ---
@@ -110,7 +110,7 @@ export default function(api: ExtensionAPI) {
 │  Phase Loop (runPhaseLoop)                               │
 │                                                          │
 │  ┌─────────────────────────────────────────────────────┐ │
-│  │ 1. Hot-reload phases from disk                      │ │
+│  │ 1. Read Agent-normalized `context.phases`           │ │
 │  │ 2. Build route tool from available phases           │ │
 │  │ 3. Build PhaseContext (filtered tools/skills)       │ │
 │  │ 4. Fire `before_phase` hooks (extensions)           │ │
@@ -448,15 +448,13 @@ interface PhaseState {
 
 ---
 
-## Hot Reload
+## Reloading File Phases
 
-File-based phases are re-read from disk on every loop iteration. This means:
+The core `Agent` and phase loop do not read phase files automatically. File-based phases are loaded by the caller, such as the Rowan CLI, and then passed in on `AgentContext.phases`. Agent always merges that registry with its built-in `"default"` phase before running.
 
-- **Edit `PHASE.md`** → next iteration uses updated instructions
-- **Edit `index.ts`** → next iteration uses updated code
-- **Extension-registered phases** (no file path) are preserved during reload
+If you want to pick up edits during a long-running process, call `loadPhases` or `reloadPhases` in the outer harness and put the updated registry on the next run's `context.phases`.
 
-This enables rapid iteration: edit a phase file, and the agent picks up changes on its next turn without restarting.
+Extension-registered phases have no file path, so `reloadPhases` preserves them.
 
 ---
 
@@ -522,21 +520,35 @@ Collection of all loaded phases.
 ```typescript
 interface PhaseRegistry {
   phases: Map<string, Phase>;
-  entryPhaseId: string | null;  // null = start from "default"
+  entryPhaseId: string | null;  // null until Agent normalizes to "default"
 }
 ```
 
 ### Loading Functions
 
 ```typescript
-// Load a single phase by name or path
-loadPhase(input: string, workspace?: WorkspacePaths): Promise<Phase>
+// Load phases via Agent static method (preferred)
+Agent.loadPhases(targetPath: string): Promise<PhaseRegistry>
 
-// Auto-discover all phases from .rowan/phases/
-loadPhases(workspace?: WorkspacePaths, paths?: string[]): Promise<PhaseRegistry>
+// Load a single phase from a PHASE.md file or phase directory
+loadPhase(targetPath: string): Promise<Phase>
 
-// Hot-reload file-based phases (preserves extension phases)
-reloadPhases(registry: PhaseRegistry, workspace?: WorkspacePaths): Promise<void>
+// Load phases from the target directory
+loadPhases(targetPath: string): Promise<PhaseRegistry>
+
+// Explicitly reload file-based phases (preserves extension phases)
+reloadPhases(registry: PhaseRegistry): Promise<void>
+```
+
+Pass the loaded `PhaseRegistry` into `AgentContext.phases` — Agent always merges it with the built-in `"default"` phase before running:
+
+```typescript
+const phases = await Agent.loadPhases("./.rowan/phases");
+const agent = new Agent({
+  context: { ...baseContext, phases },
+  model,
+  stream,
+});
 ```
 
 ---

@@ -6,6 +6,9 @@ test("public value exports snapshot", () => {
 
   // Core API
   expect(exportNames).toContain("Agent");
+  expect(typeof agentExports.Agent.loadSkills).toBe("function");
+  expect(typeof agentExports.Agent.loadPhases).toBe("function");
+  expect(typeof agentExports.Agent.loadExtensions).toBe("function");
   expect(exportNames).toContain("createMessage");
   expect(exportNames).toContain("createId");
   expect(exportNames).toContain("createTimestamp");
@@ -17,9 +20,6 @@ test("public value exports snapshot", () => {
 
   // Tools / skills / env
   expect(exportNames).toContain("createCoreTools");
-  expect(exportNames).toContain("loadSkill");
-  expect(exportNames).toContain("loadSkills");
-  expect(exportNames).toContain("resolveSkillPath");
   expect(exportNames).toContain("resolveWorkspacePaths");
   expect(exportNames).toContain("resolveInWorkspace");
 
@@ -35,7 +35,6 @@ test("public value exports snapshot", () => {
   expect(exportNames).toContain("HooksManager");
   expect(exportNames).toContain("createExtensionAPI");
   expect(exportNames).toContain("createExtensionRunner");
-  expect(exportNames).toContain("discoverAndLoadExtensions");
 
   // Snapshot total count (value exports only)
   expect(exportNames).toEqual(expect.arrayContaining([
@@ -44,8 +43,7 @@ test("public value exports snapshot", () => {
     "appendUserTurn", "buildModelRequest", "buildSystemPrompt", "conversationMessages",
     "createCoreTools", "createExtensionAPI", "createExtensionRunner", "createId", "createMessage",
     "createSession", "createSourceInfo", "createTimestamp",
-    "discoverAndLoadExtensions",
-    "latestUserInput", "loadSkill", "loadSkills", "resolveInWorkspace",
-    "resolveSkillPath", "resolveWorkspacePaths", "serializeSkills",
+    "latestUserInput", "resolveInWorkspace",
+    "resolveWorkspacePaths", "serializeSkills",
   ]));
 });

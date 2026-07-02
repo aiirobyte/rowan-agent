@@ -29,7 +29,7 @@ import type {
   Phase,
   PhaseRegistry,
 } from "../harness/phases";
-import { reloadPhases, readPhaseContent } from "../harness/phases";
+import { readPhaseContent } from "../harness/phases";
 
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
 import type { RouteToolArgs } from "../harness/tools";
@@ -321,32 +321,13 @@ export async function startPhaseLoop(
   config: AgentConfig,
   state: SessionState,
 ): Promise<RunResult> {
-  const entryPhaseId = config.phases?.entryPhaseId ?? "default";
-
-  // Build registry: always include default phase as the first entry
-  const phases = new Map<string, Phase>();
-
-  // Add default phase first
-  phases.set("default", {
-    id: "default",
-    name: "Execution Phase",
-    description: "Executes concrete task operations and produces artifacts.",
-    filePath: "",
-    baseDir: "",
-    content: "Execute tasks using current context.\nNo planning. No evaluation.\nRoute to next phase or stop when done.",
-  });
-
-  // Merge configured phases (user-defined "default" overrides built-in)
-  if (config.phases) {
-    for (const [id, phase] of config.phases.phases) {
-      phases.set(id, phase);
-    }
+  const registry = config.context.phases;
+  if (!registry) {
+    throw new Error("AgentContext.phases is required. Construct Agent to apply the default phase.");
   }
-
-  const registry: PhaseRegistry = {
-    phases,
-    entryPhaseId,
-  };
+  if (!registry.entryPhaseId) {
+    throw new Error("AgentContext.phases.entryPhaseId is required. Construct Agent to apply the default phase.");
+  }
 
   return runPhaseLoop(config, state, registry);
 }
@@ -368,13 +349,7 @@ async function runPhaseLoop(
   let pendingInstruction: string | undefined = undefined;
 
   while (currentPhaseId) {
-    // Hot-reload: re-read phase files from disk each iteration
-    await reloadPhases(registry);
-    if (config.phases) {
-      config.phases.phases = registry.phases;
-    }
-
-    // Build available phases list for route tool (rebuild each iteration for hot-reload)
+    // Build available phases list for route tool from the explicit registry.
     const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[] = [];
     for (const [, phase] of registry.phases) {
       availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input, isolated: phase.isolated });
@@ -559,10 +534,10 @@ async function runPhaseLoop(
       previousResults = successfulResults.map(r => ({ name: r.instanceId, output: r.payload }));
       pendingInstruction = routeDecision.instruction;
 
-      // Determine entry phase: original phase's target > registry entry > "default".
+      // Determine entry phase: original phase's target > registry entry.
       // In parallel mode, the original phase's target field determines where to go after
       // all parallel phases complete. If "stop", end the run.
-      const entryPhaseId = phase.target ?? registry.entryPhaseId ?? "default";
+      const entryPhaseId = phase.target ?? registry.entryPhaseId!;
       if (entryPhaseId === "stop") {
         return completeRun(config, state, createOutcome.default(output, config.context.messages));
       }

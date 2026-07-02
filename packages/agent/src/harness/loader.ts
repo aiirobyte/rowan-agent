@@ -1,7 +1,5 @@
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
-import { type WorkspacePaths, resolveInWorkspace, resolveWorkspacePaths } from "./env/path";
+import { basename, dirname, extname } from "node:path";
 
 /** Parsed frontmatter result */
 export interface FrontmatterResult<T = Record<string, unknown>> {
@@ -93,13 +91,6 @@ export async function loadMarkdown<T = Record<string, unknown>>(filePath: string
 }
 
 /**
- * Check if input is an explicit path (contains path separators or has file extension).
- */
-export function isExplicitPath(input: string): boolean {
-  return input.includes("/") || input.includes("\\") || Boolean(extname(input));
-}
-
-/**
  * Infer resource name from file path.
  * If file matches markerFile (e.g., "SKILL.md"), use parent directory name.
  * Otherwise use filename without extension.
@@ -112,37 +103,4 @@ export function inferResourceName(path: string, markerFile: string): string {
 
   const extension = extname(file);
   return extension ? file.slice(0, -extension.length) : file;
-}
-
-/**
- * Resolve path for a resource in .rowan directory.
- *
- * Resolution order:
- * 1. If absolute path, return as-is
- * 2. If not explicit path (no / or extension), resolve as .rowan/<type>/<input>/<markerFile>
- * 3. Try resolving in workspace
- * 4. Fall back to absolute path resolution
- */
-export function resolveResourcePath(
-  input: string,
-  resourceType: string,
-  markerFile: string,
-  workspace?: WorkspacePaths,
-): string {
-  const ws = workspace ?? resolveWorkspacePaths();
-
-  if (isAbsolute(input)) {
-    return input;
-  }
-
-  if (!isExplicitPath(input)) {
-    return join(ws.rowanDir, resourceType, input, markerFile);
-  }
-
-  const workspacePath = resolveInWorkspace(input, ws);
-  if (existsSync(workspacePath)) {
-    return workspacePath;
-  }
-
-  return resolve(input);
 }

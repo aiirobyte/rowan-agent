@@ -91,10 +91,9 @@ test("route in same turn extracts route normally — no forced routing", async (
   };
 
   const result = await runAgentLoop({
-    context: createContext({ systemPrompt: "Test", input: "do something", tools: [echoTool] }),
+    context: { ...createContext({ systemPrompt: "Test", input: "do something", tools: [echoTool] }), phases },
     model: { provider: "test", id: "scripted" },
     stream,
-    phases,
   });
 
   expect(requestCount).toBe(2);
@@ -128,10 +127,9 @@ test("phase tool_result message is cleaned up on route transition", async () => 
   };
 
   const result = await runAgentLoop({
-    context: createContext({ systemPrompt: "Test", input: "do something" }),
+    context: { ...createContext({ systemPrompt: "Test", input: "do something" }), phases },
     model: { provider: "test", id: "scripted" },
     stream,
-    phases,
   });
 
   // Both phase transitions happened
@@ -167,10 +165,9 @@ test("phase with tools restricted to exclude route returns stop gracefully", asy
   };
 
   const result = await runAgentLoop({
-    context: createContext({ systemPrompt: "Test", input: "plan this", tools: [echoTool] }),
+    context: { ...createContext({ systemPrompt: "Test", input: "plan this", tools: [echoTool] }), phases },
     model: { provider: "test", id: "scripted" },
     stream,
-    phases,
   });
 
   // Only 1 model invocation — forceRoutingTurn returns stop immediately (no route tool available)

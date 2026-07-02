@@ -8,7 +8,7 @@ import type {
   ToolResult,
   AgentEventListener,
 } from "../types";
-import type { PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
+import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
 
@@ -43,24 +43,23 @@ export type SessionState = {
 };
 
 export type AgentConfig = {
-  context: AgentContext;
-  sessionId?: string;
   model: LlmModelRef;
   stream: StreamFn;
-  signal?: AbortSignal;
-  emit?: AgentEventListener;
-  phases?: PhaseRegistry;
+  context: AgentContext;
+  sessionId?: string;
+  sessionState?: SessionState;
+  maxAttempts?: number;
   runtime?: AgentRuntimePort;
+  emit?: AgentEventListener;
+  signal?: AbortSignal;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   beforePhase?: BeforePhaseHook;
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
-  maxAttempts?: number;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
   onMessage?: (message: import("../types").AgentMessage) => Promise<void>;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
-  sessionState?: SessionState;
 };
 
 

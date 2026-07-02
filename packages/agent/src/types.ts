@@ -10,6 +10,7 @@ import type {
   Outcome,
   ToolResult,
 } from "./protocol";
+import type { PhaseRegistry } from "./harness/phases/types";
 import type { AgentEvent, AgentEventListener, ContentBlock, LlmContentPart } from "@rowan-agent/models";
 import { createId, createTimestamp } from "./utils";
 
@@ -18,7 +19,7 @@ export type {
   LoopMetrics,
   ToolRunner,
 } from "./loop/types";
-export type { PhaseContext, PhaseState, PhaseOutput } from "./harness/phases/types";
+export type { PhaseContext, PhaseState, PhaseOutput, PhaseRegistry } from "./harness/phases/types";
 
 export type {
   AgentMessage,
@@ -63,6 +64,8 @@ export type AgentContext = {
   tools: Tool[];
   /** Skills available for this run. */
   skills: Skill[];
+  /** Custom phases for this run. Agent normalizes this with the built-in default phase. */
+  phases?: PhaseRegistry;
 };
 
 export type BeforeToolCall = (input: {

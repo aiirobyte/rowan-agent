@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -14,9 +15,11 @@ import {
   type AgentEvent,
   type AgentEventListener,
   type AgentMessage,
+  type AgentContext,
+  type LoadedExtension,
   type Outcome,
-  type ExtensionRunnerRef,
   type LlmModelRef,
+  type PhaseRegistry,
 } from "@rowan-agent/agent";
 import {
   pinoAgentEventLogger,
@@ -28,8 +31,6 @@ import {
 import { LocalJsonlSessionManager } from "@rowan-agent/agent";
 import {
   createCoreTools,
-  loadSkills,
-  resolveSkillPath,
   type WorkspacePaths,
   resolveInWorkspace,
   resolveWorkspacePaths,
@@ -37,10 +38,6 @@ import {
   registerConfigModels,
   resolveDefaultModel,
   type AgentConfigFile,
-} from "@rowan-agent/agent";
-import {
-  createExtensionRunner,
-  discoverAndLoadExtensions,
 } from "@rowan-agent/agent";
 import { formatJsonOutput, formatMessageContent, formatOutcomeOutput, formatToolArgsPreview } from "./output";
 
@@ -181,7 +178,7 @@ Sessions:
   Interactive controls: :session, :exit, :quit.
 
 Skills:
-  --skill example resolves to <cwd>/.rowan/skills/example/SKILL.md.
+  --skill <path> loads a SKILL.md file, a skill directory, or a directory containing skill folders.
 
 Config:
   Model providers are configured in <cwd>/.rowan/config.yaml.
@@ -191,7 +188,6 @@ Config:
 
 Environment:
   ROWAN_LOG_LEVEL        Optional run log detail: debug, info, warn, error, or silent
-  ROWAN_RUNTIME          Optional override: source or binary
   ROWAN_WORKSPACE        Optional cwd override
 `);
 }
@@ -335,10 +331,16 @@ function parseArgs(argv: string[]): CliArgs {
   return parsed;
 }
 type CliSessionListItem = Pick<SessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
+type AgentResources = {
+  skills: AgentContext["skills"];
+  phases: PhaseRegistry;
+  extensions: LoadedExtension[];
+};
 type ConfiguredAgent = {
   agent: Agent;
   sessionManager?: LocalJsonlSessionManager;
   configFile?: AgentConfigFile;
+  loadResources(): Promise<AgentResources>;
 };
 
 function createConfigSnapshot(
@@ -377,7 +379,6 @@ function createConfigSnapshot(
   return {
     command: "config",
     workspace: {
-      mode: workspace.mode,
       cwd: workspace.cwd,
       rowanDir: workspace.rowanDir,
     },
@@ -406,10 +407,7 @@ function createConfigSnapshot(
               ? "env"
               : "default",
     },
-    skills: args.skills.map((skill) => ({
-      idOrPath: skill,
-      path: formatWorkspacePathForDisplay(resolveSkillPath(skill, workspace), workspace),
-    })),
+    skills: args.skills.map((skill) => ({ idOrPath: skill })),
     tools: tools.map((tool) => tool.name),
   };
 }
@@ -437,7 +435,9 @@ async function createConfiguredAgent(
   args: CliArgs,
   workspace: WorkspacePaths,
 ): Promise<ConfiguredAgent> {
-  const skills = await loadSkills(workspace, args.skills);
+  const loadResources = () => loadAgentResources(args, workspace);
+  const resources = await loadResources();
+  const { skills } = resources;
   const tools = createCoreTools({ root: workspace.cwd });
   const sessionManager = args.sessionId
     ? await LocalJsonlSessionManager.open(workspaceSessionsDir(workspace), args.sessionId)
@@ -509,10 +509,11 @@ async function createConfiguredAgent(
     });
   }
 
+  const loadedSkills = skills.length > 0 || args.skills.length > 0 ? { skills } : {};
   const context = sessionManager
     ? await sessionManager.buildAgentContext({
       tools,
-      ...(args.skills.length > 0 ? { skills } : {}),
+      ...loadedSkills,
     })
     : {
       systemPrompt: [
@@ -525,31 +526,37 @@ async function createConfiguredAgent(
       skills,
     };
 
-  // Load extension phases
-  const extensionRunner = createExtensionRunner({ cwd: workspace.cwd });
-  const { extensions } = await discoverAndLoadExtensions(workspace.cwd);
-  if (extensions.length > 0) {
-    await extensionRunner.loadExtensions(extensions);
-    extensionRunner.bind();
-  }
-
-  const extensionPhases = extensionRunner.getPhases();
-  const phases = extensionPhases.length > 0
-    ? extensionRunner.createPhaseRegistry()
-    : undefined;
-
-  const extensionRunnerRef: ExtensionRunnerRef = { current: extensionRunner };
   const agent = new Agent({
-    cwd: workspace.cwd,
-    context,
+    context: { ...context, phases: resources.phases },
     model: defaultModelRef,
     stream: createDispatchStream(),
-    phases,
-    extensionRunnerRef,
+    extensions: resources.extensions,
     ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
   });
 
-  return { agent, sessionManager, configFile };
+  return { agent, sessionManager, configFile, loadResources };
+}
+
+async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Promise<AgentResources> {
+  const defaultSkillsDir = join(workspace.rowanDir, "skills");
+  const discoveredSkills = existsSync(defaultSkillsDir) ? await Agent.loadSkills(defaultSkillsDir) : [];
+  const configuredSkills = (await Promise.all(
+    args.skills.map((skill) => Agent.loadSkills(resolveInWorkspace(skill, workspace.cwd))),
+  )).flat();
+  const phasesDir = join(workspace.rowanDir, "phases");
+  const phases = existsSync(phasesDir)
+    ? await Agent.loadPhases(phasesDir)
+    : { phases: new Map(), entryPhaseId: null };
+  const extensionsDir = join(workspace.rowanDir, "extensions");
+  const { extensions } = existsSync(extensionsDir)
+    ? await Agent.loadExtensions(extensionsDir)
+    : { extensions: [] };
+
+  return {
+    skills: [...discoveredSkills, ...configuredSkills],
+    phases,
+    extensions,
+  };
 }
 
 async function promptWithLog(input: {
@@ -563,16 +570,18 @@ async function promptWithLog(input: {
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
   onSessionManager?: (sessionManager: LocalJsonlSessionManager) => void;
+  loadResources(): Promise<AgentResources>;
 }): Promise<{ outcome: Outcome; metrics: import("@rowan-agent/agent").LoopMetrics; sessionManager: LocalJsonlSessionManager; streamedContent: boolean; pendingConsoleEvents: AgentEvent[] }> {
   let sessionManager = input.sessionManager;
   let unsubscribe: (() => void) | undefined;
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
   try {
+    const resources = await input.loadResources();
     if (!sessionManager) {
       sessionManager = await LocalJsonlSessionManager.create(workspaceSessionsDir(input.workspace), {
         systemPrompt: input.agent.state.context.systemPrompt,
         input: input.prompt,
-        skills: input.agent.state.context.skills ?? [],
+        skills: resources.skills,
       });
     }
     input.onSessionManager?.(sessionManager);
@@ -642,10 +651,14 @@ async function promptWithLog(input: {
     await sessionManager.appendMessage(userMessage);
     const context = await sessionManager.buildAgentContext({
       tools: input.agent.state.tools,
-      skills: input.agent.state.context.skills ?? [],
+      skills: resources.skills,
     });
     const result = await input.agent.run({
-      context,
+      context: {
+        ...context,
+        phases: resources.phases,
+      },
+      extensions: resources.extensions,
       sessionId: sessionManager.getSessionId(),
       onMessage: async (msg) => {
         if (msg.role !== "user") {
@@ -735,6 +748,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         onSessionManager: (manager) => {
           sessionManager = manager;
         },
+        loadResources: configured.loadResources,
       });
       sessionManager = run.sessionManager;
       printRunHeader();

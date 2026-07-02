@@ -338,10 +338,10 @@ export class ExtensionRunner {
     for (const ext of extensions) {
       try {
         const sourceInfo = createSourceInfo(ext.path, {
-          source: ext.path.startsWith("<builtin:") ? "builtin" : "local",
-          baseDir: ext.resolvedPath.startsWith("<") ? undefined : ext.resolvedPath,
+          source: "local",
+          baseDir: ext.path.startsWith("<") ? undefined : ext.path,
         });
-        const extension = createExtension(ext.path, ext.resolvedPath, sourceInfo);
+        const extension = createExtension(ext.path, sourceInfo);
 
         const api = this.createExtensionAPI(extension, ext.manifest);
         await ext.factory(api);

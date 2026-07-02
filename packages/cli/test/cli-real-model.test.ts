@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentEvent } from "@rowan-agent/agent";
@@ -220,6 +220,143 @@ test("CLI rejects invalid log level", async () => {
   expect(result.stderr).toContain("--log-level must be one of: debug, info, warn, error, silent.");
 });
 
+test("CLI loads file phases from workspace .rowan directory", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-file-phases-"));
+
+  try {
+    const phaseDir = join(workspace, ".rowan", "phases", "default");
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: CLI Default
+description: Runs from the CLI-loaded phase file.
+---
+
+CLI file phase content.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+      export async function run() {
+        return { message: "CLI file phase ran", route: "stop" };
+      }
+    `);
+
+    const result = await runCli(["--model", "test-model", "--api-key", "test-key", "hello"], {
+      ROWAN_WORKSPACE: workspace,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("CLI file phase ran");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI session continuation loads current workspace skills from file", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-session-skills-"));
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const requests: unknown[] = [];
+
+  try {
+    const skillDir = join(workspace, ".rowan", "skills", "example");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), `---
+name: Example
+description: Loaded from file during session continuation.
+---
+
+Use the example skill.
+`);
+
+    const session = await LocalJsonlSessionManager.create(join(workspace, ".rowan", "sessions"), {
+      systemPrompt: "Test system",
+      input: "old turn",
+      skills: [],
+    });
+    await session.appendMessage(createMessage("user", "old turn"));
+
+    try {
+      server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          requests.push(await request.json());
+          return openAIResponse("Done.");
+        },
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli([...modelFlags(server), "--session", session.getSessionId(), "new turn"], {
+      ROWAN_WORKSPACE: workspace,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.stringify(requests)).toContain("Loaded from file during session continuation.");
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI interactive prompts hot reload workspace skills", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-skill-hot-reload-"));
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const requests: unknown[] = [];
+
+  try {
+    const skillDir = join(workspace, ".rowan", "skills", "example");
+    const skillPath = join(skillDir, "SKILL.md");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(skillPath, `---
+name: Example
+description: First skill description.
+---
+
+First skill version.
+`);
+
+    try {
+      server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          requests.push(await request.json());
+          if (requests.length === 1) {
+            await writeFile(skillPath, `---
+name: Example
+description: Second skill description.
+---
+
+Second skill version.
+`);
+            return openAIResponse("First turn.");
+          }
+          return openAIResponse("Second turn.");
+        },
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli([...modelFlags(server)], {
+      ROWAN_WORKSPACE: workspace,
+    }, "first\nsecond\n");
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.stringify(requests[0])).toContain("First skill description.");
+    expect(JSON.stringify(requests[1])).toContain("Second skill description.");
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("CLI config shows missing config file and default configuration without requiring model credentials", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-config-missing-"));
 
@@ -319,7 +456,6 @@ test("CLI config reports resolved flags without exposing API key material", asyn
     expect(config.skills).toEqual([
       {
         idOrPath: "example",
-        path: ".rowan/skills/example/SKILL.md",
       },
     ]);
     expect(config.tools).toEqual(["read", "write", "edit", "bash"]);
