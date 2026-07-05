@@ -12,8 +12,11 @@ import {
 } from "../loader";
 import { parseModelRef } from "../config";
 import { formatResourceOutput } from "../context/resource-formatter";
+import type { WorkspacePaths } from "../env";
 
 const PHASE_MARKER = "PHASE.md";
+
+type PhaseLoadTarget = string | Pick<WorkspacePaths, "rowanDir">;
 
 function resolvePhasePath(input: string): string {
   const resolved = resolve(input);
@@ -88,9 +91,13 @@ export function readPhaseContent(phase: Phase): string {
  *
  * When entryPhaseId is null, Agent normalizes the registry to start from its default phase.
  */
-export async function loadPhases(targetPath: string): Promise<PhaseRegistry> {
+function resolvePhaseLoadTarget(targetPath: PhaseLoadTarget): string {
+  return typeof targetPath === "string" ? targetPath : join(targetPath.rowanDir, "phases");
+}
+
+export async function loadPhases(targetPath: PhaseLoadTarget): Promise<PhaseRegistry> {
   const phases = new Map<string, Phase>();
-  const phasesDir = resolve(targetPath);
+  const phasesDir = resolve(resolvePhaseLoadTarget(targetPath));
 
   if (existsSync(phasesDir) && statSync(phasesDir).isFile()) {
     const phase = await loadPhase(phasesDir);

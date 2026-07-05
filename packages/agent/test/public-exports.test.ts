@@ -22,6 +22,7 @@ test("public value exports snapshot", () => {
   expect(exportNames).toContain("createCoreTools");
   expect(exportNames).toContain("resolveWorkspacePaths");
   expect(exportNames).toContain("resolveInWorkspace");
+  expect(exportNames).toContain("loadPhases");
 
   // Prompt / context
   expect(exportNames).toContain("buildSystemPrompt");
@@ -36,14 +37,18 @@ test("public value exports snapshot", () => {
   expect(exportNames).toContain("createExtensionAPI");
   expect(exportNames).toContain("createExtensionRunner");
 
+  // Loop errors
+  expect(exportNames).toContain("EmptyResponseError");
+  expect(exportNames).toContain("MissingRouteToolCallError");
+
   // Snapshot total count (value exports only)
   expect(exportNames).toEqual(expect.arrayContaining([
     "Agent", "ExtensionRunner", "HooksManager",
     "LocalJsonlSessionManager",
     "appendUserTurn", "buildModelRequest", "buildSystemPrompt", "conversationMessages",
     "createCoreTools", "createExtensionAPI", "createExtensionRunner", "createId", "createMessage",
-    "createSession", "createSourceInfo", "createTimestamp",
-    "latestUserInput", "resolveInWorkspace",
+    "createSession", "createSourceInfo", "createTimestamp", "EmptyResponseError",
+    "latestUserInput", "loadPhases", "MissingRouteToolCallError", "resolveInWorkspace",
     "resolveWorkspacePaths", "serializeSkills",
   ]));
 });

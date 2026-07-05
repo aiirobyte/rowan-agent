@@ -10,6 +10,22 @@ export class EmptyResponseError extends Error {
   }
 }
 
+/** Error thrown when a routed phase needs a route tool call but the model did not emit one. */
+export class MissingRouteToolCallError extends Error {
+  readonly code = "missing_route_tool_call";
+  readonly phase: string;
+  readonly toolCallNames: string[];
+
+  constructor(phase: string, toolCallNames: string[]) {
+    super(
+      `Phase "${phase}" requires a route tool call, but the model did not emit one.`,
+    );
+    this.name = "MissingRouteToolCallError";
+    this.phase = phase;
+    this.toolCallNames = toolCallNames;
+  }
+}
+
 /** Result with stop reason */
 export type LoopResult = {
   stopReason: "none";

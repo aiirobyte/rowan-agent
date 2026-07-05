@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
+import { MissingRouteToolCallError } from "../src";
 import type { AgentContext, StreamFn, Tool } from "../src/types";
 import { createMessage } from "../src/types";
 import type { Phase, PhaseRegistry } from "../src/harness/phases/types";
@@ -146,32 +147,54 @@ test("phase tool_result message is cleaned up on route transition", async () => 
 });
 
 
-test("phase with tools restricted to exclude route returns stop gracefully", async () => {
+test("LLM phase errors when route tool is available but not called", async () => {
   const phases = buildPhaseRegistry([
     buildTestPhase({
       id: "plan",
-      tools: ["echo"], // route tool excluded
+      tools: ["echo"],
     }),
     buildTestPhase({ id: "execute" }),
   ], "plan");
 
   let requestCount = 0;
-  const stream: StreamFn = async function* (request) {
+  const stream: StreamFn = async function* () {
     requestCount++;
-    // Text only, no route (route tool not available to the LLM anyway)
     const text = "Planning done.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
   };
 
-  const result = await runAgentLoop({
-    context: { ...createContext({ systemPrompt: "Test", input: "plan this", tools: [echoTool] }), phases },
+  await expect(
+    runAgentLoop({
+      context: { ...createContext({ systemPrompt: "Test", input: "plan this", tools: [echoTool] }), phases },
+      model: { provider: "test", id: "scripted" },
+      stream,
+    }),
+  ).rejects.toThrow(MissingRouteToolCallError);
+  expect(requestCount).toBe(1);
+});
+
+test("LLM phase with forced target does not require route tool call", async () => {
+  const phases = buildPhaseRegistry([
+    buildTestPhase({ id: "plan", target: "execute" }),
+    buildTestPhase({ id: "execute", target: "stop" }),
+  ], "plan");
+
+  const events: string[] = [];
+  const stream: StreamFn = async function* () {
+    const text = "Phase done.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+
+  await runAgentLoop({
+    context: { ...createContext({ systemPrompt: "Test", input: "plan this" }), phases },
     model: { provider: "test", id: "scripted" },
     stream,
+    emit: event => {
+      events.push(event.type);
+    },
   });
 
-  // Only 1 model invocation — forceRoutingTurn returns stop immediately (no route tool available)
-  expect(requestCount).toBe(1);
-  // No transitions — defaults to stop
-  expect(result.metrics.phaseTransitions).toHaveLength(0);
+  expect(events).toContain("phase_end");
 });

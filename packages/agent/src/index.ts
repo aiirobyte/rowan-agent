@@ -55,12 +55,22 @@ export {
 export { EventStream, AgentEventStream } from "./event-stream";
 
 // ── loop ───────────────────────────────────────────────────────
+export {
+  EmptyResponseError,
+  MissingRouteToolCallError,
+} from "./loop/errors";
 export type { LoopMetrics } from "./loop/types";
 
 // ── extensions ─────────────────────────────────────────────────
 export * from "./extensions";
 
 // ── phases ─────────────────────────────────────────────────────
+export {
+  loadPhase,
+  loadPhases,
+  reloadPhases,
+} from "./harness/phases";
+
 export type {
   PhaseRegistry,
   Phase,

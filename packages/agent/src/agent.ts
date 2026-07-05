@@ -36,6 +36,8 @@ export type AgentOptions = {
   context: AgentContext;
   model: LlmModelRef;
   stream: StreamFn;
+  cwd?: string;
+  phases?: PhaseRegistry;
   extensions?: LoadedExtension[];
   sessionId?: string;
   maxAttempts?: number;
@@ -67,12 +69,13 @@ export class Agent {
   private activeRun?: { promise: Promise<RunResult>; resolve: (result: RunResult) => void; abortController: AbortController };
   private extensionRunner?: ExtensionRunner;
   private loadedExtensions?: LoadedExtension[];
+  private loadedExtensionsCwd?: string;
 
   static loadSkills(targetPath: string): Promise<AgentContext["skills"]> {
     return loadSkillsFromFiles(targetPath);
   }
 
-  static loadPhases(targetPath: string): Promise<PhaseRegistry> {
+  static loadPhases(targetPath: Parameters<typeof loadPhasesFromFiles>[0]): Promise<PhaseRegistry> {
     return loadPhasesFromFiles(targetPath);
   }
 
@@ -81,7 +84,10 @@ export class Agent {
   }
 
   constructor(options: AgentOptions) {
-    const context = cloneAgentContext(options.context);
+    const context = cloneAgentContext({
+      ...options.context,
+      phases: options.phases ?? options.context.phases,
+    });
     this.options = {
       ...options,
       context,
@@ -249,30 +255,32 @@ export class Agent {
     this.activeRun = undefined;
   }
 
-  private async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
+  private async loadExtensions(extensions: LoadedExtension[], cwd?: string): Promise<void> {
     if (extensions.length === 0) {
       this.extensionRunner?.invalidate();
       this.extensionRunner = undefined;
       this.loadedExtensions = extensions;
+      this.loadedExtensionsCwd = cwd;
       return;
     }
 
-    if (this.extensionRunner && this.loadedExtensions === extensions) {
+    if (this.extensionRunner && this.loadedExtensions === extensions && this.loadedExtensionsCwd === cwd) {
       return;
     }
 
-    const runner = createExtensionRunner();
+    const runner = createExtensionRunner({ cwd });
     await runner.loadExtensions(extensions);
     runner.bind();
     this.extensionRunner?.invalidate();
     this.extensionRunner = runner;
     this.loadedExtensions = extensions;
+    this.loadedExtensionsCwd = cwd;
   }
 
   async run(config?: RunOptions): Promise<RunResult> {
-    const extensions = config?.extensions ?? this.options.extensions ?? [];
-    await this.loadExtensions(extensions);
     const resolved = this.resolveRunConfig(config);
+    const extensions = resolved.extensions ?? [];
+    await this.loadExtensions(extensions, resolved.cwd);
     const runContext = cloneAgentContext(resolved.context, this.extensionRunner);
     const sessionId = resolved.sessionId ?? this.state.sessionId;
     this.options = resolved;
@@ -382,7 +390,7 @@ export class Agent {
    * @returns Formatted phase content string, or empty string if not found
    */
   async phase(name: string): Promise<string> {
-    await this.loadExtensions(this.options.extensions ?? []);
+    await this.loadExtensions(this.options.extensions ?? [], this.options.cwd);
     const registry = cloneAgentContext(this.options.context, this.extensionRunner).phases?.phases;
     const phase = registry?.get(name) ?? [...(registry?.values() ?? [])].find((candidate) => candidate.name === name);
     return phase ? readPhaseContent(phase) : "";
@@ -397,10 +405,16 @@ export class Agent {
   }
 
   private resolveRunConfig(config?: RunOptions): AgentOptions {
-    const context = cloneAgentContext(config?.context ?? this.createContextSnapshot());
-    return {
+    const merged = {
       ...this.options,
       ...config,
+    };
+    const context = cloneAgentContext({
+      ...(config?.context ?? this.createContextSnapshot()),
+      phases: merged.phases ?? config?.context?.phases ?? this.options.context.phases,
+    });
+    return {
+      ...merged,
       context,
       sessionId: config?.sessionId ?? this.state.sessionId ?? this.options.sessionId,
     };

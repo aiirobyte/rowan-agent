@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { Agent } from "../src/agent";
+import { Agent, loadPhases, resolveWorkspacePaths } from "../src";
 import type { LoadedExtension } from "../src/extensions";
 import type { AgentEventListener, LlmRequest, StreamFn } from "../src/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
@@ -125,6 +125,47 @@ test("Agent loads phases from LoadedExtension list", async () => {
   expect(outcome.outcome.message).toBe("extension phase ran");
 });
 
+test("Agent passes cwd option to extension context", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-extension-cwd-"));
+  try {
+    let capturedCwd: string | undefined;
+    const extension: LoadedExtension = {
+      path: "<test>",
+      name: "cwd-extension",
+      factory: (rowan) => {
+        capturedCwd = rowan.context.cwd;
+        rowan.registerPhase({
+          id: "extension",
+          name: "Extension",
+          description: "Extension registered phase.",
+          async run() {
+            return { message: "extension phase ran", route: "stop" };
+          },
+        });
+      },
+    };
+
+    const agent = new Agent({
+      context: createTestContext(),
+      model: { provider: "test", id: "extension-cwd" },
+      stream: async function* routeToExtensionStream() {
+        const text = "Routing to extension.";
+        yield { type: "text_delta", text, partial: buildTestPartial(text) };
+        yield* yieldRouteToolCall("extension", "Use registered extension phase.", text);
+        yield { type: "done" };
+      },
+      cwd: root,
+      extensions: [extension],
+    });
+
+    await runAgentTurn(agent, "use extension");
+
+    expect(capturedCwd).toBe(root);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Agent runs explicitly supplied file phases from configured project rowan dir", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-agent-rowan-dir-"));
   try {
@@ -157,6 +198,67 @@ Custom phase content.
     const outcome = await runAgentTurn(agent, "use configured phase");
 
     expect(outcome.outcome.message).toBe("configured project Rowan dir phase ran");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadPhases accepts workspace paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-workspace-phases-"));
+  try {
+    await writeFile(join(root, "package.json"), JSON.stringify({ name: "phase-workspace" }));
+    const phaseDir = join(root, ".rowan", "phases", "default");
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: Workspace Default
+description: Loaded through workspace paths.
+---
+
+Workspace phase content.
+`);
+
+    const workspace = resolveWorkspacePaths({ cwd: root, env: {} });
+    const phases = await loadPhases(workspace);
+
+    expect(phases.phases.get("default")?.content).toContain("Workspace phase content.");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Agent accepts an explicit phase registry option", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-agent-explicit-phases-"));
+  try {
+    const phaseDir = join(root, "phases", "default");
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: Explicit Default
+description: Supplied as an Agent option.
+---
+
+Explicit phase content.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+      export async function run() {
+        return { message: "explicit phase registry ran", route: "stop" };
+      }
+    `);
+
+    const phases = await loadPhases(join(root, "phases"));
+    const agent = new Agent({
+      context: createTestContext(),
+      model: { provider: "test", id: "explicit-phases" },
+      stream: async function* unusedStream() {
+        throw new Error("explicit phase should run without invoking the model");
+      },
+      cwd: root,
+      phases,
+    });
+
+    expect(await agent.phase("default")).toContain("Explicit phase content.");
+    const outcome = await runAgentTurn(agent, "use explicit phase");
+
+    expect(outcome.outcome.message).toBe("explicit phase registry ran");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

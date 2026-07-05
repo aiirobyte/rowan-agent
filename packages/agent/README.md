@@ -264,6 +264,8 @@ Per iteration:
   5. Transition, continue, or stop
 ```
 
+**`entryPhaseId`** specifies which phase the loop enters first. When phases are loaded from `.rowan/phases/`, the first discovered phase becomes the entry. When none are configured, the Agent normalises to `"default"`. This field is an internal routing hint for the phase loop — it is **not** exposed to the LLM, since the agent does not need to know which phase is the entry point to make routing decisions.
+
 ### Example Phase Flow
 
 ```
@@ -377,7 +379,7 @@ interface PhaseContext {
   messages: AgentMessage[];
   tools: Tool[];
   skills: Skill[];
-  state: PhaseState;             // { current, available, iterations, payload }
+  state: PhaseState;             // { current, available, entryPhaseId, iterations, payload }
 }
 
 type PhaseOutput = {

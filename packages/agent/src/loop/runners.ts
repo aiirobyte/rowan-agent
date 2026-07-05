@@ -34,7 +34,7 @@ import { readPhaseContent } from "../harness/phases";
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
 import type { RouteToolArgs } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
-import { LoopGuard } from "./errors";
+import { LoopGuard, MissingRouteToolCallError } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessage, snapshotMessages } from "./state";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
@@ -490,6 +490,15 @@ async function runPhaseLoop(
       if (extAfter.output) {
         output = extAfter.output;
       }
+    }
+
+    const routeToolAvailable = phaseContext.tools.some(tool => tool.name === PhaseRouteTool);
+    const routeRequired = !phase.target && !phase.run && !phase.factory && routeToolAvailable && registry.phases.size > 1;
+    if (routeRequired && !routeDecision) {
+      throw new MissingRouteToolCallError(
+        currentPhaseId,
+        output.toolCalls?.map(toolCall => toolCall.name) ?? [],
+      );
     }
 
     // Handle "continue" — re-execute current phase
