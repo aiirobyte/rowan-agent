@@ -325,6 +325,7 @@ export type Skill = {
 export type Outcome = {
   id: string;
   message: string;
+  payload?: unknown;
   toolResults?: Array<{
     toolCallId: string;
     toolName: string;

@@ -61,6 +61,9 @@ export const createOutcome = {
       id: createId("out"),
       message,
     };
+    if (output.payload !== undefined) {
+      outcome.payload = output.payload;
+    }
     if (toolResults.length > 0) {
       outcome.toolResults = toolResults;
     }

@@ -188,7 +188,7 @@ describe("Phase payload flow", () => {
       }
       if (requestCount === 2) {
         const text = "Verified.";
-        yield* yieldTextAndRoute(text, "stop", "Done.");
+        yield* yieldTextAndRoute(text, "stop", "Done.", { final: true, count: 2 });
         yield { type: "done" };
         return;
       }
@@ -202,6 +202,7 @@ describe("Phase payload flow", () => {
 
     expect(requestCount).toBe(2);
     expect(result.outcome.message).toContain("Verified");
+    expect(result.outcome.payload).toEqual({ final: true, count: 2 });
   });
 
   test("payload passes through phase transition", async () => {
