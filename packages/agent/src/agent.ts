@@ -37,7 +37,6 @@ export type AgentOptions = {
   model: LlmModelRef;
   stream: StreamFn;
   cwd?: string;
-  phases?: PhaseRegistry;
   extensions?: LoadedExtension[];
   sessionId?: string;
   maxAttempts?: number;
@@ -84,10 +83,7 @@ export class Agent {
   }
 
   constructor(options: AgentOptions) {
-    const context = cloneAgentContext({
-      ...options.context,
-      phases: options.phases ?? options.context.phases,
-    });
+    const context = cloneAgentContext(options.context);
     this.options = {
       ...options,
       context,
@@ -409,10 +405,7 @@ export class Agent {
       ...this.options,
       ...config,
     };
-    const context = cloneAgentContext({
-      ...(config?.context ?? this.createContextSnapshot()),
-      phases: merged.phases ?? config?.context?.phases ?? this.options.context.phases,
-    });
+    const context = cloneAgentContext(config?.context ?? this.createContextSnapshot());
     return {
       ...merged,
       context,

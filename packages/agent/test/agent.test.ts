@@ -226,7 +226,7 @@ Workspace phase content.
   }
 });
 
-test("Agent accepts an explicit phase registry option", async () => {
+test("Agent accepts an explicit phase registry in context", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-agent-explicit-phases-"));
   try {
     const phaseDir = join(root, "phases", "default");
@@ -246,13 +246,12 @@ Explicit phase content.
 
     const phases = await loadPhases(join(root, "phases"));
     const agent = new Agent({
-      context: createTestContext(),
+      context: { ...createTestContext(), phases },
       model: { provider: "test", id: "explicit-phases" },
       stream: async function* unusedStream() {
         throw new Error("explicit phase should run without invoking the model");
       },
       cwd: root,
-      phases,
     });
 
     expect(await agent.phase("default")).toContain("Explicit phase content.");
