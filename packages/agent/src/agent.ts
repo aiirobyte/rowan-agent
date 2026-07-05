@@ -83,14 +83,14 @@ export class Agent {
   }
 
   constructor(options: AgentOptions) {
-    const context = cloneAgentContext(options.context);
+    const context = prepareAgentContext(options.context);
     this.options = {
       ...options,
       context,
     };
     this.state = {
       ...(this.options.sessionId ? { sessionId: this.options.sessionId } : {}),
-      context: cloneAgentContext(context),
+      context: prepareAgentContext(context),
       model: this.options.model,
       tools: this.options.context.tools ?? [],
       isRunning: false,
@@ -277,7 +277,7 @@ export class Agent {
     const resolved = this.resolveRunConfig(config);
     const extensions = resolved.extensions ?? [];
     await this.loadExtensions(extensions, resolved.cwd);
-    const runContext = cloneAgentContext(resolved.context, this.extensionRunner);
+    const runContext = prepareAgentContext(resolved.context, this.extensionRunner);
     const sessionId = resolved.sessionId ?? this.state.sessionId;
     this.options = resolved;
     if (sessionId) {
@@ -338,11 +338,11 @@ export class Agent {
       });
 
       const nextContext = {
-        ...cloneAgentContext(resolved.context),
+        ...prepareAgentContext(resolved.context),
         messages: snapshotMessages(result.messages),
       };
       this.state.sessionId = result.sessionId;
-      this.state.context = cloneAgentContext(nextContext, this.extensionRunner);
+      this.state.context = prepareAgentContext(nextContext, this.extensionRunner);
       this.state.currentResult = result;
       this.options = {
         ...resolved,
@@ -387,7 +387,7 @@ export class Agent {
    */
   async phase(name: string): Promise<string> {
     await this.loadExtensions(this.options.extensions ?? [], this.options.cwd);
-    const registry = cloneAgentContext(this.options.context, this.extensionRunner).phases?.phases;
+    const registry = prepareAgentContext(this.options.context, this.extensionRunner).phases?.phases;
     const phase = registry?.get(name) ?? [...(registry?.values() ?? [])].find((candidate) => candidate.name === name);
     return phase ? readPhaseContent(phase) : "";
   }
@@ -405,7 +405,7 @@ export class Agent {
       ...this.options,
       ...config,
     };
-    const context = cloneAgentContext(config?.context ?? this.createContextSnapshot());
+    const context = prepareAgentContext(config?.context ?? this.createContextSnapshot());
     return {
       ...merged,
       context,
@@ -414,12 +414,12 @@ export class Agent {
   }
 
   private createContextSnapshot(): AgentContext {
-    return cloneAgentContext(this.options.context);
+    return prepareAgentContext(this.options.context);
   }
 
 }
 
-function cloneAgentContext(context: AgentContext, extensionRunner?: ExtensionRunner): AgentContext {
+function prepareAgentContext(context: AgentContext, extensionRunner?: ExtensionRunner): AgentContext {
   const phases = new Map<string, Phase>();
   phases.set(DEFAULT_PHASE_ID, createDefaultPhase());
   for (const [id, phase] of context.phases?.phases ?? []) {
