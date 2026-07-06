@@ -42,14 +42,51 @@ The `Agent` class is the public facade. It drives the entire execution loop — 
 ```ts
 class Agent {
   constructor(options: AgentOptions);
-  run(options?: RunOptions): Promise<AgentRunResult>;
+  run(options?: RunOptions): Promise<RunResult>;
+
+  // User input / conversation continuation
+  appendUserMessage(input: string): void;
+  appendMessage(message: AgentMessage): void;
+  appendMessages(messages: AgentMessage[]): void;
+  runWithUserInput(input: string, options?: RunOptions): Promise<RunResult>;
+  runWithMessage(message: AgentMessage, options?: RunOptions): Promise<RunResult>;
+
+  // Context and transcript
+  getContext(): AgentContext;
+  setContext(context: AgentContext): void;
+  updateContext(updater: (context: AgentContext) => AgentContext): void;
+  forkContext(overrides?: Partial<AgentContext>): AgentContext;
+  getMessages(): AgentMessage[];
+  setMessages(messages: AgentMessage[]): void;
+  clearMessages(): void;
+  getTranscript(): AgentMessage[];
+  replaceTranscript(messages: AgentMessage[]): void;
+
+  // Config access and shortcuts
+  getConfig(): AgentOptions;
+  setConfig(config: AgentOptions): void;
+  updateConfig(updater: (config: AgentOptions) => AgentOptions): void;
+  setSessionId(sessionId: string): void;
+  getSessionId(): string | undefined;
+  setModel(model: LlmModelRef): void;
+  setTools(tools: Tool[]): void;
+  setSkills(skills: Skill[]): void;
+  setPhases(phases: PhaseRegistry): void;
+  setCwd(cwd: string): void;
+  setStream(stream: StreamFn): void;
+  getModel(): LlmModelRef;
+  getTools(): Tool[];
+  getSkills(): Skill[];
+  getPhases(): PhaseRegistry | undefined;
+  getCwd(): string | undefined;
+
   abort(): void;
   subscribe(listener: AgentEventListener): () => void;
-  skill(name: string): Promise<void>;
+  skill(name: string, additionalInstructions?: string): string;
   phase(name: string): Promise<string>;
   waitForIdle(): Promise<void>;
   flushEvents(): Promise<void>;
-  readonly status: AgentStatus;
+  readonly state: AgentStatus;
 
   // Resource loading — replaces standalone loadSkills/loadPhases/loadExtensions
   static loadSkills(targetPath: string): Promise<Skill[]>;
@@ -65,6 +102,7 @@ type AgentOptions = {
   context: AgentContext;
   model: LlmModelRef;
   stream: StreamFn;
+  cwd?: string;
   extensions?: LoadedExtension[];
   sessionId?: string;
   maxAttempts?: number;
@@ -78,16 +116,55 @@ type AgentOptions = {
 };
 ```
 
-### AgentRunResult
+### RunResult
 
 ```ts
-type AgentRunResult = {
-  status: AgentStatus;
-  outcome?: Outcome;
-  metrics?: LoopMetrics;
-  messages: AgentMessage[];
+type RunResult = {
   sessionId: string;
+  messages: AgentMessage[];
+  outcome: Outcome;
+  metrics: LoopMetrics;
 };
+```
+
+### Conversation Continuation
+
+For multi-turn use, append input to the agent's current transcript and run with the updated context. `runWithUserInput()` is the main convenience API; the lower-level append methods are useful when a UI or session layer controls message creation.
+
+```ts
+const first = await agent.runWithUserInput("summarize this repository");
+
+agent.appendUserMessage("now focus on the CLI package");
+const second = await agent.run();
+
+await agent.runWithMessage(createMessage("user", "what changed since last turn?"));
+```
+
+Transcript helpers return snapshots, so callers can inspect or edit history without accidentally mutating the agent until they call a setter.
+
+```ts
+const messages = agent.getMessages();
+agent.replaceTranscript(messages.slice(-6));
+agent.clearMessages();
+```
+
+### Updating Config
+
+`AgentOptions` can be replaced wholesale with `setConfig()`, or updated through focused shortcuts for common orchestration flows.
+
+```ts
+agent.setSessionId("ses_known");
+agent.setModel({ provider: "openai", id: "gpt-4.1" });
+agent.setTools(createCoreTools({ root: process.cwd() }));
+agent.setSkills(await Agent.loadSkills("./.rowan/skills"));
+agent.setPhases(await Agent.loadPhases("./.rowan/phases"));
+agent.setCwd(process.cwd());
+agent.setStream(createDispatchStream());
+
+agent.updateContext((context) => ({
+  ...context,
+  systemPrompt: `${context.systemPrompt}\n\nPrefer concise answers.`,
+}));
 ```
 
 ## AgentContext

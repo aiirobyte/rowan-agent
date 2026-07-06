@@ -2,9 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { Agent, loadPhases, resolveWorkspacePaths } from "../src";
+import { Agent, createMessage, loadPhases, resolveWorkspacePaths } from "../src";
 import type { LoadedExtension } from "../src/extensions";
 import type { AgentEventListener, LlmRequest, StreamFn } from "../src/types";
+import type { Phase } from "../src/harness/phases/types";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
 import { createEchoTools } from "./support/echo-tool";
 import { buildTestPartial, scriptedStream, yieldRouteToolCall } from "./support/scripted-stream";
@@ -37,6 +38,100 @@ test("Agent.run returns a run result and emits events", async () => {
   // In the new phase system (no phaseConfig), tools are not auto-executed in none phase
   expect(events).toContain("phase_start");
   expect(events).toContain("phase_end");
+});
+
+test("Agent context and transcript accessors return safe snapshots", () => {
+  const agent = new Agent({
+    context: createTestContext({
+      messages: [createMessage("user", "initial")],
+      tools: createEchoTools(),
+    }),
+    model: { provider: "test", id: "accessors" },
+    stream: scriptedStream,
+  });
+
+  const messages = agent.getMessages();
+  messages.push(createMessage("user", "mutated clone"));
+  const config = agent.getConfig();
+  config.context.messages.push(createMessage("user", "mutated config clone"));
+  const context = agent.getContext();
+  context.tools.length = 0;
+
+  expect(agent.getMessages().map((message) => message.content)).toEqual(["initial"]);
+  expect(agent.getTools()).toHaveLength(1);
+
+  agent.appendMessages([createMessage("assistant", "answer")]);
+  expect(agent.getTranscript().map((message) => message.content)).toEqual(["initial", "answer"]);
+
+  agent.replaceTranscript([createMessage("user", "restored")]);
+  expect(agent.getMessages().map((message) => message.content)).toEqual(["restored"]);
+
+  agent.clearMessages();
+  expect(agent.getMessages()).toEqual([]);
+});
+
+test("Agent config shortcuts update subsequent run configuration", async () => {
+  const requests: LlmRequest[] = [];
+  const stream: StreamFn = async function* captureStream(request) {
+    requests.push(request);
+    const text = "configured response";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+  const alternateStream: StreamFn = async function* alternateCaptureStream(request) {
+    requests.push(request);
+    const text = "alternate response";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+  const customPhase: Phase = {
+    id: "custom",
+    name: "Custom",
+    description: "Custom phase.",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Custom phase content.",
+  };
+  const agent = new Agent({
+    context: createTestContext(),
+    model: { provider: "test", id: "initial" },
+    stream,
+  });
+
+  agent.setSessionId("known-session");
+  agent.setModel({ provider: "test", id: "updated" });
+  agent.setTools(createEchoTools());
+  agent.setSkills([{
+    name: "example",
+    description: "Example skill.",
+    filePath: "/tmp/SKILL.md",
+    baseDir: "/tmp",
+    content: "Example skill content.",
+    disableModelInvocation: false,
+  }]);
+  agent.setPhases({ phases: new Map([["custom", customPhase]]), entryPhaseId: "custom" });
+  agent.setCwd("/tmp/rowan-agent-test");
+  agent.setStream(alternateStream);
+  agent.updateConfig((config) => ({ ...config, maxAttempts: 2 }));
+  agent.updateContext((context) => ({
+    ...context,
+    systemPrompt: "Updated system",
+  }));
+
+  expect(agent.getSessionId()).toBe("known-session");
+  expect(agent.getModel()).toEqual({ provider: "test", id: "updated" });
+  expect(agent.getTools()).toHaveLength(1);
+  expect(agent.getSkills()).toHaveLength(1);
+  expect(agent.getPhases()?.entryPhaseId).toBe("custom");
+  expect(agent.getCwd()).toBe("/tmp/rowan-agent-test");
+  expect(agent.forkContext({ systemPrompt: "Forked" }).systemPrompt).toBe("Forked");
+
+  agent.setPhases({ phases: new Map(), entryPhaseId: null });
+  const result = await agent.runWithUserInput("hello");
+
+  expect(result.outcome.message).toBe("alternate response");
+  expect(requests[0]?.model).toEqual({ provider: "test", id: "updated" });
+  expect(requests[0]?.system).toContain("Updated system");
 });
 
 test("Agent does not discover custom phases from cwd .rowan extensions", async () => {

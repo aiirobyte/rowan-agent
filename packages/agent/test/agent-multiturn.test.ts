@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Agent, messageContentText, type StreamFn } from "../src";
+import { Agent, createMessage, messageContentText, type StreamFn } from "../src";
 import type { LlmRequest } from "../src/types";
 import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";
@@ -57,6 +57,38 @@ test("Agent.run reuses one session for multi-turn direct responses", async () =>
     expect.arrayContaining(["first", expect.stringContaining("First answer"), "second"]),
   );
   expect(events).toEqual(expect.arrayContaining(["turn_start"]));
+});
+
+test("Agent exposes high-level message continuation helpers", async () => {
+  const seenUserInputs: string[] = [];
+  const stream: StreamFn = async function* continuationStream(request) {
+    const userMessages = request.messages
+      .filter((message) => message.role === "user")
+      .map((message) => messageContentText(message.content));
+    const currentInput = userMessages[userMessages.length - 1] ?? "";
+    seenUserInputs.push(currentInput);
+    const text = `Answer to ${currentInput}`;
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+  const agent = new Agent({
+    context: createTestContext(),
+    model: { provider: "test", id: "continuation-helpers" },
+    stream,
+  });
+
+  const first = await agent.runWithUserInput("hello");
+  const sessionId = agent.getSessionId();
+  agent.appendUserMessage("queued only");
+  expect(seenUserInputs).toEqual(["hello"]);
+  const second = await agent.run();
+  await agent.runWithMessage(createMessage("user", "pre-built"));
+
+  expect(first.outcome.message).toBe("Answer to hello");
+  expect(second.outcome.message).toBe("Answer to queued only");
+  expect(agent.getSessionId()).toBe(sessionId);
+  expect(seenUserInputs).toEqual(["hello", "queued only", "pre-built"]);
+  expect(agent.getMessages().filter((message) => message.role === "user")).toHaveLength(3);
 });
 
 test("Agent keeps conversation messages separate from execution steps", async () => {

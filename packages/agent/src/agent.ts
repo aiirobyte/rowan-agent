@@ -14,8 +14,10 @@ import type { LoadExtensionsResult } from "./extensions/types";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
 import { DEFAULT_PHASE_ID, createDefaultPhase } from "./harness/phases/default";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "./harness/phases/types";
+import { createMessage } from "./types";
 import type {
   AgentMessage,
+  Skill,
   LlmModelRef,
   StreamFn,
   BeforeToolCall,
@@ -102,6 +104,172 @@ export class Agent {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  appendUserMessage(input: string): void {
+    this.appendMessage(createMessage("user", input));
+  }
+
+  appendMessage(message: AgentMessage): void {
+    this.appendMessages([message]);
+  }
+
+  appendMessages(messages: AgentMessage[]): void {
+    this.setMessages([...this.options.context.messages, ...snapshotMessages(messages)]);
+  }
+
+  runWithUserInput(input: string, options?: RunOptions): Promise<RunResult> {
+    this.appendUserMessage(input);
+    return this.run(options);
+  }
+
+  runWithMessage(message: AgentMessage, options?: RunOptions): Promise<RunResult> {
+    this.appendMessage(message);
+    return this.run(options);
+  }
+
+  getContext(): AgentContext {
+    return prepareAgentContext(this.options.context);
+  }
+
+  setContext(context: AgentContext): void {
+    const nextContext = prepareAgentContext(context);
+    this.options = {
+      ...this.options,
+      context: nextContext,
+    };
+    this.state.context = prepareAgentContext(nextContext, this.extensionRunner);
+    this.state.tools = this.state.context.tools ?? [];
+  }
+
+  updateContext(updater: (context: AgentContext) => AgentContext): void {
+    this.setContext(updater(this.getContext()));
+  }
+
+  forkContext(overrides: Partial<AgentContext> = {}): AgentContext {
+    return prepareAgentContext({
+      ...this.getContext(),
+      ...overrides,
+    });
+  }
+
+  getMessages(): AgentMessage[] {
+    return snapshotMessages(this.options.context.messages);
+  }
+
+  setMessages(messages: AgentMessage[]): void {
+    this.setContext({
+      ...this.options.context,
+      messages: snapshotMessages(messages),
+    });
+  }
+
+  clearMessages(): void {
+    this.setMessages([]);
+  }
+
+  getTranscript(): AgentMessage[] {
+    return this.getMessages();
+  }
+
+  replaceTranscript(messages: AgentMessage[]): void {
+    this.setMessages(messages);
+  }
+
+  getConfig(): AgentOptions {
+    return this.cloneOptions(this.options);
+  }
+
+  setConfig(config: AgentOptions): void {
+    const context = prepareAgentContext(config.context);
+    this.options = {
+      ...config,
+      context,
+      ...(config.extensions ? { extensions: config.extensions.slice() } : {}),
+    };
+    this.state.sessionId = config.sessionId;
+    this.state.context = prepareAgentContext(context, this.extensionRunner);
+    this.state.model = config.model;
+    this.state.tools = this.state.context.tools ?? [];
+  }
+
+  updateConfig(updater: (config: AgentOptions) => AgentOptions): void {
+    this.setConfig(updater(this.getConfig()));
+  }
+
+  setSessionId(sessionId: string): void {
+    this.options = {
+      ...this.options,
+      sessionId,
+    };
+    this.state.sessionId = sessionId;
+  }
+
+  getSessionId(): string | undefined {
+    return this.state.sessionId;
+  }
+
+  setModel(model: LlmModelRef): void {
+    this.options = {
+      ...this.options,
+      model,
+    };
+    this.state.model = model;
+  }
+
+  setTools(tools: Tool[]): void {
+    this.setContext({
+      ...this.options.context,
+      tools: tools.slice(),
+    });
+  }
+
+  setSkills(skills: Skill[]): void {
+    this.setContext({
+      ...this.options.context,
+      skills: skills.slice(),
+    });
+  }
+
+  setPhases(phases: PhaseRegistry): void {
+    this.setContext({
+      ...this.options.context,
+      phases: clonePhaseRegistry(phases),
+    });
+  }
+
+  setCwd(cwd: string): void {
+    this.options = {
+      ...this.options,
+      cwd,
+    };
+  }
+
+  setStream(stream: StreamFn): void {
+    this.options = {
+      ...this.options,
+      stream,
+    };
+  }
+
+  getModel(): LlmModelRef {
+    return this.state.model;
+  }
+
+  getTools(): Tool[] {
+    return this.state.context.tools.slice();
+  }
+
+  getSkills(): Skill[] {
+    return this.state.context.skills.slice();
+  }
+
+  getPhases(): PhaseRegistry | undefined {
+    return this.state.context.phases ? clonePhaseRegistry(this.state.context.phases) : undefined;
+  }
+
+  getCwd(): string | undefined {
+    return this.options.cwd;
   }
 
   private emitToListeners(event: AgentEvent): void {
@@ -417,6 +585,21 @@ export class Agent {
     return prepareAgentContext(this.options.context);
   }
 
+  private cloneOptions(options: AgentOptions): AgentOptions {
+    return {
+      ...options,
+      context: prepareAgentContext(options.context),
+      ...(options.extensions ? { extensions: options.extensions.slice() } : {}),
+    };
+  }
+
+}
+
+function clonePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {
+  return {
+    phases: new Map(registry.phases),
+    entryPhaseId: registry.entryPhaseId,
+  };
 }
 
 function prepareAgentContext(context: AgentContext, extensionRunner?: ExtensionRunner): AgentContext {
