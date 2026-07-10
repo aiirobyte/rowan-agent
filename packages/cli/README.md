@@ -122,4 +122,4 @@ import {
 
 ## Version
 
-Current version: **0.4.8**
+Current version: **0.5.5**

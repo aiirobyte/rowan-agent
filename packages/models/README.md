@@ -159,7 +159,7 @@ type AgentMessage = { id: string; role: "system" | "user" | "assistant" | "tool"
 type AgentEvent = { type: "agent_start" | "agent_end" | "turn_start" | ... ; ts: string; ... };
 type ToolCall = { id: string; name: string; args: unknown };
 type ToolResult = { toolCallId: string; toolName: string; ok: boolean; content: unknown; error?: string };
-type Outcome = { id: string; message: string; toolResults?: Array<...> };
+type Outcome = { id: string; message: string; payload?: unknown; toolResults?: Array<...> };
 ```
 
 ## Source Structure
@@ -180,4 +180,4 @@ src/
 
 ## Version
 
-Current version: **0.4.6**
+Current version: **0.5.5**

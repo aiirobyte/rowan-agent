@@ -205,6 +205,7 @@ The terminal result produced when the loop completes — carries the final messa
 type Outcome = {
   id: string;
   message: string;
+  payload?: unknown;
   toolResults?: Array<{
     toolCallId: string;
     toolName: string;
@@ -778,4 +779,4 @@ type LoopMetrics = {
 
 ## Version
 
-Current version: **0.4.11**
+Current version: **0.5.5**
