@@ -34,7 +34,7 @@ import { readPhaseContent } from "../harness/phases";
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
 import type { RouteToolArgs } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
-import { LoopGuard, MissingRouteToolCallError } from "./errors";
+import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessage, snapshotMessages } from "./state";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
@@ -169,6 +169,12 @@ async function completeRun(
   state: SessionState,
   outcome: Outcome,
 ): Promise<RunResult> {
+  if (outcome.display) {
+    const messages = createMessageManager(config.context, config.emit, config.onMessage);
+    const messageId = messages.start("assistant", outcome.message, { outcomeId: outcome.id });
+    await messages.end(messageId);
+  }
+
   // Finalize metrics
   state.metrics.endedAt = createTimestamp();
   state.metrics.durationMs = Date.now() - state.metrics.startedAtMs;
@@ -176,6 +182,16 @@ async function completeRun(
   await config.onOutcome?.(outcome);
 
   return createRunResult(config, state, outcome);
+}
+
+function createTerminalOutcome(
+  phase: Phase,
+  output: PhaseOutput,
+  transcript: AgentMessage[],
+): Outcome {
+  return phase.run || phase.factory
+    ? createOutcome.phase(output, transcript)
+    : createOutcome.default(output, transcript);
 }
 
 // ============================================================================
@@ -495,10 +511,34 @@ async function runPhaseLoop(
     const routeToolAvailable = phaseContext.tools.some(tool => tool.name === PhaseRouteTool);
     const routeRequired = !phase.target && !phase.run && !phase.factory && routeToolAvailable && registry.phases.size > 1;
     if (routeRequired && !routeDecision) {
-      throw new MissingRouteToolCallError(
-        currentPhaseId,
-        output.toolCalls?.map(toolCall => toolCall.name) ?? [],
-      );
+      if (config.waitForInput) {
+        const preAbort = LoopGuard.checkAbort(config.signal);
+        if (preAbort.stopReason !== "none") {
+          config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+          removePhaseMessage(config.context.messages, previousPhaseMsgId);
+          previousPhaseMsgId = undefined;
+          return completeRun(config, state, createOutcome.aborted());
+        }
+        config.emit?.({ type: "user_prompt_requested", phase: currentPhaseId, ts: createTimestamp() });
+        const userMessages = await config.waitForInput();
+        const abortResult = LoopGuard.checkAbort(config.signal);
+        if (abortResult.stopReason !== "none") {
+          config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+          removePhaseMessage(config.context.messages, previousPhaseMsgId);
+          previousPhaseMsgId = undefined;
+          return completeRun(config, state, createOutcome.aborted());
+        }
+        for (const message of userMessages) {
+          config.context.messages.push(message);
+        }
+        removePhaseMessage(config.context.messages, previousPhaseMsgId);
+        previousPhaseMsgId = undefined;
+        isContinuing = true;
+        continue;
+      }
+      config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
+      removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      return completeRun(config, state, createOutcome.default(output, config.context.messages));
     }
 
     // Handle "continue" — re-execute current phase
@@ -548,7 +588,7 @@ async function runPhaseLoop(
       // all parallel phases complete. If "stop", end the run.
       const entryPhaseId = phase.target ?? registry.entryPhaseId!;
       if (entryPhaseId === "stop") {
-        return completeRun(config, state, createOutcome.default(output, config.context.messages));
+        return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
       }
       currentPhaseId = entryPhaseId;
       previousPayload = undefined; // payloads stashed in previousResults instead
@@ -568,7 +608,7 @@ async function runPhaseLoop(
     // Handle stop — end execution
     if (nextRoute === "stop") {
       if (routeToolCalled) removePhaseMessage(config.context.messages, previousPhaseMsgId);
-      return completeRun(config, state, createOutcome.default(output, config.context.messages));
+      return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
     }
 
     // Validate route target exists

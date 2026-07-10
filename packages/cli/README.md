@@ -117,7 +117,6 @@ import {
   formatToolArgsPreview,
   formatToolResultOutput,
   formatMessageContent,
-  formatOutcomeOutput,
 } from "@rowan-agent/cli";
 ```
 

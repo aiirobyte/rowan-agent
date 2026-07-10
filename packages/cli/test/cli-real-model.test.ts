@@ -36,6 +36,7 @@ async function runCli(
   args: string[],
   env: Record<string, string | undefined> = {},
   stdin?: string,
+  timeoutMs?: number,
 ) {
   const proc = Bun.spawn(["bun", "run", "rowan", ...args], {
     cwd: process.cwd(),
@@ -48,6 +49,13 @@ async function runCli(
     stdout: "pipe",
     stderr: "pipe",
   });
+  let timedOut = false;
+  const timeout = timeoutMs
+    ? setTimeout(() => {
+        timedOut = true;
+        proc.kill();
+      }, timeoutMs)
+    : undefined;
 
   if (stdin !== undefined && proc.stdin) {
     proc.stdin.write(stdin);
@@ -59,8 +67,11 @@ async function runCli(
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+  if (timeout) {
+    clearTimeout(timeout);
+  }
 
-  return { stdout, stderr, exitCode };
+  return { stdout, stderr, exitCode, timedOut };
 }
 
 function openAIResponse(content: unknown): Response {
@@ -988,6 +999,146 @@ test("CLI initial prompt continues into the default interactive session", async 
     expect(summary.eventTypes.agent_state_loaded).toBeUndefined();
     expect(summary.eventTypes.session_start).toBeUndefined();
     expect(summary.eventTypes.session_end).toBeUndefined();
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI resumes a paused phase run from the next interactive prompt", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-resume-paused-"));
+  const phaseDir = join(workspace, ".rowan", "phases", "helper");
+  const requests: Array<{ messages?: Array<{ content?: string }> }> = [];
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  let requestCount = 0;
+
+  try {
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: Helper
+description: Extra phase that makes routing required.
+---
+
+Helper phase content.
+`);
+
+    try {
+      server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          requests.push((await request.json()) as { messages?: Array<{ content?: string }> });
+          requestCount++;
+          if (requestCount === 1) {
+            return openAIResponse("Need one more detail.");
+          }
+          return openAIResponse({
+            message: "Final answer.",
+            toolCalls: [
+              {
+                name: "route",
+                args: { decision: [{ phase: "stop", reason: "done" }] },
+              },
+            ],
+          });
+        },
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli(
+      [...modelFlags(server)],
+      { ROWAN_WORKSPACE: workspace },
+      "Hello\nWhat can you do for me?\n:quit\n",
+      2_000,
+    );
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Need one more detail.");
+    expect(result.stdout).toContain("Final answer.");
+    expect(requestCount).toBe(2);
+
+    const secondPrompt = requests[1]?.messages?.map((message) => message.content).join("\n") ?? "";
+    expect(secondPrompt).toContain("Hello");
+    expect(secondPrompt).toContain("Need one more detail.");
+    expect(secondPrompt).toContain("What can you do for me?");
+
+    const runsDir = join(workspace, ".rowan", "runs");
+    const [logFile] = (await readdir(runsDir)).filter((file) => file.endsWith(".jsonl"));
+    const summary = await summarizeLogFile(join(runsDir, logFile ?? ""));
+    expect(summary.eventTypes.user_prompt_requested).toBe(1);
+    expect(summary.eventTypes.agent_end).toBe(1);
+  } finally {
+    server?.stop(true);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CLI displays a programmatic phase outcome after a streamed paused turn", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-programmatic-outcome-"));
+  const phaseDir = join(workspace, ".rowan", "phases", "image-gen");
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  let requestCount = 0;
+
+  try {
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: Image generation
+description: Generates an image without an LLM.
+---
+
+Generate an image.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+      export async function run() {
+        return { message: "IMAGE_GENERATION_RESULT", route: "stop" };
+      }
+    `);
+
+    try {
+      server = Bun.serve({
+        port: 0,
+        fetch: () => {
+          requestCount++;
+          if (requestCount === 1) {
+            return openAIResponse("What image should I generate?");
+          }
+          return openAIResponse({
+            message: "Generating image.",
+            toolCalls: [
+              {
+                name: "route",
+                args: { decision: [{ phase: "image-gen", reason: "generate" }] },
+              },
+            ],
+          });
+        },
+      });
+    } catch (error) {
+      if (canSkipLocalBindError(error)) {
+        expect(true).toBe(true);
+        return;
+      }
+      throw error;
+    }
+
+    const result = await runCli(
+      [...modelFlags(server)],
+      { ROWAN_WORKSPACE: workspace },
+      "Generate a cat\nA fluffy kitten\n:quit\n",
+      2_000,
+    );
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(countMatches(result.stdout, /What image should I generate\?/g)).toBe(1);
+    expect(countMatches(result.stdout, /Generating image\./g)).toBe(1);
+    expect(countMatches(result.stdout, /IMAGE_GENERATION_RESULT/g)).toBe(1);
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });

@@ -1,46 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatJsonOutput, formatOutcomeOutput, formatToolArgsPreview, formatToolResultOutput } from "../src/output";
-import type { Outcome } from "@rowan-agent/agent";
-
-test("formatOutcomeOutput prints the outcome message instead of JSON", () => {
-  const directOutcome: Outcome = {
-    id: "out_direct",
-    message: "Hello from model",
-  };
-  const taskOutcome: Outcome = {
-    id: "out_task",
-    message: "Task completed",
-  };
-
-  expect(formatJsonOutput(directOutcome)).toContain('"message"');
-  expect(formatOutcomeOutput(directOutcome)).toBe("Hello from model");
-  expect(formatOutcomeOutput(taskOutcome)).toBe("Task completed");
-  expect(() => JSON.parse(formatOutcomeOutput(directOutcome))).toThrow();
-});
-
-test("formatOutcomeOutput falls back to tool results", () => {
-  const outcome: Outcome = {
-    id: "out_tool",
-    message: "",
-    toolResults: [
-      {
-        toolCallId: "call_1",
-        toolName: "bash",
-        ok: true,
-        content: {
-          command: "date",
-          cwd: ".",
-          exitCode: 0,
-          stdout: "Sun Jun 14 14:10:29 CST 2026\n",
-          stderr: "",
-        },
-      },
-    ],
-  };
-
-  expect(formatOutcomeOutput(outcome)).toContain("Sun Jun 14");
-  expect(formatOutcomeOutput(outcome)).not.toContain('"toolName"');
-});
+import { formatJsonOutput, formatToolArgsPreview, formatToolResultOutput } from "../src/output";
 
 test("formatToolResultOutput renders common tool results for humans", () => {
   expect(formatToolResultOutput({

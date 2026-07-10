@@ -325,6 +325,8 @@ export type Skill = {
 export type Outcome = {
   id: string;
   message: string;
+  /** Publish this outcome's message as an assistant message before completing the run. */
+  display?: boolean;
   payload?: unknown;
   toolResults?: Array<{
     toolCallId: string;
@@ -366,6 +368,7 @@ export type AgentEvent =
   | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage; ts: string }
   | { type: "phase_start"; phase: string; ts: string }
   | { type: "phase_end"; phase: string; ts: string }
+  | { type: "user_prompt_requested"; phase: string; ts: string }
   | { type: "message_start"; message: AgentMessage; ts: string }
   | { type: "message_update"; message: AgentMessage; delta: string; ts: string }
   | { type: "message_end"; message: AgentMessage; ts: string }

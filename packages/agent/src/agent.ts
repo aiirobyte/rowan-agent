@@ -56,7 +56,8 @@ export type AgentStatus = {
   context: AgentContext;
   model: LlmModelRef;
   tools: Tool[];
-  isRunning: boolean;
+  initialized: boolean;
+  running: boolean;
   currentResult?: RunResult;
   error?: string;
 };
@@ -67,7 +68,11 @@ export class Agent {
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingListenerTasks = new Set<Promise<void>>();
   private readonly listenerErrors: unknown[] = [];
-  private activeRun?: { promise: Promise<RunResult>; resolve: (result: RunResult) => void; abortController: AbortController };
+  private activeRun?: {
+    promise: Promise<RunResult>;
+    abortController: AbortController;
+    resume?: (messages: AgentMessage[]) => void;
+  };
   private extensionRunner?: ExtensionRunner;
   private loadedExtensions?: LoadedExtension[];
   private loadedExtensionsCwd?: string;
@@ -95,7 +100,8 @@ export class Agent {
       context: prepareAgentContext(context),
       model: this.options.model,
       tools: this.options.context.tools ?? [],
-      isRunning: false,
+      initialized: false,
+      running: false,
     };
   }
 
@@ -119,13 +125,37 @@ export class Agent {
   }
 
   runWithUserInput(input: string, options?: RunOptions): Promise<RunResult> {
+    const activeRun = this.activeRun;
+    if (activeRun?.resume) {
+      // Resume a paused run: deliver the user message into the loop and return
+      // the in-flight run promise (resolves only on route:stop). Do NOT append
+      // to this.options.context — the loop pushes delivered messages into its
+      // own context, and they flow back here once run() completes.
+      activeRun.resume([createMessage("user", input)]);
+      return activeRun.promise;
+    }
+    if (activeRun) {
+      return Promise.reject(new Error("Agent is already running."));
+    }
     this.appendUserMessage(input);
     return this.run(options);
   }
 
   runWithMessage(message: AgentMessage, options?: RunOptions): Promise<RunResult> {
+    const activeRun = this.activeRun;
+    if (activeRun?.resume) {
+      activeRun.resume([message]);
+      return activeRun.promise;
+    }
+    if (activeRun) {
+      return Promise.reject(new Error("Agent is already running."));
+    }
     this.appendMessage(message);
     return this.run(options);
+  }
+
+  resetInitialization(): void {
+    this.state.initialized = false;
   }
 
   getContext(): AgentContext {
@@ -386,36 +416,38 @@ export class Agent {
     // turn_end and agent_end are handled by runAgentLoop's phase turn() and finally block.
   }
 
-  private async runWithLifecycle(
-    executor: (signal: AbortSignal) => Promise<RunResult>,
+  private runWithLifecycle(
+    executor: (input: { signal: AbortSignal; waitForInput: () => Promise<AgentMessage[]> }) => Promise<RunResult>,
   ): Promise<RunResult> {
     if (this.activeRun) {
-      throw new Error("Agent is already running.");
+      return Promise.reject(new Error("Agent is already running."));
     }
 
-    let resolvePromise!: (result: RunResult) => void;
     const abortController = new AbortController();
-    const promise = new Promise<RunResult>((resolve) => {
-      resolvePromise = resolve;
-    });
-    this.activeRun = { promise, resolve: resolvePromise, abortController };
-    this.state.isRunning = true;
-
-    try {
-      const result = await executor(abortController.signal);
-      resolvePromise(result);
-      return result;
-    } catch (error) {
-      this.handleRunFailure(error, abortController.signal.aborted);
-      resolvePromise(undefined as unknown as RunResult);
-      throw error;
-    } finally {
-      this.finishRun();
-    }
+    const waitForInput = () =>
+      new Promise<AgentMessage[]>((resolve) => {
+        const activeRun = this.activeRun!;
+        activeRun.resume = (messages) => {
+          activeRun.resume = undefined;
+          resolve(messages);
+        };
+      });
+    const promise = Promise.resolve()
+      .then(() => executor({ signal: abortController.signal, waitForInput }))
+      .catch((error) => {
+        this.handleRunFailure(error, abortController.signal.aborted);
+        throw error;
+      })
+      .finally(() => {
+        this.finishRun();
+      });
+    this.activeRun = { promise, abortController };
+    this.state.running = true;
+    return promise;
   }
 
   private finishRun(): void {
-    this.state.isRunning = false;
+    this.state.running = false;
     this.activeRun = undefined;
   }
 
@@ -441,23 +473,31 @@ export class Agent {
     this.loadedExtensionsCwd = cwd;
   }
 
-  async run(config?: RunOptions): Promise<RunResult> {
-    const resolved = this.resolveRunConfig(config);
-    const extensions = resolved.extensions ?? [];
-    await this.loadExtensions(extensions, resolved.cwd);
-    const runContext = prepareAgentContext(resolved.context, this.extensionRunner);
-    const sessionId = resolved.sessionId ?? this.state.sessionId;
-    this.options = resolved;
-    if (sessionId) {
-      this.state.sessionId = sessionId;
-    }
-    this.state.context = runContext;
-    this.state.model = resolved.model;
-    this.state.tools = runContext.tools ?? [];
-    this.state.currentResult = undefined;
-    this.state.error = undefined;
+  run(config?: RunOptions): Promise<RunResult> {
+    return this.runWithLifecycle(async ({ signal, waitForInput }) => {
+      const resolved = this.resolveRunConfig(config);
+      const extensions = resolved.extensions ?? [];
+      await this.loadExtensions(extensions, resolved.cwd);
+      const runContext = prepareAgentContext(resolved.context, this.extensionRunner);
+      const entryPhaseId = this.state.initialized ? DEFAULT_PHASE_ID : runContext.phases?.entryPhaseId ?? DEFAULT_PHASE_ID;
+      const loopContext = {
+        ...runContext,
+        phases: {
+          ...runContext.phases!,
+          entryPhaseId,
+        },
+      };
+      const sessionId = resolved.sessionId ?? this.state.sessionId;
+      this.options = resolved;
+      if (sessionId) {
+        this.state.sessionId = sessionId;
+      }
+      this.state.context = runContext;
+      this.state.model = resolved.model;
+      this.state.tools = runContext.tools ?? [];
+      this.state.currentResult = undefined;
+      this.state.error = undefined;
 
-    return this.runWithLifecycle(async (signal) => {
       const emit = (event: AgentEvent) => {
         this.processEvents(event);
       };
@@ -488,7 +528,7 @@ export class Agent {
       };
 
       const result = await runAgentLoop({
-        context: runContext,
+        context: loopContext,
         sessionId: sessionId ?? createId("ses"),
         model: resolved.model,
         stream: resolved.stream,
@@ -503,6 +543,7 @@ export class Agent {
         onMessage: resolved.onMessage,
         onOutcome: resolved.onOutcome,
         onModelTranscript: resolved.onModelTranscript,
+        waitForInput,
       });
 
       const nextContext = {
@@ -512,6 +553,7 @@ export class Agent {
       this.state.sessionId = result.sessionId;
       this.state.context = prepareAgentContext(nextContext, this.extensionRunner);
       this.state.currentResult = result;
+      this.state.initialized = true;
       this.options = {
         ...resolved,
         sessionId: result.sessionId,
@@ -522,7 +564,10 @@ export class Agent {
   }
 
   abort(reason = "Aborted by caller."): void {
-    this.activeRun?.abortController.abort(reason);
+    const activeRun = this.activeRun;
+    // Release a paused loop so it wakes and observes the abort signal.
+    activeRun?.resume?.([]);
+    activeRun?.abortController.abort(reason);
   }
 
   /**

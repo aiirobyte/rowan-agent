@@ -51,7 +51,11 @@ function extractToolResults(transcript: AgentMessage[]): NonNullable<Outcome["to
 
 export const createOutcome = {
   phaseNotFound(output: PhaseOutput): Outcome {
-    return { id: createId("out"), message: `Phase "${output.phase ?? "Unknown"}" not found.` };
+    return {
+      id: createId("out"),
+      message: `Phase "${output.phase ?? "Unknown"}" not found.`,
+      display: true,
+    };
   },
 
   default(output: PhaseOutput, transcript?: AgentMessage[]): Outcome {
@@ -70,11 +74,18 @@ export const createOutcome = {
     return outcome;
   },
 
+  phase(output: PhaseOutput, transcript?: AgentMessage[]): Outcome {
+    return {
+      ...this.default(output, transcript),
+      display: true,
+    };
+  },
+
   aborted(): Outcome {
     return { id: createId("out"), message: "Agent run aborted." };
   },
 
   error(message: string): Outcome {
-    return { id: createId("out"), message };
+    return { id: createId("out"), message, display: true };
   },
 };

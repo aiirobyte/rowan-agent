@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AssistantMessagePartial } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
-import { MissingRouteToolCallError } from "../src";
-import type { AgentContext, StreamFn, Tool } from "../src/types";
+import type { AgentContext, AgentMessage, StreamFn, Tool } from "../src/types";
 import { createMessage } from "../src/types";
 import type { Phase, PhaseRegistry } from "../src/harness/phases/types";
 import { createId } from "../src/utils";
@@ -39,6 +38,25 @@ function createContext(input: { systemPrompt: string; input: string; tools?: Too
     messages: [createMessage("user", input.input)],
     tools: input.tools?.slice() ?? [],
     skills: [],
+  };
+}
+
+function createInputWaiter() {
+  let resume: ((messages: AgentMessage[]) => void) | undefined;
+  return {
+    waitForInput() {
+      return new Promise<AgentMessage[]>((resolve) => {
+        resume = resolve;
+      });
+    },
+    deliver(messages: AgentMessage[]) {
+      const fn = resume;
+      resume = undefined;
+      fn?.(messages);
+    },
+    isPending() {
+      return resume !== undefined;
+    },
   };
 }
 
@@ -147,7 +165,7 @@ test("phase tool_result message is cleaned up on route transition", async () => 
 });
 
 
-test("LLM phase errors when route tool is available but not called", async () => {
+test("LLM phase without a route call completes via default stop when no input channel", async () => {
   const phases = buildPhaseRegistry([
     buildTestPhase({
       id: "plan",
@@ -164,14 +182,103 @@ test("LLM phase errors when route tool is available but not called", async () =>
     yield { type: "done" };
   };
 
-  await expect(
-    runAgentLoop({
-      context: { ...createContext({ systemPrompt: "Test", input: "plan this", tools: [echoTool] }), phases },
-      model: { provider: "test", id: "scripted" },
-      stream,
-    }),
-  ).rejects.toThrow(MissingRouteToolCallError);
+  const result = await runAgentLoop({
+    context: { ...createContext({ systemPrompt: "Test", input: "plan this", tools: [echoTool] }), phases },
+    model: { provider: "test", id: "scripted" },
+    stream,
+  });
+
   expect(requestCount).toBe(1);
+  expect(result.outcome.message).toBe("Planning done.");
+});
+
+test("missing route pauses via waitForInput and resumes the SAME phase until route:stop", async () => {
+  const phases = buildPhaseRegistry([
+    buildTestPhase({ id: "plan" }),
+    buildTestPhase({ id: "execute" }),
+  ], "plan");
+  const input = createInputWaiter();
+
+  let requestCount = 0;
+  const seenUserInputs: string[] = [];
+  const stream: StreamFn = async function* (request) {
+    requestCount++;
+    // Record user messages visible to the model this turn.
+    for (const m of request.messages) {
+      if (m.role === "user" && typeof m.content === "string" && !m.content.startsWith("Phase:")) {
+        seenUserInputs.push(m.content);
+      }
+    }
+    const text = requestCount === 1 ? "need more info" : requestCount === 2 ? "still thinking" : "done";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    if (requestCount === 3) {
+      // Only the third turn explicitly routes to stop → run() resolves.
+      yield* yieldRouteToolCall("stop", "finished");
+    }
+    yield { type: "done" };
+  };
+
+  const runPromise = runAgentLoop({
+    context: { ...createContext({ systemPrompt: "Test", input: "plan this" }), phases },
+    model: { provider: "test", id: "scripted" },
+    stream,
+    waitForInput: input.waitForInput,
+  });
+
+  // Turn 1 paused (missing route). Feed user message → resume same phase.
+  for (let i = 0; i < 100 && !input.isPending(); i++) await Promise.resolve();
+  expect(input.isPending()).toBe(true);
+  input.deliver([createMessage("user", "first followup")]);
+
+  // Turn 2 paused again. Feed another user message → resume same phase.
+  for (let i = 0; i < 100 && !input.isPending(); i++) await Promise.resolve();
+  input.deliver([createMessage("user", "second followup")]);
+
+  const result = await runPromise;
+
+  // Three model turns, all within "plan" — no phase transitions.
+  expect(requestCount).toBe(3);
+  expect(result.metrics.phaseTransitions).toEqual([]);
+  // The model saw both followups across turns (transcript is cumulative).
+  expect(seenUserInputs).toEqual(expect.arrayContaining(["plan this", "first followup", "second followup"]));
+  // run() resolved only via the explicit route:stop on turn 3.
+  expect(result.outcome.message).toBe("finished");
+});
+
+test("aborting while paused removes the phase directive before completion", async () => {
+  const phases = buildPhaseRegistry([
+    buildTestPhase({ id: "plan" }),
+    buildTestPhase({ id: "execute" }),
+  ], "plan");
+  const abortController = new AbortController();
+  const input = createInputWaiter();
+  const stream: StreamFn = async function* () {
+    yield { type: "text_delta", text: "need input", partial: buildTestPartial("need input") };
+    yield { type: "done" };
+  };
+
+  const runPromise = runAgentLoop({
+    context: { ...createContext({ systemPrompt: "Test", input: "plan this" }), phases },
+    model: { provider: "test", id: "abort-paused" },
+    stream,
+    waitForInput: input.waitForInput,
+    signal: abortController.signal,
+  });
+
+  for (let i = 0; i < 100 && !input.isPending(); i++) await Promise.resolve();
+  abortController.abort();
+  input.deliver([]);
+  const result = await runPromise;
+
+  expect(result.outcome.message).toBe("Agent run aborted.");
+  expect(
+    result.messages.some(
+      (message) =>
+        message.role === "tool" &&
+        Array.isArray(message.content) &&
+        message.content.some((part: any) => part.toolUseId?.startsWith("phase_")),
+    ),
+  ).toBe(false);
 });
 
 test("LLM phase with forced target does not require route tool call", async () => {

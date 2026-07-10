@@ -31,13 +31,48 @@ test("Agent.run returns a run result and emits events", async () => {
 
   const outcome = await runAgentTurn(agent, "use echo tool");
 
-  expect(agent.state.isRunning).toBe(false);
+  expect(agent.state.running).toBe(false);
   expect(agent.state.sessionId).toEqual(expect.stringMatching(/^ses_/));
   expect(agent.state.context.messages.length).toBeGreaterThan(0);
   expect(agent.state.context.messages[0]?.content).toBe("use echo tool");
   // In the new phase system (no phaseConfig), tools are not auto-executed in none phase
   expect(events).toContain("phase_start");
   expect(events).toContain("phase_end");
+});
+
+test("Agent publishes display outcomes as assistant messages", async () => {
+  const phase: Phase = {
+    id: "image-gen",
+    name: "Image generation",
+    description: "Generates an image.",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Generate an image.",
+    async run() {
+      return { message: "Image generated: ./cat.jpg", route: "stop" };
+    },
+  };
+  const agent = new Agent({
+    context: {
+      ...createTestContext(),
+      phases: { phases: new Map([[phase.id, phase]]), entryPhaseId: phase.id },
+    },
+    model: { provider: "test", id: "display-outcome" },
+    stream: async function* unusedStream() {
+      throw new Error("programmatic phase should not invoke the model");
+    },
+  });
+  const displayed: string[] = [];
+  agent.subscribe((event) => {
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      displayed.push(typeof event.message.content === "string" ? event.message.content : "");
+    }
+  });
+
+  const result = await agent.run();
+
+  expect(result.outcome.display).toBe(true);
+  expect(displayed).toEqual(["Image generated: ./cat.jpg"]);
 });
 
 test("Agent context and transcript accessors return safe snapshots", () => {
@@ -132,6 +167,157 @@ test("Agent config shortcuts update subsequent run configuration", async () => {
   expect(result.outcome.message).toBe("alternate response");
   expect(requests[0]?.model).toEqual({ provider: "test", id: "updated" });
   expect(requests[0]?.system).toContain("Updated system");
+});
+
+test("Agent uses entryPhaseId only until initialized, then starts later turns at default", async () => {
+  const phaseStarts: string[] = [];
+  const planningPhase: Phase = {
+    id: "planning",
+    name: "Planning",
+    description: "Initial planning phase.",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Planning phase content.",
+    async run() {
+      return { message: "planning ran", route: "stop" };
+    },
+  };
+  const defaultPhase: Phase = {
+    id: "default",
+    name: "Default",
+    description: "Default continuation phase.",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Default phase content.",
+    async run() {
+      return { message: "default ran", route: "stop" };
+    },
+  };
+  const agent = new Agent({
+    context: {
+      ...createTestContext(),
+      phases: {
+        phases: new Map([
+          ["planning", planningPhase],
+          ["default", defaultPhase],
+        ]),
+        entryPhaseId: "planning",
+      },
+    },
+    model: { provider: "test", id: "initialization" },
+    stream: async function* unusedStream() {
+      throw new Error("test phases should run without invoking the model");
+    },
+  });
+  agent.subscribe((event) => {
+    if (event.type === "phase_start") phaseStarts.push(event.phase);
+  });
+
+  const first = await agent.run();
+  const second = await agent.runWithUserInput("continue");
+  agent.resetInitialization();
+  const third = await agent.runWithUserInput("restart planning");
+
+  expect(first.outcome.message).toBe("planning ran");
+  expect(second.outcome.message).toBe("default ran");
+  expect(third.outcome.message).toBe("planning ran");
+  expect(agent.state.initialized).toBe(true);
+  expect(phaseStarts).toEqual(["planning", "default", "planning"]);
+});
+
+test("Agent does not mark initialization complete when a run fails", async () => {
+  const phaseStarts: string[] = [];
+  let callCount = 0;
+  const stream: StreamFn = async function* failThenSucceedStream() {
+    callCount++;
+    if (callCount === 1) {
+      throw new Error("initial run failed");
+    }
+    const text = "recovered";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield* yieldRouteToolCall("stop", text, text);
+    yield { type: "done" };
+  };
+  const planningPhase: Phase = {
+    id: "planning",
+    name: "Planning",
+    description: "Initial planning phase.",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Planning phase content.",
+  };
+  const agent = new Agent({
+    context: {
+      ...createTestContext(),
+      phases: {
+        phases: new Map([["planning", planningPhase]]),
+        entryPhaseId: "planning",
+      },
+    },
+    model: { provider: "test", id: "failed-initialization" },
+    stream,
+  });
+  agent.subscribe((event) => {
+    if (event.type === "phase_start") phaseStarts.push(event.phase);
+  });
+
+  await expect(agent.run()).rejects.toThrow("initial run failed");
+  expect(agent.state.initialized).toBe(false);
+  await agent.run();
+
+  expect(agent.state.initialized).toBe(true);
+  expect(phaseStarts).toEqual(["planning", "planning"]);
+});
+
+test("Agent.run can pause and resume with a user message when route is missing", async () => {
+  const helperPhase: Phase = {
+    id: "helper",
+    name: "Helper",
+    description: "Additional phase that makes routing available.",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Helper phase content.",
+  };
+  const agent = new Agent({
+    context: {
+      ...createTestContext(),
+      phases: {
+        phases: new Map([["helper", helperPhase]]),
+        entryPhaseId: "default",
+      },
+    },
+    model: { provider: "test", id: "direct-run-no-route" },
+    stream: async function* noRouteStream(request) {
+      const userMessages = request.messages.filter((message) => message.role === "user");
+      const lastUser = userMessages.at(-1)?.content;
+      const text = lastUser === "next" ? "final answer" : "need more";
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      if (lastUser === "next") {
+        yield* yieldRouteToolCall("stop", "done", text);
+      }
+      yield { type: "done" };
+    },
+  });
+  const waits: string[] = [];
+  agent.subscribe((event) => {
+    if (event.type === "user_prompt_requested") {
+      waits.push(event.phase);
+    }
+  });
+
+  const run = Promise.race([
+    agent.run(),
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 10)),
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const resumed = await agent.runWithUserInput("next");
+  const result = await run;
+
+  expect(result).not.toBe("timeout");
+  expect(result).toEqual(resumed);
+  expect(result).toMatchObject({ outcome: { message: "final answer" } });
+  expect(waits).toEqual(["default"]);
 });
 
 test("Agent does not discover custom phases from cwd .rowan extensions", async () => {
@@ -583,5 +769,80 @@ test("Agent.abort stops an active run", async () => {
   agent.abort();
 
   await expect(run).rejects.toThrow("aborted");
-  expect(agent.state.isRunning).toBe(false);
+  expect(agent.state.running).toBe(false);
+});
+
+test("cooperative abort flushes the partial reply and resumes from the snapshot", async () => {
+  // Stream yields text then waits one tick; abort flips the signal, so the
+  // next loop iteration hits the cooperative LoopGuard.checkAbort return
+  // (not an exception). The partial "partial rep" reply must still land in
+  // the transcript so the next runWithUserInput resumes from it.
+  let released = false;
+  const stream: StreamFn = async function* (request, options) {
+    yield { type: "text_delta", text: "partial rep", partial: buildTestPartial("partial rep") };
+    // Wait until aborted (cooperative), then yield one more event so the
+    // collector's abort check fires on the next iteration.
+    await new Promise<void>((resolve) => {
+      options.signal?.addEventListener("abort", () => resolve());
+      if (options.signal?.aborted) resolve();
+      setTimeout(resolve, 50);
+    });
+    released = true;
+    yield { type: "text_delta", text: "ly", partial: buildTestPartial("partially") };
+    yield { type: "done" };
+  };
+  const agent = new Agent({
+    context: createTestContext(),
+    model: { provider: "test", id: "abort-flush" },
+    stream,
+  });
+
+  const run = runAgentTurn(agent, "hi");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  agent.abort();
+  const result = await run;
+
+  expect(result.outcome.message).toContain("aborted");
+  expect(released).toBe(true);
+  // Partial reply was flushed into the transcript (alternation preserved).
+  const assistantTexts = agent.getMessages()
+    .filter((m) => m.role === "assistant")
+    .map((m) => (typeof m.content === "string" ? m.content : ""));
+  expect(assistantTexts.some((t) => t.includes("partial rep"))).toBe(true);
+  // The user message is present; next runWithUserInput starts from here.
+  const userTexts = agent.getMessages()
+    .filter((m) => m.role === "user")
+    .map((m) => (typeof m.content === "string" ? m.content : ""));
+  expect(userTexts).toEqual(["hi"]);
+});
+
+test("cooperative abort is observed when the stream ends without another event", async () => {
+  const stream: StreamFn = async function* (_request, options) {
+    yield { type: "text_delta", text: "partial", partial: buildTestPartial("partial") };
+    await new Promise<void>((resolve) => {
+      options.signal?.addEventListener("abort", () => resolve(), { once: true });
+      if (options.signal?.aborted) resolve();
+    });
+  };
+  const agent = new Agent({
+    context: createTestContext(),
+    model: { provider: "test", id: "abort-at-stream-end" },
+    stream,
+  });
+  const endedAssistantMessages: string[] = [];
+  agent.subscribe((event) => {
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      endedAssistantMessages.push(
+        typeof event.message.content === "string" ? event.message.content : "",
+      );
+    }
+  });
+
+  const run = runAgentTurn(agent, "hi");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  agent.abort();
+  const result = await run;
+
+  expect(result.outcome.message).toBe("Agent run aborted.");
+  expect(endedAssistantMessages).toEqual(["partial"]);
 });

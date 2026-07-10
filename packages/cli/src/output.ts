@@ -1,4 +1,4 @@
-import { messageContentText, type AgentMessage, type Outcome, type ToolResult } from "@rowan-agent/agent";
+import { messageContentText, type AgentMessage, type ToolResult } from "@rowan-agent/agent";
 
 const TOOL_ARGS_PREVIEW_LIMIT = 60;
 
@@ -75,17 +75,4 @@ export function formatMessageContent(content: AgentMessage["content"]): string {
   }
 
   return parts.join("\n").trim() || messageContentText(content);
-}
-
-export function formatOutcomeOutput(outcome: Outcome): string {
-  const message = outcome.message.trim();
-  if (message) {
-    return message;
-  }
-
-  return (outcome.toolResults ?? [])
-    .map(formatToolResultOutput)
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
 }

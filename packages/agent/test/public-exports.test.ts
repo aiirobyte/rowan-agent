@@ -39,7 +39,6 @@ test("public value exports snapshot", () => {
 
   // Loop errors
   expect(exportNames).toContain("EmptyResponseError");
-  expect(exportNames).toContain("MissingRouteToolCallError");
 
   // Snapshot total count (value exports only)
   expect(exportNames).toEqual(expect.arrayContaining([
@@ -48,7 +47,7 @@ test("public value exports snapshot", () => {
     "appendUserTurn", "buildModelRequest", "buildSystemPrompt", "conversationMessages",
     "createCoreTools", "createExtensionAPI", "createExtensionRunner", "createId", "createMessage",
     "createSession", "createSourceInfo", "createTimestamp", "EmptyResponseError",
-    "latestUserInput", "loadPhases", "MissingRouteToolCallError", "resolveInWorkspace",
+    "latestUserInput", "loadPhases", "resolveInWorkspace",
     "resolveWorkspacePaths", "serializeSkills",
   ]));
 });

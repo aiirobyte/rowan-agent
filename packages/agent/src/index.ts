@@ -57,7 +57,6 @@ export { EventStream, AgentEventStream } from "./event-stream";
 // ── loop ───────────────────────────────────────────────────────
 export {
   EmptyResponseError,
-  MissingRouteToolCallError,
 } from "./loop/errors";
 export type { LoopMetrics } from "./loop/types";
 

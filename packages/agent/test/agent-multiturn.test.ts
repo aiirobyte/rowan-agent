@@ -164,3 +164,119 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
   expect(first.outcome.message).toBe("Task failed: missing requirements");
   expect(second.outcome.message).toBe("Recovered direct answer.");
 });
+
+test("Agent.runWithUserInput resumes a paused planning phase and only resolves on route:stop", async () => {
+  // Two-phase registry: planning (chatty, often no route) + execute.
+  const phases = new Map<string, any>();
+  phases.set("plan", { id: "plan", name: "plan", description: "plan", filePath: "", baseDir: "", content: "Plan." });
+  phases.set("execute", { id: "execute", name: "execute", description: "execute", filePath: "", baseDir: "", content: "Execute." });
+  const agent = new Agent({
+    context: { systemPrompt: "Test", messages: [], tools: [], skills: [], phases: { phases, entryPhaseId: "plan" } },
+    model: { provider: "test", id: "hitl" },
+    stream: (async function* (request) {
+      const userTexts = request.messages
+        .filter((m: any) => m.role === "user" && typeof m.content === "string" && !m.content.startsWith("Phase:"))
+        .map((m: any) => m.content as string);
+      const last = userTexts[userTexts.length - 1] ?? "";
+      if (last === "plan this") {
+        // Missing route → pause for human input.
+        yield { type: "text_delta", text: "need details", partial: buildTestPartial("need details") };
+        yield { type: "done" };
+        return;
+      }
+      if (last === "go") {
+        // Explicit route:stop → run() resolves.
+        yield { type: "text_delta", text: "all done", partial: buildTestPartial("all done") };
+        yield* yieldRouteToolCall("stop", "all done", "all done");
+        yield { type: "done" };
+      }
+    }) as StreamFn,
+  });
+
+  const events: string[] = [];
+  let resolvePause!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    resolvePause = resolve;
+  });
+  agent.subscribe((event) => {
+    events.push(event.type);
+    if (
+      event.type === "message_end" &&
+      messageContentText(event.message.content) === "need details"
+    ) {
+      resolvePause();
+    }
+  });
+
+  // First call: pauses inside run() (missing route). Do NOT await yet.
+  const runPromise = agent.runWithUserInput("plan this");
+  await paused;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // A rejected concurrent run must not replace the paused run's input channel.
+  await expect(agent.run()).rejects.toThrow("Agent is already running.");
+
+  // Resume through the public interface; both callers observe the same result.
+  const resumedPromise = agent.runWithUserInput("go");
+  const finalResult = await Promise.all([
+    runPromise,
+    resumedPromise,
+  ]).then(([initialResult, resumedResult]) => {
+    expect(resumedResult).toEqual(initialResult);
+    return initialResult;
+  });
+
+  expect(finalResult.outcome.message).toBe("all done");
+  // The transcript contains both user inputs within ONE run.
+  const userTexts = agent.getMessages().filter((m) => m.role === "user").map((m) => messageContentText(m.content));
+  expect(userTexts).toEqual(["plan this", "go"]);
+  expect(events).toEqual(expect.arrayContaining(["message_end", "phase_end"]));
+});
+
+test("Agent propagates a resumed run failure to both callers", async () => {
+  const phases = new Map<string, any>();
+  phases.set("plan", { id: "plan", name: "plan", description: "plan", filePath: "", baseDir: "", content: "Plan." });
+  phases.set("execute", { id: "execute", name: "execute", description: "execute", filePath: "", baseDir: "", content: "Execute." });
+  const agent = new Agent({
+    context: { systemPrompt: "Test", messages: [], tools: [], skills: [], phases: { phases, entryPhaseId: "plan" } },
+    model: { provider: "test", id: "hitl-failure" },
+    stream: (async function* (request) {
+      const userTexts = request.messages
+        .filter((message: any) => message.role === "user" && typeof message.content === "string")
+        .map((message: any) => message.content as string);
+      if (userTexts.at(-1) === "go") {
+        throw new Error("provider failed after resume");
+      }
+      yield { type: "text_delta", text: "need details", partial: buildTestPartial("need details") };
+      yield { type: "done" };
+    }) as StreamFn,
+  });
+
+  let resolvePause!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    resolvePause = resolve;
+  });
+  agent.subscribe((event) => {
+    if (
+      event.type === "message_end" &&
+      messageContentText(event.message.content) === "need details"
+    ) {
+      resolvePause();
+    }
+  });
+
+  const initialPromise = agent.runWithUserInput("plan this");
+  await paused;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const resumedPromise = agent.runWithUserInput("go");
+
+  const results = await Promise.allSettled([initialPromise, resumedPromise]);
+  expect(results).toHaveLength(2);
+  for (const result of results) {
+    expect(result.status).toBe("rejected");
+    if (result.status === "rejected") {
+      expect(result.reason).toBeInstanceOf(Error);
+      expect(result.reason.message).toBe("provider failed after resume");
+    }
+  }
+});

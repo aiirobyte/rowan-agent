@@ -86,6 +86,13 @@ async function collectStreamResult(input: {
   for await (const event of input.events) {
     const abortResult = LoopGuard.checkAbort(input.config.signal);
     if (abortResult.stopReason !== "none") {
+      // Flush the partial assistant reply so it lands in the transcript as a
+      // completed message. This keeps the user/assistant alternation intact
+      // and lets the next runWithUserInput resume from this snapshot.
+      if (activeMessageId) {
+        await input.message.end(activeMessageId);
+        activeMessageId = undefined;
+      }
       return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
     }
 
@@ -146,6 +153,15 @@ async function collectStreamResult(input: {
         activeMessageId = undefined;
       }
     }
+  }
+
+  const abortResult = LoopGuard.checkAbort(input.config.signal);
+  if (abortResult.stopReason !== "none") {
+    if (activeMessageId) {
+      await input.message.end(activeMessageId);
+      activeMessageId = undefined;
+    }
+    return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
   }
 
   if (activeMessageId) {

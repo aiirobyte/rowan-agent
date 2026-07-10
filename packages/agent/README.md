@@ -50,6 +50,7 @@ class Agent {
   appendMessages(messages: AgentMessage[]): void;
   runWithUserInput(input: string, options?: RunOptions): Promise<RunResult>;
   runWithMessage(message: AgentMessage, options?: RunOptions): Promise<RunResult>;
+  resetInitialization(): void;
 
   // Context and transcript
   getContext(): AgentContext;
@@ -139,6 +140,8 @@ const second = await agent.run();
 
 await agent.runWithMessage(createMessage("user", "what changed since last turn?"));
 ```
+
+The agent uses `context.phases.entryPhaseId` only until the first successful run completes. Later turns start from the normalized `default` phase so long-lived agents do not repeat one-time entry work. Call `agent.resetInitialization()` when the next run should use `entryPhaseId` again.
 
 Transcript helpers return snapshots, so callers can inspect or edit history without accidentally mutating the agent until they call a setter.
 
@@ -341,7 +344,7 @@ Per iteration:
   5. Transition, continue, or stop
 ```
 
-**`entryPhaseId`** specifies which phase the loop enters first. When phases are loaded from `.rowan/phases/`, the first discovered phase becomes the entry. When none are configured, the Agent normalises to `"default"`. This field is an internal routing hint for the phase loop — it is **not** exposed to the LLM, since the agent does not need to know which phase is the entry point to make routing decisions.
+**`entryPhaseId`** specifies which phase the loop enters for an uninitialized Agent. When phases are loaded from `.rowan/phases/`, the first discovered phase becomes the entry. When none are configured, the Agent normalises to `"default"`. After a successful run, later turns start from `"default"` until `agent.resetInitialization()` is called. This field is an internal routing hint for the phase loop — it is **not** exposed to the LLM, since the agent does not need to know which phase is the entry point to make routing decisions.
 
 ### Example Phase Flow
 

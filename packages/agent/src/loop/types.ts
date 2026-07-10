@@ -1,5 +1,6 @@
 import type {
   AgentContext,
+  AgentMessage,
   AfterToolCall,
   BeforeToolCall,
   LlmModelRef,
@@ -58,8 +59,10 @@ export type AgentConfig = {
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
-  onMessage?: (message: import("../types").AgentMessage) => Promise<void>;
+  onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
+  /** Internal: await next user messages before retrying the same phase. */
+  waitForInput?: () => Promise<AgentMessage[]>;
 };
 
 

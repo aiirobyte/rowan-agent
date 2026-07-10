@@ -17,7 +17,6 @@ import {
   type AgentMessage,
   type AgentContext,
   type LoadedExtension,
-  type Outcome,
   type LlmModelRef,
   type PhaseRegistry,
 } from "@rowan-agent/agent";
@@ -39,7 +38,7 @@ import {
   resolveDefaultModel,
   type AgentConfigFile,
 } from "@rowan-agent/agent";
-import { formatJsonOutput, formatMessageContent, formatOutcomeOutput, formatToolArgsPreview } from "./output";
+import { formatJsonOutput, formatMessageContent, formatToolArgsPreview } from "./output";
 
 type CliCommand = "config" | "list";
 
@@ -570,8 +569,9 @@ async function promptWithLog(input: {
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
   onSessionManager?: (sessionManager: LocalJsonlSessionManager) => void;
+  onInputWait?: () => void;
   loadResources(): Promise<AgentResources>;
-}): Promise<{ outcome: Outcome; metrics: import("@rowan-agent/agent").LoopMetrics; sessionManager: LocalJsonlSessionManager; streamedContent: boolean; pendingConsoleEvents: AgentEvent[] }> {
+}): Promise<{ metrics: import("@rowan-agent/agent").LoopMetrics; sessionManager: LocalJsonlSessionManager; pendingConsoleEvents: AgentEvent[] }> {
   let sessionManager = input.sessionManager;
   let unsubscribe: (() => void) | undefined;
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
@@ -590,7 +590,6 @@ async function promptWithLog(input: {
     const runEventLogger = pinoAgentEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
     eventLogger = runEventLogger;
     let messageId: string | undefined;
-    let streamedContent = false;
     let currentStreamableMessage = false;
     let currentAssistantWroteContent = false;
     const pendingConsoleEvents: AgentEvent[] = [];
@@ -605,6 +604,10 @@ async function promptWithLog(input: {
         }
       }
 
+      if (event.type === "user_prompt_requested") {
+        input.onInputWait?.();
+      }
+
       if (event.type === "message_start" && event.message.role === "assistant") {
         currentStreamableMessage = true;
         currentAssistantWroteContent = false;
@@ -613,14 +616,12 @@ async function promptWithLog(input: {
           if (content) {
             process.stdout.write(content);
             currentAssistantWroteContent = true;
-            streamedContent = true;
           }
         }
       }
 
       if (event.type === "message_update" && event.delta && currentStreamableMessage) {
         process.stdout.write(event.delta);
-        streamedContent = true;
         currentAssistantWroteContent = true;
       }
 
@@ -672,7 +673,7 @@ async function promptWithLog(input: {
         await sessionManager!.appendModelTranscript(transcript, meta);
       },
     });
-    return { outcome: result.outcome, metrics: result.metrics, sessionManager, streamedContent, pendingConsoleEvents };
+    return { metrics: result.metrics, sessionManager, pendingConsoleEvents };
   } finally {
     try {
       await input.agent.flushEvents();
@@ -715,7 +716,30 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     printSessionOnce();
   }
 
-  const runPrompt = async (prompt: string, options: { recoverable?: boolean } = {}) => {
+  let activeRun: Promise<void> | undefined;
+  let waitingForInput = false;
+  let resolveActiveRunReady: (() => void) | undefined;
+  let activeRunReady: Promise<void> | undefined;
+
+  const resetActiveRunReady = () => {
+    activeRunReady = new Promise<void>((resolve) => {
+      resolveActiveRunReady = resolve;
+    });
+  };
+
+  const markActiveRunReady = () => {
+    resolveActiveRunReady?.();
+    resolveActiveRunReady = undefined;
+  };
+
+  const waitForActiveRunReady = async () => {
+    if (!activeRun || !activeRunReady) {
+      return;
+    }
+    await activeRunReady;
+  };
+
+  const runPrompt = async (prompt: string, options: { recoverable?: boolean; onInputWait?: () => void } = {}) => {
     let writtenLogPath: string | undefined;
     let messageId: string | undefined;
     const printRunHeader = () => {
@@ -748,14 +772,11 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         onSessionManager: (manager) => {
           sessionManager = manager;
         },
+        onInputWait: options.onInputWait,
         loadResources: configured.loadResources,
       });
       sessionManager = run.sessionManager;
       printRunHeader();
-      // Console event replay removed - logs only written to file
-      if (!run.streamedContent) {
-        console.log(formatOutcomeOutput(run.outcome));
-      }
       // Print loop metrics
       const m = run.metrics;
       if (m.iterations > 1 || m.compactionCount > 0 || m.retryCount > 0) {
@@ -778,6 +799,35 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       }
       throw error;
     }
+  };
+
+  const startPrompt = async (prompt: string, options: { recoverable?: boolean } = {}) => {
+    waitingForInput = false;
+    resetActiveRunReady();
+    activeRun = runPrompt(prompt, {
+      ...options,
+      onInputWait: () => {
+        waitingForInput = true;
+        markActiveRunReady();
+      },
+    }).finally(() => {
+      activeRun = undefined;
+      waitingForInput = false;
+      markActiveRunReady();
+    });
+    await waitForActiveRunReady();
+  };
+
+  const resumePrompt = async (prompt: string) => {
+    if (!sessionManager) {
+      throw new Error("Cannot resume before a session is created.");
+    }
+    const userMessage = createMessage("user", prompt);
+    await sessionManager.appendMessage(userMessage);
+    waitingForInput = false;
+    resetActiveRunReady();
+    void agent.runWithMessage(userMessage).catch(() => undefined);
+    await waitForActiveRunReady();
   };
 
   if (args.prompt) {
@@ -814,7 +864,15 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         continue;
       }
 
-      await runPrompt(prompt, { recoverable: true });
+      if (activeRun && !waitingForInput) {
+        await waitForActiveRunReady();
+      }
+
+      if (activeRun && waitingForInput) {
+        await resumePrompt(prompt);
+      } else {
+        await startPrompt(prompt, { recoverable: true });
+      }
 
       if (process.stdin.isTTY) {
         process.stdout.write("> ");
@@ -822,6 +880,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     }
   } finally {
     rl.close();
+    if (activeRun) {
+      agent.abort();
+      await activeRun.catch(() => undefined);
+    }
   }
 }
 
