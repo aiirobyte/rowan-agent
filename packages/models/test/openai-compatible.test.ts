@@ -66,6 +66,32 @@ function sseChunkResponse(content: string, usage?: Record<string, number>): Resp
   return sseResponse(events);
 }
 
+function delayedSseResponse(
+  chunks: Array<{ data: string | object; delayMs?: number }>,
+): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        for (const chunk of chunks) {
+          if (chunk.delayMs) await new Promise((resolve) => setTimeout(resolve, chunk.delayMs));
+          const data = typeof chunk.data === "string" ? chunk.data : JSON.stringify(chunk.data);
+          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
 async function collect(events: AsyncIterable<LlmStreamEvent>): Promise<LlmStreamEvent[]> {
   const collected: LlmStreamEvent[] = [];
   for await (const event of events) {
@@ -304,6 +330,130 @@ test("createOpenAICompletionsStream yields SSE streaming events", async () => {
     expect(done.response?.usage?.totalTokens).toBe(15);
     expect(done.response?.stopReason).toBe("end_turn");
   }
+});
+
+test("createOpenAICompletionsStream treats timeoutMs as an idle timeout", async () => {
+  const fetchMock: ProviderFetch = async () => delayedSseResponse([
+    { data: { choices: [{ delta: { content: "one" } }] } },
+    { delayMs: 15, data: { choices: [{ delta: { content: "two" } }] } },
+    { delayMs: 15, data: { choices: [{ delta: { content: "three" }, finish_reason: "stop" }] } },
+  ]);
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 25,
+    maxRetries: 0,
+    fetch: fetchMock,
+  });
+
+  const events = await collect(
+    stream(
+      { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+      {},
+    ),
+  );
+
+  expect(events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.text : "")).toEqual([
+    "one",
+    "two",
+    "three",
+  ]);
+  expect(events.some((event) => event.type === "error")).toBe(false);
+});
+
+test("createOpenAICompletionsStream reports idle timeout after first byte", async () => {
+  const fetchMock: ProviderFetch = async () => delayedSseResponse([
+    { data: { choices: [{ delta: { content: "partial" } }] } },
+    { delayMs: 30, data: { choices: [{ delta: { content: "late" } }] } },
+  ]);
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 10,
+    maxRetries: 0,
+    fetch: fetchMock,
+  });
+
+  const events = await collect(
+    stream(
+      { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+      {},
+    ),
+  );
+
+  const error = events.find((event) => event.type === "error");
+  expect(error?.type).toBe("error");
+  if (error?.type === "error") {
+    expect(error.error.message).toBe("Request timed out after 10ms.");
+  }
+});
+
+test("createOpenAICompletionsStream preserves caller abort", async () => {
+  const controller = new AbortController();
+  const fetchMock: ProviderFetch = async (_url, init) => new Response(
+    new ReadableStream({
+      start(streamController) {
+        init?.signal?.addEventListener("abort", () => streamController.error(init.signal?.reason), { once: true });
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 100,
+    maxRetries: 0,
+    fetch: fetchMock,
+  });
+
+  const promise = collect(
+    stream(
+      { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+      { signal: controller.signal },
+    ),
+  );
+  controller.abort(new Error("test abort"));
+
+  const events = await promise;
+  const error = events.find((event) => event.type === "error");
+  expect(error?.type).toBe("error");
+  if (error?.type === "error") {
+    expect(error.error.message).toBe("test abort");
+  }
+});
+
+test("createOpenAICompletionsStream does not retry after partial output", async () => {
+  let attempts = 0;
+  const fetchMock: ProviderFetch = async () => {
+    attempts += 1;
+    return delayedSseResponse([
+      { data: { choices: [{ delta: { content: "partial" } }] } },
+      { delayMs: 30, data: { choices: [{ delta: { content: "late" } }] } },
+    ]);
+  };
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 10,
+    maxRetries: 2,
+    retryDelayMs: 0,
+    fetch: fetchMock,
+  });
+
+  const events = await collect(
+    stream(
+      { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+      {},
+    ),
+  );
+
+  expect(attempts).toBe(1);
+  expect(events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.text : "")).toEqual(["partial"]);
+  expect(events.filter((event) => event.type === "error")).toHaveLength(1);
 });
 
 test("createOpenAICompletionsStream sends tools in request body", async () => {

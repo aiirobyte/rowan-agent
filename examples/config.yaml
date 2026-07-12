@@ -20,7 +20,7 @@ providers:
     baseUrl: https://api.openai.com/v1
     apiKey: ${OPENAI_API_KEY}
     # Optional tuning:
-    # timeoutMs: 60000      # default: 60s
+    # timeoutMs: 60000      # maximum idle gap between stream bytes
     # maxRetries: 2
     # retryDelayMs: 1000
     # headers:              # extra headers sent with every request

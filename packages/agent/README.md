@@ -579,7 +579,7 @@ providers:                # required: at least one provider
     baseUrl: <string>     # required: API base URL
     apiKey: <string>      # required: API key (supports ${VAR} interpolation)
     protocol: <string>    # required: API protocol (see table below)
-    timeoutMs: <number>   # optional: request timeout (default: 60000)
+    timeoutMs: <number>   # optional: streaming idle timeout after first byte (default: 60000)
     maxRetries: <number>  # optional: retry count (default: 4)
     retryDelayMs: <number># optional: delay between retries (default: 1000)
     headers:              # optional: extra HTTP headers
@@ -682,6 +682,7 @@ type ProviderConfigFromFile = {
   baseUrl: string;
   apiKey: string;
   protocol: Protocol;
+  /** Maximum idle gap between response bytes after the first byte. */
   timeoutMs?: number;
   maxRetries?: number;
   retryDelayMs?: number;
@@ -779,4 +780,4 @@ type LoopMetrics = {
 
 ## Version
 
-Current version: **0.5.5**
+Current version: **0.5.6**

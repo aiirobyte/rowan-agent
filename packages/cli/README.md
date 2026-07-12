@@ -47,7 +47,7 @@ bun run rowan list
 | `--model <name>` | Model name | — |
 | `--base-url <url>` | API base URL | `https://api.openai.com/v1` |
 | `--api-key <key>` | API key | — |
-| `--timeout-ms <ms>` | Request timeout in milliseconds | `60000` |
+| `--timeout-ms <ms>` | Streaming idle timeout after first byte in milliseconds | `60000` |
 | `--help`, `-h` | Print help and exit | — |
 
 ## Commands
@@ -122,4 +122,4 @@ import {
 
 ## Version
 
-Current version: **0.5.5**
+Current version: **0.5.6**

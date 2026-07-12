@@ -548,7 +548,16 @@ test("CLI times out stalled OpenAI-compatible requests", async () => {
   try {
     server = Bun.serve({
       port: 0,
-      fetch: () => new Promise<Response>(() => undefined),
+      fetch: () => new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(
+              "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            ));
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
     });
   } catch (error) {
     if (canSkipLocalBindError(error)) {

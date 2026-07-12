@@ -276,7 +276,11 @@ async function* streamAnthropicMessages(
 
   while (true) {
     attempts += 1;
-    const { signal, cleanup } = createRequestSignal({ signal: options.signal, timeoutMs: config.timeoutMs });
+    const { signal, onActivity, cleanup } = createRequestSignal({
+      signal: options.signal,
+      timeoutMs: config.timeoutMs,
+    });
+    let hasPartialOutput = false;
 
     try {
       const response = await fetchImpl(endpoint, {
@@ -328,7 +332,7 @@ async function* streamAnthropicMessages(
         }
       }
 
-      for await (const sse of iterateSseMessages(response.body, signal)) {
+      for await (const sse of iterateSseMessages(response.body, signal, onActivity)) {
         if (!sse.event || !MESSAGE_EVENTS.has(sse.event)) continue;
 
         let event: AnthropicStreamEvent;
@@ -346,6 +350,7 @@ async function* streamAnthropicMessages(
               const tc = { id: event.content_block.id ?? "", name: event.content_block.name ?? "", arguments: "" };
               toolCalls.set(event.index, tc);
               rebuildPartial();
+              hasPartialOutput = true;
               yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
@@ -354,16 +359,19 @@ async function* streamAnthropicMessages(
             if (event.delta.type === "text_delta") {
               content += event.delta.text;
               rebuildPartial();
+              hasPartialOutput = true;
               yield { type: "text_delta", text: event.delta.text, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             } else if (event.delta.type === "thinking_delta") {
               thinking += event.delta.thinking;
               rebuildPartial();
+              hasPartialOutput = true;
               yield { type: "thinking_delta", thinking: event.delta.thinking, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             } else if (event.delta.type === "input_json_delta") {
               const tc = toolCalls.get(event.index);
               if (tc) {
                 tc.arguments += event.delta.partial_json;
                 rebuildPartial();
+                hasPartialOutput = true;
                 yield { type: "tool_call_delta", id: tc.id, arguments: event.delta.partial_json, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
@@ -374,6 +382,7 @@ async function* streamAnthropicMessages(
               const tc = toolCalls.get(event.index);
               if (tc) {
                 rebuildPartial();
+                hasPartialOutput = true;
                 yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
@@ -412,7 +421,7 @@ async function* streamAnthropicMessages(
       return;
     } catch (error) {
       const requestError = normalizeRequestError(error, signal);
-      if (!shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
+      if (hasPartialOutput || !shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
         yield { type: "error", error: requestError };
         yield { type: "done", response: { content: "", stopReason: "error" } };
         return;

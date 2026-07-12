@@ -275,7 +275,11 @@ async function* streamResponses(
 
   while (true) {
     attempts += 1;
-    const { signal, cleanup } = createRequestSignal({ signal: options.signal, timeoutMs: config.timeoutMs });
+    const { signal, onActivity, cleanup } = createRequestSignal({
+      signal: options.signal,
+      timeoutMs: config.timeoutMs,
+    });
+    let hasPartialOutput = false;
 
     try {
       const response = await fetchImpl(endpoint, {
@@ -322,7 +326,7 @@ async function* streamResponses(
 
       yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
 
-      for await (const sse of iterateSseMessages(response.body, signal)) {
+      for await (const sse of iterateSseMessages(response.body, signal, onActivity)) {
         let event: ResponsesStreamEvent;
         try { event = JSON.parse(sse.data) as ResponsesStreamEvent; } catch { continue; }
 
@@ -330,6 +334,7 @@ async function* streamResponses(
           case "response.output_text.delta":
             content += event.delta;
             rebuildPartial();
+            hasPartialOutput = true;
             yield { type: "text_delta", text: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             break;
 
@@ -338,6 +343,7 @@ async function* streamResponses(
               const tc = { id: event.item.id ?? "", name: event.item.name ?? "", arguments: "" };
               toolCalls.set(event.output_index, tc);
               rebuildPartial();
+              hasPartialOutput = true;
               yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
@@ -347,6 +353,7 @@ async function* streamResponses(
             if (tc) {
               tc.arguments += event.delta;
               rebuildPartial();
+              hasPartialOutput = true;
               yield { type: "tool_call_delta", id: tc.id, arguments: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
@@ -366,6 +373,7 @@ async function* streamResponses(
               if (tc) {
                 if (event.item.arguments) tc.arguments = event.item.arguments;
                 rebuildPartial();
+                hasPartialOutput = true;
                 yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
@@ -422,7 +430,7 @@ async function* streamResponses(
       return;
     } catch (error) {
       const requestError = normalizeRequestError(error, signal);
-      if (!shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
+      if (hasPartialOutput || !shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
         yield { type: "error", error: requestError };
         yield { type: "done", response: { content: "", stopReason: "error" } };
         return;

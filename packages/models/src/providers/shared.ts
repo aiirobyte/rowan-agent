@@ -77,16 +77,19 @@ export function truncateString(value: string, maxLength = 4_000): string {
 // Request signal / timeout
 // ---------------------------------------------------------------------------
 
+/**
+ * timeoutMs is the maximum idle gap after the first response byte.
+ */
 export function createRequestSignal(input: {
   signal?: AbortSignal;
   timeoutMs?: number;
-}): { signal?: AbortSignal; cleanup: () => void } {
+}): { signal?: AbortSignal; onActivity: () => void; cleanup: () => void } {
   if (!input.signal && !input.timeoutMs) {
-    return { cleanup: () => undefined };
+    return { onActivity: () => undefined, cleanup: () => undefined };
   }
 
   const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let idleTimeout: ReturnType<typeof setTimeout> | undefined;
 
   const abortFromParent = () => {
     controller.abort(input.signal?.reason ?? new Error("Request aborted."));
@@ -98,16 +101,22 @@ export function createRequestSignal(input: {
     input.signal?.addEventListener("abort", abortFromParent, { once: true });
   }
 
-  if (input.timeoutMs) {
-    timeout = setTimeout(() => {
-      controller.abort(new Error(`Request timed out after ${input.timeoutMs}ms.`));
-    }, input.timeoutMs);
-  }
+  const onActivity = () => {
+    if (controller.signal.aborted) return;
+
+    if (input.timeoutMs) {
+      if (idleTimeout) clearTimeout(idleTimeout);
+      idleTimeout = setTimeout(() => {
+        controller.abort(new Error(`Request timed out after ${input.timeoutMs}ms.`));
+      }, input.timeoutMs);
+    }
+  };
 
   return {
     signal: controller.signal,
+    onActivity,
     cleanup: () => {
-      if (timeout) clearTimeout(timeout);
+      if (idleTimeout) clearTimeout(idleTimeout);
       input.signal?.removeEventListener("abort", abortFromParent);
     },
   };
@@ -255,6 +264,7 @@ export type BaseProviderConfig = {
   model: string;
   temperature?: number;
   maxTokens?: number;
+  /** Maximum idle gap between response bytes after the first byte. */
   timeoutMs?: number;
   maxRetries?: number;
   retryDelayMs?: number;

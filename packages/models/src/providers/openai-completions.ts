@@ -327,7 +327,11 @@ async function* streamChatCompletions(
 
   while (true) {
     attempts += 1;
-    const { signal, cleanup } = createRequestSignal({ signal: options.signal, timeoutMs: config.timeoutMs });
+    const { signal, onActivity, cleanup } = createRequestSignal({
+      signal: options.signal,
+      timeoutMs: config.timeoutMs,
+    });
+    let hasPartialOutput = false;
 
     try {
       const response = await fetchImpl(endpoint, {
@@ -348,6 +352,7 @@ async function* streamChatCompletions(
 
       // Non-streaming response
       if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+        onActivity();
         const data = await response.json() as ChatCompletionResponse;
         const choice = data.choices?.[0];
         const message = choice?.message;
@@ -361,6 +366,7 @@ async function* streamChatCompletions(
 
         if (content) {
           partial.contentBlocks.push({ type: "text", text: content });
+          hasPartialOutput = true;
           yield { type: "text_delta", text: content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
         }
 
@@ -370,6 +376,7 @@ async function* streamChatCompletions(
           const name = tc.function?.name ?? "";
           const args = tc.function?.arguments ?? "";
           partial.contentBlocks.push({ type: "tool_call", id, name, args });
+          hasPartialOutput = true;
           yield { type: "tool_call_start", id, name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           yield { type: "tool_call_end", id, name, arguments: args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           let parsedArgs: unknown = args;
@@ -417,7 +424,7 @@ async function* streamChatCompletions(
 
       yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
 
-      for await (const sse of iterateSseMessages(response.body, signal)) {
+      for await (const sse of iterateSseMessages(response.body, signal, onActivity)) {
         if (sse.data === "[DONE]") break;
 
         let chunk: ChatCompletionChunk;
@@ -433,6 +440,7 @@ async function* streamChatCompletions(
           if (delta.content) {
             content += delta.content;
             rebuildPartial();
+            hasPartialOutput = true;
             yield { type: "text_delta", text: delta.content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           }
           if (delta.tool_calls) {
@@ -443,9 +451,11 @@ async function* streamChatCompletions(
                 toolCalls.set(tc.index, newTc);
                 if (tc.id || tc.function?.name) {
                   rebuildPartial();
+                  hasPartialOutput = true;
                   yield { type: "tool_call_start", id: newTc.id, name: newTc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
                 if (tc.function?.arguments) {
+                  hasPartialOutput = true;
                   yield { type: "tool_call_delta", id: newTc.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
               } else {
@@ -454,6 +464,7 @@ async function* streamChatCompletions(
                 if (tc.function?.arguments) {
                   existing.arguments += tc.function.arguments;
                   rebuildPartial();
+                  hasPartialOutput = true;
                   yield { type: "tool_call_delta", id: existing.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
               }
@@ -465,6 +476,7 @@ async function* streamChatCompletions(
 
       for (const tc of toolCalls.values()) {
         rebuildPartial();
+        hasPartialOutput = true;
         yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       }
 
@@ -487,7 +499,7 @@ async function* streamChatCompletions(
       return;
     } catch (error) {
       const requestError = normalizeRequestError(error, signal);
-      if (!shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
+      if (hasPartialOutput || !shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
         yield { type: "error", error: requestError };
         yield { type: "done", response: { content: "", stopReason: "error" } };
         return;
@@ -540,7 +552,10 @@ export async function callOpenAICompletions(
 
   while (true) {
     attempts += 1;
-    const { signal, cleanup } = createRequestSignal({ signal: options.signal, timeoutMs: config.timeoutMs });
+    const { signal, onActivity, cleanup } = createRequestSignal({
+      signal: options.signal,
+      timeoutMs: config.timeoutMs,
+    });
 
     try {
       const response = await fetchImpl(endpoint, {
@@ -554,6 +569,7 @@ export async function callOpenAICompletions(
         throw normalizeHttpError(response, await readErrorBody(response), { endpoint, model: config.model });
       }
 
+      onActivity();
       const data = await response.json() as {
         choices?: Array<{ message?: { content?: string | null } }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };

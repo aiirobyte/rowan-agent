@@ -73,6 +73,7 @@ function consumeLine(text: string): { line: string; rest: string } | null {
 export async function* iterateSseMessages(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
+  onChunk?: () => void,
 ): AsyncGenerator<ServerSentEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -87,6 +88,10 @@ export async function* iterateSseMessages(
 
       const { value, done } = await reader.read();
       if (done) break;
+      if (signal?.aborted) {
+        throw new Error("Request was aborted");
+      }
+      if (value && value.byteLength > 0) onChunk?.();
 
       buffer += decoder.decode(value, { stream: true });
       let consumed = consumeLine(buffer);

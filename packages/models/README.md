@@ -70,6 +70,9 @@ const cost = calculateCost(model, {
 
 Three built-in API providers, each with streaming support and exponential backoff retry.
 
+For streaming requests, `timeoutMs` is the maximum idle gap between response bytes after
+the first byte.
+
 ### Provider Registry
 
 The dispatch layer routes requests to the right provider based on the model's `api` field.
@@ -180,4 +183,4 @@ src/
 
 ## Version
 
-Current version: **0.5.5**
+Current version: **0.5.6**
