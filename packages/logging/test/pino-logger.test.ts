@@ -41,6 +41,39 @@ test("pinoAgentEventLogger writes summary Pino JSONL records at info by default"
   expect(record?.event).toBeUndefined();
 });
 
+test("pinoAgentEventLogger writes message_start but filters message_update", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-logging-message-"));
+  const logPath = join(root, "run.jsonl");
+  const logger = pinoAgentEventLogger(logPath);
+  const message = {
+    id: "msg_1",
+    role: "assistant" as const,
+    content: "Hello",
+    createdAt: "2026-05-03T141659-32+08:00",
+  };
+
+  logger({
+    type: "message_start",
+    message,
+    ts: "2026-05-03T141659-32+08:00",
+  });
+  logger({
+    type: "message_update",
+    message,
+    delta: " world",
+    ts: "2026-05-03T141659-33+08:00",
+  });
+  await logger.flush?.();
+
+  const records = parseLogLines(await readFile(logPath, "utf8"));
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    eventType: "message_start",
+    eventTs: "2026-05-03T141659-32+08:00",
+  });
+  expect(records[0]?.event).toBeUndefined();
+});
+
 test("pinoAgentEventLogger includes redacted event payloads at debug level", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-logging-debug-"));
   const logPath = join(root, "run.jsonl");
