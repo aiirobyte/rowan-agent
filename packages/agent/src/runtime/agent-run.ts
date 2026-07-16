@@ -1,8 +1,9 @@
 import type { Outcome } from "../protocol";
-import type { AgentRunRecord, AgentRunId, AgentRunState } from "./domain";
+import type { AgentRunRecord, AgentRunId, AgentRunState, RuntimeEvent, RuntimeEventCursor } from "./domain";
 import {
   abortRunSymbol,
   type AgentRuntime,
+  type RuntimeEventListener,
   registerRunHandleSymbol,
   waitForRunSymbol,
 } from "./agent-runtime";
@@ -16,13 +17,21 @@ export class AgentRun {
   constructor(
     private readonly runtime: AgentRuntime,
     initial: AgentRunRecord,
+    publicMessageId: string = initial.messageId,
   ) {
     this.current = structuredClone(initial);
+    this.publicMessageId = publicMessageId;
     runtime[registerRunHandleSymbol](initial.id, this);
   }
 
+  private readonly publicMessageId: string;
+
   get id(): AgentRunId {
     return this.current.id;
+  }
+
+  get messageId(): string {
+    return this.publicMessageId;
   }
 
   get status(): AgentRunState {
@@ -42,6 +51,12 @@ export class AgentRun {
   subscribe(listener: AgentRunListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  subscribeRuntimeEvents(listener: RuntimeEventListener, cursor: RuntimeEventCursor = {}): () => void {
+    return this.runtime.subscribeEvents((event: RuntimeEvent) => {
+      if (event.runId === this.id) return listener(event);
+    }, cursor);
   }
 
   async result(): Promise<Outcome> {

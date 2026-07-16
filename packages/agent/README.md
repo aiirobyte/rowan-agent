@@ -10,38 +10,70 @@ bun add @rowan-agent/agent
 
 ## Quick Start
 
+The durable lifecycle is the public entrypoint: start one `AgentRuntime`, create or
+resume an `Agent`, submit input with `send()`, and wait on the returned `AgentRun`.
+
 ```ts
 import {
   Agent,
-  createMessage,
+  AgentRuntime,
+  InMemoryRuntimeStateStore,
+  InMemorySessionManager,
   createCoreTools,
   createDispatchStream,
 } from "@rowan-agent/agent";
 
-const agent = new Agent({
-  context: {
-    systemPrompt: "You are a helpful coding assistant.",
-    messages: [createMessage("user", "list the files in this project")],
-    tools: createCoreTools({ root: process.cwd() }),
-    skills: [],
+const sessions = new Map<string, InMemorySessionManager>();
+const runtime = await AgentRuntime.start({
+  stateStore: new InMemoryRuntimeStateStore(),
+  sessionManager: {
+    create: async (input) => {
+      const session = InMemorySessionManager.create(input);
+      sessions.set(session.getSessionId(), session);
+      return session;
+    },
+    open: async (id) => sessions.get(id),
   },
-  model: { provider: "openai", id: "gpt-4.1-mini" },
-  stream: createDispatchStream(),
 });
 
-agent.subscribe((event) => console.log(event.type));
+try {
+  const agent = await Agent.create({
+    context: {
+      systemPrompt: "You are a helpful coding assistant.",
+      messages: [],
+      tools: createCoreTools({ root: process.cwd() }),
+      skills: [],
+    },
+    model: { provider: "openai", id: "gpt-4.1-mini" },
+    stream: createDispatchStream(),
+  });
 
-const result = await agent.run();
-console.log(result.outcome?.message);
+  agent.subscribe((event) => console.log(event.type));
+  const run = await agent.send("list the files in this project");
+  console.log((await run.result()).message);
+} finally {
+  await runtime.stop();
+}
 ```
 
+Use `Agent.resume({ sessionId, ...currentOptions })` for an explicit existing
+session. `send()` is non-blocking; `AgentRun.result()` waits for its durable
+terminal outcome. A suspended run is resumed by the next `send()` for that Agent.
+
 ## Agent
+
+The durable lifecycle uses `Agent.create()` and `Agent.resume()` with a running
+`AgentRuntime`. The low-level constructor remains available for legacy in-process
+loop tests, but does not create durable Agent or Run records.
 
 The `Agent` class is the public facade. It drives the entire execution loop — from receiving context and tools, through phase-based iteration, to producing a terminal `Outcome`.
 
 ```ts
 class Agent {
+  static create(options: AgentCreateOptions): Promise<Agent>;
+  static resume(options: AgentResumeOptions): Promise<Agent>;
   constructor(options: AgentOptions);
+  send(input: string | AgentMessage): Promise<AgentRun>;
   run(options?: RunOptions): Promise<RunResult>;
 
   // User input / conversation continuation

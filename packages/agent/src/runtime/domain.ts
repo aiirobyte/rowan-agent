@@ -45,15 +45,7 @@ export type AgentInputMessage = {
   input: AgentMessage;
 };
 
-export type ChildRunCompletionMessage = {
-  type: "child_run_completion";
-  childAgentId: AgentId;
-  childRunId: AgentRunId;
-  parentRunId: AgentRunId;
-  outcome: Outcome;
-};
-
-export type RuntimeMessagePayload = AgentInputMessage | ChildRunCompletionMessage;
+export type RuntimeMessagePayload = AgentInputMessage;
 
 export type RuntimeLease = {
   id: LeaseId;
@@ -81,7 +73,6 @@ export type AgentRunRecord = {
   id: AgentRunId;
   agentId: AgentId;
   messageId: RuntimeMessageId;
-  parentRunId?: AgentRunId;
   state: AgentRunState;
   attempt: number;
   leaseId?: LeaseId;
@@ -93,6 +84,10 @@ export type AgentRunRecord = {
 
 export type RuntimeEventKind =
   | "agent_created"
+  | "agent_paused"
+  | "agent_resumed"
+  | "agent_recovered"
+  | "factory_missing"
   | "message_enqueued"
   | "run_enqueued"
   | "run_leased"
@@ -104,11 +99,13 @@ export type RuntimeEventKind =
   | "message_dead_lettered"
   | "tool_call_created"
   | "tool_call_started"
+  | "tool_call_failed"
   | "tool_call_completed"
   | "tool_call_indeterminate";
 
 export type RuntimeEvent = {
   id: RuntimeEventId;
+  sequence: number;
   kind: RuntimeEventKind;
   state: RuntimeEventState;
   agentId?: AgentId;
@@ -117,6 +114,11 @@ export type RuntimeEvent = {
   toolCallId?: RuntimeToolCallId;
   payload?: unknown;
   createdAt: string;
+};
+
+export type RuntimeEventCursor = {
+  after?: RuntimeEventId;
+  limit?: number;
 };
 
 export type RuntimeToolCall = {

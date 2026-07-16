@@ -86,6 +86,23 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return agent ? clone(agent) : undefined;
   }
 
+  async listAgents(): Promise<AgentRecord[]> {
+    return clone([...this.agents.values()]);
+  }
+
+  async setAgentState(agentId: AgentId, state: AgentRecord["state"]): Promise<AgentRecord> {
+    const agent = this.requireAgent(agentId);
+    if (agent.state === state) return clone(agent);
+    if (agent.state === "stopped") {
+      throw transitionError("Agent", agent.id, agent.state, state === "active" ? "resume" : "pause");
+    }
+    const { timestamp } = now();
+    agent.state = state;
+    agent.updatedAt = timestamp;
+    this.recordEvent(state === "paused" ? "agent_paused" : "agent_resumed", { agentId });
+    return clone(agent);
+  }
+
   async enqueueMessage(input: EnqueueMessageInput): Promise<RuntimeMessage> {
     this.requireAgent(input.agentId);
     const { timestamp } = now();
@@ -104,11 +121,14 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return clone(message);
   }
 
-  async enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord }> {
+  async enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord; resumed: boolean }> {
     this.requireAgent(input.agentId);
+    const suspended = [...this.runs.values()]
+      .filter((run) => run.agentId === input.agentId && run.state === "suspended")
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     const { timestamp } = now();
     const messageId = createId("rmsg") as RuntimeMessageId;
-    const runId = createId("run") as AgentRunId;
+    const runId = suspended?.id ?? (createId("run") as AgentRunId);
     const message: RuntimeMessage = {
       id: messageId,
       agentId: input.agentId,
@@ -120,21 +140,27 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+    if (suspended) {
+      suspended.state = "queued";
+      suspended.messageId = messageId;
+      delete suspended.suspensionReason;
+      suspended.updatedAt = timestamp;
+      message.runId = suspended.id;
+    }
     const run: AgentRunRecord = {
       id: runId,
       agentId: input.agentId,
       messageId,
-      ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
       state: "queued",
       attempt: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
     this.messages.set(message.id, message);
-    this.runs.set(run.id, run);
+    this.runs.set(run.id, suspended ?? run);
     this.recordEvent("message_enqueued", { agentId: input.agentId, messageId });
     this.recordEvent("run_enqueued", { agentId: input.agentId, messageId, runId });
-    return { message: clone(message), run: clone(run) };
+    return { message: clone(message), run: clone(suspended ?? run), resumed: Boolean(suspended) };
   }
 
   async getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined> {
@@ -145,6 +171,13 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
   async getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined> {
     const run = this.runs.get(runId);
     return run ? clone(run) : undefined;
+  }
+
+  async listRuns(input: import("./store").ListRunsInput = {}): Promise<AgentRunRecord[]> {
+    return clone([...this.runs.values()]
+      .filter((run) => input.agentId === undefined || run.agentId === input.agentId)
+      .filter((run) => !input.states || input.states.includes(run.state))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
   }
 
   async leaseRun(input: LeaseRunInput): Promise<LeasedRun> {
@@ -220,58 +253,6 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       outcome: input.outcome,
     });
     return clone(run);
-  }
-
-  async completeChildRun(input: import("./store").CompleteChildRunInput): Promise<{
-    childRun: AgentRunRecord;
-    message: RuntimeMessage;
-  }> {
-    const childRun = this.requireRun(input.runId);
-    requireTransition("Agent Run", childRun.id, childRun.state, "complete", ["running"]);
-    const parentAgent = this.requireAgent(input.parent.agentId);
-    const parentRun = this.requireRun(input.parent.runId);
-    if (parentRun.agentId !== parentAgent.id) {
-      throw new Error(`Parent Run ${parentRun.id} does not belong to Agent ${parentAgent.id}.`);
-    }
-    if (childRun.parentRunId && childRun.parentRunId !== parentRun.id) {
-      throw new Error(`Child Run ${childRun.id} is already correlated to Parent Run ${childRun.parentRunId}.`);
-    }
-    const childMessage = this.requireMessage(childRun.messageId);
-    requireTransition("Runtime Message", childMessage.id, childMessage.state, "acknowledge", ["leased"]);
-    const { timestamp } = now();
-    const messageId = createId("rmsg") as RuntimeMessageId;
-    const message: RuntimeMessage = {
-      id: messageId,
-      agentId: parentAgent.id,
-      kind: "child_run_completion",
-      payload: {
-        type: "child_run_completion",
-        childAgentId: childRun.agentId,
-        childRunId: childRun.id,
-        parentRunId: parentRun.id,
-        outcome: clone(input.outcome),
-      },
-      state: "queued",
-      attempts: 0,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    childRun.state = input.state ?? "completed";
-    childRun.parentRunId = parentRun.id;
-    childRun.outcome = clone(input.outcome);
-    delete childRun.leaseId;
-    childRun.updatedAt = timestamp;
-    childMessage.state = "acknowledged";
-    delete childMessage.lease;
-    childMessage.updatedAt = timestamp;
-    this.messages.set(message.id, message);
-    this.recordEvent("run_completed", {
-      agentId: childRun.agentId,
-      messageId: childMessage.id,
-      runId: childRun.id,
-    }, { state: childRun.state, outcome: input.outcome });
-    this.recordEvent("message_enqueued", { agentId: parentAgent.id, messageId: message.id }, message.payload);
-    return { childRun: clone(childRun), message: clone(message) };
   }
 
   async abortRun(input: import("./store").AbortRunInput): Promise<AgentRunRecord> {
@@ -412,8 +393,22 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return toolCall ? clone(toolCall) : undefined;
   }
 
-  async listEvents(): Promise<RuntimeEvent[]> {
-    return clone(this.events);
+  async listEvents(cursor: import("./domain").RuntimeEventCursor = {}): Promise<RuntimeEvent[]> {
+    let events = this.events;
+    if (cursor.after) {
+      const index = events.findIndex((event) => event.id === cursor.after);
+      if (index >= 0) events = events.slice(index + 1);
+    }
+    return clone(cursor.limit === undefined ? events : events.slice(0, cursor.limit));
+  }
+
+  async recordEvent(
+    input: import("./store").RecordRuntimeEventInput | RuntimeEventKind,
+    related: Pick<RuntimeEvent, "agentId" | "messageId" | "runId" | "toolCallId"> = {},
+    payload?: unknown,
+  ): Promise<RuntimeEvent> {
+    this.recordEventInternal(typeof input === "string" ? input : input.kind, typeof input === "string" ? related : input.related ?? {}, typeof input === "string" ? payload : input.payload);
+    return clone(this.events.at(-1)!);
   }
 
   async acknowledgeEvent(eventId: RuntimeEventId): Promise<RuntimeEvent> {
@@ -458,13 +453,14 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return toolCall;
   }
 
-  private recordEvent(
+  private recordEventInternal(
     kind: RuntimeEventKind,
     related: Pick<RuntimeEvent, "agentId" | "messageId" | "runId" | "toolCallId">,
     payload?: unknown,
   ): void {
     this.events.push({
       id: createId("evt") as RuntimeEventId,
+      sequence: this.events.length + 1,
       kind,
       state: "pending",
       ...related,

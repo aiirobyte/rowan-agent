@@ -706,8 +706,11 @@ test("CLI writes a default log without --log", async () => {
     expect(metadataLines[1]).toMatch(/^Message id: msg_[A-Za-z0-9_-]+$/);
     expect(metadataLines[2]).toMatch(/^Log written to \.rowan\/runs\/.+\.jsonl$/);
     expect(displayedLogPath?.startsWith(".rowan/runs/")).toBe(true);
+    const timestampPattern = process.platform === "win32"
+      ? "\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}\\.\\d{3}[+-]\\d{2}-\\d{2}"
+      : "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}(Z|[+-]\\d{2}:\\d{2})";
     expect(displayedLogPath).toMatch(
-      new RegExp(`^\\.rowan/runs/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}(Z|[+-]\\d{2}:\\d{2})-${sessionId}\\.jsonl$`),
+      new RegExp(`^\\.rowan/runs/${timestampPattern}-${sessionId}\\.jsonl$`),
     );
 
     const logPath = join(workspace, displayedLogPath ?? "");

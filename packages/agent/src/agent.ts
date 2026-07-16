@@ -38,6 +38,7 @@ import {
   AgentRuntime,
   bindAgentSymbol,
   scheduleRunSymbol,
+  type RuntimeRunControl,
 } from "./runtime/agent-runtime";
 import { AgentRun } from "./runtime/agent-run";
 import type { SessionManager } from "./harness/session/session-manager";
@@ -54,8 +55,12 @@ export type AgentOptions = {
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   onMessage?: (message: AgentMessage) => Promise<void>;
+  /** Internal managed-lifecycle hook for persisting each submitted input. */
+  onInput?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
+  /** Internal Runtime-owned Tool executor installed by Agent.create/resume. */
+  runtime?: import("./loop/types").AgentRuntimePort;
 };
 
 export type AgentCreateOptions = AgentOptions & {
@@ -68,6 +73,10 @@ export type AgentResumeOptions = AgentOptions & {
 };
 
 export type RunOptions = Partial<AgentOptions>;
+
+type RuntimeRunHooks = {
+  onSuspend?: (reason?: string) => Promise<void> | void;
+};
 
 export type AgentStatus = {
   agentId?: AgentId;
@@ -95,6 +104,7 @@ export class Agent {
   private extensionRunner?: ExtensionRunner;
   private loadedExtensions?: LoadedExtension[];
   private loadedExtensionsCwd?: string;
+  private runtimeRunId?: import("./runtime/domain").AgentRunId;
 
   static loadSkills(targetPath: string): Promise<AgentContext["skills"]> {
     return loadSkillsFromFiles(targetPath);
@@ -139,14 +149,14 @@ export class Agent {
     if (!provider) {
       throw new Error("Agent Runtime requires a SessionManager provider for Agent.resume().");
     }
-    const record = await runtime.stateStore.getAgentBySessionId(options.sessionId);
-    if (!record) {
-      throw new Error(`Agent record not found for Session ${options.sessionId}.`);
-    }
     const manager = await provider.open(options.sessionId);
     if (!manager) {
       throw new Error(`Session not found: ${options.sessionId}.`);
     }
+    // Adopt sessions created before the durable Agent record was introduced.
+    // Once adopted, all subsequent resumes use the same opaque Agent ID.
+    const record = await runtime.stateStore.getAgentBySessionId(options.sessionId)
+      ?? await runtime.stateStore.createAgent({ sessionId: options.sessionId });
     return createManagedAgent(options, record.id, manager);
   }
 
@@ -203,7 +213,7 @@ export class Agent {
     return this.run(options);
   }
 
-  runWithMessage(message: AgentMessage, options?: RunOptions): Promise<RunResult> {
+  runWithMessage(message: AgentMessage, options?: RunOptions, internalHooks: RuntimeRunHooks = {}): Promise<RunResult> {
     const activeRun = this.activeRun;
     if (activeRun?.resume) {
       activeRun.resume([message]);
@@ -213,7 +223,18 @@ export class Agent {
       return Promise.reject(new Error("Agent is already running."));
     }
     this.appendMessage(message);
-    return this.run(options);
+    return this.run(options, internalHooks);
+  }
+
+  /** Internal Runtime boundary: executes one leased fixed Runtime Message. */
+  async executeRuntimeMessage(payload: import("./runtime/domain").RuntimeMessagePayload, runId: import("./runtime/domain").AgentRunId, control: RuntimeRunControl): Promise<Outcome> {
+    this.runtimeRunId = runId;
+    const internal: RuntimeRunHooks = { onSuspend: control.suspend };
+    try {
+      return (await this.runWithMessage(payload.input, undefined, internal)).outcome;
+    } finally {
+      if (!this.activeRun) this.runtimeRunId = undefined;
+    }
   }
 
   async send(input: string | AgentMessage): Promise<AgentRun> {
@@ -227,13 +248,9 @@ export class Agent {
       agentId,
       input: message,
     });
-    const run = new AgentRun(runtime, enqueued.run);
-    runtime[scheduleRunSymbol](agentId, enqueued.run.id, async (payload) => {
-      if (payload.type !== "agent_input") {
-        throw new Error(`Agent.send() cannot execute ${payload.type} input.`);
-      }
-      return (await this.runWithMessage(payload.input)).outcome;
-    });
+    await this.options.onInput?.(message);
+    const run = new AgentRun(runtime, enqueued.run, message.id);
+    runtime[scheduleRunSymbol](agentId, enqueued.run.id);
     return run;
   }
 
@@ -324,6 +341,11 @@ export class Agent {
 
   getAgentId(): AgentId | undefined {
     return this.state.agentId;
+  }
+
+  /** Internal Runtime hook for associating Tool Calls with the leased Run. */
+  getRuntimeRunId(): import("./runtime/domain").AgentRunId | undefined {
+    return this.runtimeRunId;
   }
 
   setModel(model: LlmModelRef): void {
@@ -505,20 +527,27 @@ export class Agent {
 
   private runWithLifecycle(
     executor: (input: { signal: AbortSignal; waitForInput: () => Promise<AgentMessage[]> }) => Promise<RunResult>,
+    hooks: RuntimeRunHooks = {},
   ): Promise<RunResult> {
     if (this.activeRun) {
       return Promise.reject(new Error("Agent is already running."));
     }
 
     const abortController = new AbortController();
-    const waitForInput = () =>
-      new Promise<AgentMessage[]>((resolve) => {
+    let suspensionRequested = false;
+    const waitForInput = () => {
+      if (!suspensionRequested) {
+        suspensionRequested = true;
+        void hooks.onSuspend?.("Agent requested input.");
+      }
+      return new Promise<AgentMessage[]>((resolve) => {
         const activeRun = this.activeRun!;
         activeRun.resume = (messages) => {
           activeRun.resume = undefined;
           resolve(messages);
         };
       });
+    };
     const promise = Promise.resolve()
       .then(() => executor({ signal: abortController.signal, waitForInput }))
       .catch((error) => {
@@ -560,7 +589,7 @@ export class Agent {
     this.loadedExtensionsCwd = cwd;
   }
 
-  run(config?: RunOptions): Promise<RunResult> {
+  run(config?: RunOptions, internalHooks: RuntimeRunHooks = {}): Promise<RunResult> {
     return this.runWithLifecycle(async ({ signal, waitForInput }) => {
       const resolved = this.resolveRunConfig(config);
       const extensions = resolved.extensions ?? [];
@@ -631,6 +660,7 @@ export class Agent {
         onOutcome: resolved.onOutcome,
         onModelTranscript: resolved.onModelTranscript,
         waitForInput,
+        runtime: resolved.runtime,
       });
 
       const nextContext = {
@@ -647,14 +677,28 @@ export class Agent {
         context: nextContext,
       };
       return result;
-    });
+    }, internalHooks);
   }
 
   abort(reason = "Aborted by caller."): void {
+    const runtime = AgentRuntime.current();
+    if (this.runtimeRunId && runtime) {
+      void runtime.abortRun(this.runtimeRunId, reason);
+      return;
+    }
+    this.abortLocal(reason);
+  }
+
+  private abortLocal(reason: string): void {
     const activeRun = this.activeRun;
     // Release a paused loop so it wakes and observes the abort signal.
     activeRun?.resume?.([]);
     activeRun?.abortController.abort(reason);
+  }
+
+  /** Internal Runtime hook; callers should use Agent.abort(). */
+  abortFromRuntime(reason = "Agent Runtime aborted the Run."): void {
+    this.abortLocal(reason);
   }
 
   /**
@@ -755,9 +799,38 @@ async function createManagedAgent(
     context,
     agentId,
     sessionId: manager.getSessionId(),
+    runtime: {
+      tools: async ({ config, toolCall }) => {
+        const tool = config.context.tools.find((candidate) => candidate.name === toolCall.name);
+        const runId = managedAgent.getRuntimeRunId();
+        if (!tool || !runId) {
+          return {
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            ok: false,
+            content: `Tool ${toolCall.name} is not available to this Agent Run.`,
+            error: `Tool ${toolCall.name} is not available to this Agent Run.`,
+          };
+        }
+        return runtime.toolRuntime.execute({
+          agentId,
+          runId,
+          tool,
+          toolCall,
+          context: config.context,
+          beforeToolCall: config.beforeToolCall,
+          afterToolCall: config.afterToolCall,
+          signal: config.signal,
+        });
+      },
+    },
     onMessage: async (message) => {
       await manager.appendMessage(message);
       await options.onMessage?.(message);
+    },
+    onInput: async (message) => {
+      await manager.appendMessage(message);
+      await options.onInput?.(message);
     },
     onOutcome: async (outcome) => {
       await manager.appendOutcome(outcome);
@@ -768,9 +841,13 @@ async function createManagedAgent(
       await options.onModelTranscript?.(transcript, meta);
     },
   };
-  const agent = new Agent(managedOptions);
-  runtime[bindAgentSymbol](agentId, agent);
-  return agent;
+  let managedAgent!: Agent;
+  managedAgent = new Agent(managedOptions);
+  runtime[bindAgentSymbol](agentId, {
+    abort: (reason) => managedAgent.abortFromRuntime(reason),
+    execute: (payload, runId, control) => managedAgent.executeRuntimeMessage(payload, runId, control),
+  });
+  return managedAgent;
 }
 
 function clonePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {

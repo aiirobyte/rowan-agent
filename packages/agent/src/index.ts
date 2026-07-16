@@ -32,6 +32,7 @@ export type {
 export {
   createSession,
   appendUserTurn,
+  InMemorySessionManager,
   LocalJsonlSessionManager,
   type Session,
   type SessionListItem,

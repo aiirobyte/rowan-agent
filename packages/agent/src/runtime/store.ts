@@ -4,6 +4,7 @@ import type {
   AgentRecord,
   AgentRunRecord,
   AgentRunId,
+  AgentLifecycleState,
   FactoryId,
   RuntimeEvent,
   RuntimeEventId,
@@ -13,6 +14,7 @@ import type {
   RuntimeToolCall,
   RuntimeToolCallId,
   RuntimeLease,
+  RuntimeEventCursor,
 } from "./domain";
 
 export type CreateAgentInput = {
@@ -28,7 +30,17 @@ export type EnqueueMessageInput = {
 export type EnqueueAgentInput = {
   agentId: AgentId;
   input: AgentMessage;
-  parentRunId?: AgentRunId;
+};
+
+export type ListRunsInput = {
+  agentId?: AgentId;
+  states?: AgentRunRecord["state"][];
+};
+
+export type RecordRuntimeEventInput = {
+  kind: import("./domain").RuntimeEventKind;
+  related?: Pick<import("./domain").RuntimeEvent, "agentId" | "messageId" | "runId" | "toolCallId">;
+  payload?: unknown;
 };
 
 export type LeaseRunInput = {
@@ -53,13 +65,6 @@ export type CompleteRunInput = {
   runId: AgentRunId;
   outcome: Outcome;
   state?: Extract<AgentRunRecord["state"], "completed" | "failed" | "cancelled">;
-};
-
-export type CompleteChildRunInput = CompleteRunInput & {
-  parent: {
-    agentId: AgentId;
-    runId: AgentRunId;
-  };
 };
 
 export type AbortRunInput = {
@@ -89,15 +94,21 @@ export interface RuntimeStateStore {
   createAgent(input: CreateAgentInput): Promise<AgentRecord>;
   getAgent(agentId: AgentId): Promise<AgentRecord | undefined>;
   getAgentBySessionId(sessionId: string): Promise<AgentRecord | undefined>;
+  listAgents(): Promise<AgentRecord[]>;
+  setAgentState(agentId: AgentId, state: AgentLifecycleState): Promise<AgentRecord>;
 
   enqueueMessage(input: EnqueueMessageInput): Promise<RuntimeMessage>;
-  enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord }>;
+  enqueueAgentInput(input: EnqueueAgentInput): Promise<{
+    message: RuntimeMessage;
+    run: AgentRunRecord;
+    resumed: boolean;
+  }>;
   getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined>;
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
+  listRuns(input?: ListRunsInput): Promise<AgentRunRecord[]>;
   leaseRun(input: LeaseRunInput): Promise<LeasedRun>;
   suspendRun(input: SuspendRunInput): Promise<AgentRunRecord>;
   completeRun(input: CompleteRunInput): Promise<AgentRunRecord>;
-  completeChildRun(input: CompleteChildRunInput): Promise<{ childRun: AgentRunRecord; message: RuntimeMessage }>;
   abortRun(input: AbortRunInput): Promise<AgentRunRecord>;
   acknowledgeMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage>;
   deadLetterMessage(messageId: RuntimeMessageId, reason: string): Promise<RuntimeMessage>;
@@ -109,6 +120,7 @@ export interface RuntimeStateStore {
   markToolCallIndeterminate(input: IndeterminateToolCallInput): Promise<RuntimeToolCall>;
   getToolCall(toolCallId: RuntimeToolCallId): Promise<RuntimeToolCall | undefined>;
 
-  listEvents(): Promise<RuntimeEvent[]>;
+  listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]>;
+  recordEvent(input: RecordRuntimeEventInput): Promise<RuntimeEvent>;
   acknowledgeEvent(eventId: RuntimeEventId): Promise<RuntimeEvent>;
 }

@@ -120,41 +120,6 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect((await store.getMessage(enqueued.message.id))?.state).toBe("queued");
   });
 
-  test("atomically completes a Child Run and enqueues its parent completion Message", async () => {
-    const store = createStore();
-    const parentAgent = await store.createAgent({ sessionId: "parent-session" });
-    const childAgent = await store.createAgent({ sessionId: "child-session" });
-    const parent = await store.enqueueAgentInput({ agentId: parentAgent.id, input: {
-      id: "parent-message",
-      role: "user",
-      content: "start child",
-      createdAt: "2026-01-01T00:00:00.000+00:00",
-    } });
-    const child = await store.enqueueAgentInput({
-      agentId: childAgent.id,
-      parentRunId: parent.run.id,
-      input: {
-        id: "child-message",
-        role: "user",
-        content: "child work",
-        createdAt: "2026-01-01T00:00:00.000+00:00",
-      },
-    });
-    await store.leaseRun({ runId: child.run.id, workerId: "worker-1", leaseDurationMs: 30_000 });
-
-    const completed = await store.completeChildRun({
-      runId: child.run.id,
-      parent: { agentId: parentAgent.id, runId: parent.run.id },
-      outcome: { id: "child-outcome", message: "child done" },
-    });
-    expect(completed.childRun.state).toBe("completed");
-    expect(completed.childRun.parentRunId).toBe(parent.run.id);
-    expect(completed.message.agentId).toBe(parentAgent.id);
-    expect(completed.message.kind).toBe("child_run_completion");
-    expect(completed.message.payload.type).toBe("child_run_completion");
-    expect((await store.getMessage(child.message.id))?.state).toBe("acknowledged");
-  });
-
   test("rejects invalid lifecycle transitions", async () => {
     const store = createStore();
     const agent = await store.createAgent({ sessionId: "session-1" });
@@ -184,11 +149,13 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     const manualMessage = await store.enqueueMessage({
       agentId: agent.id,
       payload: {
-        type: "child_run_completion",
-        childAgentId: agent.id,
-        childRunId: enqueued.run.id,
-        parentRunId: enqueued.run.id,
-        outcome: { id: "outcome-2", message: "child done" },
+        type: "agent_input",
+        input: {
+          id: "message-2",
+          role: "user",
+          content: "another input",
+          createdAt: "2026-01-01T00:00:00.000+00:00",
+        },
       },
     });
     await expect(store.acknowledgeMessage(manualMessage.id)).resolves.toMatchObject({ state: "acknowledged" });

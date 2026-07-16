@@ -13,7 +13,7 @@ const RUNTIME_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS runtime_messages (
       id TEXT PRIMARY KEY NOT NULL,
       agent_id TEXT NOT NULL REFERENCES agents(id),
-      kind TEXT NOT NULL CHECK (kind IN ('agent_input', 'child_run_completion')),
+      kind TEXT NOT NULL CHECK (kind IN ('agent_input')),
       payload_json TEXT NOT NULL,
       state TEXT NOT NULL CHECK (state IN ('queued', 'leased', 'acknowledged', 'dead_lettered')),
       attempts INTEGER NOT NULL DEFAULT 0,
@@ -27,7 +27,6 @@ const RUNTIME_SCHEMA_SQL = `
       id TEXT PRIMARY KEY NOT NULL,
       agent_id TEXT NOT NULL REFERENCES agents(id),
       message_id TEXT NOT NULL REFERENCES runtime_messages(id),
-      parent_run_id TEXT,
       state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'suspended', 'completed', 'failed', 'cancelled')),
       attempt INTEGER NOT NULL DEFAULT 0,
       lease_id TEXT,
@@ -47,6 +46,7 @@ const RUNTIME_SCHEMA_SQL = `
 
     CREATE TABLE IF NOT EXISTS runtime_events (
       id TEXT PRIMARY KEY NOT NULL,
+      sequence INTEGER NOT NULL DEFAULT 0,
       kind TEXT NOT NULL,
       state TEXT NOT NULL CHECK (state IN ('pending', 'acknowledged')),
       agent_id TEXT,
@@ -75,7 +75,10 @@ const RUNTIME_SCHEMA_SQL = `
     CREATE INDEX IF NOT EXISTS agent_runs_agent_state_idx
       ON agent_runs (agent_id, state, created_at);
     CREATE INDEX IF NOT EXISTS runtime_events_delivery_idx
-      ON runtime_events (state, created_at);
+      ON runtime_events (state, sequence);
+
+    CREATE INDEX IF NOT EXISTS agent_runs_runnable_idx
+      ON agent_runs (state, created_at);
 `;
 
 export function initializeRuntimeSchema(database: Database): void {
@@ -88,4 +91,17 @@ export function initializeRuntimeSchema(database: Database): void {
     }
   });
   initialize();
+
+  // Keep databases created by the Slice 1-6 foundation readable as the
+  // runtime gains durable event sequencing.
+  for (const statement of [
+    "ALTER TABLE runtime_events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0",
+  ]) {
+    try {
+      database.run(statement);
+    } catch {
+      // The column already exists.
+    }
+  }
+  database.run("CREATE INDEX IF NOT EXISTS runtime_events_sequence_idx ON runtime_events (sequence)");
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -10,11 +11,12 @@ import {
 } from "@rowan-agent/models";
 import {
   Agent,
-  createMessage,
   createTimestamp,
+  AgentRuntime,
+  SqliteRuntimeStateStore,
   type AgentEvent,
   type AgentEventListener,
-  type AgentMessage,
+  type AgentRun,
   type AgentContext,
   type LoadedExtension,
   type LlmModelRef,
@@ -24,9 +26,7 @@ import {
   pinoAgentEventLogger,
   type AgentEventLogLevel,
 } from "@rowan-agent/logging";
-import {
-  type SessionListItem,
-} from "@rowan-agent/agent";
+import type { SessionListItem } from "@rowan-agent/agent";
 import { LocalJsonlSessionManager } from "@rowan-agent/agent";
 import {
   createCoreTools,
@@ -104,7 +104,10 @@ async function runRegisteredCommand(args: CliArgs): Promise<boolean> {
 }
 
 function createDefaultLogPath(workspace: WorkspacePaths, sessionId: string): string {
-  return join(workspaceRunsDir(workspace), `${createTimestamp()}-${sessionId}.jsonl`);
+  const timestamp = process.platform === "win32"
+    ? createTimestamp().replaceAll(":", "-")
+    : createTimestamp();
+  return join(workspaceRunsDir(workspace), `${timestamp}-${sessionId}.jsonl`);
 }
 
 function resolveOptionalWorkspacePath(path: string | undefined, workspace: WorkspacePaths): string | undefined {
@@ -128,17 +131,6 @@ function workspaceRunsDir(workspace: WorkspacePaths): string {
 
 function workspaceSessionsDir(workspace: WorkspacePaths): string {
   return join(workspace.rowanDir, "sessions");
-}
-
-function currentTurnMessageId(messages: AgentMessage[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role === "user") {
-      return message.id;
-    }
-  }
-
-  return undefined;
 }
 
 function printHelp(): void {
@@ -338,7 +330,7 @@ type AgentResources = {
 };
 type ConfiguredAgent = {
   agent: Agent;
-  sessionManager?: LocalJsonlSessionManager;
+  runtime: AgentRuntime;
   configFile?: AgentConfigFile;
   loadResources(): Promise<AgentResources>;
 };
@@ -526,15 +518,35 @@ async function createConfiguredAgent(
       skills,
     };
 
-  const agent = new Agent({
-    context: { ...context, phases: resources.phases },
-    model: defaultModelRef,
-    stream: createDispatchStream(),
-    extensions: resources.extensions,
-    ...(sessionManager ? { sessionId: sessionManager.getSessionId() } : {}),
-  });
-
-  return { agent, sessionManager, configFile, loadResources };
+  await mkdir(workspaceRunsDir(workspace), { recursive: true });
+  const stateStore = new SqliteRuntimeStateStore(join(workspace.rowanDir, "runtime.sqlite"));
+  const sessionProvider = {
+    create: (input: Parameters<typeof LocalJsonlSessionManager.create>[1]) =>
+      LocalJsonlSessionManager.create(workspaceSessionsDir(workspace), input),
+    open: (sessionId: string) =>
+      LocalJsonlSessionManager.open(workspaceSessionsDir(workspace), sessionId),
+  };
+  let runtime: AgentRuntime | undefined;
+  try {
+    runtime = await AgentRuntime.start({
+      stateStore,
+      sessionManager: sessionProvider,
+    });
+    const options = {
+      context: { ...context, phases: resources.phases },
+      model: defaultModelRef,
+      stream: createDispatchStream(),
+      extensions: resources.extensions,
+    };
+    const agent = args.sessionId
+      ? await Agent.resume({ ...options, sessionId: args.sessionId })
+      : await Agent.create(options);
+    return { agent, runtime, configFile, loadResources };
+  } catch (error) {
+    await runtime?.stop();
+    stateStore.close();
+    throw error;
+  }
 }
 
 async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Promise<AgentResources> {
@@ -561,7 +573,6 @@ async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Pro
 
 async function promptWithLog(input: {
   agent: Agent;
-  sessionManager?: LocalJsonlSessionManager;
   prompt: string;
   workspace: WorkspacePaths;
   logPath?: string;
@@ -569,41 +580,19 @@ async function promptWithLog(input: {
   logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
-  onSessionManager?: (sessionManager: LocalJsonlSessionManager) => void;
   onInputWait?: () => void;
-  loadResources(): Promise<AgentResources>;
-}): Promise<{ metrics: import("@rowan-agent/agent").LoopMetrics; sessionManager: LocalJsonlSessionManager; pendingConsoleEvents: AgentEvent[] }> {
-  let sessionManager = input.sessionManager;
+}): Promise<{ run: AgentRun; outcome: import("@rowan-agent/agent").Outcome }> {
   let unsubscribe: (() => void) | undefined;
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
   try {
-    const resources = await input.loadResources();
-    if (!sessionManager) {
-      sessionManager = await LocalJsonlSessionManager.create(workspaceSessionsDir(input.workspace), {
-        systemPrompt: input.agent.state.context.systemPrompt,
-        input: input.prompt,
-        skills: resources.skills,
-      });
-    }
-    input.onSessionManager?.(sessionManager);
-
-    const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, sessionManager.getSessionId());
+    const sessionId = input.agent.getSessionId() ?? "session";
+    const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, sessionId);
     const runEventLogger = pinoAgentEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
     eventLogger = runEventLogger;
-    let messageId: string | undefined;
     let currentStreamableMessage = false;
     let currentAssistantWroteContent = false;
-    const pendingConsoleEvents: AgentEvent[] = [];
     const listener: AgentEventListener = ((event: AgentEvent) => {
       runEventLogger(event);
-      pendingConsoleEvents.push(event);
-
-      if (event.type === "turn_start" && !messageId) {
-        messageId = currentTurnMessageId(event.content);
-        if (messageId) {
-          input.onMessageId?.(messageId);
-        }
-      }
 
       if (event.type === "user_prompt_requested") {
         input.onInputWait?.();
@@ -648,33 +637,10 @@ async function promptWithLog(input: {
     };
 
     unsubscribe = input.agent.subscribe(listener);
-
-    const userMessage = createMessage("user", input.prompt);
-    await sessionManager.appendMessage(userMessage);
-    const context = await sessionManager.buildAgentContext({
-      tools: input.agent.state.tools,
-      skills: resources.skills,
-    });
-    const result = await input.agent.run({
-      context: {
-        ...context,
-        phases: resources.phases,
-      },
-      extensions: resources.extensions,
-      sessionId: sessionManager.getSessionId(),
-      onMessage: async (msg) => {
-        if (msg.role !== "user") {
-          await sessionManager!.appendMessage(msg);
-        }
-      },
-      onOutcome: async (outcome) => {
-        await sessionManager!.appendOutcome(outcome);
-      },
-      onModelTranscript: async (transcript, meta) => {
-        await sessionManager!.appendModelTranscript(transcript, meta);
-      },
-    });
-    return { metrics: result.metrics, sessionManager, pendingConsoleEvents };
+    const run = await input.agent.send(input.prompt);
+    input.onMessageId?.(run.messageId);
+    const outcome = await run.result();
+    return { run, outcome };
   } finally {
     try {
       await input.agent.flushEvents();
@@ -688,8 +654,7 @@ async function promptWithLog(input: {
 async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
   const configured = await createConfiguredAgent(args, workspace);
-  const { agent } = configured;
-  let sessionManager = configured.sessionManager;
+  const { agent, runtime } = configured;
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args, configured.configFile);
@@ -699,7 +664,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   let hasPrintedLog = false;
 
   const printSessionOnce = () => {
-    const sessionId = sessionManager?.getSessionId() ?? agent.state.sessionId;
+    const sessionId = agent.getSessionId();
     if (!hasPrintedSession && sessionId) {
       console.error(`Session id: ${sessionId}`);
       hasPrintedSession = true;
@@ -713,7 +678,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     }
   };
 
-  if (agent.state.sessionId) {
+  if (agent.getSessionId()) {
     printSessionOnce();
   }
 
@@ -743,7 +708,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const runPrompt = async (prompt: string, options: { recoverable?: boolean; onInputWait?: () => void } = {}) => {
     let writtenLogPath: string | undefined;
     let messageId: string | undefined;
+    let printedRunHeader = false;
     const printRunHeader = () => {
+      if (printedRunHeader) return;
+      printedRunHeader = true;
       printSessionOnce();
       if (messageId) {
         console.error(`Message id: ${messageId}`);
@@ -752,9 +720,11 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     };
 
     try {
+      const resources = await configured.loadResources();
+      agent.setSkills(resources.skills);
+      agent.setPhases(resources.phases);
       const run = await promptWithLog({
         agent,
-        sessionManager,
         prompt,
         workspace,
         logPath: activeLogPath,
@@ -770,27 +740,11 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         onMessageId: (id) => {
           messageId = id;
         },
-        onSessionManager: (manager) => {
-          sessionManager = manager;
-        },
         onInputWait: options.onInputWait,
-        loadResources: configured.loadResources,
       });
-      sessionManager = run.sessionManager;
       printRunHeader();
-      // Print loop metrics
-      const m = run.metrics;
-      if (m.iterations > 1 || m.compactionCount > 0 || m.retryCount > 0) {
-        const parts: string[] = [];
-        parts.push(`${m.iterations} iterations`);
-        if (m.phaseTransitions.length > 0) {
-          const path = [m.phaseTransitions[0].from, ...m.phaseTransitions.map((t) => t.to)].join(" → ");
-          parts.push(`path: ${path}`);
-        }
-        if (m.compactionCount > 0) parts.push(`${m.compactionCount} compactions`);
-        if (m.retryCount > 0) parts.push(`${m.retryCount} retries`);
-        if (m.durationMs !== undefined) parts.push(`${m.durationMs}ms`);
-        console.error(`∞ Loop: ${parts.join(", ")}`);
+      if (run.run.status === "failed") {
+        throw new Error(run.outcome.message);
       }
     } catch (error) {
       printRunHeader();
@@ -820,19 +774,15 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   };
 
   const resumePrompt = async (prompt: string) => {
-    if (!sessionManager) {
-      throw new Error("Cannot resume before a session is created.");
-    }
-    const userMessage = createMessage("user", prompt);
-    await sessionManager.appendMessage(userMessage);
     waitingForInput = false;
     resetActiveRunReady();
-    void agent.runWithMessage(userMessage).catch(() => undefined);
+    const run = await agent.send(prompt);
+    console.error(`Message id: ${run.messageId}`);
     await waitForActiveRunReady();
   };
 
   if (args.prompt) {
-    await runPrompt(args.prompt);
+    await startPrompt(args.prompt);
   }
 
   const rl = createInterface({
@@ -858,7 +808,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         return;
       }
       if (prompt === ":session") {
-        console.log(sessionManager?.getSessionId() ?? agent.state.sessionId ?? "(no session yet)");
+        console.log(agent.getSessionId() ?? "(no session yet)");
         if (process.stdin.isTTY) {
           process.stdout.write("> ");
         }
@@ -885,6 +835,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       agent.abort();
       await activeRun.catch(() => undefined);
     }
+    await runtime.stop();
   }
 }
 

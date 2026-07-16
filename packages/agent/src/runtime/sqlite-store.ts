@@ -20,7 +20,6 @@ import type {
 } from "./domain";
 import type {
   CompleteRunInput,
-  CompleteChildRunInput,
   CompleteToolCallInput,
   CreateAgentInput,
   CreateToolCallInput,
@@ -65,7 +64,6 @@ type RunRow = {
   id: string;
   agent_id: string;
   message_id: string;
-  parent_run_id: string | null;
   state: AgentRunRecord["state"];
   attempt: number;
   lease_id: string | null;
@@ -77,6 +75,7 @@ type RunRow = {
 
 type EventRow = {
   id: string;
+  sequence: number;
   kind: RuntimeEventKind;
   state: RuntimeEventState;
   agent_id: string | null;
@@ -181,6 +180,26 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     return row ? this.agentFromRow(row) : undefined;
   }
 
+  async listAgents(): Promise<AgentRecord[]> {
+    const rows = this.database.query("SELECT * FROM agents ORDER BY created_at, id").all() as AgentRow[];
+    return rows.map((row) => this.agentFromRow(row));
+  }
+
+  async setAgentState(agentId: AgentId, state: AgentRecord["state"]): Promise<AgentRecord> {
+    const current = this.requireAgent(agentId);
+    if (current.state === state) return clone(current);
+    if (current.state === "stopped") {
+      throw transitionError("Agent", current.id, current.state, state === "active" ? "resume" : "pause");
+    }
+    const { timestamp } = timestampFor();
+    const updated = this.database.transaction(() => {
+      this.database.run("UPDATE agents SET state = ?, updated_at = ? WHERE id = ?", [state, timestamp, agentId]);
+      this.recordEvent(state === "paused" ? "agent_paused" : "agent_resumed", { agentId });
+      return this.requireAgent(agentId);
+    })();
+    return clone(updated);
+  }
+
   async enqueueMessage(input: EnqueueMessageInput): Promise<RuntimeMessage> {
     this.requireAgent(input.agentId);
     const { timestamp } = timestampFor();
@@ -202,11 +221,14 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     return clone(message);
   }
 
-  async enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord }> {
+  async enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord; resumed: boolean }> {
     this.requireAgent(input.agentId);
     const { timestamp } = timestampFor();
     const messageId = createId("rmsg") as RuntimeMessageId;
-    const runId = createId("run") as AgentRunId;
+    const suspendedRow = this.database.query(
+      "SELECT * FROM agent_runs WHERE agent_id = ? AND state = 'suspended' ORDER BY created_at, id LIMIT 1",
+    ).get(input.agentId) as RunRow | null;
+    const runId = (suspendedRow?.id as AgentRunId | undefined) ?? (createId("run") as AgentRunId);
     const message: RuntimeMessage = {
       id: messageId,
       agentId: input.agentId,
@@ -222,23 +244,33 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       id: runId,
       agentId: input.agentId,
       messageId,
-      ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
       state: "queued",
       attempt: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+    if (suspendedRow) {
+      message.runId = runId;
+    }
     const enqueue = this.database.transaction(() => {
       this.insertMessage(message);
-      this.database.run(
-        "INSERT INTO agent_runs (id, agent_id, message_id, parent_run_id, state, attempt, lease_id, outcome_json, suspension_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [run.id, run.agentId, run.messageId, run.parentRunId ?? null, run.state, run.attempt, null, null, null, run.createdAt, run.updatedAt],
-      );
+      if (suspendedRow) {
+        this.database.run(
+          "UPDATE agent_runs SET message_id = ?, state = 'queued', lease_id = NULL, suspension_reason = NULL, updated_at = ? WHERE id = ?",
+          [messageId, timestamp, runId],
+        );
+      } else {
+        this.database.run(
+          "INSERT INTO agent_runs (id, agent_id, message_id, state, attempt, lease_id, outcome_json, suspension_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [run.id, run.agentId, run.messageId, run.state, run.attempt, null, null, null, run.createdAt, run.updatedAt],
+        );
+      }
       this.recordEvent("message_enqueued", { agentId: input.agentId, messageId });
       this.recordEvent("run_enqueued", { agentId: input.agentId, messageId, runId });
     });
     enqueue();
-    return { message: clone(message), run: clone(run) };
+    const storedRun = this.requireRun(runId);
+    return { message: clone(message), run: clone(storedRun), resumed: Boolean(suspendedRow) };
   }
 
   async getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined> {
@@ -249,6 +281,22 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
   async getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined> {
     const row = this.runRow(runId);
     return row ? this.runFromRow(row) : undefined;
+  }
+
+  async listRuns(input: import("./store").ListRunsInput = {}): Promise<AgentRunRecord[]> {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (input.agentId) {
+      clauses.push("agent_id = ?");
+      params.push(input.agentId);
+    }
+    if (input.states && input.states.length > 0) {
+      clauses.push(`state IN (${input.states.map(() => "?").join(", ")})`);
+      params.push(...input.states);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.database.query(`SELECT * FROM agent_runs ${where} ORDER BY created_at, id`).all(...params) as RunRow[];
+    return rows.map((row) => this.runFromRow(row));
   }
 
   async leaseRun(input: LeaseRunInput): Promise<LeasedRun> {
@@ -341,62 +389,6 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       return this.requireRun(current.id);
     })();
     return clone(run);
-  }
-
-  async completeChildRun(input: CompleteChildRunInput): Promise<{
-    childRun: AgentRunRecord;
-    message: RuntimeMessage;
-  }> {
-    const result = this.database.transaction(() => {
-      const childRun = this.requireRun(input.runId);
-      requireTransition("Agent Run", childRun.id, childRun.state, "complete", ["running"]);
-      const parentAgent = this.requireAgent(input.parent.agentId);
-      const parentRun = this.requireRun(input.parent.runId);
-      if (parentRun.agentId !== parentAgent.id) {
-        throw new Error(`Parent Run ${parentRun.id} does not belong to Agent ${parentAgent.id}.`);
-      }
-      if (childRun.parentRunId && childRun.parentRunId !== parentRun.id) {
-        throw new Error(`Child Run ${childRun.id} is already correlated to Parent Run ${childRun.parentRunId}.`);
-      }
-      const childMessage = this.requireMessage(childRun.messageId);
-      requireTransition("Runtime Message", childMessage.id, childMessage.state, "acknowledge", ["leased"]);
-      const { timestamp } = timestampFor();
-      const message: RuntimeMessage = {
-        id: createId("rmsg") as RuntimeMessageId,
-        agentId: parentAgent.id,
-        kind: "child_run_completion",
-        payload: {
-          type: "child_run_completion",
-          childAgentId: childRun.agentId,
-          childRunId: childRun.id,
-          parentRunId: parentRun.id,
-          outcome: clone(input.outcome),
-        },
-        state: "queued",
-        attempts: 0,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      const state = input.state ?? "completed";
-      this.database.run(
-        "UPDATE agent_runs SET state = ?, parent_run_id = ?, lease_id = NULL, outcome_json = ?, updated_at = ? WHERE id = ?",
-        [state, parentRun.id, json(input.outcome), timestamp, childRun.id],
-      );
-      this.database.run("UPDATE runtime_messages SET state = 'acknowledged', updated_at = ? WHERE id = ?", [
-        timestamp,
-        childMessage.id,
-      ]);
-      this.database.run("DELETE FROM runtime_leases WHERE run_id = ?", [childRun.id]);
-      this.insertMessage(message);
-      this.recordEvent("run_completed", {
-        agentId: childRun.agentId,
-        messageId: childMessage.id,
-        runId: childRun.id,
-      }, { state, outcome: input.outcome });
-      this.recordEvent("message_enqueued", { agentId: message.agentId, messageId: message.id }, message.payload);
-      return { childRun: this.requireRun(childRun.id), message: this.requireMessage(message.id) };
-    })();
-    return { childRun: clone(result.childRun), message: clone(result.message) };
   }
 
   async abortRun(input: import("./store").AbortRunInput): Promise<AgentRunRecord> {
@@ -584,9 +576,29 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     return row ? this.toolCallFromRow(row) : undefined;
   }
 
-  async listEvents(): Promise<RuntimeEvent[]> {
-    const rows = this.database.query("SELECT * FROM runtime_events ORDER BY created_at, rowid").all() as EventRow[];
+  async listEvents(cursor: import("./domain").RuntimeEventCursor = {}): Promise<RuntimeEvent[]> {
+    const after = cursor.after ? this.database.query("SELECT sequence FROM runtime_events WHERE id = ?").get(cursor.after) as { sequence: number } | null : null;
+    const limit = cursor.limit === undefined ? "" : ` LIMIT ${Math.max(0, Math.floor(cursor.limit))}`;
+    const rows = this.database.query(`SELECT * FROM runtime_events ${after ? "WHERE sequence > ?" : ""} ORDER BY sequence${limit}`).all(...(after ? [after.sequence] : [])) as EventRow[];
     return rows.map((row) => this.eventFromRow(row));
+  }
+
+  async recordEvent(
+    input: import("./store").RecordRuntimeEventInput | RuntimeEventKind,
+    related: Pick<RuntimeEvent, "agentId" | "messageId" | "runId" | "toolCallId"> = {},
+    payload?: unknown,
+  ): Promise<RuntimeEvent> {
+    if (typeof input === "string") {
+      this.recordEventInternal(input, related, payload);
+      const row = this.database.query("SELECT * FROM runtime_events ORDER BY sequence DESC LIMIT 1").get() as EventRow;
+      return clone(this.eventFromRow(row));
+    }
+    const event = this.database.transaction(() => {
+      this.recordEventInternal(input.kind, input.related ?? {}, input.payload);
+      const row = this.database.query("SELECT * FROM runtime_events ORDER BY sequence DESC LIMIT 1").get() as EventRow;
+      return this.eventFromRow(row);
+    })();
+    return clone(event);
   }
 
   async acknowledgeEvent(eventId: RuntimeEventId): Promise<RuntimeEvent> {
@@ -647,7 +659,6 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       id: row.id as AgentRunId,
       agentId: row.agent_id as AgentId,
       messageId: row.message_id as RuntimeMessageId,
-      ...(row.parent_run_id ? { parentRunId: row.parent_run_id as AgentRunId } : {}),
       state: row.state,
       attempt: row.attempt,
       ...(row.lease_id ? { leaseId: row.lease_id as LeaseId } : {}),
@@ -661,6 +672,7 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
   private eventFromRow(row: EventRow): RuntimeEvent {
     return {
       id: row.id as RuntimeEventId,
+      sequence: row.sequence,
       kind: row.kind,
       state: row.state,
       ...(row.agent_id ? { agentId: row.agent_id as AgentId } : {}),
@@ -747,15 +759,16 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     return this.eventFromRow(row);
   }
 
-  private recordEvent(
+  private recordEventInternal(
     kind: RuntimeEventKind,
     related: Pick<RuntimeEvent, "agentId" | "messageId" | "runId" | "toolCallId">,
     payload?: unknown,
   ): void {
     this.database.run(
-      "INSERT INTO runtime_events (id, kind, state, agent_id, message_id, run_id, tool_call_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO runtime_events (id, sequence, kind, state, agent_id, message_id, run_id, tool_call_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         createId("evt"),
+        ((this.database.query("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM runtime_events").get() as { sequence: number }).sequence ?? 0) + 1,
         kind,
         "pending",
         related.agentId ?? null,
