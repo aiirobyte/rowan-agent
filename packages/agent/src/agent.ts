@@ -33,6 +33,14 @@ import type {
 } from "./types";
 import type { ModelTranscript } from "./protocol/turn";
 import { createId } from "./utils";
+import type { FactoryId, AgentId } from "./runtime/domain";
+import {
+  AgentRuntime,
+  bindAgentSymbol,
+  scheduleRunSymbol,
+} from "./runtime/agent-runtime";
+import { AgentRun } from "./runtime/agent-run";
+import type { SessionManager } from "./harness/session/session-manager";
 
 export type AgentOptions = {
   context: AgentContext;
@@ -41,6 +49,7 @@ export type AgentOptions = {
   cwd?: string;
   extensions?: LoadedExtension[];
   sessionId?: string;
+  agentId?: AgentId;
   maxAttempts?: number;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
@@ -49,9 +58,19 @@ export type AgentOptions = {
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
 };
 
+export type AgentCreateOptions = AgentOptions & {
+  input?: string;
+  factoryId?: FactoryId;
+};
+
+export type AgentResumeOptions = AgentOptions & {
+  sessionId: string;
+};
+
 export type RunOptions = Partial<AgentOptions>;
 
 export type AgentStatus = {
+  agentId?: AgentId;
   sessionId?: string;
   context: AgentContext;
   model: LlmModelRef;
@@ -89,6 +108,48 @@ export class Agent {
     return loadExtensionsFromPath(targetPath);
   }
 
+  static async create(options: AgentCreateOptions): Promise<Agent> {
+    const runtime = requireRuntime();
+    const provider = runtime.sessionManager;
+    if (!provider) {
+      throw new Error("Agent Runtime requires a SessionManager provider for Agent.create().");
+    }
+    const manager = await provider.create({
+      systemPrompt: options.context.systemPrompt,
+      input: options.input ?? "",
+      skills: options.context.skills,
+    });
+    if (options.input) {
+      const entries = await manager.listEntries();
+      const hasUserMessage = entries.some((entry) => entry.type === "message" && entry.message.role === "user");
+      if (!hasUserMessage) {
+        await manager.appendMessage(createMessage("user", options.input));
+      }
+    }
+    const record = await runtime.stateStore.createAgent({
+      sessionId: manager.getSessionId(),
+      ...(options.factoryId ? { factoryId: options.factoryId } : {}),
+    });
+    return createManagedAgent(options, record.id, manager);
+  }
+
+  static async resume(options: AgentResumeOptions): Promise<Agent> {
+    const runtime = requireRuntime();
+    const provider = runtime.sessionManager;
+    if (!provider) {
+      throw new Error("Agent Runtime requires a SessionManager provider for Agent.resume().");
+    }
+    const record = await runtime.stateStore.getAgentBySessionId(options.sessionId);
+    if (!record) {
+      throw new Error(`Agent record not found for Session ${options.sessionId}.`);
+    }
+    const manager = await provider.open(options.sessionId);
+    if (!manager) {
+      throw new Error(`Session not found: ${options.sessionId}.`);
+    }
+    return createManagedAgent(options, record.id, manager);
+  }
+
   constructor(options: AgentOptions) {
     const context = prepareAgentContext(options.context);
     this.options = {
@@ -96,6 +157,7 @@ export class Agent {
       context,
     };
     this.state = {
+      ...(this.options.agentId ? { agentId: this.options.agentId } : {}),
       ...(this.options.sessionId ? { sessionId: this.options.sessionId } : {}),
       context: prepareAgentContext(context),
       model: this.options.model,
@@ -152,6 +214,27 @@ export class Agent {
     }
     this.appendMessage(message);
     return this.run(options);
+  }
+
+  async send(input: string | AgentMessage): Promise<AgentRun> {
+    const runtime = requireRuntime();
+    const agentId = this.getAgentId();
+    if (!agentId) {
+      throw new Error("Agent.send() requires an Agent created or resumed by AgentRuntime.");
+    }
+    const message = typeof input === "string" ? createMessage("user", input) : input;
+    const enqueued = await runtime.stateStore.enqueueAgentInput({
+      agentId,
+      input: message,
+    });
+    const run = new AgentRun(runtime, enqueued.run);
+    runtime[scheduleRunSymbol](agentId, enqueued.run.id, async (payload) => {
+      if (payload.type !== "agent_input") {
+        throw new Error(`Agent.send() cannot execute ${payload.type} input.`);
+      }
+      return (await this.runWithMessage(payload.input)).outcome;
+    });
+    return run;
   }
 
   resetInitialization(): void {
@@ -237,6 +320,10 @@ export class Agent {
 
   getSessionId(): string | undefined {
     return this.state.sessionId;
+  }
+
+  getAgentId(): AgentId | undefined {
+    return this.state.agentId;
   }
 
   setModel(model: LlmModelRef): void {
@@ -638,6 +725,52 @@ export class Agent {
     };
   }
 
+}
+
+function requireRuntime(): AgentRuntime {
+  const runtime = AgentRuntime.current();
+  if (!runtime) {
+    throw new Error("Agent Runtime must be started before creating or resuming an Agent.");
+  }
+  return runtime;
+}
+
+async function createManagedAgent(
+  options: AgentCreateOptions | AgentResumeOptions,
+  agentId: AgentId,
+  manager: SessionManager,
+): Promise<Agent> {
+  const runtime = requireRuntime();
+  const restoredContext = await manager.buildAgentContext({
+    tools: options.context.tools,
+    skills: options.context.skills,
+  });
+  const context: AgentContext = {
+    ...restoredContext,
+    systemPrompt: options.context.systemPrompt || restoredContext.systemPrompt,
+    phases: options.context.phases,
+  };
+  const managedOptions: AgentOptions = {
+    ...options,
+    context,
+    agentId,
+    sessionId: manager.getSessionId(),
+    onMessage: async (message) => {
+      await manager.appendMessage(message);
+      await options.onMessage?.(message);
+    },
+    onOutcome: async (outcome) => {
+      await manager.appendOutcome(outcome);
+      await options.onOutcome?.(outcome);
+    },
+    onModelTranscript: async (transcript, meta) => {
+      await manager.appendModelTranscript(transcript, meta);
+      await options.onModelTranscript?.(transcript, meta);
+    },
+  };
+  const agent = new Agent(managedOptions);
+  runtime[bindAgentSymbol](agentId, agent);
+  return agent;
 }
 
 function clonePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {

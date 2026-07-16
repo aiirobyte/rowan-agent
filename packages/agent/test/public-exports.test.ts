@@ -6,6 +6,11 @@ test("public value exports snapshot", () => {
 
   // Core API
   expect(exportNames).toContain("Agent");
+  expect(exportNames).toContain("AgentRuntime");
+  expect(exportNames).toContain("AgentRun");
+  expect(exportNames).toContain("InMemoryRuntimeStateStore");
+  expect(exportNames).toContain("SqliteRuntimeStateStore");
+  expect(exportNames).toContain("initializeRuntimeSchema");
   expect(typeof agentExports.Agent.loadSkills).toBe("function");
   expect(typeof agentExports.Agent.loadPhases).toBe("function");
   expect(typeof agentExports.Agent.loadExtensions).toBe("function");

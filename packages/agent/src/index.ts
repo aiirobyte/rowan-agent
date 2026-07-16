@@ -1,6 +1,12 @@
 // ── core API ──────────────────────────────────────────────────
 export { Agent } from "./agent";
-export type { AgentOptions, RunOptions, AgentStatus } from "./agent";
+export type {
+  AgentOptions,
+  AgentCreateOptions,
+  AgentResumeOptions,
+  RunOptions,
+  AgentStatus,
+} from "./agent";
 
 export {
   createMessage,
@@ -97,6 +103,9 @@ export type {
   Outcome,
   ModelTranscript,
 } from "./protocol";
+
+// durable runtime domain / store
+export * from "./runtime";
 
 // ── model dispatch ──────────────────────────────────────────────
 export {
