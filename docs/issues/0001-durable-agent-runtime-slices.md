@@ -1,0 +1,175 @@
+# Durable Multi-Agent Runtime Issue Slices
+
+Status: Local draft
+
+Source: [PRD-0001](../prd/0001-durable-agent-runtime.md)
+
+Decision: [ADR-0001](../adr/0001-embedded-durable-agent-runtime.md)
+
+These slices are ordered for test-driven implementation. Each slice must leave the public behavior it introduces passing before the next slice begins.
+
+## Slice 1: Define the Runtime domain and Store contract
+
+Introduce Agent ID, Factory ID, Agent Run, Runtime Message, Runtime Event, Tool Call, lifecycle states, and a `RuntimeStateStore` interface. Implement an in-memory adapter with transactional state-transition tests.
+
+Acceptance:
+
+- Agent, Message, Run, Event, and Tool Call records use opaque IDs and explicit lifecycle unions.
+- Store operations express domain transitions rather than exposing raw collections.
+- Enqueue, lease, suspend, complete, acknowledge, dead-letter, and indeterminate transitions reject invalid prior states.
+- Tests use the Store interface and are reusable by later adapters.
+
+## Slice 2: Add the SQLite Runtime Store
+
+Implement the durable SQLite adapter and migrations with behavioral parity to the in-memory Store.
+
+Acceptance:
+
+- SQLite persists Agents, Messages, Runs, leases, Runtime Events/outbox state, and Tool Calls.
+- Enqueuing work and creating its Run are atomic.
+- Expired leases are recoverable after reopening the database.
+- The shared Store contract suite passes against memory and SQLite.
+
+Depends on: Slice 1.
+
+## Slice 3: Add the process-wide Agent Runtime and private Agent Registry
+
+Add explicit Runtime start/stop, Rowan-generated Agent IDs, private live bindings, and single-Runtime enforcement.
+
+Acceptance:
+
+- Starting a second Runtime in one process fails clearly.
+- Creating or resuming an Agent binds it internally without a public bind API.
+- Duplicate live binding for one Agent ID is rejected.
+- Stopping and restarting leaves durable records recoverable.
+- Tests isolate Runtime global state and cannot leak bindings across cases.
+
+Depends on: Slices 1-2.
+
+## Slice 4: Move Session hosting into `Agent.create()` and `Agent.resume()`
+
+Replace public direct construction with asynchronous lifecycle factories that own Session creation, restoration, and persistence callbacks.
+
+Acceptance:
+
+- `Agent.create()` creates a new Session and Agent record.
+- `Agent.resume()` restores the same Agent ID and Session ID into a new in-memory object.
+- Resume uses current model, prompt, tools, skills, and phases supplied by the caller.
+- Messages, model transcripts, outcomes, and execution state persist without an external host.
+- Missing Sessions and duplicate bindings fail explicitly.
+- Public tests no longer need to assemble persistence callbacks around `new Agent()`.
+
+Depends on: Slice 3.
+
+## Slice 5: Add Mailboxes, `Agent.send()`, and `AgentRun`
+
+Add fixed Agent Input messages, durable Run creation, non-blocking send, and the public AgentRun handle.
+
+Acceptance:
+
+- `send()` returns only after Message and Run persistence succeeds.
+- `send()` does not wait for model or Tool execution.
+- `AgentRun` exposes ID, status, `result()`, subscription, and precise abort.
+- `runWithUserInput()` delegates to `send()` and `result()` rather than executing another path.
+- Message redelivery cannot duplicate a completed Run.
+
+Depends on: Slice 4.
+
+## Slice 6: Implement Scheduler leases and Agent concurrency
+
+Schedule persisted Mailbox work with single-Agent serialization, multi-Agent concurrency, capacity controls, leases, and infrastructure retry classification.
+
+Acceptance:
+
+- Two Agents may run concurrently under available capacity.
+- One Agent never processes two Runs concurrently.
+- Per-Agent Message order is preserved and busy Agents cannot starve all others.
+- Lost or expired leases make retryable infrastructure work runnable again.
+- Business and terminal Agent failures are not retried.
+- Exhausted infrastructure retries fail the Run and dead-letter its Message.
+
+Depends on: Slice 5.
+
+## Slice 7: Suspend Runs and add preemptive Runtime Commands
+
+Persist waiting-for-input suspension and implement pause, resume, and abort outside normal Mailbox order.
+
+Acceptance:
+
+- Input requests suspend the current Run and release its lease and capacity.
+- The next `send()` resumes the same Run rather than creating another Run.
+- Suspended Runs survive Store reopen and Factory reconstruction.
+- Abort terminates running or suspended work without becoming a Session message.
+- Pause and resume produce durable Runtime Events.
+
+Depends on: Slice 6.
+
+## Slice 8: Add Factory recovery
+
+Register host Factories by opaque Factory ID and automatically reconstruct unfinished or messaged Agents after Runtime restart.
+
+Acceptance:
+
+- Runtime records Agent ID, Session ID, and Factory ID without inspecting business meaning.
+- Factory recovery does not match on Session ID patterns.
+- Factories receive opaque recovery identity and return current Agent construction options.
+- Missing Factory or host association leaves the Agent unbound and observable.
+- Reconstruction calls the same private binding path as explicit resume.
+- No executable Agent definition or definition version is serialized.
+
+Depends on: Slices 3-7.
+
+## Slice 10: Split durable Runtime Events from transient Stream Events
+
+Add transactional Runtime Event/outbox delivery while preserving transient Agent streaming for live consumers.
+
+Acceptance:
+
+- Recovery-relevant transitions emit durable Runtime Events transactionally.
+- Runtime Event subscribers can resume from a durable cursor or acknowledgement.
+- Model deltas, message updates, and partial Tool output are not persisted.
+- Stream Events cannot mutate Runtime State or make an Agent runnable.
+- Existing live Agent subscription behavior remains available through the new lifecycle.
+- The Extension EventBus remains transient and is not reused as the Runtime Event outbox.
+
+Depends on: Slices 2-8.
+
+## Slice 11: Centralize Tool execution in Tool Runtime
+
+Route all Tool Calls through one Runtime-controlled executor with capability checks, narrowing policy, limits, abort, and durable call state.
+
+Acceptance:
+
+- Only Tools supplied to the Agent may execute.
+- Runtime policy may remove but never add Tool Capability.
+- Global and per-Tool concurrency limits apply across Agents.
+- Abort propagates to active Tool adapters.
+- Definite Tool failures are terminal results, not infrastructure retries.
+- Interrupted uncertain side effects become indeterminate and cannot be blindly retried.
+
+Depends on: Slices 2, 6-7.
+
+## Slice 12: Migrate Rowan CLI and remove the legacy lifecycle
+
+Move Rowan CLI and examples to explicit Runtime startup, `Agent.create()` / `Agent.resume()`, `send()`, AgentRun, and Factory registration. Remove public direct construction and duplicate lifecycle paths.
+
+Acceptance:
+
+- Rowan CLI starts and stops one configured Runtime.
+- New and resumed CLI Sessions use the public Agent lifecycle.
+- Examples cover non-blocking send, waiting on AgentRun, and suspended input.
+- Public exports and README describe only the new lifecycle.
+- Tests prove no external Session host is required.
+- Release notes identify the breaking API and downstream migration requirements.
+
+Depends on: Slices 4-11.
+
+## Verification Order
+
+For each slice:
+
+1. Add a failing test at the public seam introduced by the slice.
+2. Implement the smallest behavior that makes it pass.
+3. Run the focused package test file.
+4. Run `bun test packages/agent`.
+5. Run `bun run build` before marking the slice complete.
