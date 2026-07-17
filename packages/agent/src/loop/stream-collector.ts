@@ -88,7 +88,7 @@ async function collectStreamResult(input: {
     if (abortResult.stopReason !== "none") {
       // Flush the partial assistant reply so it lands in the transcript as a
       // completed message. This keeps the user/assistant alternation intact
-      // and lets the next runWithUserInput resume from this snapshot.
+      // and lets the next durable Agent Input resume from this snapshot.
       if (activeMessageId) {
         await input.message.end(activeMessageId);
         activeMessageId = undefined;

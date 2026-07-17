@@ -6,26 +6,28 @@ import type {
   AgentRunId,
   LeaseId,
   RuntimeEvent,
+  RuntimeEventCheckpoint,
   RuntimeEventId,
   RuntimeEventKind,
   RuntimeLease,
   RuntimeMessage,
   RuntimeMessageId,
-  RuntimeMessagePayload,
   RuntimeToolCall,
   RuntimeToolCallId,
 } from "./domain";
 import type {
   CompleteRunInput,
+  ExhaustRunInput,
   CompleteToolCallInput,
   CreateAgentInput,
   CreateToolCallInput,
   EnqueueAgentInput,
-  EnqueueMessageInput,
   IndeterminateToolCallInput,
   LeaseRunInput,
   LeasedRun,
   RuntimeStateStore,
+  RetryRunInput,
+  RenewLeaseInput,
   SuspendRunInput,
 } from "./store";
 
@@ -60,6 +62,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
   private readonly runs = new Map<AgentRunId, AgentRunRecord>();
   private readonly toolCalls = new Map<RuntimeToolCallId, RuntimeToolCall>();
   private readonly events: RuntimeEvent[] = [];
+  private readonly eventCheckpoints = new Map<string, RuntimeEventCheckpoint>();
 
   async createAgent(input: CreateAgentInput): Promise<AgentRecord> {
     const { timestamp } = now();
@@ -81,11 +84,6 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return agent ? clone(agent) : undefined;
   }
 
-  async getAgentBySessionId(sessionId: string): Promise<AgentRecord | undefined> {
-    const agent = [...this.agents.values()].find((candidate) => candidate.sessionId === sessionId);
-    return agent ? clone(agent) : undefined;
-  }
-
   async listAgents(): Promise<AgentRecord[]> {
     return clone([...this.agents.values()]);
   }
@@ -93,32 +91,11 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
   async setAgentState(agentId: AgentId, state: AgentRecord["state"]): Promise<AgentRecord> {
     const agent = this.requireAgent(agentId);
     if (agent.state === state) return clone(agent);
-    if (agent.state === "stopped") {
-      throw transitionError("Agent", agent.id, agent.state, state === "active" ? "resume" : "pause");
-    }
     const { timestamp } = now();
     agent.state = state;
     agent.updatedAt = timestamp;
     this.recordEvent(state === "paused" ? "agent_paused" : "agent_resumed", { agentId });
     return clone(agent);
-  }
-
-  async enqueueMessage(input: EnqueueMessageInput): Promise<RuntimeMessage> {
-    this.requireAgent(input.agentId);
-    const { timestamp } = now();
-    const message: RuntimeMessage = {
-      id: createId("rmsg") as RuntimeMessageId,
-      agentId: input.agentId,
-      kind: input.payload.type,
-      payload: clone(input.payload),
-      state: "queued",
-      attempts: 0,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    this.messages.set(message.id, message);
-    this.recordEvent("message_enqueued", { agentId: message.agentId, messageId: message.id });
-    return clone(message);
   }
 
   async enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord; resumed: boolean }> {
@@ -133,7 +110,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       id: messageId,
       agentId: input.agentId,
       kind: "agent_input",
-      payload: { type: "agent_input", input: clone(input.input) },
+      input: clone(input.input),
       state: "queued",
       attempts: 0,
       runId,
@@ -220,6 +197,27 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return { run: clone(run), message: clone(message), lease: clone(lease) };
   }
 
+  async renewLease(input: RenewLeaseInput): Promise<RuntimeLease> {
+    const run = this.requireRun(input.runId);
+    requireTransition("Agent Run", run.id, run.state, "renew Lease", ["running"]);
+    const message = this.requireMessage(run.messageId);
+    requireTransition("Runtime Message", message.id, message.state, "renew Lease", ["leased"]);
+    if (run.leaseId !== input.leaseId || message.lease?.id !== input.leaseId) {
+      throw new Error(`Lease ${input.leaseId} does not own Agent Run ${run.id}.`);
+    }
+    if (!Number.isFinite(input.leaseDurationMs) || input.leaseDurationMs <= 0) {
+      throw new Error("Lease duration must be a positive finite number.");
+    }
+    const { date, timestamp } = now(input.now);
+    const lease: RuntimeLease = {
+      ...message.lease,
+      expiresAt: createTimestamp(new Date(date.getTime() + input.leaseDurationMs)),
+    };
+    message.lease = lease;
+    message.updatedAt = timestamp;
+    return clone(lease);
+  }
+
   async suspendRun(input: SuspendRunInput): Promise<AgentRunRecord> {
     const run = this.requireRun(input.runId);
     requireTransition("Agent Run", run.id, run.state, "suspend", ["running"]);
@@ -242,15 +240,65 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
   async completeRun(input: CompleteRunInput): Promise<AgentRunRecord> {
     const run = this.requireRun(input.runId);
     requireTransition("Agent Run", run.id, run.state, "complete", ["running"]);
+    const message = this.requireMessage(run.messageId);
+    requireTransition("Runtime Message", message.id, message.state, "acknowledge", ["leased"]);
     const { timestamp } = now();
     const state = input.state ?? "completed";
     run.state = state;
     run.outcome = clone(input.outcome);
     delete run.leaseId;
     run.updatedAt = timestamp;
+    message.state = "acknowledged";
+    delete message.lease;
+    message.updatedAt = timestamp;
     this.recordEvent("run_completed", { agentId: run.agentId, messageId: run.messageId, runId: run.id }, {
       state,
       outcome: input.outcome,
+    });
+    this.recordEvent("message_acknowledged", { agentId: message.agentId, messageId: message.id });
+    return clone(run);
+  }
+
+  async retryRun(input: RetryRunInput): Promise<AgentRunRecord> {
+    const run = this.requireRun(input.runId);
+    requireTransition("Agent Run", run.id, run.state, "retry", ["running"]);
+    const message = this.requireMessage(run.messageId);
+    requireTransition("Runtime Message", message.id, message.state, "retry", ["leased"]);
+    const { timestamp } = now();
+    run.state = "queued";
+    delete run.leaseId;
+    run.updatedAt = timestamp;
+    message.state = "queued";
+    delete message.lease;
+    message.updatedAt = timestamp;
+    this.recordEvent("run_retry_scheduled", {
+      agentId: run.agentId,
+      messageId: message.id,
+      runId: run.id,
+    }, { reason: input.reason, attempt: run.attempt });
+    return clone(run);
+  }
+
+  async exhaustRun(input: ExhaustRunInput): Promise<AgentRunRecord> {
+    const run = this.requireRun(input.runId);
+    requireTransition("Agent Run", run.id, run.state, "exhaust retries", ["running"]);
+    const message = this.requireMessage(run.messageId);
+    requireTransition("Runtime Message", message.id, message.state, "dead-letter", ["leased"]);
+    const { timestamp } = now();
+    run.state = "failed";
+    run.outcome = clone(input.outcome);
+    delete run.leaseId;
+    run.updatedAt = timestamp;
+    message.state = "dead_lettered";
+    message.deadLetterReason = input.reason;
+    delete message.lease;
+    message.updatedAt = timestamp;
+    this.recordEvent("run_completed", { agentId: run.agentId, messageId: message.id, runId: run.id }, {
+      state: "failed",
+      outcome: input.outcome,
+    });
+    this.recordEvent("message_dead_lettered", { agentId: run.agentId, messageId: message.id }, {
+      reason: input.reason,
     });
     return clone(run);
   }
@@ -275,41 +323,6 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return clone(run);
   }
 
-  async acknowledgeMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage> {
-    const message = this.requireMessage(messageId);
-    requireTransition("Runtime Message", message.id, message.state, "acknowledge", ["queued", "leased"]);
-    if (message.runId) {
-      const run = this.requireRun(message.runId);
-      if (!["suspended", "completed", "failed", "cancelled"].includes(run.state)) {
-        throw new Error(`Cannot acknowledge Runtime Message ${message.id} while its Run is ${run.state}.`);
-      }
-    }
-    const { timestamp } = now();
-    message.state = "acknowledged";
-    delete message.lease;
-    message.updatedAt = timestamp;
-    this.recordEvent("message_acknowledged", { agentId: message.agentId, messageId: message.id });
-    return clone(message);
-  }
-
-  async deadLetterMessage(messageId: RuntimeMessageId, reason: string): Promise<RuntimeMessage> {
-    const message = this.requireMessage(messageId);
-    requireTransition("Runtime Message", message.id, message.state, "dead-letter", ["queued", "leased"]);
-    if (message.runId) {
-      const run = this.requireRun(message.runId);
-      if (run.state !== "queued") {
-        throw new Error(`Cannot dead-letter Runtime Message ${message.id} while its Run is ${run.state}.`);
-      }
-    }
-    const { timestamp } = now();
-    message.state = "dead_lettered";
-    message.deadLetterReason = reason;
-    delete message.lease;
-    message.updatedAt = timestamp;
-    this.recordEvent("message_dead_lettered", { agentId: message.agentId, messageId: message.id }, { reason });
-    return clone(message);
-  }
-
   async recoverExpiredLeases(input?: Date): Promise<AgentRunRecord[]> {
     const { date, timestamp } = now(input);
     const recovered: AgentRunRecord[] = [];
@@ -324,6 +337,25 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       delete message.lease;
       message.updatedAt = timestamp;
       this.recordEvent("lease_expired", { agentId: run.agentId, messageId: message.id, runId: run.id });
+      recovered.push(clone(run));
+    }
+    return recovered;
+  }
+
+  async recoverLeases(): Promise<AgentRunRecord[]> {
+    const { timestamp } = now();
+    const recovered: AgentRunRecord[] = [];
+    for (const run of this.runs.values()) {
+      if (run.state !== "running" || !run.leaseId) continue;
+      const message = this.requireMessage(run.messageId);
+      if (message.state !== "leased" || !message.lease) continue;
+      run.state = "queued";
+      delete run.leaseId;
+      run.updatedAt = timestamp;
+      message.state = "queued";
+      delete message.lease;
+      message.updatedAt = timestamp;
+      this.recordEvent("lease_recovered", { agentId: run.agentId, messageId: message.id, runId: run.id });
       recovered.push(clone(run));
     }
     return recovered;
@@ -360,12 +392,19 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
 
   async completeToolCall(input: CompleteToolCallInput): Promise<RuntimeToolCall> {
     const toolCall = this.requireToolCall(input.toolCallId);
-    requireTransition("Tool Call", toolCall.id, toolCall.state, "complete", ["running"]);
+    const state = input.state ?? (input.result.ok ? "completed" : "failed");
+    requireTransition(
+      "Tool Call",
+      toolCall.id,
+      toolCall.state,
+      "complete",
+      state === "failed" ? ["queued", "running"] : ["running"],
+    );
     const { timestamp } = now();
-    toolCall.state = input.state ?? (input.result.ok ? "completed" : "failed");
+    toolCall.state = state;
     toolCall.result = clone(input.result);
     toolCall.updatedAt = timestamp;
-    this.recordEvent("tool_call_completed", {
+    this.recordEvent(state === "failed" ? "tool_call_failed" : "tool_call_completed", {
       agentId: toolCall.agentId,
       runId: toolCall.runId,
       toolCallId: toolCall.id,
@@ -411,14 +450,33 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return clone(this.events.at(-1)!);
   }
 
-  async acknowledgeEvent(eventId: RuntimeEventId): Promise<RuntimeEvent> {
+  async getEventCheckpoint(consumerId: string): Promise<RuntimeEventCheckpoint> {
+    return clone(this.eventCheckpoints.get(consumerId) ?? {
+      consumerId,
+      sequence: 0,
+      updatedAt: createTimestamp(new Date(0)),
+    });
+  }
+
+  async acknowledgeEvent(
+    consumerId: string,
+    eventId: RuntimeEventId,
+  ): Promise<RuntimeEventCheckpoint> {
     const event = this.events.find((candidate) => candidate.id === eventId);
-    if (!event) {
-      throw new Error(`Runtime Event not found: ${eventId}.`);
+    if (!event) throw new Error(`Runtime Event not found: ${eventId}.`);
+    const current = await this.getEventCheckpoint(consumerId);
+    if (event.sequence <= current.sequence) return current;
+    if (event.sequence !== current.sequence + 1) {
+      throw new Error(`Runtime Event Consumer Checkpoint cannot advance from sequence ${current.sequence} to ${event.sequence}.`);
     }
-    requireTransition("Runtime Event", event.id, event.state, "acknowledge", ["pending"]);
-    event.state = "acknowledged";
-    return clone(event);
+    const checkpoint: RuntimeEventCheckpoint = {
+      consumerId,
+      sequence: event.sequence,
+      eventId: event.id,
+      updatedAt: createTimestamp(),
+    };
+    this.eventCheckpoints.set(consumerId, checkpoint);
+    return clone(checkpoint);
   }
 
   private requireAgent(agentId: AgentId): AgentRecord {
@@ -462,7 +520,6 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       id: createId("evt") as RuntimeEventId,
       sequence: this.events.length + 1,
       kind,
-      state: "pending",
       ...related,
       ...(payload !== undefined ? { payload: clone(payload) } : {}),
       createdAt: createTimestamp(),

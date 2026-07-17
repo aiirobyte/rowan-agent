@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import {
-  asFactoryId,
   InMemoryRuntimeStateStore,
   SqliteRuntimeStateStore,
   type RuntimeStateStore,
@@ -11,7 +10,7 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     const store = createStore();
     const agent = await store.createAgent({
       sessionId: "session-1",
-      factoryId: asFactoryId("factory-test"),
+      factoryId: "factory-test",
     });
 
     const enqueued = await store.enqueueAgentInput({
@@ -28,6 +27,7 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect(agent.state).toBe("active");
     expect(enqueued.message.state).toBe("queued");
     expect(enqueued.message.kind).toBe("agent_input");
+    expect(enqueued.message.input.content).toBe("hello");
     expect(enqueued.run.state).toBe("queued");
     expect(enqueued.run.agentId).toBe(agent.id);
     expect(enqueued.run.messageId).toBe(enqueued.message.id);
@@ -70,7 +70,7 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     ).rejects.toThrow(/suspended/);
   });
 
-  test("completes a leased Run and acknowledges its triggering Message", async () => {
+  test("atomically completes a leased Run and acknowledges its triggering Message", async () => {
     const store = createStore();
     const agent = await store.createAgent({ sessionId: "session-1" });
     const enqueued = await store.enqueueAgentInput({
@@ -91,8 +91,7 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect(completed.state).toBe("completed");
     expect(completed.outcome?.message).toBe("done");
 
-    const acknowledged = await store.acknowledgeMessage(enqueued.message.id);
-    expect(acknowledged.state).toBe("acknowledged");
+    expect(await store.getMessage(enqueued.message.id)).toMatchObject({ state: "acknowledged" });
   });
 
   test("recovers an expired lease back to queued work", async () => {
@@ -120,6 +119,37 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect((await store.getMessage(enqueued.message.id))?.state).toBe("queued");
   });
 
+  test("renews the current Lease without changing Run ownership", async () => {
+    const store = createStore();
+    const agent = await store.createAgent({ sessionId: "session-1" });
+    const enqueued = await store.enqueueAgentInput({
+      agentId: agent.id,
+      input: {
+        id: "message-1",
+        role: "user",
+        content: "hello",
+        createdAt: "2026-01-01T00:00:00.000+00:00",
+      },
+    });
+    const leased = await store.leaseRun({
+      runId: enqueued.run.id,
+      workerId: "worker-1",
+      leaseDurationMs: 10_000,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+
+    const renewed = await store.renewLease({
+      runId: leased.run.id,
+      leaseId: leased.lease.id,
+      leaseDurationMs: 30_000,
+      now: new Date("2026-01-01T00:00:05.000Z"),
+    });
+
+    expect(renewed.id).toBe(leased.lease.id);
+    expect(renewed.expiresAt).toBe("2026-01-01T00:00:35.000+00:00");
+    expect((await store.getRun(leased.run.id))?.state).toBe("running");
+  });
+
   test("rejects invalid lifecycle transitions", async () => {
     const store = createStore();
     const agent = await store.createAgent({ sessionId: "session-1" });
@@ -145,48 +175,42 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     await expect(
       store.suspendRun({ runId: enqueued.run.id }),
     ).rejects.toThrow(/suspended/);
-
-    const manualMessage = await store.enqueueMessage({
-      agentId: agent.id,
-      payload: {
-        type: "agent_input",
-        input: {
-          id: "message-2",
-          role: "user",
-          content: "another input",
-          createdAt: "2026-01-01T00:00:00.000+00:00",
-        },
-      },
-    });
-    await expect(store.acknowledgeMessage(manualMessage.id)).resolves.toMatchObject({ state: "acknowledged" });
-    await expect(store.acknowledgeMessage(manualMessage.id)).rejects.toThrow(/acknowledged/);
-    await expect(store.deadLetterMessage(manualMessage.id, "already acknowledged")).rejects.toThrow(/acknowledged/);
   });
 
-  test("dead-letters queued messages and records an acknowledged Runtime Event", async () => {
+  test("dead-letters queued messages and advances one Runtime Event Consumer Checkpoint", async () => {
     const store = createStore();
     const agent = await store.createAgent({ sessionId: "session-1" });
-    const message = await store.enqueueMessage({
+    const enqueued = await store.enqueueAgentInput({
       agentId: agent.id,
-      payload: {
-        type: "agent_input",
-        input: {
-          id: "message-1",
-          role: "user",
-          content: "hello",
-          createdAt: "2026-01-01T00:00:00.000+00:00",
-        },
+      input: {
+        id: "message-1",
+        role: "user",
+        content: "hello",
+        createdAt: "2026-01-01T00:00:00.000+00:00",
       },
     });
 
-    const deadLettered = await store.deadLetterMessage(message.id, "exhausted retries");
-    expect(deadLettered.state).toBe("dead_lettered");
+    await store.leaseRun({ runId: enqueued.run.id, workerId: "worker-1", leaseDurationMs: 30_000 });
+    await store.exhaustRun({
+      runId: enqueued.run.id,
+      outcome: { id: "outcome-1", message: "exhausted retries" },
+      reason: "exhausted retries",
+    });
+    expect(await store.getMessage(enqueued.message.id)).toMatchObject({
+      state: "dead_lettered",
+      deadLetterReason: "exhausted retries",
+    });
 
     const event = (await store.listEvents()).at(-1);
-    expect(event?.state).toBe("pending");
     expect(event?.kind).toBe("message_dead_lettered");
-    const acknowledged = await store.acknowledgeEvent(event!.id);
-    expect(acknowledged.state).toBe("acknowledged");
+    const consumerId = "store-contract-consumer";
+    expect(await store.getEventCheckpoint(consumerId)).toMatchObject({ consumerId, sequence: 0 });
+    await expect(store.acknowledgeEvent(consumerId, event!.id)).rejects.toThrow(/Checkpoint/);
+    let checkpoint = await store.getEventCheckpoint(consumerId);
+    for (const pendingEvent of await store.listEvents()) {
+      checkpoint = await store.acknowledgeEvent(consumerId, pendingEvent.id);
+    }
+    expect(checkpoint).toMatchObject({ consumerId, sequence: event!.sequence, eventId: event!.id });
   });
 
   test("marks only a running Tool Call indeterminate", async () => {
@@ -218,6 +242,36 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect(indeterminate.state).toBe("indeterminate");
     expect(indeterminate.indeterminateReason).toContain("side effect");
     await expect(store.startToolCall(call.id)).rejects.toThrow(/indeterminate/);
+  });
+
+  test("fails a queued Tool Call only when execution never started", async () => {
+    const store = createStore();
+    const agent = await store.createAgent({ sessionId: "session-1" });
+    const enqueued = await store.enqueueAgentInput({
+      agentId: agent.id,
+      input: {
+        id: "message-1",
+        role: "user",
+        content: "hello",
+        createdAt: "2026-01-01T00:00:00.000+00:00",
+      },
+    });
+    const call = await store.createToolCall({
+      agentId: agent.id,
+      runId: enqueued.run.id,
+      name: "queued-tool",
+      args: {},
+    });
+    const result = {
+      toolCallId: call.id,
+      toolName: call.name,
+      ok: false,
+      content: "cancelled before start",
+      error: "cancelled before start",
+    };
+
+    await expect(store.completeToolCall({ toolCallId: call.id, result, state: "failed" }))
+      .resolves.toMatchObject({ state: "failed" });
   });
 }
 

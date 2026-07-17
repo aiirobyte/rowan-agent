@@ -75,15 +75,15 @@ the first byte.
 
 ### Provider Registry
 
-The dispatch layer routes requests to the right provider based on the model's `api` field.
+The model stream routes requests to the right provider based on the model's `api` field.
 
 ```ts
-import { stream, streamByRef, createDispatchStream, registerApiProvider } from "@rowan-agent/models";
+import { stream, streamByRef, createModelStream, registerApiProvider } from "@rowan-agent/models";
 
 for await (const event of stream(model, request, { signal })) { ... }
 for await (const event of streamByRef("openai/gpt-4.1-mini", request)) { ... }
 
-const streamFn = createDispatchStream();  // reusable StreamFn
+const streamFn = createModelStream();  // reusable StreamFn
 registerApiProvider({ api: "my-api", stream: myApiStreamFn });  // custom provider
 ```
 
@@ -183,4 +183,4 @@ src/
 
 ## Version
 
-Current version: **0.5.6**
+Current version: **0.6.0**

@@ -1,23 +1,21 @@
 import { expect, test } from "bun:test";
 import {
-  Agent,
   AgentRuntime,
   InMemoryRuntimeStateStore,
-  asFactoryId,
   createMessage,
   type AgentContext,
   type AgentEvent,
   type RuntimeEvent,
-  ToolRuntime,
 } from "../../src";
 import Type from "typebox";
 import { InMemorySessionManager } from "../../src/harness/session";
 import type { CreateSessionManagerInput, SessionManager } from "../../src/harness/session/session-manager";
-import type { RuntimeSessionManagerProvider } from "../../src/runtime";
+import type { SessionManagerProvider } from "../../src/harness/session/session-manager";
 import { createTestContext } from "../support/agent-run";
 import { yieldRouteToolCall } from "../support/scripted-stream";
+import { ToolRuntime } from "../../src/runtime/tool-runtime";
 
-type TestProvider = RuntimeSessionManagerProvider & { get(id: string): SessionManager | undefined };
+type TestProvider = SessionManagerProvider & { get(id: string): SessionManager | undefined };
 
 function provider(): TestProvider {
   const sessions = new Map<string, SessionManager>();
@@ -49,7 +47,7 @@ function options(input: {
       yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
       yield { type: "done" };
     }),
-    ...(input.factoryId ? { factoryId: asFactoryId(input.factoryId) } : {}),
+    ...(input.factoryId ? { factoryId: input.factoryId } : {}),
     ...(input.onOutcome ? { onOutcome: input.onOutcome } : {}),
   };
 }
@@ -75,10 +73,10 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
     yield* yieldRouteToolCall("stop");
     yield { type: "done" };
   };
-  const runtime = await AgentRuntime.start({ stateStore, sessionManager });
-  const unsubscribe = runtime.subscribeEvents((event) => { events.push(event); });
+  const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  const unsubscribe = runtime.consumeEvents("runtime-slices", (event) => { events.push(event); });
   try {
-    const agent = await Agent.create(options({ stream, context: {
+    const agent = await runtime.createAgent(options({ stream, context: {
       ...createTestContext(),
       phases: {
         phases: new Map([
@@ -90,8 +88,8 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
     } }));
     const first = await agent.send("need input");
     await waitFor(async () => (await stateStore.getRun(first.id))?.state === "suspended");
-    await runtime.pauseAgent(agent.getAgentId()!);
-    await runtime.resumeAgent(agent.getAgentId()!);
+    await runtime.pauseAgent(agent.id);
+    await runtime.resumeAgent(agent.id);
     const second = await agent.send("continue");
     expect(second.id).toBe(first.id);
     await second.result();
@@ -105,15 +103,15 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
 test("Runtime restart reconstructs unfinished Agents through opaque Factory IDs", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const sessionManager = provider();
-  const factoryId = asFactoryId("factory_current");
+  const factoryId = "factory_current";
   const outcomes: string[] = [];
-  const runtime = await AgentRuntime.start({ stateStore, sessionManager });
+  const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
   let agentId: import("../../src").AgentId;
   let sessionId: string;
   try {
-    const agent = await Agent.create(options({ factoryId: "factory_current", onOutcome: async (outcome) => { outcomes.push(outcome.message); } }));
-    agentId = agent.getAgentId()!;
-    sessionId = agent.getSessionId()!;
+    const agent = await runtime.createAgent(options({ factoryId: "factory_current", onOutcome: async (outcome) => { outcomes.push(outcome.message); } }));
+    agentId = agent.id;
+    sessionId = agent.sessionId;
   } finally {
     await runtime.stop();
   }
@@ -121,7 +119,7 @@ test("Runtime restart reconstructs unfinished Agents through opaque Factory IDs"
   await stateStore.enqueueAgentInput({ agentId: agentId!, input: createMessage("user", "recover me") });
   const restarted = await AgentRuntime.start({
     stateStore,
-    sessionManager,
+    sessionProvider: sessionManager,
     factories: new Map([[factoryId, async () => options({ onOutcome: async (outcome) => { outcomes.push(outcome.message); } })]]),
   });
   try {
@@ -129,6 +127,23 @@ test("Runtime restart reconstructs unfinished Agents through opaque Factory IDs"
     expect(await stateStore.getAgent(agentId!)).toMatchObject({ sessionId, factoryId, state: "active" });
   } finally {
     await restarted.stop();
+  }
+});
+
+test("Factory refusal is observable as Agent recovery failure, not a missing Factory", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const factoryId = "declining-factory";
+  const agent = await stateStore.createAgent({ sessionId: "missing-host-association", factoryId });
+  const runtime = await AgentRuntime.start({
+    stateStore,
+    factories: new Map([[factoryId, () => undefined]]),
+  });
+  try {
+    const recoveryEvents = (await runtime.listEvents()).filter((event) => event.agentId === agent.id);
+    expect(recoveryEvents.map((event) => event.kind)).toContain("agent_recovery_failed");
+    expect(recoveryEvents.map((event) => event.kind)).not.toContain("factory_missing");
+  } finally {
+    await runtime.stop();
   }
 });
 
@@ -174,11 +189,104 @@ test("Tool Runtime narrows capabilities, enforces concurrency, and records indet
     context: { skills: [] },
     signal: controller.signal,
   });
-  await waitFor(async () => (await stateStore.listEvents()).filter((event) => event.kind === "tool_call_started").length >= 2);
+  await waitFor(async () => (await stateStore.listEvents()).filter((event) => event.kind === "tool_call_started").length >= 1);
   controller.abort();
   releaseTool?.();
   const interrupted = await pending;
   expect(interrupted.ok).toBe(false);
   const toolCalls = (await stateStore.listEvents()).filter((event) => event.kind === "tool_call_indeterminate");
   expect(toolCalls).toHaveLength(1);
+});
+
+test("Tool Runtime reserves capacity before waking more queued Tool Calls", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const agent = await stateStore.createAgent({ sessionId: "session-tool-capacity" });
+  const enqueued = await stateStore.enqueueAgentInput({ agentId: agent.id, input: createMessage("user", "tools") });
+  const leased = await stateStore.leaseRun({ runId: enqueued.run.id, workerId: "test", leaseDurationMs: 10_000 });
+  let releaseFirst!: () => void;
+  let releaseRemaining!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const remainingGate = new Promise<void>((resolve) => { releaseRemaining = resolve; });
+  let invocations = 0;
+  let active = 0;
+  let peak = 0;
+  const tool = {
+    name: "serial",
+    description: "serial",
+    parameters: Type.Object({}),
+    execute: async () => {
+      const invocation = ++invocations;
+      active += 1;
+      peak = Math.max(peak, active);
+      await (invocation === 1 ? firstGate : remainingGate);
+      active -= 1;
+      return { toolCallId: `serial-${invocation}`, toolName: "serial", ok: true, content: "done" };
+    },
+  };
+  const runtime = new ToolRuntime(stateStore, { maxConcurrent: 1 });
+  const execute = (id: string) => runtime.execute({
+    agentId: agent.id,
+    runId: leased.run.id,
+    tool,
+    toolCall: { id, name: "serial", args: {} },
+    context: { skills: [] },
+  });
+
+  const first = execute("serial-1");
+  await waitFor(() => Promise.resolve(invocations === 1));
+  const second = execute("serial-2");
+  const third = execute("serial-3");
+  releaseFirst();
+  await waitFor(() => Promise.resolve(invocations >= 2));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(peak).toBe(1);
+  releaseRemaining();
+  await Promise.all([first, second, third]);
+});
+
+test("Tool Runtime fails an aborted queued Tool Call without marking it indeterminate", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const agent = await stateStore.createAgent({ sessionId: "session-tool-abort" });
+  const enqueued = await stateStore.enqueueAgentInput({ agentId: agent.id, input: createMessage("user", "tools") });
+  const leased = await stateStore.leaseRun({ runId: enqueued.run.id, workerId: "test", leaseDurationMs: 10_000 });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tool = {
+    name: "serial",
+    description: "serial",
+    parameters: Type.Object({}),
+    execute: async () => {
+      await gate;
+      return { toolCallId: "serial", toolName: "serial", ok: true, content: "done" };
+    },
+  };
+  const runtime = new ToolRuntime(stateStore, { maxConcurrent: 1 });
+  const first = runtime.execute({
+    agentId: agent.id,
+    runId: leased.run.id,
+    tool,
+    toolCall: { id: "running", name: "serial", args: {} },
+    context: { skills: [] },
+  });
+  await waitFor(async () => (await stateStore.listEvents()).some((event) => event.kind === "tool_call_started"));
+  const controller = new AbortController();
+  const queued = runtime.execute({
+    agentId: agent.id,
+    runId: leased.run.id,
+    tool,
+    toolCall: { id: "queued", name: "serial", args: {} },
+    context: { skills: [] },
+    signal: controller.signal,
+  });
+  await waitFor(async () => (await stateStore.listEvents()).filter((event) => event.kind === "tool_call_created").length === 2);
+  controller.abort();
+  const result = await queued;
+  release();
+  await first;
+
+  const created = (await stateStore.listEvents()).filter((event) => event.kind === "tool_call_created");
+  const queuedCall = await stateStore.getToolCall(created[1]!.toolCallId!);
+  expect(result.ok).toBe(false);
+  expect(queuedCall?.state).toBe("failed");
+  expect((await stateStore.listEvents()).filter((event) => event.kind === "tool_call_indeterminate")).toHaveLength(0);
 });

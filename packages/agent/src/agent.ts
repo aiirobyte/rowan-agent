@@ -1,46 +1,22 @@
-import { runAgentLoop } from "./agent-loop";
-import { snapshotMessages } from "./loop/state";
-import {
-  loadSkills as loadSkillsFromFiles,
-  readSkillContent,
-} from "./harness/skills";
-import {
-  loadPhases as loadPhasesFromFiles,
-  readPhaseContent,
-} from "./harness/phases/loader";
-import { createExtensionRunner, type ExtensionRunner, type LoadedExtension } from "./extensions";
-import { loadExtensionsFromPath } from "./extensions/loader";
-import type { LoadExtensionsResult } from "./extensions/types";
-import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
-import { DEFAULT_PHASE_ID, createDefaultPhase } from "./harness/phases/default";
-import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "./harness/phases/types";
+import { AgentExecution } from "./agent-execution";
+import type { LoadedExtension } from "./extensions";
 import { createMessage } from "./types";
 import type {
-  AgentMessage,
-  Skill,
-  LlmModelRef,
-  StreamFn,
-  BeforeToolCall,
-  Tool,
   AfterToolCall,
-  RunResult,
-  AgentEvent,
   AgentContext,
   AgentEventListener,
-  Unsubscribe,
+  AgentMessage,
+  BeforeToolCall,
+  LlmModelRef,
+  StreamFn,
   ToolResult,
-  Outcome,
+  Unsubscribe,
 } from "./types";
+import type { AgentId, AgentRunId } from "./runtime/domain";
+import type { AgentRun } from "./runtime/agent-run";
+import type { RuntimeToolExecutionInput } from "./runtime/tool-runtime";
+import type { Outcome } from "./protocol";
 import type { ModelTranscript } from "./protocol/turn";
-import { createId } from "./utils";
-import type { FactoryId, AgentId } from "./runtime/domain";
-import {
-  AgentRuntime,
-  bindAgentSymbol,
-  scheduleRunSymbol,
-  type RuntimeRunControl,
-} from "./runtime/agent-runtime";
-import { AgentRun } from "./runtime/agent-run";
 import type { SessionManager } from "./harness/session/session-manager";
 
 export type AgentOptions = {
@@ -49,771 +25,126 @@ export type AgentOptions = {
   stream: StreamFn;
   cwd?: string;
   extensions?: LoadedExtension[];
-  sessionId?: string;
-  agentId?: AgentId;
   maxAttempts?: number;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   onMessage?: (message: AgentMessage) => Promise<void>;
-  /** Internal managed-lifecycle hook for persisting each submitted input. */
-  onInput?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
-  /** Internal Runtime-owned Tool executor installed by Agent.create/resume. */
-  runtime?: import("./loop/types").AgentRuntimePort;
 };
 
 export type AgentCreateOptions = AgentOptions & {
   input?: string;
-  factoryId?: FactoryId;
+  factoryId?: string;
 };
 
-export type AgentResumeOptions = AgentOptions & {
+export type AgentRunControl = {
+  suspend(reason?: string): Promise<void>;
+};
+
+const AGENT_CONSTRUCTION = Symbol("rowan.agent.construction");
+const ATTACH_AGENT = Symbol("rowan.agent.attach");
+
+export type AttachedAgentBinding = {
+  abort(reason?: string): void;
+  execute(input: AgentMessage, runId: AgentRunId, control: AgentRunControl): Promise<Outcome>;
+};
+
+export type AttachAgentInput = {
+  options: AgentOptions;
+  agentId: AgentId;
   sessionId: string;
-};
-
-export type RunOptions = Partial<AgentOptions>;
-
-type RuntimeRunHooks = {
-  onSuspend?: (reason?: string) => Promise<void> | void;
-};
-
-export type AgentStatus = {
-  agentId?: AgentId;
-  sessionId?: string;
-  context: AgentContext;
-  model: LlmModelRef;
-  tools: Tool[];
-  initialized: boolean;
-  running: boolean;
-  currentResult?: RunResult;
-  error?: string;
+  manager: SessionManager;
+  submit(input: AgentMessage, persist: () => Promise<void>): Promise<AgentRun>;
+  executeTool(input: RuntimeToolExecutionInput): Promise<ToolResult>;
 };
 
 export class Agent {
-  readonly state: AgentStatus;
-  private options: AgentOptions;
-  private readonly listeners = new Set<AgentEventListener>();
-  private readonly pendingListenerTasks = new Set<Promise<void>>();
-  private readonly listenerErrors: unknown[] = [];
-  private activeRun?: {
-    promise: Promise<RunResult>;
-    abortController: AbortController;
-    resume?: (messages: AgentMessage[]) => void;
-  };
-  private extensionRunner?: ExtensionRunner;
-  private loadedExtensions?: LoadedExtension[];
-  private loadedExtensionsCwd?: string;
-  private runtimeRunId?: import("./runtime/domain").AgentRunId;
+  private constructor(
+    token: typeof AGENT_CONSTRUCTION,
+    readonly id: AgentId,
+    readonly sessionId: string,
+    private readonly execution: AgentExecution,
+    private readonly submitInput: (input: AgentMessage) => Promise<AgentRun>,
+  ) {
+    if (token !== AGENT_CONSTRUCTION) {
+      throw new Error("Agent lifecycle is owned by AgentRuntime.");
+    }
+  }
+
+  static [ATTACH_AGENT](
+    id: AgentId,
+    sessionId: string,
+    execution: AgentExecution,
+    submitInput: (input: AgentMessage) => Promise<AgentRun>,
+  ): Agent {
+    return new Agent(AGENT_CONSTRUCTION, id, sessionId, execution, submitInput);
+  }
 
   static loadSkills(targetPath: string): Promise<AgentContext["skills"]> {
-    return loadSkillsFromFiles(targetPath);
+    return AgentExecution.loadSkills(targetPath);
   }
 
-  static loadPhases(targetPath: Parameters<typeof loadPhasesFromFiles>[0]): Promise<PhaseRegistry> {
-    return loadPhasesFromFiles(targetPath);
+  static loadPhases(targetPath: Parameters<typeof AgentExecution.loadPhases>[0]) {
+    return AgentExecution.loadPhases(targetPath);
   }
 
-  static loadExtensions(targetPath: string): Promise<LoadExtensionsResult> {
-    return loadExtensionsFromPath(targetPath);
-  }
-
-  static async create(options: AgentCreateOptions): Promise<Agent> {
-    const runtime = requireRuntime();
-    const provider = runtime.sessionManager;
-    if (!provider) {
-      throw new Error("Agent Runtime requires a SessionManager provider for Agent.create().");
-    }
-    const manager = await provider.create({
-      systemPrompt: options.context.systemPrompt,
-      input: options.input ?? "",
-      skills: options.context.skills,
-    });
-    if (options.input) {
-      const entries = await manager.listEntries();
-      const hasUserMessage = entries.some((entry) => entry.type === "message" && entry.message.role === "user");
-      if (!hasUserMessage) {
-        await manager.appendMessage(createMessage("user", options.input));
-      }
-    }
-    const record = await runtime.stateStore.createAgent({
-      sessionId: manager.getSessionId(),
-      ...(options.factoryId ? { factoryId: options.factoryId } : {}),
-    });
-    return createManagedAgent(options, record.id, manager);
-  }
-
-  static async resume(options: AgentResumeOptions): Promise<Agent> {
-    const runtime = requireRuntime();
-    const provider = runtime.sessionManager;
-    if (!provider) {
-      throw new Error("Agent Runtime requires a SessionManager provider for Agent.resume().");
-    }
-    const manager = await provider.open(options.sessionId);
-    if (!manager) {
-      throw new Error(`Session not found: ${options.sessionId}.`);
-    }
-    // Adopt sessions created before the durable Agent record was introduced.
-    // Once adopted, all subsequent resumes use the same opaque Agent ID.
-    const record = await runtime.stateStore.getAgentBySessionId(options.sessionId)
-      ?? await runtime.stateStore.createAgent({ sessionId: options.sessionId });
-    return createManagedAgent(options, record.id, manager);
-  }
-
-  constructor(options: AgentOptions) {
-    const context = prepareAgentContext(options.context);
-    this.options = {
-      ...options,
-      context,
-    };
-    this.state = {
-      ...(this.options.agentId ? { agentId: this.options.agentId } : {}),
-      ...(this.options.sessionId ? { sessionId: this.options.sessionId } : {}),
-      context: prepareAgentContext(context),
-      model: this.options.model,
-      tools: this.options.context.tools ?? [],
-      initialized: false,
-      running: false,
-    };
+  static loadExtensions(targetPath: string) {
+    return AgentExecution.loadExtensions(targetPath);
   }
 
   subscribe(listener: AgentEventListener): Unsubscribe {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return this.execution.subscribe(listener);
   }
 
-  appendUserMessage(input: string): void {
-    this.appendMessage(createMessage("user", input));
+  flushEvents(): Promise<void> {
+    return this.execution.flushEvents();
   }
 
-  appendMessage(message: AgentMessage): void {
-    this.appendMessages([message]);
-  }
-
-  appendMessages(messages: AgentMessage[]): void {
-    this.setMessages([...this.options.context.messages, ...snapshotMessages(messages)]);
-  }
-
-  runWithUserInput(input: string, options?: RunOptions): Promise<RunResult> {
-    const activeRun = this.activeRun;
-    if (activeRun?.resume) {
-      // Resume a paused run: deliver the user message into the loop and return
-      // the in-flight run promise (resolves only on route:stop). Do NOT append
-      // to this.options.context — the loop pushes delivered messages into its
-      // own context, and they flow back here once run() completes.
-      activeRun.resume([createMessage("user", input)]);
-      return activeRun.promise;
-    }
-    if (activeRun) {
-      return Promise.reject(new Error("Agent is already running."));
-    }
-    this.appendUserMessage(input);
-    return this.run(options);
-  }
-
-  runWithMessage(message: AgentMessage, options?: RunOptions, internalHooks: RuntimeRunHooks = {}): Promise<RunResult> {
-    const activeRun = this.activeRun;
-    if (activeRun?.resume) {
-      activeRun.resume([message]);
-      return activeRun.promise;
-    }
-    if (activeRun) {
-      return Promise.reject(new Error("Agent is already running."));
-    }
-    this.appendMessage(message);
-    return this.run(options, internalHooks);
-  }
-
-  /** Internal Runtime boundary: executes one leased fixed Runtime Message. */
-  async executeRuntimeMessage(payload: import("./runtime/domain").RuntimeMessagePayload, runId: import("./runtime/domain").AgentRunId, control: RuntimeRunControl): Promise<Outcome> {
-    this.runtimeRunId = runId;
-    const internal: RuntimeRunHooks = { onSuspend: control.suspend };
-    try {
-      return (await this.runWithMessage(payload.input, undefined, internal)).outcome;
-    } finally {
-      if (!this.activeRun) this.runtimeRunId = undefined;
-    }
-  }
-
-  async send(input: string | AgentMessage): Promise<AgentRun> {
-    const runtime = requireRuntime();
-    const agentId = this.getAgentId();
-    if (!agentId) {
-      throw new Error("Agent.send() requires an Agent created or resumed by AgentRuntime.");
-    }
+  send(input: string | AgentMessage): Promise<AgentRun> {
     const message = typeof input === "string" ? createMessage("user", input) : input;
-    const enqueued = await runtime.stateStore.enqueueAgentInput({
-      agentId,
-      input: message,
-    });
-    await this.options.onInput?.(message);
-    const run = new AgentRun(runtime, enqueued.run, message.id);
-    runtime[scheduleRunSymbol](agentId, enqueued.run.id);
-    return run;
+    return this.submitInput(message);
   }
-
-  resetInitialization(): void {
-    this.state.initialized = false;
-  }
-
-  getContext(): AgentContext {
-    return prepareAgentContext(this.options.context);
-  }
-
-  setContext(context: AgentContext): void {
-    const nextContext = prepareAgentContext(context);
-    this.options = {
-      ...this.options,
-      context: nextContext,
-    };
-    this.state.context = prepareAgentContext(nextContext, this.extensionRunner);
-    this.state.tools = this.state.context.tools ?? [];
-  }
-
-  updateContext(updater: (context: AgentContext) => AgentContext): void {
-    this.setContext(updater(this.getContext()));
-  }
-
-  forkContext(overrides: Partial<AgentContext> = {}): AgentContext {
-    return prepareAgentContext({
-      ...this.getContext(),
-      ...overrides,
-    });
-  }
-
-  getMessages(): AgentMessage[] {
-    return snapshotMessages(this.options.context.messages);
-  }
-
-  setMessages(messages: AgentMessage[]): void {
-    this.setContext({
-      ...this.options.context,
-      messages: snapshotMessages(messages),
-    });
-  }
-
-  clearMessages(): void {
-    this.setMessages([]);
-  }
-
-  getTranscript(): AgentMessage[] {
-    return this.getMessages();
-  }
-
-  replaceTranscript(messages: AgentMessage[]): void {
-    this.setMessages(messages);
-  }
-
-  getConfig(): AgentOptions {
-    return this.cloneOptions(this.options);
-  }
-
-  setConfig(config: AgentOptions): void {
-    const context = prepareAgentContext(config.context);
-    this.options = {
-      ...config,
-      context,
-      ...(config.extensions ? { extensions: config.extensions.slice() } : {}),
-    };
-    this.state.sessionId = config.sessionId;
-    this.state.context = prepareAgentContext(context, this.extensionRunner);
-    this.state.model = config.model;
-    this.state.tools = this.state.context.tools ?? [];
-  }
-
-  updateConfig(updater: (config: AgentOptions) => AgentOptions): void {
-    this.setConfig(updater(this.getConfig()));
-  }
-
-  setSessionId(sessionId: string): void {
-    this.options = {
-      ...this.options,
-      sessionId,
-    };
-    this.state.sessionId = sessionId;
-  }
-
-  getSessionId(): string | undefined {
-    return this.state.sessionId;
-  }
-
-  getAgentId(): AgentId | undefined {
-    return this.state.agentId;
-  }
-
-  /** Internal Runtime hook for associating Tool Calls with the leased Run. */
-  getRuntimeRunId(): import("./runtime/domain").AgentRunId | undefined {
-    return this.runtimeRunId;
-  }
-
-  setModel(model: LlmModelRef): void {
-    this.options = {
-      ...this.options,
-      model,
-    };
-    this.state.model = model;
-  }
-
-  setTools(tools: Tool[]): void {
-    this.setContext({
-      ...this.options.context,
-      tools: tools.slice(),
-    });
-  }
-
-  setSkills(skills: Skill[]): void {
-    this.setContext({
-      ...this.options.context,
-      skills: skills.slice(),
-    });
-  }
-
-  setPhases(phases: PhaseRegistry): void {
-    this.setContext({
-      ...this.options.context,
-      phases: clonePhaseRegistry(phases),
-    });
-  }
-
-  setCwd(cwd: string): void {
-    this.options = {
-      ...this.options,
-      cwd,
-    };
-  }
-
-  setStream(stream: StreamFn): void {
-    this.options = {
-      ...this.options,
-      stream,
-    };
-  }
-
-  getModel(): LlmModelRef {
-    return this.state.model;
-  }
-
-  getTools(): Tool[] {
-    return this.state.context.tools.slice();
-  }
-
-  getSkills(): Skill[] {
-    return this.state.context.skills.slice();
-  }
-
-  getPhases(): PhaseRegistry | undefined {
-    return this.state.context.phases ? clonePhaseRegistry(this.state.context.phases) : undefined;
-  }
-
-  getCwd(): string | undefined {
-    return this.options.cwd;
-  }
-
-  private emitToListeners(event: AgentEvent): void {
-    for (const listener of this.listeners) {
-      try {
-        const result = listener(event);
-        if (result && typeof result === "object" && "then" in result) {
-          const task = Promise.resolve(result)
-            .catch((error) => {
-              this.listenerErrors.push(error);
-            })
-            .finally(() => {
-              this.pendingListenerTasks.delete(task);
-            });
-          this.pendingListenerTasks.add(task);
-        }
-      } catch (error) {
-        this.listenerErrors.push(error);
-      }
-    }
-  }
-
-  async flushEvents(): Promise<void> {
-    while (this.pendingListenerTasks.size > 0) {
-      await Promise.all([...this.pendingListenerTasks]);
-    }
-
-    for (const listener of this.listeners) {
-      try {
-        await listener.flush?.();
-      } catch (error) {
-        this.listenerErrors.push(error);
-      }
-    }
-
-    if (this.listenerErrors.length > 0) {
-      const [error] = this.listenerErrors;
-      throw error instanceof Error ? error : new Error(String(error));
-    }
-  }
-
-  private processEvents(event: AgentEvent): void {
-    // State reducer
-    switch (event.type) {
-      case "message_start":
-        this.state.currentResult = undefined;
-        break;
-      case "message_end":
-        break;
-      case "agent_end":
-        break;
-    }
-
-    // Notify listeners
-    this.emitToListeners(event);
-
-    // Dispatch to the Agent-owned extension runner
-    this.extensionRunner?.emitAgentEvent(event);
-  }
-
-  /**
-   * Hook for before_tool_call — called before a tool executes.
-   * Extensions can block execution by setting allow=false.
-   */
-  private async handleBeforeToolCall(tool: Tool, args: unknown): Promise<{ allow: boolean; reason?: string }> {
-    const runner = this.extensionRunner;
-    if (!runner) return { allow: true };
-    return runner.emitBeforeToolCall(tool, args);
-  }
-
-  /**
-   * Hook for after_tool_call — called after a tool executes.
-   * Extensions can mutate the result.
-   */
-  private async handleAfterToolCall(tool: Tool, result: ToolResult): Promise<ToolResult> {
-    const runner = this.extensionRunner;
-    if (!runner) return result;
-    return runner.emitAfterToolCall(tool, result);
-  }
-
-  /**
-   * Hook for before_phase — called before a phase executes.
-   * Extensions can abort, skip, or replace the phase input.
-   */
-  private async handleBeforePhase(phaseId: string, input: PhaseContext): Promise<BeforePhaseHookResult> {
-    const runner = this.extensionRunner;
-    if (!runner) return {};
-    return runner.emitBeforePhase(phaseId, input);
-  }
-
-  /**
-   * Hook for after_phase — called after a phase executes.
-   * Extensions can abort, retry, or replace the output.
-   */
-  private async handleAfterPhase(phaseId: string, output: PhaseOutput): Promise<AfterPhaseHookResult> {
-    const runner = this.extensionRunner;
-    if (!runner) return {};
-    return runner.emitAfterPhase(phaseId, output);
-  }
-
-  /**
-   * Hook for before_prompt — called before model request, allowing extensions to transform PhaseContext.
-   * Extensions can transform the PhaseContext (messages, tools, systemPrompt, etc.).
-   */
-  private async handleBeforePrompt(phaseId: string, input: PhaseContext): Promise<PhaseContext> {
-    const runner = this.extensionRunner;
-    if (!runner) return input;
-    return runner.emitBeforePrompt(phaseId, input);
-  }
-
-  private handleRunFailure(error: unknown, aborted: boolean): void {
-    const message = error instanceof Error ? error.message : "Agent run failed.";
-    this.state.error = message;
-    // turn_end and agent_end are handled by runAgentLoop's phase turn() and finally block.
-  }
-
-  private runWithLifecycle(
-    executor: (input: { signal: AbortSignal; waitForInput: () => Promise<AgentMessage[]> }) => Promise<RunResult>,
-    hooks: RuntimeRunHooks = {},
-  ): Promise<RunResult> {
-    if (this.activeRun) {
-      return Promise.reject(new Error("Agent is already running."));
-    }
-
-    const abortController = new AbortController();
-    let suspensionRequested = false;
-    const waitForInput = () => {
-      if (!suspensionRequested) {
-        suspensionRequested = true;
-        void hooks.onSuspend?.("Agent requested input.");
-      }
-      return new Promise<AgentMessage[]>((resolve) => {
-        const activeRun = this.activeRun!;
-        activeRun.resume = (messages) => {
-          activeRun.resume = undefined;
-          resolve(messages);
-        };
-      });
-    };
-    const promise = Promise.resolve()
-      .then(() => executor({ signal: abortController.signal, waitForInput }))
-      .catch((error) => {
-        this.handleRunFailure(error, abortController.signal.aborted);
-        throw error;
-      })
-      .finally(() => {
-        this.finishRun();
-      });
-    this.activeRun = { promise, abortController };
-    this.state.running = true;
-    return promise;
-  }
-
-  private finishRun(): void {
-    this.state.running = false;
-    this.activeRun = undefined;
-  }
-
-  private async loadExtensions(extensions: LoadedExtension[], cwd?: string): Promise<void> {
-    if (extensions.length === 0) {
-      this.extensionRunner?.invalidate();
-      this.extensionRunner = undefined;
-      this.loadedExtensions = extensions;
-      this.loadedExtensionsCwd = cwd;
-      return;
-    }
-
-    if (this.extensionRunner && this.loadedExtensions === extensions && this.loadedExtensionsCwd === cwd) {
-      return;
-    }
-
-    const runner = createExtensionRunner({ cwd });
-    await runner.loadExtensions(extensions);
-    runner.bind();
-    this.extensionRunner?.invalidate();
-    this.extensionRunner = runner;
-    this.loadedExtensions = extensions;
-    this.loadedExtensionsCwd = cwd;
-  }
-
-  run(config?: RunOptions, internalHooks: RuntimeRunHooks = {}): Promise<RunResult> {
-    return this.runWithLifecycle(async ({ signal, waitForInput }) => {
-      const resolved = this.resolveRunConfig(config);
-      const extensions = resolved.extensions ?? [];
-      await this.loadExtensions(extensions, resolved.cwd);
-      const runContext = prepareAgentContext(resolved.context, this.extensionRunner);
-      const entryPhaseId = this.state.initialized ? DEFAULT_PHASE_ID : runContext.phases?.entryPhaseId ?? DEFAULT_PHASE_ID;
-      const loopContext = {
-        ...runContext,
-        phases: {
-          ...runContext.phases!,
-          entryPhaseId,
-        },
-      };
-      const sessionId = resolved.sessionId ?? this.state.sessionId;
-      this.options = resolved;
-      if (sessionId) {
-        this.state.sessionId = sessionId;
-      }
-      this.state.context = runContext;
-      this.state.model = resolved.model;
-      this.state.tools = runContext.tools ?? [];
-      this.state.currentResult = undefined;
-      this.state.error = undefined;
-
-      const emit = (event: AgentEvent) => {
-        this.processEvents(event);
-      };
-
-      // Combine user-provided hooks with extension hooks
-      const beforeToolCall: BeforeToolCall = async (input) => {
-        // User-provided hook first
-        if (resolved.beforeToolCall) {
-          const userResult = await resolved.beforeToolCall(input);
-          if (!userResult.allow) return userResult;
-        }
-        // Extension hooks
-        const extResult = await this.handleBeforeToolCall(input.tool, input.args);
-        if (!extResult.allow) {
-          return { allow: false, reason: extResult.reason ?? "Blocked by extension" };
-        }
-        return { allow: true };
-      };
-
-      const afterToolCall: AfterToolCall = async (input) => {
-        let result = input.result;
-        // User-provided hook first
-        if (resolved.afterToolCall) {
-          result = await resolved.afterToolCall({ tool: input.tool, result });
-        }
-        // Extension hooks
-        return this.handleAfterToolCall(input.tool, result);
-      };
-
-      const result = await runAgentLoop({
-        context: loopContext,
-        sessionId: sessionId ?? createId("ses"),
-        model: resolved.model,
-        stream: resolved.stream,
-        maxAttempts: resolved.maxAttempts,
-        signal,
-        beforeToolCall,
-        afterToolCall,
-        beforePhase: (phaseId: string, input: PhaseContext) => this.handleBeforePhase(phaseId, input),
-        afterPhase: (phaseId: string, output: PhaseOutput) => this.handleAfterPhase(phaseId, output),
-        beforePrompt: (phaseId: string, input: PhaseContext) => this.handleBeforePrompt(phaseId, input),
-        emit,
-        onMessage: resolved.onMessage,
-        onOutcome: resolved.onOutcome,
-        onModelTranscript: resolved.onModelTranscript,
-        waitForInput,
-        runtime: resolved.runtime,
-      });
-
-      const nextContext = {
-        ...prepareAgentContext(resolved.context),
-        messages: snapshotMessages(result.messages),
-      };
-      this.state.sessionId = result.sessionId;
-      this.state.context = prepareAgentContext(nextContext, this.extensionRunner);
-      this.state.currentResult = result;
-      this.state.initialized = true;
-      this.options = {
-        ...resolved,
-        sessionId: result.sessionId,
-        context: nextContext,
-      };
-      return result;
-    }, internalHooks);
-  }
-
-  abort(reason = "Aborted by caller."): void {
-    const runtime = AgentRuntime.current();
-    if (this.runtimeRunId && runtime) {
-      void runtime.abortRun(this.runtimeRunId, reason);
-      return;
-    }
-    this.abortLocal(reason);
-  }
-
-  private abortLocal(reason: string): void {
-    const activeRun = this.activeRun;
-    // Release a paused loop so it wakes and observes the abort signal.
-    activeRun?.resume?.([]);
-    activeRun?.abortController.abort(reason);
-  }
-
-  /** Internal Runtime hook; callers should use Agent.abort(). */
-  abortFromRuntime(reason = "Agent Runtime aborted the Run."): void {
-    this.abortLocal(reason);
-  }
-
-  /**
-   * Get formatted skill content for LLM consumption.
-   *
-   * Finds the skill by name and returns the formatted content using `formatSkillInvocation`.
-   * This is a programmatic API for developers to invoke skills directly.
-   *
-   * @param name - The skill name to look up
-   * @param additionalInstructions - Optional additional instructions to append
-   * @returns Formatted skill content string
-   */
-  skill(name: string, additionalInstructions?: string): string {
-    const skill = this.state.context.skills.find(s => s.name === name);
-    if (!skill) {
-      throw new Error(`Unknown skill: ${name}`);
-    }
-    const content = readSkillContent(skill);
-    return additionalInstructions ? `${content}\n\n${additionalInstructions}` : content;
-  }
-
-  /**
-   * Get formatted phase content for LLM consumption.
-   *
-   * Finds the phase by name and returns the formatted content.
-   * This is a programmatic API for developers to invoke phases directly.
-   *
-   * @param name - The phase name to look up
-   * @returns Formatted phase content string, or empty string if not found
-   */
-  async phase(name: string): Promise<string> {
-    await this.loadExtensions(this.options.extensions ?? [], this.options.cwd);
-    const registry = prepareAgentContext(this.options.context, this.extensionRunner).phases?.phases;
-    const phase = registry?.get(name) ?? [...(registry?.values() ?? [])].find((candidate) => candidate.name === name);
-    return phase ? readPhaseContent(phase) : "";
-  }
-
-  async waitForIdle(): Promise<void> {
-    if (!this.activeRun) {
-      return;
-    }
-    await this.activeRun.promise.catch(() => undefined);
-    await this.flushEvents().catch(() => undefined);
-  }
-
-  private resolveRunConfig(config?: RunOptions): AgentOptions {
-    const merged = {
-      ...this.options,
-      ...config,
-    };
-    const context = prepareAgentContext(config?.context ?? this.createContextSnapshot());
-    return {
-      ...merged,
-      context,
-      sessionId: config?.sessionId ?? this.state.sessionId ?? this.options.sessionId,
-    };
-  }
-
-  private createContextSnapshot(): AgentContext {
-    return prepareAgentContext(this.options.context);
-  }
-
-  private cloneOptions(options: AgentOptions): AgentOptions {
-    return {
-      ...options,
-      context: prepareAgentContext(options.context),
-      ...(options.extensions ? { extensions: options.extensions.slice() } : {}),
-    };
-  }
-
 }
 
-function requireRuntime(): AgentRuntime {
-  const runtime = AgentRuntime.current();
-  if (!runtime) {
-    throw new Error("Agent Runtime must be started before creating or resuming an Agent.");
-  }
-  return runtime;
-}
-
-async function createManagedAgent(
-  options: AgentCreateOptions | AgentResumeOptions,
-  agentId: AgentId,
-  manager: SessionManager,
-): Promise<Agent> {
-  const runtime = requireRuntime();
-  const restoredContext = await manager.buildAgentContext({
-    tools: options.context.tools,
-    skills: options.context.skills,
+export async function attachAgent(input: AttachAgentInput): Promise<{
+  agent: Agent;
+  binding: AttachedAgentBinding;
+}> {
+  const restoredContext = await input.manager.buildAgentContext({
+    tools: input.options.context.tools,
+    skills: input.options.context.skills,
   });
   const context: AgentContext = {
     ...restoredContext,
-    systemPrompt: options.context.systemPrompt || restoredContext.systemPrompt,
-    phases: options.context.phases,
+    systemPrompt: input.options.context.systemPrompt || restoredContext.systemPrompt,
+    phases: input.options.context.phases,
   };
-  const managedOptions: AgentOptions = {
-    ...options,
+  const persistInput = async (message: AgentMessage) => {
+    await input.manager.appendMessage(message);
+  };
+  let execution: AgentExecution;
+  execution = new AgentExecution({
+    ...input.options,
     context,
-    agentId,
-    sessionId: manager.getSessionId(),
+    agentId: input.agentId,
+    sessionId: input.sessionId,
     runtime: {
       tools: async ({ config, toolCall }) => {
         const tool = config.context.tools.find((candidate) => candidate.name === toolCall.name);
-        const runId = managedAgent.getRuntimeRunId();
+        const runId = execution.getRuntimeRunId();
         if (!tool || !runId) {
+          const message = `Tool ${toolCall.name} is not available to this Agent Run.`;
           return {
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             ok: false,
-            content: `Tool ${toolCall.name} is not available to this Agent Run.`,
-            error: `Tool ${toolCall.name} is not available to this Agent Run.`,
+            content: message,
+            error: message,
           };
         }
-        return runtime.toolRuntime.execute({
-          agentId,
+        return input.executeTool({
+          agentId: input.agentId,
           runId,
           tool,
           toolCall,
@@ -825,57 +156,30 @@ async function createManagedAgent(
       },
     },
     onMessage: async (message) => {
-      await manager.appendMessage(message);
-      await options.onMessage?.(message);
+      await input.manager.appendMessage(message);
+      await input.options.onMessage?.(message);
     },
-    onInput: async (message) => {
-      await manager.appendMessage(message);
-      await options.onInput?.(message);
-    },
+    onInput: persistInput,
     onOutcome: async (outcome) => {
-      await manager.appendOutcome(outcome);
-      await options.onOutcome?.(outcome);
+      await input.manager.appendOutcome(outcome);
+      await input.options.onOutcome?.(outcome);
     },
     onModelTranscript: async (transcript, meta) => {
-      await manager.appendModelTranscript(transcript, meta);
-      await options.onModelTranscript?.(transcript, meta);
+      await input.manager.appendModelTranscript(transcript, meta);
+      await input.options.onModelTranscript?.(transcript, meta);
     },
-  };
-  let managedAgent!: Agent;
-  managedAgent = new Agent(managedOptions);
-  runtime[bindAgentSymbol](agentId, {
-    abort: (reason) => managedAgent.abortFromRuntime(reason),
-    execute: (payload, runId, control) => managedAgent.executeRuntimeMessage(payload, runId, control),
   });
-  return managedAgent;
-}
-
-function clonePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {
+  const agent = Agent[ATTACH_AGENT](
+    input.agentId,
+    input.sessionId,
+    execution,
+    (message) => input.submit(message, () => persistInput(message)),
+  );
   return {
-    phases: new Map(registry.phases),
-    entryPhaseId: registry.entryPhaseId,
-  };
-}
-
-function prepareAgentContext(context: AgentContext, extensionRunner?: ExtensionRunner): AgentContext {
-  const phases = new Map<string, Phase>();
-  phases.set(DEFAULT_PHASE_ID, createDefaultPhase());
-  for (const [id, phase] of context.phases?.phases ?? []) {
-    phases.set(id, phase);
-  }
-  const extensionRegistry = extensionRunner?.createPhaseRegistry();
-  for (const [id, phase] of extensionRegistry?.phases ?? []) {
-    phases.set(id, phase);
-  }
-
-  return {
-    systemPrompt: context.systemPrompt,
-    messages: snapshotMessages(context.messages),
-    tools: context.tools.slice(),
-    skills: context.skills.slice(),
-    phases: {
-      phases,
-      entryPhaseId: extensionRegistry?.entryPhaseId ?? context.phases?.entryPhaseId ?? DEFAULT_PHASE_ID,
+    agent,
+    binding: {
+      abort: (reason) => execution.abortFromRuntime(reason),
+      execute: (message, runId, control) => execution.executeAgentInput(message, runId, control),
     },
   };
 }

@@ -30,7 +30,7 @@ import type {
   ToolDefinition,
 } from "./types";
 import { createExtension, createExtensionRuntime } from "./types";
-import { parseModelRef } from "../harness/config";
+import { parseModelRef } from "@rowan-agent/models";
 import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import { HooksManager } from "./hooks";

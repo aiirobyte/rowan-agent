@@ -6,7 +6,7 @@ import type { ToolCall, ToolResult } from "../../protocol";
 import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../../types";
 import { formatResourceOutput, detectResourceType, type ResourceType } from "../context/resource-formatter";
 import { parseFrontmatter, inferResourceName } from "../loader";
-import { normalizeRelativePath } from "../env/path";
+import { normalizeRelativePath } from "../path";
 
 // Re-export route tool
 export { createRouteTool, extractRouteCall, PhaseRouteTool } from "./route-tool";

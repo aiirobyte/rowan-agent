@@ -5,18 +5,20 @@ import { mkdir } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
-  createDispatchStream,
+  createModelStream,
   registerBuiltInApiProviders,
   registerModel,
 } from "@rowan-agent/models";
 import {
   Agent,
-  createTimestamp,
   AgentRuntime,
   SqliteRuntimeStateStore,
+  LocalJsonlSessionProvider,
+  createCoreTools,
   type AgentEvent,
   type AgentEventListener,
   type AgentRun,
+  type AgentId,
   type AgentContext,
   type LoadedExtension,
   type LlmModelRef,
@@ -26,18 +28,13 @@ import {
   pinoAgentEventLogger,
   type AgentEventLogLevel,
 } from "@rowan-agent/logging";
-import type { SessionListItem } from "@rowan-agent/agent";
-import { LocalJsonlSessionManager } from "@rowan-agent/agent";
 import {
-  createCoreTools,
-  type WorkspacePaths,
-  resolveInWorkspace,
-  resolveWorkspacePaths,
   loadConfigFile,
   registerConfigModels,
   resolveDefaultModel,
   type AgentConfigFile,
-} from "@rowan-agent/agent";
+} from "./config";
+import { resolveInWorkspace, resolveWorkspacePaths, type WorkspacePaths } from "./workspace";
 import { formatJsonOutput, formatMessageContent, formatToolArgsPreview } from "./output";
 
 type CliCommand = "config" | "list";
@@ -46,7 +43,7 @@ type CliArgs = {
   command?: CliCommand;
   log?: string;
   logLevel?: AgentEventLogLevel;
-  sessionId?: string;
+  agentId?: AgentId;
   skills: string[];
   baseUrl?: string;
   apiKey?: string;
@@ -74,7 +71,7 @@ const CLI_COMMANDS = {
   },
   list: {
     name: "list",
-    summary: "List saved sessions in the current workspace.",
+    summary: "List durable Agents in the current workspace.",
     acceptsPrompt: false,
     run: runListCommand,
   },
@@ -110,6 +107,17 @@ function createDefaultLogPath(workspace: WorkspacePaths, sessionId: string): str
   return join(workspaceRunsDir(workspace), `${timestamp}-${sessionId}.jsonl`);
 }
 
+function createTimestamp(date = new Date()): string {
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60_000);
+  const iso = local.toISOString().slice(0, -1);
+  const sign = offset <= 0 ? "+" : "-";
+  const abs = Math.abs(offset);
+  const hours = String(Math.floor(abs / 60)).padStart(2, "0");
+  const minutes = String(abs % 60).padStart(2, "0");
+  return `${iso}${sign}${hours}:${minutes}`;
+}
+
 function resolveOptionalWorkspacePath(path: string | undefined, workspace: WorkspacePaths): string | undefined {
   return path ? resolveInWorkspace(path, workspace.rowanDir) : undefined;
 }
@@ -143,7 +151,7 @@ Examples:
   bun run rowan "hello"
   bun run rowan config
   bun run rowan list
-  bun run rowan --session ses_12345678 "continue"
+  bun run rowan --agent agt_12345678 "continue"
   bun run rowan --model gpt-4.1-mini "hello"
   bun run rowan --skill example "summarize the example skill"
   bun run rowan --log runs/real.jsonl "list workspace files"
@@ -159,13 +167,13 @@ Run logs:
   --log-level controls run log detail: debug, info, warn, error, or silent. Default: info.
   Info logs write event summaries only; debug logs include redacted event payloads.
   Matching run log records are streamed live to stderr; stdout is reserved for command results.
-  Turns in one process append to the same run log; explicit session loads start a new run log.
+  Turns in one process append to the same run log; explicit Agent reconstruction starts a new run log.
   Relative --log paths are resolved from <cwd>/.rowan.
-  CLI output prints Session id once, Message id before each turn result, and Log path last once per entry.
+  CLI output prints Agent and Session ids once, Message id before each turn result, and Log path last once per entry.
 
 Sessions:
   Sessions are saved automatically to <cwd>/.rowan/sessions/<session-id>.jsonl.
-  Use --session <id> to continue a saved conversation.
+  Use --agent <id> to reconstruct an existing Agent and continue its Session.
   Interactive controls: :session, :exit, :quit.
 
 Skills:
@@ -266,8 +274,8 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
-    if (next === "--session") {
-      parsed.sessionId = readOptionValue(args, "--session");
+    if (next === "--agent") {
+      parsed.agentId = readOptionValue(args, "--agent") as AgentId;
       continue;
     }
 
@@ -322,7 +330,16 @@ function parseArgs(argv: string[]): CliArgs {
 
   return parsed;
 }
-type CliSessionListItem = Pick<SessionListItem, "id" | "title" | "createdAt" | "updatedAt" | "messageCount">;
+type CliAgentListItem = {
+  id: AgentId;
+  sessionId: string;
+  state: "active" | "paused";
+  factoryId?: string;
+  title?: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
 type AgentResources = {
   skills: AgentContext["skills"];
   phases: PhaseRegistry;
@@ -330,9 +347,8 @@ type AgentResources = {
 };
 type ConfiguredAgent = {
   agent: Agent;
-  runtime: AgentRuntime;
   configFile?: AgentConfigFile;
-  loadResources(): Promise<AgentResources>;
+  close(): Promise<void>;
 };
 
 function createConfigSnapshot(
@@ -382,9 +398,9 @@ function createConfigSnapshot(
       baseUrl: baseUrlFlag ? normalizeBaseUrl(baseUrlFlag) : null,
       timeoutMs: args.timeoutMs ?? null,
     },
-    session: {
-      id: args.sessionId ?? null,
-      source: args.sessionId ? "flag" : "new",
+    agent: {
+      id: args.agentId ?? null,
+      source: args.agentId ? "flag" : "new",
     },
     logging: {
       automatic: !logPath,
@@ -412,32 +428,39 @@ async function runConfigCommand(args: CliArgs): Promise<void> {
 
 async function runListCommand(_args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  const sessions = [...(await LocalJsonlSessionManager.list(workspaceSessionsDir(workspace)))]
-    .map<CliSessionListItem>((session) => ({
-      id: session.id,
-      ...(session.title ? { title: session.title } : {}),
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      messageCount: session.messageCount,
-    }));
-  console.log(formatJsonOutput(sessions));
+  const sessionProvider = new LocalJsonlSessionProvider(workspaceSessionsDir(workspace));
+  const sessions = new Map(
+    (await sessionProvider.list())
+      .map((session) => [session.id, session]),
+  );
+  const stateStore = new SqliteRuntimeStateStore(join(workspace.rowanDir, "runtime.sqlite"));
+  try {
+    const agents = (await stateStore.listAgents()).map<CliAgentListItem>((agent) => {
+      const session = sessions.get(agent.sessionId);
+      return {
+        id: agent.id,
+        sessionId: agent.sessionId,
+        state: agent.state,
+        ...(agent.factoryId ? { factoryId: agent.factoryId } : {}),
+        ...(session?.title ? { title: session.title } : {}),
+        createdAt: agent.createdAt,
+        updatedAt: agent.updatedAt,
+        messageCount: session?.messageCount ?? 0,
+      };
+    }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    console.log(formatJsonOutput(agents));
+  } finally {
+    stateStore.close();
+  }
 }
 
 async function createConfiguredAgent(
   args: CliArgs,
   workspace: WorkspacePaths,
 ): Promise<ConfiguredAgent> {
-  const loadResources = () => loadAgentResources(args, workspace);
-  const resources = await loadResources();
+  const resources = await loadAgentResources(args, workspace);
   const { skills } = resources;
   const tools = createCoreTools({ root: workspace.cwd });
-  const sessionManager = args.sessionId
-    ? await LocalJsonlSessionManager.open(workspaceSessionsDir(workspace), args.sessionId)
-    : undefined;
-  if (args.sessionId && !sessionManager) {
-    throw new Error(`Session not found: ${args.sessionId}`);
-  }
-
   // Load config file and register providers/models
   const configFile = await loadConfigFile(workspace);
 
@@ -501,13 +524,7 @@ async function createConfiguredAgent(
     });
   }
 
-  const loadedSkills = skills.length > 0 || args.skills.length > 0 ? { skills } : {};
-  const context = sessionManager
-    ? await sessionManager.buildAgentContext({
-      tools,
-      ...loadedSkills,
-    })
-    : {
+  const context = {
       systemPrompt: [
         "You are Rowan, a helpful assistant that can assist users with a wide variety of tasks.",
         "",
@@ -520,28 +537,33 @@ async function createConfiguredAgent(
 
   await mkdir(workspaceRunsDir(workspace), { recursive: true });
   const stateStore = new SqliteRuntimeStateStore(join(workspace.rowanDir, "runtime.sqlite"));
-  const sessionProvider = {
-    create: (input: Parameters<typeof LocalJsonlSessionManager.create>[1]) =>
-      LocalJsonlSessionManager.create(workspaceSessionsDir(workspace), input),
-    open: (sessionId: string) =>
-      LocalJsonlSessionManager.open(workspaceSessionsDir(workspace), sessionId),
-  };
+  const sessionProvider = new LocalJsonlSessionProvider(workspaceSessionsDir(workspace));
   let runtime: AgentRuntime | undefined;
   try {
     runtime = await AgentRuntime.start({
       stateStore,
-      sessionManager: sessionProvider,
+      sessionProvider,
     });
     const options = {
       context: { ...context, phases: resources.phases },
       model: defaultModelRef,
-      stream: createDispatchStream(),
+      stream: createModelStream(),
       extensions: resources.extensions,
     };
-    const agent = args.sessionId
-      ? await Agent.resume({ ...options, sessionId: args.sessionId })
-      : await Agent.create(options);
-    return { agent, runtime, configFile, loadResources };
+    const agent = args.agentId
+      ? await runtime.reconstructAgent(args.agentId, options)
+      : await runtime.createAgent(options);
+    return {
+      agent,
+      configFile,
+      close: async () => {
+        try {
+          await runtime!.stop();
+        } finally {
+          stateStore.close();
+        }
+      },
+    };
   } catch (error) {
     await runtime?.stop();
     stateStore.close();
@@ -580,12 +602,13 @@ async function promptWithLog(input: {
   logLevel?: AgentEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
   onMessageId?: (messageId: string) => void;
+  onRun?: (run: AgentRun) => void;
   onInputWait?: () => void;
 }): Promise<{ run: AgentRun; outcome: import("@rowan-agent/agent").Outcome }> {
   let unsubscribe: (() => void) | undefined;
   let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
   try {
-    const sessionId = input.agent.getSessionId() ?? "session";
+    const sessionId = input.agent.sessionId;
     const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, sessionId);
     const runEventLogger = pinoAgentEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
     eventLogger = runEventLogger;
@@ -638,6 +661,7 @@ async function promptWithLog(input: {
 
     unsubscribe = input.agent.subscribe(listener);
     const run = await input.agent.send(input.prompt);
+    input.onRun?.(run);
     input.onMessageId?.(run.messageId);
     const outcome = await run.result();
     return { run, outcome };
@@ -654,17 +678,22 @@ async function promptWithLog(input: {
 async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
   const configured = await createConfiguredAgent(args, workspace);
-  const { agent, runtime } = configured;
+  const { agent } = configured;
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args, configured.configFile);
   let activeLogPath: string | undefined = explicitLogPath;
   let hasWrittenLog = false;
   let hasPrintedSession = false;
+  let hasPrintedAgent = false;
   let hasPrintedLog = false;
 
   const printSessionOnce = () => {
-    const sessionId = agent.getSessionId();
+    if (!hasPrintedAgent) {
+      console.error(`Agent id: ${agent.id}`);
+      hasPrintedAgent = true;
+    }
+    const sessionId = agent.sessionId;
     if (!hasPrintedSession && sessionId) {
       console.error(`Session id: ${sessionId}`);
       hasPrintedSession = true;
@@ -678,11 +707,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     }
   };
 
-  if (agent.getSessionId()) {
-    printSessionOnce();
-  }
+  printSessionOnce();
 
   let activeRun: Promise<void> | undefined;
+  let activeAgentRun: AgentRun | undefined;
   let waitingForInput = false;
   let resolveActiveRunReady: (() => void) | undefined;
   let activeRunReady: Promise<void> | undefined;
@@ -720,9 +748,6 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     };
 
     try {
-      const resources = await configured.loadResources();
-      agent.setSkills(resources.skills);
-      agent.setPhases(resources.phases);
       const run = await promptWithLog({
         agent,
         prompt,
@@ -739,6 +764,9 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         },
         onMessageId: (id) => {
           messageId = id;
+        },
+        onRun: (run) => {
+          activeAgentRun = run;
         },
         onInputWait: options.onInputWait,
       });
@@ -767,6 +795,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       },
     }).finally(() => {
       activeRun = undefined;
+      activeAgentRun = undefined;
       waitingForInput = false;
       markActiveRunReady();
     });
@@ -808,7 +837,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
         return;
       }
       if (prompt === ":session") {
-        console.log(agent.getSessionId() ?? "(no session yet)");
+        console.log(agent.sessionId);
         if (process.stdin.isTTY) {
           process.stdout.write("> ");
         }
@@ -832,10 +861,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   } finally {
     rl.close();
     if (activeRun) {
-      agent.abort();
+      await activeAgentRun?.abort();
       await activeRun.catch(() => undefined);
     }
-    await runtime.stop();
+    await configured.close();
   }
 }
 

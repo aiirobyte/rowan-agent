@@ -7,45 +7,28 @@ export type OpaqueId<Kind extends string> = string & {
 };
 
 export type AgentId = OpaqueId<"AgentId">;
-export type FactoryId = OpaqueId<"FactoryId">;
 export type AgentRunId = OpaqueId<"AgentRunId">;
 export type RuntimeMessageId = OpaqueId<"RuntimeMessageId">;
 export type RuntimeEventId = OpaqueId<"RuntimeEventId">;
 export type LeaseId = OpaqueId<"LeaseId">;
 export type RuntimeToolCallId = OpaqueId<"RuntimeToolCallId">;
 
-export function asFactoryId(value: string): FactoryId {
-  if (value.trim().length === 0) {
-    throw new Error("Factory ID must not be empty.");
-  }
-  return value as FactoryId;
-}
-
-export type AgentLifecycleState = "active" | "paused" | "stopped";
+export type AgentLifecycleState = "active" | "paused";
 
 export type RuntimeMessageState = "queued" | "leased" | "acknowledged" | "dead_lettered";
 
 export type AgentRunState = "queued" | "running" | "suspended" | "completed" | "failed" | "cancelled";
-
-export type RuntimeEventState = "pending" | "acknowledged";
 
 export type RuntimeToolCallState = "queued" | "running" | "completed" | "failed" | "indeterminate";
 
 export type AgentRecord = {
   id: AgentId;
   sessionId: string;
-  factoryId?: FactoryId;
+  factoryId?: string;
   state: AgentLifecycleState;
   createdAt: string;
   updatedAt: string;
 };
-
-export type AgentInputMessage = {
-  type: "agent_input";
-  input: AgentMessage;
-};
-
-export type RuntimeMessagePayload = AgentInputMessage;
 
 export type RuntimeLease = {
   id: LeaseId;
@@ -58,8 +41,8 @@ export type RuntimeLease = {
 export type RuntimeMessage = {
   id: RuntimeMessageId;
   agentId: AgentId;
-  kind: RuntimeMessagePayload["type"];
-  payload: RuntimeMessagePayload;
+  kind: "agent_input";
+  input: AgentMessage;
   state: RuntimeMessageState;
   attempts: number;
   runId?: AgentRunId;
@@ -87,12 +70,15 @@ export type RuntimeEventKind =
   | "agent_paused"
   | "agent_resumed"
   | "agent_recovered"
+  | "agent_recovery_failed"
   | "factory_missing"
   | "message_enqueued"
   | "run_enqueued"
   | "run_leased"
   | "lease_expired"
+  | "lease_recovered"
   | "run_suspended"
+  | "run_retry_scheduled"
   | "run_completed"
   | "run_aborted"
   | "message_acknowledged"
@@ -107,7 +93,6 @@ export type RuntimeEvent = {
   id: RuntimeEventId;
   sequence: number;
   kind: RuntimeEventKind;
-  state: RuntimeEventState;
   agentId?: AgentId;
   messageId?: RuntimeMessageId;
   runId?: AgentRunId;
@@ -119,6 +104,13 @@ export type RuntimeEvent = {
 export type RuntimeEventCursor = {
   after?: RuntimeEventId;
   limit?: number;
+};
+
+export type RuntimeEventCheckpoint = {
+  consumerId: string;
+  sequence: number;
+  eventId?: RuntimeEventId;
+  updatedAt: string;
 };
 
 export type RuntimeToolCall = {

@@ -1,6 +1,7 @@
 # @rowan-agent/cli
 
-Command-line interface for Rowan Agent. Supports one-shot prompts, interactive multi-turn sessions, session management, skill loading, extension discovery, and JSONL run logging.
+Command-line host for the durable Rowan Agent Runtime. It supports one-shot and
+interactive input, Agent reconstruction, resource loading, and JSONL run logs.
 
 ## Setup
 
@@ -11,115 +12,103 @@ bun install
 ## Usage
 
 ```bash
-# One-shot prompt
+# Create a durable Agent and submit one input
 bun run rowan "what files are in this directory?"
 
-# Interactive session (continues on stdin, :exit to quit)
-bun run rowan "hello"
+# Reconstruct an Agent by its durable identity
+bun run rowan --agent agt_12345678 "continue the previous topic"
 
-# Resume a session
-bun run rowan --session ses_12345678 "continue the previous topic"
+# Discover Agent IDs and their Session metadata
+bun run rowan list
 
-# Load skills
-bun run rowan --skill code-review --skill test-gen "review and test this code"
-
-# Override model
+# Load skills or override the model
+bun run rowan --skill code-review "review this code"
 bun run rowan --model gpt-4o "use a different model"
 
-# Debug logging
-bun run rowan --log-level debug "show full event payloads"
-
-# Inspect resolved config (secrets redacted)
+# Inspect resolved config without secrets
 bun run rowan config
-
-# List saved sessions
-bun run rowan list
 ```
 
 ## CLI Options
 
 | Option | Description | Default |
-|--------|-------------|---------|
-| `--session <id>` | Resume a previous session | — |
-| `--skill <name>` | Load a skill (repeatable) | — |
-| `--log <path>` | Custom log file path (relative to `.rowan/`) | Auto-generated |
-| `--log-level <level>` | `debug`, `info`, `warn`, `error`, `silent`; can also be set with `ROWAN_LOG_LEVEL` | `info` |
-| `--model <name>` | Model name | — |
+|---|---|---|
+| `--agent <id>` | Reconstruct an existing durable Agent | New Agent |
+| `--skill <name>` | Load a skill; repeatable | — |
+| `--log <path>` | Log path relative to `.rowan/` | Auto-generated |
+| `--log-level <level>` | `debug`, `info`, `warn`, `error`, or `silent` | `info` |
+| `--model <name>` | Model name | Config default |
 | `--base-url <url>` | API base URL | `https://api.openai.com/v1` |
 | `--api-key <key>` | API key | — |
-| `--timeout-ms <ms>` | Streaming idle timeout after first byte in milliseconds | `60000` |
-| `--help`, `-h` | Print help and exit | — |
+| `--timeout-ms <ms>` | Streaming idle timeout | `60000` |
+| `--help`, `-h` | Print help | — |
 
 ## Commands
 
 | Command | Description |
-|---------|-------------|
-| `rowan config` | Print resolved configuration as JSON (secrets redacted) |
-| `rowan list` | List all saved sessions |
+|---|---|
+| `rowan config` | Print resolved configuration as redacted JSON |
+| `rowan list` | List durable Agents with Agent ID, Session ID, and metadata |
 
-When no command is given, positional arguments are joined as the prompt.
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ROWAN_LOG_LEVEL` | Run log detail level | `info` |
-| `ROWAN_WORKSPACE` | Override current working directory | `cwd` |
+When no command is given, positional arguments are joined as Agent Input.
 
 ## Interactive Controls
 
 | Control | Action |
-|---------|--------|
-| `:session` | Print current session ID |
-| `:exit` / `:quit` | Exit the CLI |
+|---|---|
+| `:session` | Print the bound Session ID |
+| `:exit` / `:quit` | Exit and abort an active Agent Run |
 
-## Output Behavior
+The CLI prints Agent, Session, and Message IDs to stderr. Assistant output goes
+to stdout. Runtime State is stored at `.rowan/runtime.sqlite`, Sessions at
+`.rowan/sessions/`, and logs at `.rowan/runs/`.
 
-- **stdout** — assistant text (streamed as it arrives), `config`/`list` JSON output, `:session` ID
-- **stderr** — session/message IDs, log path, tool execution status, loop metrics, errors
+## Runtime Wiring
 
-Tool execution is shown on stderr: `⚙ read { path: "..." }` when started, `✓ read` / `✗ bash` when completed.
+1. Resolve the workspace, model, and Agent resources.
+2. Open the SQLite Runtime Store and start one `AgentRuntime`.
+3. Call `runtime.createAgent()` or `runtime.reconstructAgent(agentId, options)`.
+4. Submit input only through `agent.send()` and wait on `AgentRun.result()`.
+5. Stream transient Agent Events to stdout/stderr and the JSONL logger.
+6. Stop the Runtime and close the Store.
 
-## Run Logs & Sessions
+Resources are fixed for one live Agent Binding. A new CLI process reloads current
+Skills, Phases, Extensions, Tools, prompt, and model before reconstruction.
 
-- Logs auto-generated at `.rowan/runs/<timestamp>-<session-id>.jsonl`
-- Sessions saved to `.rowan/sessions/<session-id>.jsonl`
-- `--log` overrides log path; `--session` resumes a session; `rowan list` lists all sessions
+## Configuration
 
-## How It Wires Together
+The CLI owns `.rowan/config.yaml` loading, provider registration, default-model
+selection, and workspace discovery. These are host concerns and are not exported
+by `@rowan-agent/agent`.
 
-```
-┌──────────┐     ┌──────────┐     ┌──────────┐
-│  models   │◄────│   cli    │────►│  logging │
-│ (stream)  │     │ (wiring) │     │ (JSONL)  │
-└──────────┘     └────┬─────┘     └──────────┘
-                      │
-                      ▼
-                ┌──────────┐
-                │   agent   │
-                │  (loop)   │
-                └──────────┘
-```
-
-1. Parse args → resolve workspace, create core tools
-2. Optionally resume session via `LocalJsonlSessionManager`
-3. Load skills, phases, and extensions from `.rowan/` via `Agent.loadSkills()`, `Agent.loadPhases()`, `Agent.loadExtensions()`
-4. Create `Agent` with the loaded resources (skills → context, phases → context, extensions → constructor)
-5. Stream assistant text to stdout, tool status to stderr
-6. Write JSONL run logs via `pinoAgentEventLogger`
-7. Resources are hot-reloaded from disk each turn in interactive mode — edits to skills/phases/extensions apply immediately
-
-## Output Formatting (Programmatic)
-
-```ts
-import {
-  formatJsonOutput,
-  formatToolArgsPreview,
-  formatToolResultOutput,
-  formatMessageContent,
-} from "@rowan-agent/cli";
+```yaml
+model:
+  provider: openai
+  id: gpt-4o
+logLevel: info
+providers:
+  - id: openai
+    baseUrl: https://api.openai.com/v1
+    apiKey: ${OPENAI_API_KEY}
+    protocol: openai-responses
+    models:
+      - id: gpt-4o
+        primary: true
 ```
 
-## Version
+Supported protocols are `openai-completions`, `openai-responses`, and
+`anthropic-messages`. String values support `${VAR}` interpolation; missing or
+empty variables fail config loading. Without `--model`, selection order is the
+top-level `model`, the first model marked `primary`, then the first configured
+model.
 
-Current version: **0.5.6**
+The workspace defaults to the discovered project root and can be overridden by
+`ROWAN_WORKSPACE`. Runtime data and configuration live under that workspace's
+`.rowan/` directory.
+
+## Environment Variables
+
+| Variable | Description | Default |
+|---|---|---|
+| `ROWAN_LOG_LEVEL` | Run log detail | `info` |
+| `ROWAN_WORKSPACE` | Workspace override | `cwd` |

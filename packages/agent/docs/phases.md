@@ -452,9 +452,7 @@ interface PhaseState {
 
 The core `Agent` and phase loop do not read phase files automatically. File-based phases are loaded by the caller, such as the Rowan CLI, and then passed in on `AgentContext.phases`. Agent always merges that registry with its built-in `"default"` phase before running.
 
-If you want to pick up edits during a long-running process, call `loadPhases` or `reloadPhases` in the outer harness and put the updated registry on the next run's `context.phases`.
-
-Extension-registered phases have no file path, so `reloadPhases` preserves them.
+To pick up file edits, call `Agent.loadPhases` again and pass the fresh registry when creating the next Runtime-owned Agent Binding. Extension phases are loaded separately with that binding.
 
 ---
 
@@ -527,24 +525,15 @@ interface PhaseRegistry {
 ### Loading Functions
 
 ```typescript
-// Load phases via Agent static method (preferred)
+// Load phases from a PHASE.md file or directory
 Agent.loadPhases(targetPath: string): Promise<PhaseRegistry>
-
-// Load a single phase from a PHASE.md file or phase directory
-loadPhase(targetPath: string): Promise<Phase>
-
-// Load phases from the target directory
-loadPhases(targetPath: string): Promise<PhaseRegistry>
-
-// Explicitly reload file-based phases (preserves extension phases)
-reloadPhases(registry: PhaseRegistry): Promise<void>
 ```
 
 Pass the loaded `PhaseRegistry` into `AgentContext.phases` — Agent always merges it with the built-in `"default"` phase before running:
 
 ```typescript
 const phases = await Agent.loadPhases("./.rowan/phases");
-const agent = new Agent({
+const agent = await runtime.createAgent({
   context: { ...baseContext, phases },
   model,
   stream,

@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
+// CLI workspace discovery and project-local .rowan path resolution.
+
 export const WORKSPACE_ENV = "ROWAN_WORKSPACE";
 export const BINARY_WORKSPACE_DIR = ".rowan";
 

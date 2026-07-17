@@ -10,13 +10,10 @@ import {
   loadMarkdown,
   inferResourceName,
 } from "../loader";
-import { parseModelRef } from "../config";
+import { parseModelRef } from "@rowan-agent/models";
 import { formatResourceOutput } from "../context/resource-formatter";
-import type { WorkspacePaths } from "../env";
 
 const PHASE_MARKER = "PHASE.md";
-
-type PhaseLoadTarget = string | Pick<WorkspacePaths, "rowanDir">;
 
 function resolvePhasePath(input: string): string {
   const resolved = resolve(input);
@@ -91,13 +88,9 @@ export function readPhaseContent(phase: Phase): string {
  *
  * When entryPhaseId is null, Agent normalizes the registry to start from its default phase.
  */
-function resolvePhaseLoadTarget(targetPath: PhaseLoadTarget): string {
-  return typeof targetPath === "string" ? targetPath : join(targetPath.rowanDir, "phases");
-}
-
-export async function loadPhases(targetPath: PhaseLoadTarget): Promise<PhaseRegistry> {
+export async function loadPhases(targetPath: string): Promise<PhaseRegistry> {
   const phases = new Map<string, Phase>();
-  const phasesDir = resolve(resolvePhaseLoadTarget(targetPath));
+  const phasesDir = resolve(targetPath);
 
   if (existsSync(phasesDir) && statSync(phasesDir).isFile()) {
     const phase = await loadPhase(phasesDir);
@@ -158,7 +151,9 @@ async function loadPhaseCode(
 ): Promise<{ factory?: (api: ExtensionAPI) => Promise<void>; run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> }> {
   const { createJiti } = await import("jiti");
   const jiti = createJiti(import.meta.url, {
+    fsCache: false,
     moduleCache: false,
+    tryNative: false,
   });
 
   const mod = await jiti.import(codePath, { default: true }) as unknown;

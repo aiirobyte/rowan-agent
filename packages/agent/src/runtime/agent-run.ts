@@ -1,30 +1,49 @@
 import type { Outcome } from "../protocol";
-import type { AgentRunRecord, AgentRunId, AgentRunState, RuntimeEvent, RuntimeEventCursor } from "./domain";
-import {
-  abortRunSymbol,
-  type AgentRuntime,
-  type RuntimeEventListener,
-  registerRunHandleSymbol,
-  waitForRunSymbol,
-} from "./agent-runtime";
+import type {
+  AgentRunRecord,
+  AgentRunId,
+  AgentRunState,
+  RuntimeEvent,
+} from "./domain";
+import type { RuntimeEventListener, RuntimeRunHandle } from "./agent-runtime";
 
-export type AgentRunListener = (run: AgentRunRecord) => void | Promise<void>;
+export type AgentRunListener = (state: AgentRunState) => void | Promise<void>;
 
-export class AgentRun {
+type AgentRunHost = {
+  register(handle: RuntimeRunHandle): void;
+  getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
+  waitForRunChange(runId: AgentRunId, state: AgentRunState, updatedAt: string): Promise<void>;
+  abortRun(runId: AgentRunId, reason: string): Promise<void>;
+  consumeEvents(consumerId: string, listener: RuntimeEventListener): () => void;
+};
+
+const AGENT_RUN_CONSTRUCTION = Symbol("rowan.agentRun.construction");
+const CREATE_AGENT_RUN = Symbol("rowan.agentRun.create");
+
+export class AgentRun implements RuntimeRunHandle {
   private current: AgentRunRecord;
   private readonly listeners = new Set<AgentRunListener>();
 
-  constructor(
-    private readonly runtime: AgentRuntime,
+  private constructor(
+    token: typeof AGENT_RUN_CONSTRUCTION,
+    private readonly host: AgentRunHost,
     initial: AgentRunRecord,
-    publicMessageId: string = initial.messageId,
+    private readonly publicMessageId: string,
   ) {
+    if (token !== AGENT_RUN_CONSTRUCTION) {
+      throw new Error("AgentRun lifecycle is owned by AgentRuntime.");
+    }
     this.current = structuredClone(initial);
-    this.publicMessageId = publicMessageId;
-    runtime[registerRunHandleSymbol](initial.id, this);
+    host.register(this);
   }
 
-  private readonly publicMessageId: string;
+  static [CREATE_AGENT_RUN](
+    host: AgentRunHost,
+    initial: AgentRunRecord,
+    publicMessageId: string,
+  ): AgentRun {
+    return new AgentRun(AGENT_RUN_CONSTRUCTION, host, initial, publicMessageId);
+  }
 
   get id(): AgentRunId {
     return this.current.id;
@@ -43,7 +62,7 @@ export class AgentRun {
   }
 
   async getStatus(): Promise<AgentRunState> {
-    const run = await this.runtime.stateStore.getRun(this.id);
+    const run = await this.host.getRun(this.id);
     if (run) this.notify(run);
     return this.current.state;
   }
@@ -53,18 +72,16 @@ export class AgentRun {
     return () => this.listeners.delete(listener);
   }
 
-  subscribeRuntimeEvents(listener: RuntimeEventListener, cursor: RuntimeEventCursor = {}): () => void {
-    return this.runtime.subscribeEvents((event: RuntimeEvent) => {
+  consumeRuntimeEvents(consumerId: string, listener: RuntimeEventListener): () => void {
+    return this.host.consumeEvents(consumerId, (event: RuntimeEvent) => {
       if (event.runId === this.id) return listener(event);
-    }, cursor);
+    });
   }
 
   async result(): Promise<Outcome> {
     while (true) {
-      const run = await this.runtime.stateStore.getRun(this.id);
-      if (!run) {
-        throw new Error(`Agent Run not found: ${this.id}.`);
-      }
+      const run = await this.host.getRun(this.id);
+      if (!run) throw new Error(`Agent Run not found: ${this.id}.`);
       this.notify(run);
       if (["completed", "failed", "cancelled"].includes(run.state)) {
         if (!run.outcome) {
@@ -72,19 +89,19 @@ export class AgentRun {
         }
         return structuredClone(run.outcome);
       }
-      await this.runtime[waitForRunSymbol](this.id);
+      await this.host.waitForRunChange(this.id, run.state, run.updatedAt);
     }
   }
 
   async abort(reason = "Agent Run aborted by caller."): Promise<void> {
-    await this.runtime[abortRunSymbol](this.id, reason);
+    await this.host.abortRun(this.id, reason);
   }
 
   notify(run: AgentRunRecord): void {
     this.current = structuredClone(run);
     for (const listener of this.listeners) {
       try {
-        const result = listener(structuredClone(run));
+        const result = listener(run.state);
         if (result && typeof (result as Promise<void>).then === "function") {
           void Promise.resolve(result).catch(() => undefined);
         }
@@ -93,4 +110,12 @@ export class AgentRun {
       }
     }
   }
+}
+
+export function createAgentRun(
+  host: AgentRunHost,
+  initial: AgentRunRecord,
+  publicMessageId: string = initial.messageId,
+): AgentRun {
+  return AgentRun[CREATE_AGENT_RUN](host, initial, publicMessageId);
 }

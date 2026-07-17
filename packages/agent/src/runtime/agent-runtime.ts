@@ -1,94 +1,86 @@
-import { Agent } from "../agent";
+import { Agent, attachAgent } from "../agent";
+import type { AgentRunControl, AttachedAgentBinding } from "../agent";
+import { createMessage } from "../types";
 import { createId } from "../utils";
-import type { AgentResumeOptions } from "../agent";
+import type { AgentCreateOptions, AgentOptions } from "../agent";
 import type {
   AgentId,
   AgentRunRecord,
   AgentRunId,
   RuntimeEvent,
   RuntimeEventCursor,
-  RuntimeMessagePayload,
 } from "./domain";
 import type { Outcome } from "../protocol";
+import type { SessionManagerProvider } from "../harness/session/session-manager";
 import type { RuntimeStateStore } from "./store";
 import { ToolRuntime, type ToolRuntimePolicy } from "./tool-runtime";
-
-export type RuntimeSessionManagerProvider = {
-  create(input: import("../harness/session/session-manager").CreateSessionManagerInput): Promise<import("../harness/session/session-manager").SessionManager>;
-  open(sessionId: string): Promise<import("../harness/session/session-manager").SessionManager | undefined>;
-};
+import { createAgentRun } from "./agent-run";
 
 export type AgentFactoryIdentity = {
   agentId: AgentId;
   sessionId: string;
-  factoryId: import("./domain").FactoryId;
+  factoryId: string;
 };
 
 export type AgentFactory = (
   identity: AgentFactoryIdentity,
-) => Promise<Omit<AgentResumeOptions, "sessionId"> | undefined> | Omit<AgentResumeOptions, "sessionId"> | undefined;
+) => Promise<AgentOptions | undefined> | AgentOptions | undefined;
 
 export type AgentRuntimeOptions = {
   stateStore: RuntimeStateStore;
-  sessionManager?: RuntimeSessionManagerProvider;
-  factories?: ReadonlyMap<import("./domain").FactoryId, AgentFactory> | Readonly<Record<string, AgentFactory>>;
+  sessionProvider?: SessionManagerProvider;
+  factories?: ReadonlyMap<string, AgentFactory> | Readonly<Record<string, AgentFactory>>;
   toolPolicy?: ToolRuntimePolicy;
   maxConcurrentRuns?: number;
+  maxInfrastructureAttempts?: number;
+  leaseDurationMs?: number;
+  leaseRenewalIntervalMs?: number;
 };
 
-export type RuntimeRunControl = {
-  suspend(reason?: string): Promise<void>;
-};
-
-type LiveAgent = {
-  abort?: (reason?: string) => void;
-  execute?: (payload: RuntimeMessagePayload, runId: AgentRunId, control: RuntimeRunControl) => Promise<Outcome>;
-};
+class InfrastructureFailureError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "InfrastructureFailureError";
+  }
+}
 
 export type RuntimeRunHandle = {
   notify(run: AgentRunRecord): void;
 };
 
-export type RuntimeRunExecutor = (
-  payload: RuntimeMessagePayload,
-  control?: RuntimeRunControl,
-) => Promise<Outcome>;
-
 export type RuntimeEventListener = (event: RuntimeEvent) => void | Promise<void>;
-
-export const bindAgentSymbol = Symbol("rowan.agentRuntime.bindAgent");
-export const unbindAgentSymbol = Symbol("rowan.agentRuntime.unbindAgent");
-export const registerRunHandleSymbol = Symbol("rowan.agentRuntime.registerRunHandle");
-export const waitForRunSymbol = Symbol("rowan.agentRuntime.waitForRun");
-export const scheduleRunSymbol = Symbol("rowan.agentRuntime.scheduleRun");
-export const abortRunSymbol = Symbol("rowan.agentRuntime.abortRun");
 
 let activeRuntime: AgentRuntime | undefined;
 
 type PendingJob = {
   agentId: AgentId;
   runId: AgentRunId;
-  executor?: RuntimeRunExecutor;
 };
 
 type EventSubscription = {
+  consumerId: string;
   listener: RuntimeEventListener;
-  after?: import("./domain").RuntimeEventId;
+  delivering: boolean;
+  redeliver: boolean;
 };
 
 export class AgentRuntime {
-  readonly stateStore: RuntimeStateStore;
-  readonly sessionManager?: RuntimeSessionManagerProvider;
-  readonly maxConcurrentRuns: number;
-  readonly toolRuntime: ToolRuntime;
+  private readonly stateStore: RuntimeStateStore;
+  private readonly sessionProvider?: SessionManagerProvider;
+  private readonly maxConcurrentRuns: number;
+  private readonly maxInfrastructureAttempts: number;
+  private readonly leaseDurationMs: number;
+  private readonly leaseRenewalIntervalMs: number;
+  private readonly toolRuntime: ToolRuntime;
   private readonly factories: ReadonlyMap<string, AgentFactory>;
-  private readonly bindings = new Map<AgentId, LiveAgent>();
+  private readonly bindings = new Map<AgentId, AttachedAgentBinding>();
   private readonly runHandles = new Map<AgentRunId, RuntimeRunHandle>();
   private readonly runWaiters = new Map<AgentRunId, Set<() => void>>();
   private readonly pendingRuns: PendingJob[] = [];
   private readonly scheduledRunIds = new Set<AgentRunId>();
   private readonly runningAgents = new Set<AgentId>();
-  private readonly eventSubscriptions = new Set<EventSubscription>();
+  private readonly pausedAgents = new Set<AgentId>();
+  private readonly eventSubscriptions = new Map<string, EventSubscription>();
   private readonly activeDispatches = new Set<Promise<void>>();
   private runningRuns = 0;
   private pumping = false;
@@ -97,12 +89,18 @@ export class AgentRuntime {
 
   private constructor(options: AgentRuntimeOptions) {
     this.stateStore = options.stateStore;
-    this.sessionManager = options.sessionManager;
+    this.sessionProvider = options.sessionProvider;
     this.maxConcurrentRuns = options.maxConcurrentRuns ?? Number.POSITIVE_INFINITY;
-    this.toolRuntime = new ToolRuntime(options.stateStore, options.toolPolicy);
+    this.maxInfrastructureAttempts = options.maxInfrastructureAttempts ?? 3;
+    this.leaseDurationMs = options.leaseDurationMs ?? 60_000;
+    this.leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? Math.max(1, Math.floor(this.leaseDurationMs / 2));
+    this.toolRuntime = new ToolRuntime(options.stateStore, options.toolPolicy, () => this.publishEvents());
     this.factories = options.factories instanceof Map
       ? new Map([...options.factories.entries()].map(([id, factory]) => [String(id), factory]))
       : new Map(Object.entries(options.factories ?? {}));
+    for (const id of this.factories.keys()) {
+      if (id.trim().length === 0) throw new Error("Factory ID must not be empty.");
+    }
   }
 
   static async start(options: AgentRuntimeOptions): Promise<AgentRuntime> {
@@ -115,25 +113,79 @@ export class AgentRuntime {
     if (!Number.isFinite(options.maxConcurrentRuns ?? 1) || (options.maxConcurrentRuns ?? 1) <= 0) {
       throw new Error("Agent Runtime maxConcurrentRuns must be a positive finite number.");
     }
+    if (!Number.isInteger(options.maxInfrastructureAttempts ?? 3) || (options.maxInfrastructureAttempts ?? 3) <= 0) {
+      throw new Error("Agent Runtime maxInfrastructureAttempts must be a positive integer.");
+    }
+    if (!Number.isFinite(options.leaseDurationMs ?? 60_000) || (options.leaseDurationMs ?? 60_000) <= 0) {
+      throw new Error("Agent Runtime leaseDurationMs must be a positive finite number.");
+    }
+    const leaseDurationMs = options.leaseDurationMs ?? 60_000;
+    const renewalIntervalMs = options.leaseRenewalIntervalMs ?? Math.max(1, Math.floor(leaseDurationMs / 2));
+    if (!Number.isFinite(renewalIntervalMs) || renewalIntervalMs <= 0 || renewalIntervalMs >= leaseDurationMs) {
+      throw new Error("Agent Runtime leaseRenewalIntervalMs must be positive and shorter than leaseDurationMs.");
+    }
     const runtime = new AgentRuntime(options);
     activeRuntime = runtime;
-    await runtime.recover();
-    return runtime;
+    try {
+      await runtime.recover();
+      return runtime;
+    } catch (error) {
+      await runtime.stop().catch(() => undefined);
+      throw error;
+    }
   }
 
-  static current(): AgentRuntime | undefined {
-    return activeRuntime;
+  async createAgent(options: AgentCreateOptions): Promise<Agent> {
+    this.assertRunning();
+    if (options.factoryId !== undefined && options.factoryId.trim().length === 0) {
+      throw new Error("Factory ID must not be empty.");
+    }
+    const provider = this.sessionProvider;
+    if (!provider) throw new Error("Agent Runtime requires a SessionManager provider to create an Agent.");
+    const manager = await provider.create({
+      systemPrompt: options.context.systemPrompt,
+      input: options.input ?? "",
+      skills: options.context.skills,
+    });
+    if (options.input) await manager.appendMessage(createMessage("user", options.input));
+    const record = await this.stateStore.createAgent({
+      sessionId: manager.getSessionId(),
+      ...(options.factoryId ? { factoryId: options.factoryId } : {}),
+    });
+    this.pausedAgents.delete(record.id);
+    const agent = await this.attachAgent(record, manager, options);
+    this.publishEvents();
+    return agent;
+  }
+
+  async reconstructAgent(
+    agentId: AgentId,
+    options: AgentOptions,
+  ): Promise<Agent> {
+    this.assertRunning();
+    const record = await this.stateStore.getAgent(agentId);
+    if (!record) throw new Error(`Agent not found: ${agentId}.`);
+    if (record.state === "paused") this.pausedAgents.add(record.id);
+    else this.pausedAgents.delete(record.id);
+    const provider = this.sessionProvider;
+    if (!provider) throw new Error("Agent Runtime requires a SessionManager provider to reconstruct an Agent.");
+    const manager = await provider.open(record.sessionId);
+    if (!manager) throw new Error(`Session not found: ${record.sessionId}.`);
+    const agent = await this.attachAgent(record, manager, options);
+    this.publishEvents();
+    return agent;
   }
 
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
     for (const binding of this.bindings.values()) {
-      binding.abort?.("Agent Runtime stopped.");
+      binding.abort("Agent Runtime stopped.");
     }
     this.bindings.clear();
     this.pendingRuns.length = 0;
     this.scheduledRunIds.clear();
+    this.pausedAgents.clear();
     const activeDispatches = [...this.activeDispatches];
     this.runHandles.clear();
     for (const waiters of this.runWaiters.values()) {
@@ -145,65 +197,68 @@ export class AgentRuntime {
     if (activeRuntime === this) activeRuntime = undefined;
   }
 
-  [bindAgentSymbol](agentId: AgentId, agent: LiveAgent): void {
+  private bindAgent(agentId: AgentId, agent: AttachedAgentBinding): void {
     this.assertRunning();
     if (this.bindings.has(agentId)) {
       throw new Error(`Agent ${agentId} is already bound to a live Agent.`);
     }
     this.bindings.set(agentId, agent);
-    void this.scheduleQueuedRuns(agentId);
+    if (!this.pausedAgents.has(agentId)) void this.scheduleQueuedRuns(agentId);
   }
 
-  [unbindAgentSymbol](agentId: AgentId, agent: LiveAgent): void {
-    if (this.bindings.get(agentId) === agent) this.bindings.delete(agentId);
-  }
-
-  [registerRunHandleSymbol](runId: AgentRunId, handle: RuntimeRunHandle): void {
+  private registerRunHandle(runId: AgentRunId, handle: RuntimeRunHandle): void {
     this.runHandles.set(runId, handle);
   }
 
-  [waitForRunSymbol](runId: AgentRunId): Promise<void> {
+  private waitForRunChange(runId: AgentRunId, state: AgentRunRecord["state"], updatedAt: string): Promise<void> {
     return new Promise((resolve) => {
       const waiters = this.runWaiters.get(runId) ?? new Set<() => void>();
-      waiters.add(resolve);
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        waiters.delete(finish);
+        if (waiters.size === 0) this.runWaiters.delete(runId);
+        resolve();
+      };
+      waiters.add(finish);
       this.runWaiters.set(runId, waiters);
+      void this.stateStore.getRun(runId).then((current) => {
+        if (!current || current.state !== state || current.updatedAt !== updatedAt) finish();
+      }, finish);
     });
   }
 
-  [scheduleRunSymbol](agentId: AgentId, runId: AgentRunId, executor?: RuntimeRunExecutor): void {
+  private scheduleRun(agentId: AgentId, runId: AgentRunId): void {
     this.assertRunning();
     if (this.scheduledRunIds.has(runId)) return;
     this.scheduledRunIds.add(runId);
-    this.pendingRuns.push({ agentId, runId, executor });
+    this.pendingRuns.push({ agentId, runId });
     void this.pump();
   }
 
   async pauseAgent(agentId: AgentId): Promise<void> {
     this.assertRunning();
-    await this.stateStore.setAgentState(agentId, "paused");
-    await this.publishEvents();
-  }
-
-  async pause(agentId: AgentId): Promise<void> {
-    return this.pauseAgent(agentId);
+    this.pausedAgents.add(agentId);
+    try {
+      await this.stateStore.setAgentState(agentId, "paused");
+    } catch (error) {
+      this.pausedAgents.delete(agentId);
+      throw error;
+    }
+    this.publishEvents();
   }
 
   async resumeAgent(agentId: AgentId): Promise<void> {
     this.assertRunning();
     await this.stateStore.setAgentState(agentId, "active");
+    this.pausedAgents.delete(agentId);
     await this.scheduleQueuedRuns(agentId);
-    await this.publishEvents();
-  }
-
-  async resume(agentId: AgentId): Promise<void> {
-    return this.resumeAgent(agentId);
+    void this.pump();
+    this.publishEvents();
   }
 
   async abortRun(runId: AgentRunId, reason = "Agent Run aborted by caller."): Promise<void> {
-    await this[abortRunSymbol](runId, reason);
-  }
-
-  async [abortRunSymbol](runId: AgentRunId, reason: string): Promise<void> {
     const run = await this.stateStore.getRun(runId);
     if (!run || ["completed", "failed", "cancelled"].includes(run.state)) return;
     const aborted = await this.stateStore.abortRun({
@@ -211,16 +266,39 @@ export class AgentRuntime {
       outcome: { id: createId("out"), message: reason },
     });
     this.notifyRun(aborted);
+    if (run.state === "queued") {
+      const pendingIndex = this.pendingRuns.findIndex((job) => job.runId === runId);
+      if (pendingIndex >= 0) this.pendingRuns.splice(pendingIndex, 1);
+      this.scheduledRunIds.delete(runId);
+    }
     this.toolRuntime.abortRun(runId);
-    this.bindings.get(aborted.agentId)?.abort?.(reason);
-    await this.publishEvents();
+    if (run.state === "running" || run.state === "suspended") {
+      this.bindings.get(aborted.agentId)?.abort(reason);
+    }
+    this.publishEvents();
   }
 
-  subscribeEvents(listener: RuntimeEventListener, cursor: RuntimeEventCursor = {}): () => void {
-    const subscription: EventSubscription = { listener, ...(cursor.after ? { after: cursor.after } : {}) };
-    this.eventSubscriptions.add(subscription);
-    void this.deliverEvents(subscription);
-    return () => this.eventSubscriptions.delete(subscription);
+  consumeEvents(consumerId: string, listener: RuntimeEventListener): () => void {
+    this.assertRunning();
+    if (consumerId.trim().length === 0) {
+      throw new Error("Runtime Event Consumer ID must not be empty.");
+    }
+    if (this.eventSubscriptions.has(consumerId)) {
+      throw new Error(`Runtime Event Consumer is already active: ${consumerId}.`);
+    }
+    const subscription: EventSubscription = {
+      consumerId,
+      listener,
+      delivering: false,
+      redeliver: false,
+    };
+    this.eventSubscriptions.set(consumerId, subscription);
+    void this.deliverEvents(subscription).catch(() => undefined);
+    return () => {
+      if (this.eventSubscriptions.get(consumerId) === subscription) {
+        this.eventSubscriptions.delete(consumerId);
+      }
+    };
   }
 
   async listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]> {
@@ -228,8 +306,11 @@ export class AgentRuntime {
   }
 
   private async recover(): Promise<void> {
-    await this.stateStore.recoverExpiredLeases(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    await this.stateStore.recoverLeases();
     const agents = await this.stateStore.listAgents();
+    for (const record of agents) {
+      if (record.state === "paused") this.pausedAgents.add(record.id);
+    }
     for (const record of agents) {
       if (record.state !== "active" || !record.factoryId) continue;
       const factory = this.factories.get(String(record.factoryId));
@@ -239,23 +320,68 @@ export class AgentRuntime {
       }
       try {
         const options = await factory({ agentId: record.id, sessionId: record.sessionId, factoryId: record.factoryId });
-        if (!options) continue;
-        await Agent.resume({ ...options, sessionId: record.sessionId });
+        if (!options) {
+          await this.stateStore.recordEvent({
+            kind: "agent_recovery_failed",
+            related: { agentId: record.id },
+            payload: { factoryId: record.factoryId, error: "Factory returned no reconstruction options." },
+          });
+          continue;
+        }
+        await this.reconstructAgent(record.id, options);
         await this.stateStore.recordEvent({ kind: "agent_recovered", related: { agentId: record.id }, payload: { factoryId: record.factoryId } });
       } catch (error) {
-        await this.stateStore.recordEvent({ kind: "factory_missing", related: { agentId: record.id }, payload: { factoryId: record.factoryId, error: error instanceof Error ? error.message : String(error) } });
+        await this.stateStore.recordEvent({ kind: "agent_recovery_failed", related: { agentId: record.id }, payload: { factoryId: record.factoryId, error: error instanceof Error ? error.message : String(error) } });
       }
     }
     for (const record of await this.stateStore.listAgents()) {
       if (this.bindings.has(record.id)) await this.scheduleQueuedRuns(record.id);
     }
-    await this.publishEvents();
+    this.publishEvents();
   }
 
   private async scheduleQueuedRuns(agentId: AgentId): Promise<void> {
     if (!this.bindings.has(agentId)) return;
     const runs = await this.stateStore.listRuns({ agentId, states: ["queued"] });
-    for (const run of runs) this[scheduleRunSymbol](agentId, run.id);
+    for (const run of runs) this.scheduleRun(agentId, run.id);
+  }
+
+  private async attachAgent(
+    record: import("./domain").AgentRecord,
+    manager: import("../harness/session/session-manager").SessionManager,
+    options: AgentOptions,
+  ): Promise<Agent> {
+    const attached = await attachAgent({
+      options,
+      agentId: record.id,
+      sessionId: record.sessionId,
+      manager,
+      submit: (message, persist) => this.submitAgentInput(record.id, message, persist),
+      executeTool: (input) => this.toolRuntime.execute(input),
+    });
+    this.bindAgent(record.id, attached.binding);
+    return attached.agent;
+  }
+
+  private async submitAgentInput(
+    agentId: AgentId,
+    input: import("../types").AgentMessage,
+    persist: () => Promise<void>,
+  ): Promise<import("./agent-run").AgentRun> {
+    this.assertRunning();
+    if (!this.bindings.has(agentId)) throw new Error(`Agent ${agentId} has no live Agent Binding.`);
+    const enqueued = await this.stateStore.enqueueAgentInput({ agentId, input });
+    await persist();
+    const run = createAgentRun({
+      register: (handle) => this.registerRunHandle(enqueued.run.id, handle),
+      getRun: (runId) => this.stateStore.getRun(runId),
+      waitForRunChange: (runId, state, updatedAt) => this.waitForRunChange(runId, state, updatedAt),
+      abortRun: (runId, reason) => this.abortRun(runId, reason),
+      consumeEvents: (consumerId, listener) => this.consumeEvents(consumerId, listener),
+    }, enqueued.run, input.id);
+    this.scheduleRun(agentId, enqueued.run.id);
+    this.publishEvents();
+    return run;
   }
 
   private async pump(): Promise<void> {
@@ -263,7 +389,11 @@ export class AgentRuntime {
     this.pumping = true;
     try {
       while (this.runningRuns < this.maxConcurrentRuns) {
-        const index = this.pendingRuns.findIndex((job) => this.bindings.has(job.agentId) && !this.runningAgents.has(job.agentId));
+        const index = this.pendingRuns.findIndex((job) => (
+          this.bindings.has(job.agentId)
+          && !this.pausedAgents.has(job.agentId)
+          && !this.runningAgents.has(job.agentId)
+        ));
         if (index < 0) return;
         const [job] = this.pendingRuns.splice(index, 1);
         if (!job) return;
@@ -292,78 +422,110 @@ export class AgentRuntime {
     let suspendedResolve: (() => void) | undefined;
     let suspended = false;
     const suspendedSignal = new Promise<void>((resolve) => { suspendedResolve = resolve; });
-    const control: RuntimeRunControl = {
+    const control: AgentRunControl = {
       suspend: async (reason) => {
         if (suspended) return;
         suspended = true;
         const current = await this.stateStore.suspendRun({ runId: job.runId, reason });
         this.notifyRun(current);
-        await this.publishEvents();
+        this.publishEvents();
         suspendedResolve?.();
       },
     };
+    let renewalTimer: ReturnType<typeof setInterval> | undefined;
+    let renewalFailed = false;
+    let failRenewal!: (error: InfrastructureFailureError) => void;
+    const renewalFailureSignal = new Promise<InfrastructureFailureError>((resolve) => {
+      failRenewal = resolve;
+    });
     try {
       const leased = await this.stateStore.leaseRun({
         runId: job.runId,
         workerId,
-        leaseDurationMs: 60_000,
+        leaseDurationMs: this.leaseDurationMs,
       });
       this.notifyRun(leased.run);
-      const execute = job.executor ?? binding.execute;
-      if (!execute) throw new Error(`Agent ${job.agentId} has no Runtime executor.`);
-      const execution = job.executor
-        ? job.executor(leased.message.payload, control)
-        : binding.execute!(leased.message.payload, job.runId, control);
+      renewalTimer = setInterval(() => {
+        void this.stateStore.renewLease({
+          runId: job.runId,
+          leaseId: leased.lease.id,
+          leaseDurationMs: this.leaseDurationMs,
+        }).catch((error) => {
+          if (renewalFailed) return;
+          renewalFailed = true;
+          const failure = new InfrastructureFailureError("Agent Run Lease renewal failed.", { cause: error });
+          binding.abort(failure.message);
+          failRenewal(failure);
+        });
+      }, this.leaseRenewalIntervalMs);
+      const execution = binding.execute(leased.message.input, job.runId, control);
       const outcome = await Promise.race([
         execution.then((value) => ({ kind: "terminal" as const, value })).catch((error) => ({ kind: "error" as const, error })),
         suspendedSignal.then(() => ({ kind: "suspended" as const })),
+        renewalFailureSignal.then((error) => ({ kind: "renewal_failure" as const, error })),
       ]);
       if (outcome.kind === "suspended") {
         void execution.catch(() => undefined);
         return;
       }
       if (outcome.kind === "error") {
-        await this.finishFailedRun(job.runId, outcome.error);
+        await this.finishFailedRun(job, outcome.error);
         return;
       }
-      await this.finishRun(job, leased.message.id, outcome.value);
+      if (outcome.kind === "renewal_failure") {
+        await execution.catch(() => undefined);
+        await this.finishFailedRun(job, outcome.error);
+        return;
+      }
+      await this.finishRun(job, outcome.value);
     } catch (error) {
       const current = await this.stateStore.getRun(job.runId);
       if (!current || ["completed", "failed", "cancelled", "suspended"].includes(current.state)) {
         if (current) this.notifyRun(current);
         return;
       }
-      await this.finishFailedRun(job.runId, error);
+      if (current.state !== "running") {
+        this.notifyRun(current);
+        return;
+      }
+      await this.finishFailedRun(job, error);
+    } finally {
+      if (renewalTimer) clearInterval(renewalTimer);
     }
   }
 
-  private async finishRun(job: PendingJob, messageId: import("./domain").RuntimeMessageId, outcome: Outcome): Promise<void> {
+  private async finishRun(job: PendingJob, outcome: Outcome): Promise<void> {
     const current = await this.stateStore.getRun(job.runId);
     if (!current || ["completed", "failed", "cancelled"].includes(current.state)) {
       if (current) this.notifyRun(current);
       return;
     }
     const completed = await this.stateStore.completeRun({ runId: current.id, outcome });
-    await this.stateStore.acknowledgeMessage(messageId);
     this.notifyRun(completed);
-    await this.publishEvents();
+    this.publishEvents();
   }
 
-  private async finishFailedRun(runId: AgentRunId, error: unknown): Promise<void> {
-    const current = await this.stateStore.getRun(runId);
+  private async finishFailedRun(job: PendingJob, error: unknown): Promise<void> {
+    const current = await this.stateStore.getRun(job.runId);
     if (!current || ["completed", "failed", "cancelled"].includes(current.state)) {
       if (current) this.notifyRun(current);
       return;
     }
-    const failed = await this.stateStore.completeRun({
-      runId,
-      state: "failed",
-      outcome: { id: createId("out"), message: error instanceof Error ? error.message : "Agent Run failed." },
-    });
-    const message = await this.stateStore.getMessage(failed.messageId);
-    if (message && ["queued", "leased"].includes(message.state)) await this.stateStore.acknowledgeMessage(message.id);
+    const message = error instanceof Error ? error.message : "Agent Run failed.";
+    const outcome = { id: createId("out"), message };
+    const retryable = isRetryableInfrastructureError(error);
+    if (retryable && current.attempt < this.maxInfrastructureAttempts) {
+      const retried = await this.stateStore.retryRun({ runId: current.id, reason: message });
+      this.notifyRun(retried);
+      this.pendingRuns.push(job);
+      this.publishEvents();
+      return;
+    }
+    const failed = retryable
+      ? await this.stateStore.exhaustRun({ runId: current.id, outcome, reason: message })
+      : await this.stateStore.completeRun({ runId: current.id, state: "failed", outcome });
     this.notifyRun(failed);
-    await this.publishEvents();
+    this.publishEvents();
   }
 
   private notifyRun(run: AgentRunRecord): void {
@@ -374,19 +536,45 @@ export class AgentRuntime {
     for (const resolve of waiters) resolve();
   }
 
-  private async publishEvents(): Promise<void> {
-    await Promise.all([...this.eventSubscriptions].map((subscription) => this.deliverEvents(subscription)));
+  private publishEvents(): void {
+    for (const subscription of this.eventSubscriptions.values()) {
+      void this.deliverEvents(subscription).catch(() => undefined);
+    }
   }
 
   private async deliverEvents(subscription: EventSubscription): Promise<void> {
-    const events = await this.stateStore.listEvents(subscription.after ? { after: subscription.after } : undefined);
-    for (const event of events) {
-      subscription.after = event.id;
-      await subscription.listener(structuredClone(event));
+    if (subscription.delivering) {
+      subscription.redeliver = true;
+      return;
+    }
+    subscription.delivering = true;
+    try {
+      do {
+        subscription.redeliver = false;
+        const checkpoint = await this.stateStore.getEventCheckpoint(subscription.consumerId);
+        const events = await this.stateStore.listEvents(
+          checkpoint.eventId ? { after: checkpoint.eventId } : undefined,
+        );
+        for (const event of events) {
+          if (this.eventSubscriptions.get(subscription.consumerId) !== subscription) return;
+          await subscription.listener(structuredClone(event));
+          await this.stateStore.acknowledgeEvent(subscription.consumerId, event.id);
+        }
+      } while (subscription.redeliver);
+    } finally {
+      subscription.delivering = false;
     }
   }
 
   private assertRunning(): void {
     if (this.stopped || activeRuntime !== this) throw new Error("Agent Runtime is stopped.");
   }
+}
+
+function isRetryableInfrastructureError(error: unknown): boolean {
+  if (error instanceof InfrastructureFailureError) return true;
+  return typeof error === "object"
+    && error !== null
+    && "retryable" in error
+    && error.retryable === true;
 }

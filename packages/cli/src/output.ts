@@ -1,4 +1,4 @@
-import { messageContentText, type AgentMessage, type ToolResult } from "@rowan-agent/agent";
+import type { AgentMessage, ToolResult } from "@rowan-agent/agent";
 
 const TOOL_ARGS_PREVIEW_LIMIT = 60;
 
@@ -23,6 +23,21 @@ export function formatToolArgsPreview(toolName: string, args: unknown): string {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function messageContentText(content: AgentMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      if (part.type === "thinking") return part.thinking;
+      if (part.type === "tool_result") return part.content;
+      if (part.type === "tool_use") return JSON.stringify(part.input);
+      if (part.type === "image") return `[image:${part.mimeType}]`;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function formatToolResultOutput(result: ToolResult): string {

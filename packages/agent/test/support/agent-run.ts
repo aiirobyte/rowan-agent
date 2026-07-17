@@ -1,5 +1,5 @@
 import { createMessage, type AgentMessage } from "@rowan-agent/agent";
-import type { Agent, RunOptions } from "../../src/agent";
+import type { AgentExecution as Agent, RunOptions } from "../../src/agent-execution";
 import type { AgentContext, Tool } from "../../src/types";
 
 export function createTestContext(input: {

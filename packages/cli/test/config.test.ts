@@ -9,10 +9,10 @@ import {
   parseModelRef,
   interpolateEnvVars,
   type AgentConfigFile,
-} from "../../src/harness/config";
+} from "../src/config";
 import {
   type WorkspacePaths,
-} from "../../src/harness/env";
+} from "../src/workspace";
 import { getModel, clearModels } from "@rowan-agent/models";
 
 function ws(dir: string): WorkspacePaths {

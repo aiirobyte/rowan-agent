@@ -5,7 +5,7 @@ const RUNTIME_SCHEMA_SQL = `
       id TEXT PRIMARY KEY NOT NULL,
       session_id TEXT NOT NULL,
       factory_id TEXT,
-      state TEXT NOT NULL CHECK (state IN ('active', 'paused', 'stopped')),
+      state TEXT NOT NULL CHECK (state IN ('active', 'paused')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -48,7 +48,6 @@ const RUNTIME_SCHEMA_SQL = `
       id TEXT PRIMARY KEY NOT NULL,
       sequence INTEGER NOT NULL DEFAULT 0,
       kind TEXT NOT NULL,
-      state TEXT NOT NULL CHECK (state IN ('pending', 'acknowledged')),
       agent_id TEXT,
       message_id TEXT,
       run_id TEXT,
@@ -70,12 +69,19 @@ const RUNTIME_SCHEMA_SQL = `
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS runtime_event_consumers (
+      consumer_id TEXT PRIMARY KEY NOT NULL,
+      sequence INTEGER NOT NULL DEFAULT 0,
+      event_id TEXT,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS runtime_messages_runnable_idx
       ON runtime_messages (agent_id, state, created_at);
     CREATE INDEX IF NOT EXISTS agent_runs_agent_state_idx
       ON agent_runs (agent_id, state, created_at);
     CREATE INDEX IF NOT EXISTS runtime_events_delivery_idx
-      ON runtime_events (state, sequence);
+      ON runtime_events (sequence);
 
     CREATE INDEX IF NOT EXISTS agent_runs_runnable_idx
       ON agent_runs (state, created_at);
@@ -92,16 +98,4 @@ export function initializeRuntimeSchema(database: Database): void {
   });
   initialize();
 
-  // Keep databases created by the Slice 1-6 foundation readable as the
-  // runtime gains durable event sequencing.
-  for (const statement of [
-    "ALTER TABLE runtime_events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0",
-  ]) {
-    try {
-      database.run(statement);
-    } catch {
-      // The column already exists.
-    }
-  }
-  database.run("CREATE INDEX IF NOT EXISTS runtime_events_sequence_idx ON runtime_events (sequence)");
 }

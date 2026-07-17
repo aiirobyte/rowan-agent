@@ -1,6 +1,8 @@
 # @rowan-agent/agent
 
-Core agent runtime for Rowan. Provides a configurable phase-based execution loop, tool calling, session persistence, event streaming, skills, and an extension system for plugins.
+Embedded durable agent runtime for Rowan. It owns Agent lifecycle, scheduling,
+recovery, Tool Calls, and Runtime Events while preserving the configurable
+phase loop, Sessions, skills, and extension system.
 
 ## Installation
 
@@ -10,42 +12,38 @@ bun add @rowan-agent/agent
 
 ## Quick Start
 
-The durable lifecycle is the public entrypoint: start one `AgentRuntime`, create or
-resume an `Agent`, submit input with `send()`, and wait on the returned `AgentRun`.
+The durable lifecycle is the public entrypoint: start one `AgentRuntime`, create
+or reconstruct an `Agent`, submit input with `send()`, and wait on the returned
+`AgentRun`.
 
 ```ts
 import {
-  Agent,
   AgentRuntime,
   InMemoryRuntimeStateStore,
-  InMemorySessionManager,
+  InMemorySessionProvider,
   createCoreTools,
-  createDispatchStream,
 } from "@rowan-agent/agent";
+import { createModelStream } from "@rowan-agent/models";
 
-const sessions = new Map<string, InMemorySessionManager>();
 const runtime = await AgentRuntime.start({
   stateStore: new InMemoryRuntimeStateStore(),
-  sessionManager: {
-    create: async (input) => {
-      const session = InMemorySessionManager.create(input);
-      sessions.set(session.getSessionId(), session);
-      return session;
-    },
-    open: async (id) => sessions.get(id),
-  },
+  sessionProvider: new InMemorySessionProvider(),
 });
 
 try {
-  const agent = await Agent.create({
+  const agent = await runtime.createAgent({
     context: {
       systemPrompt: "You are a helpful coding assistant.",
       messages: [],
       tools: createCoreTools({ root: process.cwd() }),
       skills: [],
+      phases: {
+        phases: new Map(),
+        entryPhaseId: default,
+      },
     },
     model: { provider: "openai", id: "gpt-4.1-mini" },
-    stream: createDispatchStream(),
+    stream: createModelStream(),
   });
 
   agent.subscribe((event) => console.log(event.type));
@@ -56,72 +54,117 @@ try {
 }
 ```
 
-Use `Agent.resume({ sessionId, ...currentOptions })` for an explicit existing
-session. `send()` is non-blocking; `AgentRun.result()` waits for its durable
-terminal outcome. A suspended run is resumed by the next `send()` for that Agent.
+Use `runtime.reconstructAgent(agentId, currentOptions)` to bind an existing
+durable Agent to its Session with current resources. `send()` is non-blocking;
+`AgentRun.result()` waits for its durable terminal Outcome.
+
+The example uses in-memory adapters. Use `SqliteRuntimeStateStore` and a
+persistent Session provider when state must survive a process restart.
+
+## AgentRuntime
+
+Exactly one `AgentRuntime` may be active in a process. It is the sole owner of
+Agent creation and reconstruction, durable input, scheduling, leases, Runtime
+Events, and Tool Call control. Always stop it during host shutdown.
+
+```ts
+type AgentRuntimeOptions = {
+  stateStore: InMemoryRuntimeStateStore | SqliteRuntimeStateStore;
+  sessionProvider?: InMemorySessionProvider | LocalJsonlSessionProvider;
+  factories?: ReadonlyMap<string, AgentFactory> | Readonly<Record<string, AgentFactory>>;
+  toolPolicy?: ToolRuntimePolicy;
+  maxConcurrentRuns?: number;
+  maxInfrastructureAttempts?: number;
+  leaseDurationMs?: number;
+  leaseRenewalIntervalMs?: number;
+};
+
+class AgentRuntime {
+  static start(options: AgentRuntimeOptions): Promise<AgentRuntime>;
+  createAgent(options: AgentCreateOptions): Promise<Agent>;
+  reconstructAgent(agentId: AgentId, options: AgentOptions): Promise<Agent>;
+  pauseAgent(agentId: AgentId): Promise<void>;
+  resumeAgent(agentId: AgentId): Promise<void>;
+  abortRun(runId: AgentRunId, reason?: string): Promise<void>;
+  consumeEvents(
+    consumerId: string,
+    listener: (event: RuntimeEvent) => void | Promise<void>,
+  ): () => void;
+  listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]>;
+  stop(): Promise<void>;
+}
+```
+
+A Session provider is required by `createAgent()` and `reconstructAgent()`.
+Runtime State and conversation history are deliberately separate:
+
+| Concern | Durable adapter | In-memory adapter |
+|---------|-----------------|-------------------|
+| Agent records, Messages, Runs, Leases, Runtime Events, Tool Calls | `SqliteRuntimeStateStore` | `InMemoryRuntimeStateStore` |
+| Conversation messages, model transcripts, Outcomes | `LocalJsonlSessionProvider` | `InMemorySessionProvider` |
+
+The SQLite Runtime schema has no compatibility migration. Replace an older
+Runtime database when adopting a breaking schema; Session JSONL records remain
+separate.
+
+### Scheduling and Runtime Commands
+
+The Scheduler runs at most one Run for each Agent and up to
+`maxConcurrentRuns` across different Agents. `pauseAgent()` gates queued and new
+work without cancelling a Run that is already executing; `resumeAgent()` opens
+that gate. `abortRun()` targets one precise Run.
+
+Lease failures and model/provider errors marked `retryable: true` are retried.
+The Runtime renews active leases and retries them up to
+`maxInfrastructureAttempts`; exhausted work fails and its triggering Message is
+dead-lettered.
+
+### Factory Recovery
+
+An optional opaque Factory ID lets the Runtime reconstruct active Agents after
+a restart. The Factory supplies current executable resources; Rowan persists
+the Agent and Session identities, not model clients, Tools, Phases, or
+Extensions.
+
+```ts
+const factoryId = "coding-agent";
+const factories = new Map([
+  [factoryId, async () => currentAgentOptions],
+]);
+
+const runtime = await AgentRuntime.start({
+  stateStore,
+  sessionProvider,
+  factories,
+});
+
+const agent = await runtime.createAgent({
+  ...currentAgentOptions,
+  factoryId,
+});
+```
+
+On the next `AgentRuntime.start()` with the same durable adapters and Factory,
+the active Agent is reconstructed with its original Agent ID and Session ID.
+Missing or declining Factories leave the Agent unbound and emit a durable
+Runtime Event.
 
 ## Agent
 
-The durable lifecycle uses `Agent.create()` and `Agent.resume()` with a running
-`AgentRuntime`. The low-level constructor remains available for legacy in-process
-loop tests, but does not create durable Agent or Run records.
+`AgentRuntime` is the only lifecycle owner. `Agent` is a bound facade: it cannot
+be directly constructed and has no independent `run()` path.
 
-The `Agent` class is the public facade. It drives the entire execution loop — from receiving context and tools, through phase-based iteration, to producing a terminal `Outcome`.
+The `Agent` class is the public facade for one Runtime-owned Agent Binding.
 
 ```ts
 class Agent {
-  static create(options: AgentCreateOptions): Promise<Agent>;
-  static resume(options: AgentResumeOptions): Promise<Agent>;
-  constructor(options: AgentOptions);
+  readonly id: AgentId;
+  readonly sessionId: string;
   send(input: string | AgentMessage): Promise<AgentRun>;
-  run(options?: RunOptions): Promise<RunResult>;
-
-  // User input / conversation continuation
-  appendUserMessage(input: string): void;
-  appendMessage(message: AgentMessage): void;
-  appendMessages(messages: AgentMessage[]): void;
-  runWithUserInput(input: string, options?: RunOptions): Promise<RunResult>;
-  runWithMessage(message: AgentMessage, options?: RunOptions): Promise<RunResult>;
-  resetInitialization(): void;
-
-  // Context and transcript
-  getContext(): AgentContext;
-  setContext(context: AgentContext): void;
-  updateContext(updater: (context: AgentContext) => AgentContext): void;
-  forkContext(overrides?: Partial<AgentContext>): AgentContext;
-  getMessages(): AgentMessage[];
-  setMessages(messages: AgentMessage[]): void;
-  clearMessages(): void;
-  getTranscript(): AgentMessage[];
-  replaceTranscript(messages: AgentMessage[]): void;
-
-  // Config access and shortcuts
-  getConfig(): AgentOptions;
-  setConfig(config: AgentOptions): void;
-  updateConfig(updater: (config: AgentOptions) => AgentOptions): void;
-  setSessionId(sessionId: string): void;
-  getSessionId(): string | undefined;
-  setModel(model: LlmModelRef): void;
-  setTools(tools: Tool[]): void;
-  setSkills(skills: Skill[]): void;
-  setPhases(phases: PhaseRegistry): void;
-  setCwd(cwd: string): void;
-  setStream(stream: StreamFn): void;
-  getModel(): LlmModelRef;
-  getTools(): Tool[];
-  getSkills(): Skill[];
-  getPhases(): PhaseRegistry | undefined;
-  getCwd(): string | undefined;
-
-  abort(): void;
   subscribe(listener: AgentEventListener): () => void;
-  skill(name: string, additionalInstructions?: string): string;
-  phase(name: string): Promise<string>;
-  waitForIdle(): Promise<void>;
   flushEvents(): Promise<void>;
-  readonly state: AgentStatus;
 
-  // Resource loading — replaces standalone loadSkills/loadPhases/loadExtensions
+  // Resource discovery helpers
   static loadSkills(targetPath: string): Promise<Skill[]>;
   static loadPhases(targetPath: string): Promise<PhaseRegistry>;
   static loadExtensions(targetPath: string): Promise<LoadExtensionsResult>;
@@ -137,7 +180,6 @@ type AgentOptions = {
   stream: StreamFn;
   cwd?: string;
   extensions?: LoadedExtension[];
-  sessionId?: string;
   maxAttempts?: number;
 
   // Lifecycle hooks
@@ -147,60 +189,77 @@ type AgentOptions = {
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: Outcome) => Promise<void>;
 };
-```
 
-### RunResult
-
-```ts
-type RunResult = {
-  sessionId: string;
-  messages: AgentMessage[];
-  outcome: Outcome;
-  metrics: LoopMetrics;
+type AgentCreateOptions = AgentOptions & {
+  // Seeds the Session; it does not schedule a Run.
+  input?: string;
+  // Enables automatic reconstruction through a registered Factory.
+  factoryId?: string;
 };
 ```
 
 ### Conversation Continuation
 
-For multi-turn use, append input to the agent's current transcript and run with the updated context. `runWithUserInput()` is the main convenience API; the lower-level append methods are useful when a UI or session layer controls message creation.
+Every turn enters through `send()`. The Runtime persists the input before it
+returns an `AgentRun`; Session history is restored during reconstruction.
 
 ```ts
-const first = await agent.runWithUserInput("summarize this repository");
+const first = await agent.send("summarize this repository");
+console.log((await first.result()).message);
 
-agent.appendUserMessage("now focus on the CLI package");
-const second = await agent.run();
-
-await agent.runWithMessage(createMessage("user", "what changed since last turn?"));
+const second = await agent.send("now focus on the CLI package");
+console.log((await second.result()).message);
 ```
 
-The agent uses `context.phases.entryPhaseId` only until the first successful run completes. Later turns start from the normalized `default` phase so long-lived agents do not repeat one-time entry work. Call `agent.resetInitialization()` when the next run should use `entryPhaseId` again.
+If a Run is suspended waiting for input, the next `send()` to that Agent resumes
+the same Run instead of creating a second one.
 
-Transcript helpers return snapshots, so callers can inspect or edit history without accidentally mutating the agent until they call a setter.
+### Updating Runtime Resources
+
+Resources are fixed for a live Agent Binding. Apply a new model, prompt, Tool
+set, Skill set, Phase registry, or Extension set during reconstruction. A
+duplicate live Binding is rejected, so explicit reconstruction normally occurs
+after the previous process or Runtime has stopped.
 
 ```ts
-const messages = agent.getMessages();
-agent.replaceTranscript(messages.slice(-6));
-agent.clearMessages();
+const agentId = agent.id;
+await runtime.stop();
+
+const nextRuntime = await AgentRuntime.start({ stateStore, sessionProvider });
+const reconstructed = await nextRuntime.reconstructAgent(agentId, {
+  context: currentContext,
+  model: { provider: "openai", id: "gpt-4.1" },
+  stream: createModelStream(),
+});
 ```
 
-### Updating Config
+## AgentRun
 
-`AgentOptions` can be replaced wholesale with `setConfig()`, or updated through focused shortcuts for common orchestration flows.
+`send()` returns a Runtime-owned handle immediately after the input and Run are
+durable. The handle exposes cached state for synchronous inspection and can
+refresh from the Runtime Store when needed.
 
 ```ts
-agent.setSessionId("ses_known");
-agent.setModel({ provider: "openai", id: "gpt-4.1" });
-agent.setTools(createCoreTools({ root: process.cwd() }));
-agent.setSkills(await Agent.loadSkills("./.rowan/skills"));
-agent.setPhases(await Agent.loadPhases("./.rowan/phases"));
-agent.setCwd(process.cwd());
-agent.setStream(createDispatchStream());
+class AgentRun {
+  readonly id: AgentRunId;
+  readonly messageId: string;
+  readonly status: AgentRunState;
+  readonly state: AgentRunState; // alias of status
 
-agent.updateContext((context) => ({
-  ...context,
-  systemPrompt: `${context.systemPrompt}\n\nPrefer concise answers.`,
-}));
+  getStatus(): Promise<AgentRunState>;
+  subscribe(listener: AgentRunListener): () => void;
+  consumeRuntimeEvents(
+    consumerId: string,
+    listener: (event: RuntimeEvent) => void | Promise<void>,
+  ): () => void;
+  result(): Promise<Outcome>;
+  abort(reason?: string): Promise<void>;
+}
 ```
+
+`result()` waits through queued, running, and suspended states. Completed,
+failed, and cancelled Runs all resolve to their persisted terminal `Outcome`;
+inspect `status` when the distinction matters. `abort()` affects only this Run.
 
 ## AgentContext
 
@@ -294,12 +353,33 @@ const myTool: Tool = {
 `beforeToolCall` can intercept or reject tool calls (e.g. for approval flows); `afterToolCall` can modify results before they reach the model.
 
 ```ts
-const agent = new Agent({
+const agent = await runtime.createAgent({
+  context,
+  model,
+  stream,
   async beforeToolCall({ tool, args }) {
     return { allow: true };  // or { allow: false, reason: "blocked" }
   },
   async afterToolCall({ tool, result }) {
     return result;
+  },
+});
+```
+
+### Runtime Tool Policy
+
+Every managed Tool Call passes through the Runtime before its adapter executes.
+Runtime policy can narrow the Agent's Tool set and cap concurrency, but it can
+never add a capability that was not supplied in `AgentContext`.
+
+```ts
+const runtime = await AgentRuntime.start({
+  stateStore,
+  sessionProvider,
+  toolPolicy: {
+    allowedTools: ["read", "bash"],
+    maxConcurrent: 8,
+    perToolMaxConcurrent: { bash: 2 },
   },
 });
 ```
@@ -328,6 +408,25 @@ agent.subscribe((event: AgentEvent) => {
 });
 ```
 
+### Durable Runtime Events
+
+Runtime State transitions are a separate durable stream. Give each consumer a
+stable ID; its Checkpoint advances only after the listener succeeds. Delivery
+is asynchronous, so a slow or unavailable consumer does not block state
+transitions.
+
+```ts
+const stopConsuming = runtime.consumeEvents("deployment-observer", async (event) => {
+  await deliverRuntimeFact(event);
+});
+```
+
+Only one live subscription may use a Consumer ID. If delivery fails, its
+Checkpoint stays put and the Event is delivered again when that Consumer is
+started later. `runtime.listEvents()` inspects the durable stream without
+advancing a Consumer Checkpoint. Use `run.consumeRuntimeEvents()` for the same
+delivery contract filtered to one Run.
+
 ### Parallel Phase Events
 
 When multiple phases run concurrently (via multi-target `route`), each branch emits its own `turn_*`, `message_*`, and `tool_execution_*` events into the shared event stream — they are interleaved, not sequenced. Individual parallel phases do **not** emit `phase_start`/`phase_end`; those only fire for serial phases. After all branches complete, their outputs are stashed and surfaced in the next iteration's phase entry message (under `<prev_phase_outputs>`); the `message_start`/`message_end` you observe for that entry message carry the merged results.
@@ -337,17 +436,20 @@ When multiple phases run concurrently (via multi-target `route`), each branch em
 JSONL-based session persistence — lets multi-turn conversations survive across process restarts. Supports create, resume, branch, and history replay.
 
 ```ts
-import { LocalJsonlSessionManager } from "@rowan-agent/agent";
+import { LocalJsonlSessionProvider } from "@rowan-agent/agent";
 
-const session = await LocalJsonlSessionManager.create(sessionsDir, { workspaceRoot: process.cwd() });
-const session = await LocalJsonlSessionManager.open(sessionsDir, sessionId);
-const sessions = await LocalJsonlSessionManager.list(sessionsDir);
+const sessions = new LocalJsonlSessionProvider(sessionsDir);
+const session = await sessions.create({
+  systemPrompt,
+  input: "",
+  skills: [],
+});
+const resumed = await sessions.open(sessionId);
+const savedSessions = await sessions.list();
 
 await session.appendMessage(message);
 await session.appendOutcome(outcome);
-await session.appendExecutionTurn(turn);
 const context = await session.buildAgentContext({ tools });
-await session.branch(entryId);
 ```
 
 ## Skills
@@ -377,7 +479,7 @@ Per iteration:
   5. Transition, continue, or stop
 ```
 
-**`entryPhaseId`** specifies which phase the loop enters for an uninitialized Agent. When phases are loaded from `.rowan/phases/`, the first discovered phase becomes the entry. When none are configured, the Agent normalises to `"default"`. After a successful run, later turns start from `"default"` until `agent.resetInitialization()` is called. This field is an internal routing hint for the phase loop — it is **not** exposed to the LLM, since the agent does not need to know which phase is the entry point to make routing decisions.
+**`entryPhaseId`** specifies which phase the loop enters for a newly bound Agent. When phases are loaded from `.rowan/phases/`, the first discovered phase becomes the entry. When none are configured, the Agent normalises to `"default"`. Later turns start from the normalized default phase. This field is an internal routing hint and is not exposed to the model.
 
 ### Example Phase Flow
 
@@ -520,27 +622,13 @@ The extension system lets plugins register lifecycle hooks, tools, phases, model
 import { Agent } from "@rowan-agent/agent";
 
 const { extensions } = await Agent.loadExtensions(`${cwd}/.rowan/extensions`);
-// Pass extensions to the Agent constructor — they are loaded and bound internally
-const agent = new Agent({ context, model, stream, extensions });
+// Extensions are fixed for this Runtime-owned Agent Binding.
+const agent = await runtime.createAgent({ context, model, stream, extensions });
 ```
 
-### ExtensionRunner
+### Extension Runtime
 
-`ExtensionRunner` is used internally by Agent when extensions are passed via the constructor or `run()`. The Agent manages the runner lifecycle — load, bind, invalidate — automatically.
-
-```ts
-class ExtensionRunner {
-  readonly hooks: HooksManager;  // 19 lifecycle hook types
-  readonly events: EventBus;     // cross-plugin event channel
-
-  loadExtensions(extensions: LoadedExtension[]): Promise<void>;
-  getAllRegisteredTools(): RegisteredTool[];
-  getPhases(): Phase[];
-  createPhaseRegistry(): PhaseRegistry;
-  signal: AbortSignal;
-  abort(): void;
-}
-```
+Extension orchestration is internal. The Runtime-owned Agent Binding loads extensions, binds their hooks and events, invalidates their context, and aborts them with the run.
 
 ### Hook Types
 
@@ -575,196 +663,11 @@ export default function myPlugin(rowan: ExtensionAPI) {
 
 > **Full reference:** [Extensions Documentation](docs/extensions.md)
 
-## Configuration
+## Model Selection
 
-Multi-provider model configuration via `.rowan/config.yaml`. Supports multiple API providers, per-model settings, environment variable interpolation, and per-phase model overrides.
+`AgentOptions` accepts a model reference and stream implementation from `@rowan-agent/models`. Phase frontmatter may override the model for that phase.
 
-Config is loaded from the runtime Rowan directory, which defaults to `.rowan`.
-
-### Config File
-
-Place `config.yaml` in your `.rowan/` directory (alongside `phases/`, `skills/`, etc.):
-
-```
-<workspace>/
-└── .rowan/
-    ├── config.yaml      # model configuration
-    ├── phases/           # phase definitions
-    ├── skills/           # skill bundles
-    └── extensions/       # plugins
-```
-
-### Schema
-
-```yaml
-model:                    # optional: explicit default model override
-  provider: <string>      # → providers[].id
-  id: <string>            # → providers[].models[].id
-
-logLevel: <string>        # optional: run log detail (default: "info")
-                          # one of: debug, info, warn, error, silent
-                          # priority: --log-level flag > config > ROWAN_LOG_LEVEL env > "info"
-
-providers:                # required: at least one provider
-  - id: <string>          # required: provider identifier
-    name: <string>        # optional: display name
-    baseUrl: <string>     # required: API base URL
-    apiKey: <string>      # required: API key (supports ${VAR} interpolation)
-    protocol: <string>    # required: API protocol (see table below)
-    timeoutMs: <number>   # optional: streaming idle timeout after first byte (default: 60000)
-    maxRetries: <number>  # optional: retry count (default: 4)
-    retryDelayMs: <number># optional: delay between retries (default: 1000)
-    headers:              # optional: extra HTTP headers
-      <string>: <string>
-    models:               # required: at least one model
-      - id: <string>      # required: model identifier
-        name: <string>    # optional: display name (defaults to id)
-        primary: <bool>   # optional: mark as default agent model
-        reasoning: <bool> # optional: reasoning model (default: false)
-        input:            # optional: supported input types (default: ["text"])
-          - "text"
-          - "image"
-        contextWindow: <number>  # optional: max context tokens (default: 128000)
-        maxTokens: <number>      # optional: max output tokens (default: 16384)
-        cost:                    # optional: per-token costs (default: all 0)
-          input: <number>
-          output: <number>
-          cacheRead: <number>
-          cacheWrite: <number>
-```
-
-### Protocols
-
-| Protocol | Description |
-|----------|-------------|
-| `openai-completions` | OpenAI Chat Completions API (`/v1/chat/completions`) |
-| `openai-responses` | OpenAI Responses API (`/v1/responses`) |
-| `anthropic-messages` | Anthropic Messages API (`/v1/messages`) |
-
-### Environment Variable Interpolation
-
-Use `${VAR_NAME}` syntax in any string value to reference environment variables:
-
-```yaml
-apiKey: ${OPENAI_API_KEY}
-```
-
-Undefined or empty variables throw an error at config load time.
-
-### Default Model Resolution
-
-When no `--model` flag is passed, the default model is resolved in order:
-
-1. **Top-level `model:`** — explicit override in config
-2. **`primary: true`** — first model marked primary (by file order)
-3. **First model** — first model in config (by parse order)
-
-### Per-Phase Model Override
-
-Override the model for a specific phase via PHASE.md frontmatter:
-
-```yaml
----
-name: Review
-description: Deep code review
-model: anthropic/claude-sonnet-4-20250514   # format: provider/id or just id
----
-
-Review the implementation for correctness...
-```
-
-- `model: gpt-4.1` — wildcard provider, resolved by model ID
-- `model: anthropic/claude-sonnet-4-20250514` — specific provider + model
-
-### Loading Config
-
-```ts
-import {
-  loadConfigFile,
-  registerConfigModels,
-  resolveDefaultModel,
-  parseModelRef,
-} from "@rowan-agent/agent";
-
-// Load from .rowan/config.yaml (returns undefined if missing)
-const config = await loadConfigFile(workspace);
-
-// Register all configured models into the global registry
-if (config) registerConfigModels(config);
-
-// Resolve default model
-const defaultModel = config ? resolveDefaultModel(config) : undefined;
-
-// Parse a model reference string
-const ref = parseModelRef("anthropic/claude-sonnet-4-20250514");
-// → { provider: "anthropic", id: "claude-sonnet-4-20250514" }
-```
-
-### Config Types
-
-```ts
-type AgentConfigFile = {
-  model?: { provider: string; id: string };
-  providers: ProviderConfigFromFile[];
-};
-
-type ProviderConfigFromFile = {
-  id: string;
-  name?: string;
-  baseUrl: string;
-  apiKey: string;
-  protocol: Protocol;
-  /** Maximum idle gap between response bytes after the first byte. */
-  timeoutMs?: number;
-  maxRetries?: number;
-  retryDelayMs?: number;
-  headers?: Record<string, string>;
-  models: ModelConfigFromFile[];
-};
-
-type ModelConfigFromFile = {
-  id: string;
-  name?: string;
-  primary?: boolean;
-  reasoning?: boolean;
-  input?: ("text" | "image")[];
-  contextWindow?: number;
-  maxTokens?: number;
-  cost?: Partial<ModelCost>;
-};
-```
-
-## Context & Prompt
-
-Helpers for assembling system prompts and building model requests.
-
-```ts
-import {
-  buildSystemPrompt,
-  buildModelRequest,
-  conversationMessages,
-  latestUserInput,
-  serializeSkills,
-} from "@rowan-agent/agent";
-
-const prompt = buildSystemPrompt({ systemPrompt, tools, skills, cwd });
-const messages = conversationMessages(agentMessages);
-const request = buildModelRequest({ systemPrompt, messages, tools });
-```
-
-## Workspace
-
-Workspace resolution uses the current project root. The project Rowan directory defaults to `<cwd>/.rowan`; pass `rowanDir` to resolve another project-local directory.
-
-```ts
-import { resolveWorkspacePaths, resolveInWorkspace } from "@rowan-agent/agent";
-
-const workspace = resolveWorkspacePaths();
-// → { cwd: string, rowanDir: string }
-
-const custom = resolveWorkspacePaths({ rowanDir: ".rowan-project" });
-// → custom.rowanDir is <cwd>/.rowan-project
-```
+CLI-specific `.rowan/config.yaml` loading and workspace discovery belong to [`@rowan-agent/cli`](../cli/README.md).
 
 ## Loop Metrics
 
@@ -783,7 +686,11 @@ type LoopMetrics = {
 
 | Type | Description |
 |------|-------------|
-| `Agent` | Main agent facade |
+| `AgentRuntime` | Process-wide lifecycle, scheduling, recovery, Event, and Tool owner |
+| `Agent` | Runtime-owned facade for input and transient Stream Events |
+| `AgentRun` | Durable Run handle for state, terminal Outcome, observation, and abort |
+| `SqliteRuntimeStateStore` / `InMemoryRuntimeStateStore` | Durable and test Runtime Store adapters |
+| `RuntimeEvent` / consumer ID string | Durable lifecycle facts and checkpointed consumer identity |
 | `AgentContext` | System prompt, messages, tools, skills, phases |
 | `AgentMessage` | Typed message with role, content, metadata |
 | `AgentEvent` | Discriminated union of 13 event types |
@@ -794,14 +701,10 @@ type LoopMetrics = {
 | `PhaseRegistry` | Map of phase ids to Phase objects plus entry phase id |
 | `Outcome` | Terminal result with message and tool results |
 | `LoopMetrics` | Loop iteration, timing, and phase transition stats |
-| `LocalJsonlSessionManager` | JSONL session manager |
-| `ExtensionRunner` | Extension runtime with hooks and events |
-| `HooksManager` / `EventBus` | Hook registry and cross-plugin event channel |
+| `SessionManagerProvider` | Session lifecycle seam used by the Runtime |
+| `LocalJsonlSessionProvider` / `InMemorySessionProvider` | JSONL and in-memory Session adapters |
+| `ExtensionAPI` / `ExtensionFactory` | Extension developer interface |
 | `StreamFn` / `LlmModelRef` | Model stream function and model reference |
-| `AgentConfigFile` | Parsed `.rowan/config.yaml` structure |
-| `ProviderConfigFromFile` / `ModelConfigFromFile` | Provider and model config entries |
-| `loadConfigFile` / `registerConfigModels` / `resolveDefaultModel` | Config loading and model registration |
-| `parseModelRef` | Parse `"provider/id"` or `"id"` strings to `LlmModelRef` |
 
 ## Documentation
 
@@ -812,4 +715,4 @@ type LoopMetrics = {
 
 ## Version
 
-Current version: **0.5.6**
+Current version: **0.6.0**

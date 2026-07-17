@@ -2,9 +2,11 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { registerModel } from "@rowan-agent/models";
+import { parseModelRef, registerModel } from "@rowan-agent/models";
 import type { LlmModelRef, Model, ModelCost, Protocol } from "@rowan-agent/models";
-import type { WorkspacePaths } from "./env/path";
+import type { WorkspacePaths } from "./workspace";
+
+export { parseModelRef } from "@rowan-agent/models";
 
 // ---------------------------------------------------------------------------
 // Config file types (mirror config.yaml structure)
@@ -244,20 +246,4 @@ export function registerConfigModels(config: AgentConfigFile): void {
       registerModel(model);
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Model ref parsing (shared with phases/loader)
-// ---------------------------------------------------------------------------
-
-export function parseModelRef(input?: string): LlmModelRef | undefined {
-  if (!input) return undefined;
-  const slashIndex = input.indexOf("/");
-  if (slashIndex === -1) {
-    return { provider: "*", id: input };
-  }
-  return {
-    provider: input.slice(0, slashIndex),
-    id: input.slice(slashIndex + 1),
-  };
 }

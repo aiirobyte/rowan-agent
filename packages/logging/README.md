@@ -19,7 +19,7 @@ agent.subscribe(consoleLog);
 const fileLog = pinoAgentEventLogger("runs/session.jsonl", { level: "debug" });
 agent.subscribe(fileLog);
 
-await agent.run();
+await (await agent.send("summarize this workspace")).result();
 await fileLog.flush();
 ```
 
@@ -139,4 +139,4 @@ src/
 
 ## Version
 
-Current version: **0.5.6**
+Current version: **0.6.0**

@@ -1,81 +1,42 @@
-// ── core API ──────────────────────────────────────────────────
 export { Agent } from "./agent";
-export type {
-  AgentOptions,
-  AgentCreateOptions,
-  AgentResumeOptions,
-  RunOptions,
-  AgentStatus,
-} from "./agent";
+export type { AgentOptions, AgentCreateOptions } from "./agent";
 
-export {
-  createMessage,
-  messageContentText,
-} from "./types";
-
-export { createId, createTimestamp } from "./utils";
-
+export { createMessage } from "./types";
 export type {
   AgentMessage,
   AgentContext,
   Skill,
   Tool,
+  ToolContext,
+  ToolExecutionMode,
   ToolResult,
   AgentEvent,
   AgentEventListener,
-  RunResult,
   StreamFn,
   LlmModelRef,
+  BeforeToolCall,
+  AfterToolCall,
+  Unsubscribe,
 } from "./types";
 
-// ── session ────────────────────────────────────────────────────
-export {
-  createSession,
-  appendUserTurn,
-  InMemorySessionManager,
-  LocalJsonlSessionManager,
-  type Session,
-  type SessionListItem,
-} from "./harness/session";
+export { InMemorySessionProvider, LocalJsonlSessionProvider } from "./harness/session/provider";
+export type { SessionManagerProvider } from "./harness/session/session-manager";
 
-// ── tools / skills / env ───────────────────────────────────────
 export { createCoreTools } from "./harness/tools";
-export {
-  resolveWorkspacePaths,
-  resolveInWorkspace,
-  type WorkspacePaths,
-} from "./harness/env";
+export type { CoreToolContext } from "./harness/tools";
 
-// ── config ─────────────────────────────────────────────────────
-export {
-  loadConfigFile,
-  registerConfigModels,
-  resolveDefaultModel,
-  parseModelRef,
-  interpolateEnvVars,
-  type AgentConfigFile,
-  type ProviderConfigFromFile,
-  type ModelConfigFromFile,
-} from "./harness/config";
-
-// ── events ─────────────────────────────────────────────────────
-export { EventStream, AgentEventStream } from "./event-stream";
-
-// ── loop ───────────────────────────────────────────────────────
-export {
-  EmptyResponseError,
-} from "./loop/errors";
-export type { LoopMetrics } from "./loop/types";
-
-// ── extensions ─────────────────────────────────────────────────
-export * from "./extensions";
-
-// ── phases ─────────────────────────────────────────────────────
-export {
-  loadPhase,
-  loadPhases,
-  reloadPhases,
-} from "./harness/phases";
+export type {
+  ExtensionAPI,
+  ExtensionFactory,
+  LoadedExtension,
+  HookEvent,
+  HookEventType,
+  HookHandler,
+  PhaseRegistration,
+  ToolDefinition,
+  ToolExecutionResult,
+  LoadExtensionsResult,
+} from "./extensions";
 
 export type {
   PhaseRegistry,
@@ -84,32 +45,28 @@ export type {
   PhaseState,
   PhaseOutput,
 } from "./harness/phases/types";
+export type { PhaseExecution } from "./loop/execution";
+export type { LoopMetrics } from "./loop/types";
 
+export type { ExecutionTurn, Outcome, ModelTranscript } from "./protocol";
+
+export { AgentRuntime } from "./runtime/agent-runtime";
 export type {
-  PhaseExecution,
-} from "./loop/execution";
-
-// ── prompt / context ───────────────────────────────────────────
-export {
-  buildSystemPrompt,
-  buildModelRequest,
-  conversationMessages,
-  latestUserInput,
-  serializeSkills,
-} from "./harness/context";
-
-// ── protocol ───────────────────────────────────────────────────
+  AgentFactory,
+  AgentFactoryIdentity,
+  AgentRuntimeOptions,
+  RuntimeEventListener,
+} from "./runtime/agent-runtime";
+export { AgentRun } from "./runtime/agent-run";
+export type { AgentRunListener } from "./runtime/agent-run";
+export { InMemoryRuntimeStateStore } from "./runtime/memory-store";
+export { SqliteRuntimeStateStore } from "./runtime/sqlite-store";
 export type {
-  ExecutionTurn,
-  Outcome,
-  ModelTranscript,
-} from "./protocol";
-
-// durable runtime domain / store
-export * from "./runtime";
-
-// ── model dispatch ──────────────────────────────────────────────
-export {
-  createDispatchStream,
-  registerBuiltInApiProviders,
-} from "@rowan-agent/models";
+  AgentId,
+  AgentRunId,
+  AgentRunState,
+  RuntimeEvent,
+  RuntimeEventCursor,
+  RuntimeEventKind,
+} from "./runtime/domain";
+export type { ToolRuntimePolicy } from "./runtime/tool-runtime";

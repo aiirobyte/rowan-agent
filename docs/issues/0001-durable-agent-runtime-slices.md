@@ -1,12 +1,22 @@
 # Durable Multi-Agent Runtime Issue Slices
 
-Status: Local draft
+Status: Implemented
 
 Source: [PRD-0001](../prd/0001-durable-agent-runtime.md)
 
 Decision: [ADR-0001](../adr/0001-embedded-durable-agent-runtime.md)
 
 These slices are ordered for test-driven implementation. Each slice must leave the public behavior it introduces passing before the next slice begins.
+
+## Implementation direction
+
+- `AgentRuntime` owns creation and reconstruction through `createAgent()` and `reconstructAgent(agentId, currentOptions)`.
+- `Agent` is not directly constructible and exposes no independent execution path; `send()` is the only Agent Input entrypoint.
+- `resumeAgent()` names only the preemptive Runtime Command that removes a pause.
+- Store adapters expose semantic durable transitions. A terminal Run transition atomically updates its Outcome, triggering Message disposition, Lease, and Runtime Events.
+- Scheduler decisions use durable Mailbox state, renew Leases, retry only explicit Infrastructure Failures, and dead-letter exhausted work atomically.
+- Runtime Event delivery uses stable consumer identities and independent durable Checkpoints that advance after successful delivery.
+- Tool Call capability, admission, execution, abort, and indeterminate classification stay behind the Runtime seam.
 
 ## Slice 1: Define the Runtime domain and Store contract
 
@@ -21,11 +31,11 @@ Acceptance:
 
 ## Slice 2: Add the SQLite Runtime Store
 
-Implement the durable SQLite adapter and migrations with behavioral parity to the in-memory Store.
+Implement the durable SQLite adapter and from-scratch schema with behavioral parity to the in-memory Store.
 
 Acceptance:
 
-- SQLite persists Agents, Messages, Runs, leases, Runtime Events/outbox state, and Tool Calls.
+- SQLite persists Agents, Messages, Runs, leases, Runtime Events, Runtime Event Consumer Checkpoints, and Tool Calls.
 - Enqueuing work and creating its Run are atomic.
 - Expired leases are recoverable after reopening the database.
 - The shared Store contract suite passes against memory and SQLite.
@@ -39,24 +49,24 @@ Add explicit Runtime start/stop, Rowan-generated Agent IDs, private live binding
 Acceptance:
 
 - Starting a second Runtime in one process fails clearly.
-- Creating or resuming an Agent binds it internally without a public bind API.
+- Creating or reconstructing an Agent binds it internally without a public bind API.
 - Duplicate live binding for one Agent ID is rejected.
 - Stopping and restarting leaves durable records recoverable.
 - Tests isolate Runtime global state and cannot leak bindings across cases.
 
 Depends on: Slices 1-2.
 
-## Slice 4: Move Session hosting into `Agent.create()` and `Agent.resume()`
+## Slice 4: Move Session hosting into Runtime-owned Agent lifecycle
 
-Replace public direct construction with asynchronous lifecycle factories that own Session creation, restoration, and persistence callbacks.
+Replace public direct construction with Runtime methods that own Session creation, reconstruction, and persistence callbacks.
 
 Acceptance:
 
-- `Agent.create()` creates a new Session and Agent record.
-- `Agent.resume()` restores the same Agent ID and Session ID into a new in-memory object.
-- Resume uses current model, prompt, tools, skills, and phases supplied by the caller.
+- `runtime.createAgent()` creates a new Session and Agent record.
+- `runtime.reconstructAgent(agentId, currentOptions)` restores the same Agent ID and Session ID into a new in-memory object.
+- Reconstruction uses current model, prompt, tools, skills, and phases supplied by the caller.
 - Messages, model transcripts, outcomes, and execution state persist without an external host.
-- Missing Sessions and duplicate bindings fail explicitly.
+- Missing Agent records, missing Sessions, and duplicate bindings fail explicitly; Session ID cannot adopt or select an Agent identity.
 - Public tests no longer need to assemble persistence callbacks around `new Agent()`.
 
 Depends on: Slice 3.
@@ -70,7 +80,7 @@ Acceptance:
 - `send()` returns only after Message and Run persistence succeeds.
 - `send()` does not wait for model or Tool execution.
 - `AgentRun` exposes ID, status, `result()`, subscription, and precise abort.
-- `runWithUserInput()` delegates to `send()` and `result()` rather than executing another path.
+- No public direct execution method exists beside `send()` and `AgentRun.result()`.
 - Message redelivery cannot duplicate a completed Run.
 
 Depends on: Slice 4.
@@ -114,19 +124,20 @@ Acceptance:
 - Factory recovery does not match on Session ID patterns.
 - Factories receive opaque recovery identity and return current Agent construction options.
 - Missing Factory or host association leaves the Agent unbound and observable.
-- Reconstruction calls the same private binding path as explicit resume.
+- Factory recovery and explicit reconstruction call the same private Agent Binding path.
 - No executable Agent definition or definition version is serialized.
 
 Depends on: Slices 3-7.
 
-## Slice 10: Split durable Runtime Events from transient Stream Events
+## Slice 9: Split durable Runtime Events from transient Stream Events
 
 Add transactional Runtime Event/outbox delivery while preserving transient Agent streaming for live consumers.
 
 Acceptance:
 
 - Recovery-relevant transitions emit durable Runtime Events transactionally.
-- Runtime Event subscribers can resume from a durable cursor or acknowledgement.
+- Runtime Event Consumers resume from independent durable Checkpoints.
+- Slow or unavailable consumers cannot block Runtime State transitions.
 - Model deltas, message updates, and partial Tool output are not persisted.
 - Stream Events cannot mutate Runtime State or make an Agent runnable.
 - Existing live Agent subscription behavior remains available through the new lifecycle.
@@ -134,7 +145,7 @@ Acceptance:
 
 Depends on: Slices 2-8.
 
-## Slice 11: Centralize Tool execution in Tool Runtime
+## Slice 10: Centralize Tool execution in Tool Runtime
 
 Route all Tool Calls through one Runtime-controlled executor with capability checks, narrowing policy, limits, abort, and durable call state.
 
@@ -149,20 +160,20 @@ Acceptance:
 
 Depends on: Slices 2, 6-7.
 
-## Slice 12: Migrate Rowan CLI and remove the legacy lifecycle
+## Slice 11: Migrate Rowan CLI and remove the legacy lifecycle
 
-Move Rowan CLI and examples to explicit Runtime startup, `Agent.create()` / `Agent.resume()`, `send()`, AgentRun, and Factory registration. Remove public direct construction and duplicate lifecycle paths.
+Move Rowan CLI and examples to explicit Runtime startup, `runtime.createAgent()` / `runtime.reconstructAgent()`, `send()`, AgentRun, and Factory registration. Remove public direct construction, static lifecycle factories, ambient Runtime access, and duplicate execution paths.
 
 Acceptance:
 
 - Rowan CLI starts and stops one configured Runtime.
-- New and resumed CLI Sessions use the public Agent lifecycle.
+- New and reconstructed CLI Agents use the public Runtime-owned lifecycle and are addressed by Agent ID.
 - Examples cover non-blocking send, waiting on AgentRun, and suspended input.
 - Public exports and README describe only the new lifecycle.
 - Tests prove no external Session host is required.
 - Release notes identify the breaking API and downstream migration requirements.
 
-Depends on: Slices 4-11.
+Depends on: Slices 4-10.
 
 ## Verification Order
 

@@ -13,8 +13,12 @@ The opaque identity Rowan assigns to an Agent for binding, scheduling, and resul
 _Avoid_: Session address, Project Agent ID
 
 **Agent Binding**:
-The exclusive association that makes one Agent ID available to an active Runtime. Reconstructing an Agent replaces the binding while preserving its identity.
+The exclusive association that makes one Agent ID available to an active Runtime. Only the Runtime establishes it; reconstructing an Agent replaces the binding while preserving identity.
 _Avoid_: Agent registration, Session binding
+
+**Agent Reconstruction**:
+Rebuilding an Agent Binding from an existing Agent ID, its Session, and current Context. Reconstruction never creates or adopts an Agent identity.
+_Avoid_: Agent resume, Session resume, Legacy adoption
 
 **Agent Factory**:
 A host-provided rule that rebuilds an Agent from current capabilities and context. Rowan identifies the rule by an opaque Factory ID without interpreting its business meaning.
@@ -23,11 +27,11 @@ _Avoid_: Agent type, serialized Agent
 ## Conversation
 
 **Session**:
-The durable conversation belonging to one Agent. A resumed Agent continues the same Session; a Session does not own scheduling or business state.
+The durable conversation belonging to one Agent. A reconstructed Agent continues the same Session; a Session does not own scheduling or business state.
 _Avoid_: Memory, Runtime State
 
 **Context**:
-The current model-facing instructions, messages, tools, skills, and phases supplied to an Agent. Context may be rebuilt from current host state when an Agent is resumed.
+The current model-facing instructions, messages, tools, skills, and phases supplied to an Agent. Context may be rebuilt from current host state during Agent Reconstruction.
 _Avoid_: Runtime State, Agent Definition snapshot
 
 ## Execution
@@ -39,6 +43,10 @@ _Avoid_: Command, Chat event
 **Agent Run**:
 A durable execution of Agent Input that may be queued, running, suspended, or terminal. An Agent Run has one eventual Outcome.
 _Avoid_: Job, Workflow Run, Turn Promise
+
+**Infrastructure Failure**:
+A Runtime-owned execution failure that leaves an Agent Run safe to attempt again. It is the only failure category eligible for automatic retry.
+_Avoid_: Agent failure, Tool failure, Business failure
 
 **Suspension**:
 A non-terminal Agent Run state that releases execution capacity while waiting for input. New Agent Input resumes the same Agent Run.
@@ -59,7 +67,7 @@ The ordered Runtime Message queue belonging to one Agent. Only a Runtime Message
 _Avoid_: Event Bus, Transcript
 
 **Scheduler**:
-The runtime policy that selects already-declared work for execution under ordering, capacity, retry, and lease constraints. It never chooses business work or interprets message payloads.
+The runtime policy that selects already-declared durable Mailbox work for execution under ordering, capacity, retry, and Lease constraints. It never chooses business work or treats process-local queues as authority.
 _Avoid_: Workflow orchestrator, Router
 
 **Lease**:
@@ -67,7 +75,7 @@ The temporary exclusive claim that permits one Runtime worker to execute an Agen
 _Avoid_: Lock, Agent ownership
 
 **Runtime Command**:
-A preemptive control instruction such as pause, resume, or abort. Runtime Commands do not enter the Mailbox or Session.
+A preemptive control instruction such as pause, resume, or abort. Pause gates queued work, resume removes that gate, and abort targets one Agent Run. Runtime Commands do not enter the Mailbox or Session.
 _Avoid_: Agent Input, Business cancellation
 
 ## State and Events
@@ -80,6 +88,14 @@ _Avoid_: Memory, Session
 A durable fact about a control-state transition that may be replayed for recovery or delivery.
 _Avoid_: Runtime Message, Stream Event
 
+**Runtime Event Consumer**:
+A stable delivery identity that receives Runtime Events and owns an independent durable Checkpoint. Failed delivery leaves its Checkpoint unchanged so Events remain replayable.
+_Avoid_: Stream subscriber, Extension listener
+
+**Checkpoint**:
+The last contiguous Runtime Event sequence durably acknowledged by one Runtime Event Consumer. Checkpoints belong to consumers, not to Runtime Events globally and cannot skip undelivered Events.
+_Avoid_: Global acknowledgement, In-memory cursor
+
 **Stream Event**:
 A transient observation such as model output or tool progress intended for live consumers. Stream Events are not replayed and cannot control scheduling.
 _Avoid_: Runtime Event, State transition
@@ -87,7 +103,7 @@ _Avoid_: Runtime Event, State transition
 ## Tools
 
 **Tool Capability**:
-A Tool made available when an Agent is constructed. It defines the Agent's maximum executable capability and may only be narrowed by Runtime policy.
+A Tool made available when an Agent Binding is created or reconstructed. It defines the Agent's maximum executable capability and may only be narrowed by Runtime policy.
 _Avoid_: Prompt permission, Tool request
 
 **Tool Call**:

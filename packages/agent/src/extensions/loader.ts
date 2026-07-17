@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, type Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { createJiti } from "jiti";
 import type { ExtensionFactory } from "./api";
 import type { ExtensionManifest, LoadedExtension, ExtensionPackageManifest } from "./types";
@@ -60,7 +60,9 @@ let sharedJiti: ReturnType<typeof createJiti> | undefined;
 
 function getJiti(): ReturnType<typeof createJiti> {
   sharedJiti ??= createJiti(import.meta.url || process.cwd(), {
+    fsCache: false,
     moduleCache: false,
+    tryNative: false,
     alias: jitiAliases(),
   });
   return sharedJiti;
@@ -145,7 +147,7 @@ export function loadExtensionFromFactory(
   // Extract name from path
   const name = isSyntheticPath(extensionPath)
     ? extensionPath
-    : dirname(resolvedPath).split("/").pop() ?? "unknown";
+    : basename(dirname(resolvedPath)) || "unknown";
 
   // Read manifest from package.json in extension directory
   const manifestDir = isSyntheticPath(extensionPath) ? resolvedCwd : dirname(resolvedPath);

@@ -1,4 +1,4 @@
-import type { Protocol, ApiStreamFn, Model, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
+import type { Protocol, ApiStreamFn, Model, LlmModelRef, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
 import { getModel, resolveModel } from "./models";
 import { streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
@@ -11,6 +11,16 @@ import { streamAnthropic } from "./providers/anthropic";
 export interface ApiProvider {
   protocol: Protocol;
   stream: ApiStreamFn;
+}
+
+export function parseModelRef(input?: string): LlmModelRef | undefined {
+  if (!input) return undefined;
+  const slashIndex = input.indexOf("/");
+  if (slashIndex === -1) return { provider: "*", id: input };
+  return {
+    provider: input.slice(0, slashIndex),
+    id: input.slice(slashIndex + 1),
+  };
 }
 
 const apiProviderRegistry = new Map<string, ApiProvider>();
@@ -119,13 +129,13 @@ export function registerProvider(name: string, factory: ProviderFactory): void {
   legacyProviders.set(name, factory);
 }
 
-export function createDispatchStream(): StreamFn {
+export function createModelStream(): StreamFn {
   // Auto-register built-in providers if none registered
   if (apiProviderRegistry.size === 0) {
     registerBuiltInApiProviders();
   }
 
-  return async function* dispatchStream(request, options) {
+  return async function* modelStream(request, options) {
     // Try to resolve a full Model from the registry
     const model = getModel(request.model.provider, request.model.id)
       ?? resolveModel(request.model.id);

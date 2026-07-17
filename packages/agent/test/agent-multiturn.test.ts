@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { Agent, createMessage, messageContentText, type StreamFn } from "../src";
+import { createMessage, messageContentText, type StreamFn } from "../src/types";
+import { AgentExecution as Agent } from "../src/agent-execution";
 import type { LlmRequest } from "../src/types";
 import { createId } from "../src/utils";
 import { createTestContext, runAgentTurn } from "./support/agent-run";

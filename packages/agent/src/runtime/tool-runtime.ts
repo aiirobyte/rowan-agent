@@ -23,8 +23,15 @@ export type RuntimeToolExecutionInput = {
 
 type Waiter = {
   toolName: string;
-  resolve: () => void;
+  signal: AbortSignal;
+  onAbort: () => void;
+  resolve: (release: () => void) => void;
   reject: (error: unknown) => void;
+};
+
+type ActiveToolCall = {
+  runId: AgentRunId;
+  controller: AbortController;
 };
 
 function failed(toolCall: ToolCall, message: string): ToolResult {
@@ -52,11 +59,12 @@ export class ToolRuntime {
   private running = 0;
   private readonly runningByTool = new Map<string, number>();
   private readonly waiters: Waiter[] = [];
-  private readonly activeControllers = new Map<string, AbortController>();
+  private readonly activeToolCalls = new Map<string, ActiveToolCall>();
 
   constructor(
     private readonly stateStore: RuntimeStateStore,
     policy: ToolRuntimePolicy = {},
+    private readonly onTransition: () => void | Promise<void> = () => undefined,
   ) {
     this.maxConcurrent = positiveLimit(policy.maxConcurrent, Number.MAX_SAFE_INTEGER);
     this.perToolMaxConcurrent = Object.fromEntries(
@@ -74,19 +82,20 @@ export class ToolRuntime {
       name: input.toolCall.name,
       args: input.toolCall.args,
     });
+    await this.onTransition();
 
     if (!input.tool || this.allowedTools && !this.allowedTools.has(input.tool.name)) {
       const result = failed(input.toolCall, `Tool ${input.toolCall.name} is not permitted by Runtime policy.`);
-      await this.stateStore.startToolCall(call.id);
       await this.stateStore.completeToolCall({ toolCallId: call.id, result, state: "failed" });
+      await this.onTransition();
       return result;
     }
 
     const before = await input.beforeToolCall?.({ tool: input.tool, args: input.toolCall.args });
     if (before && !before.allow) {
       const result = failed(input.toolCall, before.reason);
-      await this.stateStore.startToolCall(call.id);
       await this.stateStore.completeToolCall({ toolCallId: call.id, result, state: "failed" });
+      await this.onTransition();
       return result;
     }
 
@@ -94,20 +103,24 @@ export class ToolRuntime {
     const controller = new AbortController();
     const forwardAbort = () => controller.abort(input.signal?.reason);
     input.signal?.addEventListener("abort", forwardAbort, { once: true });
-    this.activeControllers.set(call.id, controller);
+    this.activeToolCalls.set(call.id, { runId: input.runId, controller });
     try {
       try {
         release = await this.acquire(input.tool.name, controller.signal);
       } catch (error) {
         const result = failed(input.toolCall, error instanceof Error ? error.message : "Tool execution was cancelled.");
         await this.stateStore.completeToolCall({ toolCallId: call.id, result, state: "failed" });
+        await this.onTransition();
         return result;
       }
       if (controller.signal.aborted) {
-        await this.stateStore.markToolCallIndeterminate({ toolCallId: call.id, reason: "Tool execution was aborted before it returned." });
-        return failed(input.toolCall, "Tool Call became indeterminate after abort.");
+        const result = failed(input.toolCall, "Tool execution was aborted before it started.");
+        await this.stateStore.completeToolCall({ toolCallId: call.id, result, state: "failed" });
+        await this.onTransition();
+        return result;
       }
       await this.stateStore.startToolCall(call.id);
+      await this.onTransition();
       let result: ToolResult;
       try {
         result = await input.tool.execute(input.toolCall.args, {
@@ -120,12 +133,14 @@ export class ToolRuntime {
             toolCallId: call.id,
             reason: error instanceof Error ? error.message : "Tool execution was interrupted.",
           });
+          await this.onTransition();
           return failed(input.toolCall, "Tool Call became indeterminate after abort.");
         }
         result = failed(input.toolCall, error instanceof Error ? error.message : "Tool execution failed.");
       }
       if (controller.signal.aborted) {
         await this.stateStore.markToolCallIndeterminate({ toolCallId: call.id, reason: "Tool execution was interrupted after it may have had an external effect." });
+        await this.onTransition();
         return failed(input.toolCall, "Tool Call became indeterminate after abort.");
       }
       try {
@@ -138,37 +153,38 @@ export class ToolRuntime {
         result,
         state: result.ok ? "completed" : "failed",
       });
+      await this.onTransition();
       return result;
     } finally {
       input.signal?.removeEventListener("abort", forwardAbort);
-      this.activeControllers.delete(call.id);
+      this.activeToolCalls.delete(call.id);
       release?.();
     }
   }
 
   abortRun(runId: AgentRunId): void {
-    for (const [callId, controller] of this.activeControllers) {
-      void this.stateStore.getToolCall(callId as import("./domain").RuntimeToolCallId).then((call) => {
-        if (call?.runId === runId) controller.abort("Agent Run aborted.");
-      });
+    for (const active of this.activeToolCalls.values()) {
+      if (active.runId === runId) active.controller.abort("Agent Run aborted.");
     }
   }
 
   private async acquire(toolName: string, signal: AbortSignal): Promise<() => void> {
+    if (signal.aborted) throw new Error("Tool execution aborted while waiting for capacity.");
     const limit = this.perToolMaxConcurrent[toolName] ?? this.maxConcurrent;
     if (this.running < this.maxConcurrent && (this.runningByTool.get(toolName) ?? 0) < limit) {
       return this.reserve(toolName);
     }
-    await new Promise<void>((resolve, reject) => {
-      const waiter = { toolName, resolve, reject };
-      this.waiters.push(waiter);
-      signal.addEventListener("abort", () => {
+    return new Promise<() => void>((resolve, reject) => {
+      let waiter!: Waiter;
+      const onAbort = () => {
         const index = this.waiters.indexOf(waiter);
         if (index >= 0) this.waiters.splice(index, 1);
         reject(new Error("Tool execution aborted while waiting for capacity."));
-      }, { once: true });
+      };
+      waiter = { toolName, signal, onAbort, resolve, reject };
+      this.waiters.push(waiter);
+      signal.addEventListener("abort", onAbort, { once: true });
     });
-    return this.reserve(toolName);
   }
 
   private reserve(toolName: string): () => void {
@@ -192,7 +208,8 @@ export class ToolRuntime {
       const limit = this.perToolMaxConcurrent[waiter.toolName] ?? this.maxConcurrent;
       if (this.running >= this.maxConcurrent || (this.runningByTool.get(waiter.toolName) ?? 0) >= limit) continue;
       this.waiters.splice(index, 1);
-      waiter.resolve();
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      waiter.resolve(this.reserve(waiter.toolName));
       index -= 1;
     }
   }

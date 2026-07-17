@@ -2,7 +2,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { Agent, createMessage, loadPhases, resolveWorkspacePaths } from "../src";
+import { createMessage } from "../src";
+import { loadPhases } from "../src/harness/phases";
+import { AgentExecution as Agent } from "../src/agent-execution";
 import type { LoadedExtension } from "../src/extensions";
 import type { AgentEventListener, LlmRequest, StreamFn } from "../src/types";
 import type { Phase } from "../src/harness/phases/types";
@@ -479,29 +481,6 @@ Custom phase content.
     const outcome = await runAgentTurn(agent, "use configured phase");
 
     expect(outcome.outcome.message).toBe("configured project Rowan dir phase ran");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("loadPhases accepts workspace paths", async () => {
-  const root = await mkdtemp(join(tmpdir(), "rowan-agent-workspace-phases-"));
-  try {
-    await writeFile(join(root, "package.json"), JSON.stringify({ name: "phase-workspace" }));
-    const phaseDir = join(root, ".rowan", "phases", "default");
-    await mkdir(phaseDir, { recursive: true });
-    await writeFile(join(phaseDir, "PHASE.md"), `---
-name: Workspace Default
-description: Loaded through workspace paths.
----
-
-Workspace phase content.
-`);
-
-    const workspace = resolveWorkspacePaths({ cwd: root, env: {} });
-    const phases = await loadPhases(workspace);
-
-    expect(phases.phases.get("default")?.content).toContain("Workspace phase content.");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

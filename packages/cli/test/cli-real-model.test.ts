@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentEvent } from "@rowan-agent/agent";
-import { LocalJsonlSessionManager } from "@rowan-agent/agent";
+import { LocalJsonlSessionProvider } from "@rowan-agent/agent";
+import { SqliteRuntimeStateStore } from "@rowan-agent/agent";
 import { createMessage } from "@rowan-agent/agent";
 
 type AgentEventLogRecord = Record<string, unknown> & {
@@ -114,6 +115,12 @@ function sessionIdFrom(stderr: string): string {
   if (!match?.[1]) {
     throw new Error(`Missing session id in stderr: ${stderr}`);
   }
+  return match[1];
+}
+
+function agentIdFrom(stderr: string): string {
+  const match = stderr.match(/Agent id: (agt_[A-Za-z0-9_-]+)/);
+  if (!match?.[1]) throw new Error(`Missing Agent id in stderr: ${stderr}`);
   return match[1];
 }
 
@@ -277,12 +284,16 @@ description: Loaded from file during session continuation.
 Use the example skill.
 `);
 
-    const session = await LocalJsonlSessionManager.create(join(workspace, ".rowan", "sessions"), {
+    const sessions = new LocalJsonlSessionProvider(join(workspace, ".rowan", "sessions"));
+    const session = await sessions.create({
       systemPrompt: "Test system",
       input: "old turn",
       skills: [],
     });
     await session.appendMessage(createMessage("user", "old turn"));
+    const stateStore = new SqliteRuntimeStateStore(join(workspace, ".rowan", "runtime.sqlite"));
+    const agent = await stateStore.createAgent({ sessionId: session.getSessionId() });
+    stateStore.close();
 
     try {
       server = Bun.serve({
@@ -300,7 +311,7 @@ Use the example skill.
       throw error;
     }
 
-    const result = await runCli([...modelFlags(server), "--session", session.getSessionId(), "new turn"], {
+    const result = await runCli([...modelFlags(server), "--agent", agent.id, "new turn"], {
       ROWAN_WORKSPACE: workspace,
     });
 
@@ -312,7 +323,7 @@ Use the example skill.
   }
 });
 
-test("CLI interactive prompts hot reload workspace skills", async () => {
+test("CLI keeps resources fixed for one live Agent Binding", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-skill-hot-reload-"));
   let server: ReturnType<typeof Bun.serve> | undefined;
   const requests: unknown[] = [];
@@ -361,7 +372,8 @@ Second skill version.
 
     expect(result.exitCode).toBe(0);
     expect(JSON.stringify(requests[0])).toContain("First skill description.");
-    expect(JSON.stringify(requests[1])).toContain("Second skill description.");
+    expect(JSON.stringify(requests[1])).toContain("First skill description.");
+    expect(JSON.stringify(requests[1])).not.toContain("Second skill description.");
   } finally {
     server?.stop(true);
     await rm(workspace, { recursive: true, force: true });
@@ -423,8 +435,8 @@ test("CLI config reports resolved flags without exposing API key material", asyn
         "test-model",
         "--timeout-ms",
         "1234",
-        "--session",
-        "ses_example",
+        "--agent",
+        "agt_example",
         "--log",
         "runs/custom.jsonl",
         "--log-level",
@@ -443,7 +455,7 @@ test("CLI config reports resolved flags without exposing API key material", asyn
     const config = JSON.parse(result.stdout) as {
       configFile?: Record<string, unknown>;
       model?: Record<string, unknown>;
-      session?: Record<string, unknown>;
+      agent?: Record<string, unknown>;
       logging?: Record<string, unknown>;
       skills?: Array<Record<string, unknown>>;
       tools?: string[];
@@ -457,7 +469,7 @@ test("CLI config reports resolved flags without exposing API key material", asyn
       baseUrl: "https://api.example/v1",
       timeoutMs: 1234,
     });
-    expect(config.session).toEqual({ id: "ses_example", source: "flag" });
+    expect(config.agent).toEqual({ id: "agt_example", source: "flag" });
     expect(config.logging).toEqual({
       automatic: false,
       path: ".rowan/runs/custom.jsonl",
@@ -482,9 +494,10 @@ test("CLI config rejects trailing prompt text", async () => {
   expect(result.stderr).toContain("config does not accept a prompt.");
 });
 
-test("CLI list returns saved sessions in the current workspace", async () => {
+test("CLI list returns durable Agents with their saved Session metadata", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-list-"));
-  const older = await LocalJsonlSessionManager.create(join(workspace, ".rowan", "sessions"), {
+  const sessions = new LocalJsonlSessionProvider(join(workspace, ".rowan", "sessions"));
+  const older = await sessions.create({
     systemPrompt: "Test system",
     input: "old hello",
     title: "Older session",
@@ -492,13 +505,18 @@ test("CLI list returns saved sessions in the current workspace", async () => {
   await older.appendMessage(createMessage("user", "old hello"));
   await older.appendMessage(createMessage("assistant", "Older answer"));
   await Bun.sleep(20);
-  const newer = await LocalJsonlSessionManager.create(join(workspace, ".rowan", "sessions"), {
+  const newer = await sessions.create({
     systemPrompt: "Test system",
     input: "new hello",
     title: "Newer session",
   });
   await newer.appendMessage(createMessage("user", "new hello"));
   await newer.appendMessage(createMessage("assistant", "Newer answer"));
+  const stateStore = new SqliteRuntimeStateStore(join(workspace, ".rowan", "runtime.sqlite"));
+  const olderAgent = await stateStore.createAgent({ sessionId: older.getSessionId() });
+  await Bun.sleep(20);
+  const newerAgent = await stateStore.createAgent({ sessionId: newer.getSessionId() });
+  stateStore.close();
 
   try {
     const result = await runCli(["list"], {
@@ -508,28 +526,31 @@ test("CLI list returns saved sessions in the current workspace", async () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("Missing API key");
     expect(result.stderr).not.toContain("Missing model");
-    const sessions = JSON.parse(result.stdout) as Array<{
+    const agents = JSON.parse(result.stdout) as Array<{
       id?: string;
+      sessionId?: string;
       title?: string | null;
       createdAt?: string;
       updatedAt?: string;
       messageCount?: number;
     }>;
 
-    expect(sessions).toHaveLength(2);
+    expect(agents).toHaveLength(2);
     expect(result.stdout).not.toContain("Newer answer");
     expect(result.stdout).not.toContain("Older answer");
-    expect(sessions.map((session) => session.id)).toEqual([newer.getSessionId(), older.getSessionId()]);
-    expect(sessions[0]).toMatchObject({
+    expect(agents.map((agent) => agent.id)).toEqual([newerAgent.id, olderAgent.id]);
+    expect(agents[0]).toMatchObject({
+      sessionId: newer.getSessionId(),
       title: "Newer session",
       messageCount: 2,
     });
-    expect(sessions[0]).not.toHaveProperty("latestMessage");
-    expect(sessions[1]).toMatchObject({
+    expect(agents[0]).not.toHaveProperty("latestMessage");
+    expect(agents[1]).toMatchObject({
+      sessionId: older.getSessionId(),
       title: "Older session",
       messageCount: 2,
     });
-    expect(sessions[1]).not.toHaveProperty("latestMessage");
+    expect(agents[1]).not.toHaveProperty("latestMessage");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -889,7 +910,7 @@ test("CLI exposes core bash in the none phase", async () => {
   }
 });
 
-test("CLI --session continues a saved one-shot session", async () => {
+test("CLI --agent reconstructs a saved one-shot Agent", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-session-"));
   const responses = [
     { message: "First saved answer", route: "direct" },
@@ -919,8 +940,9 @@ test("CLI --session continues a saved one-shot session", async () => {
     const first = await runCli([...modelFlags(server), "hello"], { ROWAN_WORKSPACE: workspace });
     expect(first.exitCode).toBe(0);
     const sessionId = sessionIdFrom(first.stderr);
+    const agentId = agentIdFrom(first.stderr);
 
-    const second = await runCli([...modelFlags(server), "--session", sessionId, "continue"], { ROWAN_WORKSPACE: workspace });
+    const second = await runCli([...modelFlags(server), "--agent", agentId, "continue"], { ROWAN_WORKSPACE: workspace });
     expect(second.exitCode).toBe(0);
     expect(sessionIdFrom(second.stderr)).toBe(sessionId);
     expect(countMatches(second.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
@@ -1157,7 +1179,7 @@ Generate an image.
   }
 });
 
-test("CLI --session can continue with additional interactive turns", async () => {
+test("CLI --agent can reconstruct and continue with additional interactive turns", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-loaded-interactive-"));
   const responses = [
     { message: "Initial answer", route: "direct" },
@@ -1183,8 +1205,9 @@ test("CLI --session can continue with additional interactive turns", async () =>
     const initial = await runCli([...modelFlags(server), "hello"], { ROWAN_WORKSPACE: workspace });
     expect(initial.exitCode).toBe(0);
     const sessionId = sessionIdFrom(initial.stderr);
+    const agentId = agentIdFrom(initial.stderr);
 
-    const chat = await runCli([...modelFlags(server), "--session", sessionId, "again"], { ROWAN_WORKSPACE: workspace }, "more\n:quit\n");
+    const chat = await runCli([...modelFlags(server), "--agent", agentId, "again"], { ROWAN_WORKSPACE: workspace }, "more\n:quit\n");
     expect(chat.exitCode).toBe(0);
     expect(sessionIdFrom(chat.stderr)).toBe(sessionId);
     expect(countMatches(chat.stderr, /Session id: ses_[A-Za-z0-9_-]+/g)).toBe(1);
@@ -1221,7 +1244,7 @@ test("CLI no longer exposes chat, sessions, or log subcommands in help", async (
   expect(result.stdout).toContain("Usage:");
   expect(result.stdout).toContain("bun run rowan [options] [command] [prompt]");
   expect(result.stdout).toContain("config  Show the current resolved configuration");
-  expect(result.stdout).toContain("list    List saved sessions in the current workspace");
+  expect(result.stdout).toContain("list    List durable Agents in the current workspace");
   expect(result.stdout).not.toContain("bun run rowan chat");
   expect(result.stdout).not.toContain("sessions list");
   expect(result.stdout).not.toContain("trace list");

@@ -4,7 +4,8 @@ import {
   buildModelRequest,
 } from "../../../src/harness/context/prompt-builder";
 import type { AgentMessage } from "@rowan-agent/models";
-import { createId, createMessage } from "@rowan-agent/agent";
+import { createMessage } from "@rowan-agent/agent";
+import { createId } from "../../../src/utils";
 import type { Skill, Tool } from "@rowan-agent/agent";
 
 type TestInput = {

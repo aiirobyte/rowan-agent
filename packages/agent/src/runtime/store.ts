@@ -5,26 +5,20 @@ import type {
   AgentRunRecord,
   AgentRunId,
   AgentLifecycleState,
-  FactoryId,
   RuntimeEvent,
   RuntimeEventId,
   RuntimeMessage,
   RuntimeMessageId,
-  RuntimeMessagePayload,
   RuntimeToolCall,
   RuntimeToolCallId,
   RuntimeLease,
   RuntimeEventCursor,
+  RuntimeEventCheckpoint,
 } from "./domain";
 
 export type CreateAgentInput = {
   sessionId: string;
-  factoryId?: FactoryId;
-};
-
-export type EnqueueMessageInput = {
-  agentId: AgentId;
-  payload: RuntimeMessagePayload;
+  factoryId?: string;
 };
 
 export type EnqueueAgentInput = {
@@ -56,6 +50,13 @@ export type LeasedRun = {
   lease: RuntimeLease;
 };
 
+export type RenewLeaseInput = {
+  runId: AgentRunId;
+  leaseId: import("./domain").LeaseId;
+  leaseDurationMs: number;
+  now?: Date;
+};
+
 export type SuspendRunInput = {
   runId: AgentRunId;
   reason?: string;
@@ -65,6 +66,17 @@ export type CompleteRunInput = {
   runId: AgentRunId;
   outcome: Outcome;
   state?: Extract<AgentRunRecord["state"], "completed" | "failed" | "cancelled">;
+};
+
+export type RetryRunInput = {
+  runId: AgentRunId;
+  reason: string;
+};
+
+export type ExhaustRunInput = {
+  runId: AgentRunId;
+  outcome: Outcome;
+  reason: string;
 };
 
 export type AbortRunInput = {
@@ -93,11 +105,9 @@ export type IndeterminateToolCallInput = {
 export interface RuntimeStateStore {
   createAgent(input: CreateAgentInput): Promise<AgentRecord>;
   getAgent(agentId: AgentId): Promise<AgentRecord | undefined>;
-  getAgentBySessionId(sessionId: string): Promise<AgentRecord | undefined>;
   listAgents(): Promise<AgentRecord[]>;
   setAgentState(agentId: AgentId, state: AgentLifecycleState): Promise<AgentRecord>;
 
-  enqueueMessage(input: EnqueueMessageInput): Promise<RuntimeMessage>;
   enqueueAgentInput(input: EnqueueAgentInput): Promise<{
     message: RuntimeMessage;
     run: AgentRunRecord;
@@ -107,12 +117,14 @@ export interface RuntimeStateStore {
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
   listRuns(input?: ListRunsInput): Promise<AgentRunRecord[]>;
   leaseRun(input: LeaseRunInput): Promise<LeasedRun>;
+  renewLease(input: RenewLeaseInput): Promise<RuntimeLease>;
   suspendRun(input: SuspendRunInput): Promise<AgentRunRecord>;
   completeRun(input: CompleteRunInput): Promise<AgentRunRecord>;
+  retryRun(input: RetryRunInput): Promise<AgentRunRecord>;
+  exhaustRun(input: ExhaustRunInput): Promise<AgentRunRecord>;
   abortRun(input: AbortRunInput): Promise<AgentRunRecord>;
-  acknowledgeMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage>;
-  deadLetterMessage(messageId: RuntimeMessageId, reason: string): Promise<RuntimeMessage>;
   recoverExpiredLeases(now?: Date): Promise<AgentRunRecord[]>;
+  recoverLeases(): Promise<AgentRunRecord[]>;
 
   createToolCall(input: CreateToolCallInput): Promise<RuntimeToolCall>;
   startToolCall(toolCallId: RuntimeToolCallId): Promise<RuntimeToolCall>;
@@ -122,5 +134,6 @@ export interface RuntimeStateStore {
 
   listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]>;
   recordEvent(input: RecordRuntimeEventInput): Promise<RuntimeEvent>;
-  acknowledgeEvent(eventId: RuntimeEventId): Promise<RuntimeEvent>;
+  getEventCheckpoint(consumerId: string): Promise<RuntimeEventCheckpoint>;
+  acknowledgeEvent(consumerId: string, eventId: RuntimeEventId): Promise<RuntimeEventCheckpoint>;
 }

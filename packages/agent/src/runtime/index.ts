@@ -2,10 +2,12 @@ export * from "./domain";
 export * from "./store";
 export { InMemoryRuntimeStateStore } from "./memory-store";
 export { SqliteRuntimeStateStore } from "./sqlite-store";
-export { initializeRuntimeSchema } from "./runtime-schema";
 export { AgentRuntime } from "./agent-runtime";
-export type { AgentRuntimeOptions, RuntimeSessionManagerProvider } from "./agent-runtime";
+export type {
+  AgentFactory,
+  AgentFactoryIdentity,
+  AgentRuntimeOptions,
+} from "./agent-runtime";
 export { AgentRun } from "./agent-run";
 export type { AgentRunListener } from "./agent-run";
-export { ToolRuntime } from "./tool-runtime";
-export type { ToolRuntimePolicy, RuntimeToolExecutionInput } from "./tool-runtime";
+export type { ToolRuntimePolicy } from "./tool-runtime";

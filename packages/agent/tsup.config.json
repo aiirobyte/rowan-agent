@@ -1,6 +1,6 @@
 {
   "entry": [
-    "src/index.ts"
+    "./src/index.ts"
   ],
   "format": [
     "esm"
@@ -9,6 +9,7 @@
   "clean": true,
   "outDir": "dist",
   "external": [
-    "@rowan-agent/models"
+    "@rowan-agent/models",
+    "bun:sqlite"
   ]
 }

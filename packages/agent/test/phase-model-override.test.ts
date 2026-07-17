@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseModelRef } from "../src/harness/config";
+import { parseModelRef } from "@rowan-agent/models";
 import type { PhaseFrontmatter } from "../src/harness/phases/types";
 
 // parseModelRef is exported from config.ts

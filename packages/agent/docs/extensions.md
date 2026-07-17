@@ -157,12 +157,16 @@ The factory receives an [`ExtensionAPI`](#extensionapi) — the single entry poi
 Extensions can import from:
 
 ```typescript
-// Types
-import type { ExtensionAPI, ExtensionContext } from "@rowan-agent/agent";
+// Main extension Interface
+import type { ExtensionAPI } from "@rowan-agent/agent";
 
 // Models (for custom providers)
 import type { ProviderConfig } from "@rowan-agent/models";
 ```
+
+Hook handlers, registration objects, context, utilities, and events are inferred
+from `ExtensionAPI`. Named `HookHandler`, `PhaseRegistration`, and
+`ToolDefinition` types remain available for reusable helpers.
 
 No compilation step needed — Rowan uses [jiti](https://github.com/unjs/jiti) to load `.ts` files directly.
 
@@ -170,7 +174,7 @@ No compilation step needed — Rowan uses [jiti](https://github.com/unjs/jiti) t
 
 ## ExtensionAPI
 
-The `ExtensionAPI` is the contract between extensions and Rowan. Everything an extension can do flows through this object.
+The `ExtensionAPI` is the contract between extensions and Rowan. Everything an extension can do flows through this object. Its nested context, utility, event, and manifest shapes are documented below but are not separate root exports.
 
 ```typescript
 interface ExtensionAPI {
@@ -734,11 +738,11 @@ interface ExtensionUtils {
 }
 ```
 
-Pass the result to the `Agent` constructor to bind extensions automatically:
+Pass the result through the Runtime-owned Agent lifecycle:
 
 ```typescript
 const { extensions } = await Agent.loadExtensions("./.rowan/extensions");
-const agent = new Agent({ context, model, stream, extensions });
+const agent = await runtime.createAgent({ context, model, stream, extensions });
 ```
 
 Extensions are loaded in sorted order (alphabetical by path).
@@ -764,7 +768,7 @@ import type { ProviderConfig } from "@rowan-agent/models";
 5. **Run** — agent loop starts, hooks fire as events occur
 6. **Invalidate** — on extension reload or agent reset, old contexts are marked stale
 
-When extensions are passed to the `Agent` constructor (or `agent.run()`), lifecycle steps 1–4 happen automatically inside the Agent.
+When extensions are supplied to `runtime.createAgent()` or `runtime.reconstructAgent()`, lifecycle steps 1–4 happen inside the Runtime-owned Agent Binding.
 
 ### Runtime Protection
 
@@ -876,41 +880,12 @@ interface ToolExecutionResult {
 }
 ```
 
-#### Extension
-
-Internal tracking object — what the runner uses to manage each loaded extension.
-
-```typescript
-interface Extension {
-  path: string;
-  sourceInfo: SourceInfo;
-  handlers: Map<string, HandlerFn[]>;
-  tools: Map<string, RegisteredTool>;
-  phases: Map<string, RegisteredPhase>;
-}
-```
-
-#### SourceInfo
-
-```typescript
-interface SourceInfo {
-  source: string;       // "local" | "synthetic"
-  baseDir?: string;
-  displayName?: string;
-}
-```
 
 ### Functions
 
 ```typescript
 // Load extensions from filesystem
 Agent.loadExtensions(path: string): Promise<LoadExtensionsResult>
-
-// Load a single extension from a factory function
-loadExtensionFromFactory(factory: ExtensionFactory, cwd: string, extensionPath?: string): LoadedExtension
-
-// Create an EventBus
-createEventBus(): EventBus
 ```
 
 ### Hook Event Types (Complete)

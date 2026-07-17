@@ -138,22 +138,15 @@ export type SessionListItem = {
 
 export type SessionManager = {
   getSessionId(): string;
-  getSessionFile(): string | undefined;
-  getHeader(): Promise<SessionHeader>;
   appendMessage(message: AgentMessage): Promise<string>;
   appendOutcome(outcome: Outcome): Promise<string>;
-  appendExecutionTurn(turn: ExecutionTurn): Promise<string>;
-  appendCompaction(input: { summary: string; firstKeptEntryId: string }): Promise<string>;
-  appendBranchSummary(input: { fromId: string; summary: string }): Promise<string>;
-  appendSessionInfo(input: { title: string }): Promise<string>;
-  appendCustom(input: { customType: string; data: unknown }): Promise<string>;
-  appendSessionState(state: SessionState): Promise<string>;
   appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: LlmModelRef }): Promise<string>;
-  getSessionState(): Promise<SessionState | undefined>;
-  branch(entryId: string | null): Promise<void>;
   buildAgentContext<TTool = unknown>(input?: BuildAgentContextInput<TTool>): Promise<SessionAgentContext<TTool>>;
-  listEntries(): Promise<SessionEntry[]>;
-  loadExecutionTurns(filter?: StepFilter): Promise<ExecutionTurn[]>;
+};
+
+export type SessionManagerProvider = {
+  create(input: CreateSessionManagerInput): Promise<SessionManager>;
+  open(sessionId: string): Promise<SessionManager | undefined>;
 };
 
 function clone<T>(value: T): T {
