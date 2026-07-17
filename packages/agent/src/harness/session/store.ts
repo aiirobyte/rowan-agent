@@ -6,7 +6,7 @@ import {
   type SessionManagerProvider,
 } from "./session-manager";
 
-export class InMemorySessionProvider implements SessionManagerProvider {
+export class InMemorySessionStore implements SessionManagerProvider {
   private readonly sessions = new Map<string, SessionManager>();
 
   async create(input: CreateSessionManagerInput): Promise<SessionManager> {
@@ -20,7 +20,7 @@ export class InMemorySessionProvider implements SessionManagerProvider {
   }
 }
 
-export class LocalJsonlSessionProvider implements SessionManagerProvider {
+export class JsonlSessionStore implements SessionManagerProvider {
   constructor(private readonly sessionsDir: string) {}
 
   create(input: CreateSessionManagerInput): Promise<SessionManager> {

@@ -13,7 +13,7 @@ import {
   Agent,
   AgentRuntime,
   SqliteRuntimeStateStore,
-  LocalJsonlSessionProvider,
+  JsonlSessionStore,
   createCoreTools,
   type AgentEvent,
   type AgentEventListener,
@@ -428,7 +428,7 @@ async function runConfigCommand(args: CliArgs): Promise<void> {
 
 async function runListCommand(_args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  const sessionProvider = new LocalJsonlSessionProvider(workspaceSessionsDir(workspace));
+  const sessionProvider = new JsonlSessionStore(workspaceSessionsDir(workspace));
   const sessions = new Map(
     (await sessionProvider.list())
       .map((session) => [session.id, session]),
@@ -537,7 +537,7 @@ async function createConfiguredAgent(
 
   await mkdir(workspaceRunsDir(workspace), { recursive: true });
   const stateStore = new SqliteRuntimeStateStore(join(workspace.rowanDir, "runtime.sqlite"));
-  const sessionProvider = new LocalJsonlSessionProvider(workspaceSessionsDir(workspace));
+  const sessionProvider = new JsonlSessionStore(workspaceSessionsDir(workspace));
   let runtime: AgentRuntime | undefined;
   try {
     runtime = await AgentRuntime.start({

@@ -19,7 +19,7 @@ export type {
   Unsubscribe,
 } from "./types";
 
-export { InMemorySessionProvider, LocalJsonlSessionProvider } from "./harness/session/provider";
+export { InMemorySessionStore, JsonlSessionStore } from "./harness/session/store";
 export type { SessionManagerProvider } from "./harness/session/session-manager";
 
 export { createCoreTools } from "./harness/tools";

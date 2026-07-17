@@ -7,11 +7,13 @@ import {
   type AgentContext,
   type SessionManagerProvider,
   type StreamFn,
+  type Tool,
 } from "../../src";
+import Type from "typebox";
 import { ProviderError } from "@rowan-agent/models";
 import { InMemorySessionManager } from "../../src/harness/session";
 import type { CreateSessionManagerInput, SessionManager } from "../../src/harness/session/session-manager";
-import { scriptedStream } from "../support/scripted-stream";
+import { buildTestPartial, buildToolCallPartial, scriptedStream } from "../support/scripted-stream";
 
 function sessions(): SessionManagerProvider {
   const managers = new Map<string, SessionManager>();
@@ -189,6 +191,92 @@ test("Scheduler retries only Infrastructure Failures and dead-letters exhausted 
     expect(outcome.message).toContain("temporary model transport failure");
     expect(eventKinds).toContain("run_retry_scheduled");
     expect(eventKinds).toContain("message_dead_lettered");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("Tool errors are passed to the model transcript as tool_result, not blocking the run", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const sessionProvider = sessions();
+  const exactError = "Project missing is not registered in the DB. Run `everyield doctor`.";
+  let modelCalls = 0;
+  const failingTool: Tool = {
+    name: "task_manage",
+    description: "Fail deterministically.",
+    parameters: Type.Object({}),
+    async execute() {
+      throw new Error(exactError);
+    },
+  };
+  const stream: StreamFn = async function* () {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      // First turn: model calls the failing tool
+      const toolCallId = "call_fatal_task_manage";
+      const args = "{}";
+      const partial = buildToolCallPartial(toolCallId, failingTool.name, args);
+      yield { type: "tool_call_start", id: toolCallId, name: failingTool.name, partial };
+      yield { type: "tool_call_delta", id: toolCallId, arguments: args, partial };
+      yield { type: "tool_call_end", id: toolCallId, name: failingTool.name, arguments: args, partial };
+      yield { type: "done" };
+      return;
+    }
+    // Second turn: model sees the tool error in transcript and responds
+    const text = "The task_manage tool failed. I cannot proceed.";
+    yield { type: "text_delta", text, partial: buildTestPartial(text) };
+    yield { type: "done" };
+  };
+  const runtime = await AgentRuntime.start({
+    stateStore,
+    sessionProvider,
+  });
+
+  try {
+    const base = options();
+    const agent = await runtime.createAgent({
+      ...base,
+      context: { ...base.context, tools: [failingTool] },
+      stream,
+    });
+    const agentEvents: string[] = [];
+    agent.subscribe((event) => { agentEvents.push(event.type); });
+    const run = await agent.send("create task");
+    const outcome = await run.result();
+
+    // The run completes normally — the model saw the error and responded
+    expect(run.status).toBe("completed");
+    // Model was called twice: once to request the tool, once after seeing the error
+    expect(modelCalls).toBe(2);
+    expect(agentEvents).toContain("tool_execution_end");
+
+    // Tool call is recorded as failed in state store
+    const toolEvent = (await runtime.listEvents()).find((event) => event.kind === "tool_call_failed");
+    expect(toolEvent?.runId).toBe(run.id);
+    expect(await stateStore.getToolCall(toolEvent!.toolCallId!)).toMatchObject({
+      state: "failed",
+      result: { ok: false, error: exactError },
+    });
+
+    // The tool error was passed to the transcript as a tool_result message
+    const manager = await sessionProvider.open(agent.sessionId) as InMemorySessionManager;
+    const entries = await manager.listEntries();
+    const errorToolMessages = entries.filter((entry) => {
+      if (entry.type !== "message" || entry.message.role !== "tool") return false;
+      const content = entry.message.content;
+      if (Array.isArray(content)) {
+        return content.some((block: any) =>
+          block.type === "tool_result" && block.content.includes(exactError),
+        );
+      }
+      return false;
+    });
+    expect(errorToolMessages.length).toBe(1);
+    // The model's second response acknowledges the error
+    const assistantMessages = entries.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const lastAssistant = assistantMessages[assistantMessages.length - 1];
+    expect(typeof lastAssistant?.message.content).toBe("string");
+    expect((lastAssistant?.message.content as string).toLowerCase()).toContain("fail");
   } finally {
     await runtime.stop();
   }

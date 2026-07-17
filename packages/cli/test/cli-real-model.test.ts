@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentEvent } from "@rowan-agent/agent";
-import { LocalJsonlSessionProvider } from "@rowan-agent/agent";
+import { JsonlSessionStore } from "@rowan-agent/agent";
 import { SqliteRuntimeStateStore } from "@rowan-agent/agent";
 import { createMessage } from "@rowan-agent/agent";
 
@@ -284,7 +284,7 @@ description: Loaded from file during session continuation.
 Use the example skill.
 `);
 
-    const sessions = new LocalJsonlSessionProvider(join(workspace, ".rowan", "sessions"));
+    const sessions = new JsonlSessionStore(join(workspace, ".rowan", "sessions"));
     const session = await sessions.create({
       systemPrompt: "Test system",
       input: "old turn",
@@ -496,7 +496,7 @@ test("CLI config rejects trailing prompt text", async () => {
 
 test("CLI list returns durable Agents with their saved Session metadata", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "rowan-cli-list-"));
-  const sessions = new LocalJsonlSessionProvider(join(workspace, ".rowan", "sessions"));
+  const sessions = new JsonlSessionStore(join(workspace, ".rowan", "sessions"));
   const older = await sessions.create({
     systemPrompt: "Test system",
     input: "old hello",

@@ -1,13 +1,13 @@
 import {
   AgentRuntime,
   InMemoryRuntimeStateStore,
-  InMemorySessionProvider,
+  InMemorySessionStore,
 } from "@rowan-agent/agent";
 import { createModelStream } from "@rowan-agent/models";
 
 const runtime = await AgentRuntime.start({
   stateStore: new InMemoryRuntimeStateStore(),
-  sessionProvider: new InMemorySessionProvider(),
+  sessionProvider: new InMemorySessionStore(),
 });
 
 try {

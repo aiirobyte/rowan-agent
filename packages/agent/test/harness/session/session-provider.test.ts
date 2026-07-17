@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  InMemorySessionProvider,
-  LocalJsonlSessionProvider,
+  InMemorySessionStore,
+  JsonlSessionStore,
 } from "../../../src/harness/session";
 
 const sessionInput = {
@@ -12,17 +12,17 @@ const sessionInput = {
   input: "hello",
 };
 
-test("InMemorySessionProvider creates and opens Sessions", async () => {
-  const provider = new InMemorySessionProvider();
+test("InMemorySessionStore creates and opens Sessions", async () => {
+  const provider = new InMemorySessionStore();
   const created = await provider.create(sessionInput);
 
   expect(await provider.open(created.getSessionId())).toBe(created);
   expect(await provider.open("ses_missing")).toBeUndefined();
 });
 
-test("LocalJsonlSessionProvider creates and opens Sessions", async () => {
+test("JsonlSessionStore creates and opens Sessions", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-session-provider-"));
-  const provider = new LocalJsonlSessionProvider(join(root, "sessions"));
+  const provider = new JsonlSessionStore(join(root, "sessions"));
 
   try {
     const created = await provider.create(sessionInput);

@@ -20,14 +20,14 @@ or reconstruct an `Agent`, submit input with `send()`, and wait on the returned
 import {
   AgentRuntime,
   InMemoryRuntimeStateStore,
-  InMemorySessionProvider,
+  InMemorySessionStore,
   createCoreTools,
 } from "@rowan-agent/agent";
 import { createModelStream } from "@rowan-agent/models";
 
 const runtime = await AgentRuntime.start({
   stateStore: new InMemoryRuntimeStateStore(),
-  sessionProvider: new InMemorySessionProvider(),
+  sessionProvider: new InMemorySessionStore(),
 });
 
 try {
@@ -70,7 +70,7 @@ Events, and Tool Call control. Always stop it during host shutdown.
 ```ts
 type AgentRuntimeOptions = {
   stateStore: InMemoryRuntimeStateStore | SqliteRuntimeStateStore;
-  sessionProvider?: InMemorySessionProvider | LocalJsonlSessionProvider;
+  sessionProvider?: InMemorySessionStore | JsonlSessionStore;
   factories?: ReadonlyMap<string, AgentFactory> | Readonly<Record<string, AgentFactory>>;
   toolPolicy?: ToolRuntimePolicy;
   maxConcurrentRuns?: number;
@@ -101,7 +101,7 @@ Runtime State and conversation history are deliberately separate:
 | Concern | Durable adapter | In-memory adapter |
 |---------|-----------------|-------------------|
 | Agent records, Messages, Runs, Leases, Runtime Events, Tool Calls | `SqliteRuntimeStateStore` | `InMemoryRuntimeStateStore` |
-| Conversation messages, model transcripts, Outcomes | `LocalJsonlSessionProvider` | `InMemorySessionProvider` |
+| Conversation messages, model transcripts, Outcomes | `JsonlSessionStore` | `InMemorySessionStore` |
 
 The SQLite Runtime schema has no compatibility migration. Replace an older
 Runtime database when adopting a breaking schema; Session JSONL records remain
@@ -377,7 +377,7 @@ const runtime = await AgentRuntime.start({
   stateStore,
   sessionProvider,
   toolPolicy: {
-    allowedTools: ["read", "bash"],
+    allowedTools: ["read", "bash", "task_manage", "resource_manage"],
     maxConcurrent: 8,
     perToolMaxConcurrent: { bash: 2 },
   },
@@ -436,9 +436,9 @@ When multiple phases run concurrently (via multi-target `route`), each branch em
 JSONL-based session persistence — lets multi-turn conversations survive across process restarts. Supports create, resume, branch, and history replay.
 
 ```ts
-import { LocalJsonlSessionProvider } from "@rowan-agent/agent";
+import { JsonlSessionStore } from "@rowan-agent/agent";
 
-const sessions = new LocalJsonlSessionProvider(sessionsDir);
+const sessions = new JsonlSessionStore(sessionsDir);
 const session = await sessions.create({
   systemPrompt,
   input: "",
@@ -702,7 +702,7 @@ type LoopMetrics = {
 | `Outcome` | Terminal result with message and tool results |
 | `LoopMetrics` | Loop iteration, timing, and phase transition stats |
 | `SessionManagerProvider` | Session lifecycle seam used by the Runtime |
-| `LocalJsonlSessionProvider` / `InMemorySessionProvider` | JSONL and in-memory Session adapters |
+| `JsonlSessionStore` / `InMemorySessionStore` | JSONL and in-memory Session adapters |
 | `ExtensionAPI` / `ExtensionFactory` | Extension developer interface |
 | `StreamFn` / `LlmModelRef` | Model stream function and model reference |
 
