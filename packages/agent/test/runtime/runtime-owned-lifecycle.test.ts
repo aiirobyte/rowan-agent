@@ -13,7 +13,7 @@ import {
 import Type from "typebox";
 import { ProviderError } from "@rowan-agent/models";
 import { InMemorySessionManager } from "../../src/harness/session";
-import type { CreateSessionManagerInput, SessionManager } from "../../src/harness/session/session-manager";
+import type { CreateSessionManagerInput, MessageSessionEntry, SessionManager } from "../../src/harness/session/session-manager";
 import { buildTestPartial, buildToolCallPartial, scriptedStream } from "../support/scripted-stream";
 
 function sessions(): SessionManagerProvider {
@@ -274,7 +274,10 @@ test("Tool errors are passed to the model transcript as tool_result, not blockin
     });
     expect(errorToolMessages.length).toBe(1);
     // The model's second response acknowledges the error
-    const assistantMessages = entries.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const assistantMessages = entries.filter(
+      (entry): entry is MessageSessionEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
     const lastAssistant = assistantMessages[assistantMessages.length - 1];
     expect(typeof lastAssistant?.message.content).toBe("string");
     expect((lastAssistant?.message.content as string).toLowerCase()).toContain("fail");
