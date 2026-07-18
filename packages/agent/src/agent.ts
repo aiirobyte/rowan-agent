@@ -57,6 +57,7 @@ const ATTACH_AGENT = Symbol("rowan.agent.attach");
 
 export type AttachedAgentBinding = {
   abort(reason?: string): void;
+  persistInput(input: AgentMessage): Promise<void>;
   execute(input: AgentMessage, runId: AgentRunId, control: AgentRunControl): Promise<Outcome>;
 };
 
@@ -131,6 +132,8 @@ export async function attachAgent(input: AttachAgentInput): Promise<{
     phases: input.options.context.phases,
   };
   const persistInput = async (message: AgentMessage) => {
+    const context = await input.manager.buildAgentContext();
+    if (context.messages.some((candidate) => candidate.id === message.id)) return;
     await input.manager.appendMessage(message);
   };
   let execution: AgentExecution;
@@ -189,6 +192,7 @@ export async function attachAgent(input: AttachAgentInput): Promise<{
     agent,
     binding: {
       abort: (reason) => execution.abortFromRuntime(reason),
+      persistInput,
       execute: (message, runId, control) => execution.executeAgentInput(message, runId, control),
     },
   };

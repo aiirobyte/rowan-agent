@@ -213,6 +213,49 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect(checkpoint).toMatchObject({ consumerId, sequence: event!.sequence, eventId: event!.id });
   });
 
+  test("atomically acknowledges one Runtime Event and enqueues Agent Input", async () => {
+    const store = createStore();
+    const target = await store.createAgent({ sessionId: "session-target" });
+    const [event] = await store.listEvents();
+    const consumerId = "event-forwarding-contract";
+    const input = {
+      id: "message-forwarded",
+      role: "user" as const,
+      content: "delegated result",
+      createdAt: "2026-01-01T00:00:00.000+00:00",
+    };
+
+    await expect(store.acknowledgeEventAndEnqueueAgentInput({
+      consumerId,
+      eventId: event!.id,
+      agentId: "agt_missing" as typeof target.id,
+      input,
+    })).rejects.toThrow(/Agent not found/);
+    expect(await store.getEventCheckpoint(consumerId)).toMatchObject({ sequence: 0 });
+
+    const forwarded = await store.acknowledgeEventAndEnqueueAgentInput({
+      consumerId,
+      eventId: event!.id,
+      agentId: target.id,
+      input,
+    });
+    expect(forwarded.checkpoint).toMatchObject({ sequence: event!.sequence, eventId: event!.id });
+    expect(await store.getMessage(forwarded.enqueued!.message.id)).toMatchObject({
+      agentId: target.id,
+      state: "queued",
+      input: { id: "message-forwarded", content: "delegated result" },
+    });
+
+    const duplicate = await store.acknowledgeEventAndEnqueueAgentInput({
+      consumerId,
+      eventId: event!.id,
+      agentId: target.id,
+      input,
+    });
+    expect(duplicate.enqueued).toBeUndefined();
+    expect(await store.listRuns({ agentId: target.id })).toHaveLength(1);
+  });
+
   test("marks only a running Tool Call indeterminate", async () => {
     const store = createStore();
     const agent = await store.createAgent({ sessionId: "session-1" });

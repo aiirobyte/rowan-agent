@@ -19,12 +19,15 @@ import type {
   RuntimeToolCallState,
 } from "./domain";
 import type {
+  AcknowledgeEventAndEnqueueAgentInput,
+  AcknowledgeEventAndEnqueueAgentInputResult,
   CompleteRunInput,
   ExhaustRunInput,
   CompleteToolCallInput,
   CreateAgentInput,
   CreateToolCallInput,
   EnqueueAgentInput,
+  EnqueuedAgentInput,
   IndeterminateToolCallInput,
   LeaseRunInput,
   LeasedRun,
@@ -193,7 +196,12 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     return clone(updated);
   }
 
-  async enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord; resumed: boolean }> {
+  async enqueueAgentInput(input: EnqueueAgentInput): Promise<EnqueuedAgentInput> {
+    const enqueue = this.database.transaction(() => this.enqueueAgentInputState(input));
+    return clone(enqueue());
+  }
+
+  private enqueueAgentInputState(input: EnqueueAgentInput): EnqueuedAgentInput {
     this.requireAgent(input.agentId);
     const { timestamp } = timestampFor();
     const messageId = createId("rmsg") as RuntimeMessageId;
@@ -224,23 +232,20 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     if (suspendedRow) {
       message.runId = runId;
     }
-    const enqueue = this.database.transaction(() => {
-      this.insertMessage(message);
-      if (suspendedRow) {
-        this.database.run(
-          "UPDATE agent_runs SET message_id = ?, state = 'queued', lease_id = NULL, suspension_reason = NULL, updated_at = ? WHERE id = ?",
-          [messageId, timestamp, runId],
-        );
-      } else {
-        this.database.run(
-          "INSERT INTO agent_runs (id, agent_id, message_id, state, attempt, lease_id, outcome_json, suspension_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [run.id, run.agentId, run.messageId, run.state, run.attempt, null, null, null, run.createdAt, run.updatedAt],
-        );
-      }
-      this.recordEvent("message_enqueued", { agentId: input.agentId, messageId });
-      this.recordEvent("run_enqueued", { agentId: input.agentId, messageId, runId });
-    });
-    enqueue();
+    this.insertMessage(message);
+    if (suspendedRow) {
+      this.database.run(
+        "UPDATE agent_runs SET message_id = ?, state = 'queued', lease_id = NULL, suspension_reason = NULL, updated_at = ? WHERE id = ?",
+        [messageId, timestamp, runId],
+      );
+    } else {
+      this.database.run(
+        "INSERT INTO agent_runs (id, agent_id, message_id, state, attempt, lease_id, outcome_json, suspension_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [run.id, run.agentId, run.messageId, run.state, run.attempt, null, null, null, run.createdAt, run.updatedAt],
+      );
+    }
+    this.recordEventInternal("message_enqueued", { agentId: input.agentId, messageId });
+    this.recordEventInternal("run_enqueued", { agentId: input.agentId, messageId, runId });
     const storedRun = this.requireRun(runId);
     return { message: clone(message), run: clone(storedRun), resumed: Boolean(suspendedRow) };
   }
@@ -656,26 +661,47 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     consumerId: string,
     eventId: RuntimeEventId,
   ): Promise<RuntimeEventCheckpoint> {
-    const checkpoint = this.database.transaction(() => {
-      const event = this.requireEvent(eventId);
-      const current = this.eventCheckpoint(consumerId);
-      if (event.sequence <= current.sequence) return current;
-      if (event.sequence !== current.sequence + 1) {
-        throw new Error(`Runtime Event Consumer Checkpoint cannot advance from sequence ${current.sequence} to ${event.sequence}.`);
-      }
-      const updatedAt = createTimestamp();
-      this.database.run(
-        `INSERT INTO runtime_event_consumers (consumer_id, sequence, event_id, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(consumer_id) DO UPDATE SET
-           sequence = excluded.sequence,
-           event_id = excluded.event_id,
-           updated_at = excluded.updated_at`,
-        [consumerId, event.sequence, event.id, updatedAt],
-      );
-      return this.eventCheckpoint(consumerId);
-    })();
+    const acknowledge = this.database.transaction(() => this.acknowledgeEventState(consumerId, eventId));
+    const checkpoint = acknowledge();
     return clone(checkpoint);
+  }
+
+  async acknowledgeEventAndEnqueueAgentInput(
+    input: AcknowledgeEventAndEnqueueAgentInput,
+  ): Promise<AcknowledgeEventAndEnqueueAgentInputResult> {
+    const deliver = this.database.transaction(() => {
+      const event = this.requireEvent(input.eventId);
+      const current = this.eventCheckpoint(input.consumerId);
+      if (event.sequence <= current.sequence) return { checkpoint: current };
+      this.requireAgent(input.agentId);
+      const enqueued = this.enqueueAgentInputState(input);
+      const checkpoint = this.acknowledgeEventState(input.consumerId, input.eventId);
+      return { checkpoint, enqueued };
+    });
+    return clone(deliver());
+  }
+
+  private acknowledgeEventState(
+    consumerId: string,
+    eventId: RuntimeEventId,
+  ): RuntimeEventCheckpoint {
+    const event = this.requireEvent(eventId);
+    const current = this.eventCheckpoint(consumerId);
+    if (event.sequence <= current.sequence) return current;
+    if (event.sequence !== current.sequence + 1) {
+      throw new Error(`Runtime Event Consumer Checkpoint cannot advance from sequence ${current.sequence} to ${event.sequence}.`);
+    }
+    const updatedAt = createTimestamp();
+    this.database.run(
+      `INSERT INTO runtime_event_consumers (consumer_id, sequence, event_id, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(consumer_id) DO UPDATE SET
+         sequence = excluded.sequence,
+         event_id = excluded.event_id,
+         updated_at = excluded.updated_at`,
+      [consumerId, event.sequence, event.id, updatedAt],
+    );
+    return this.eventCheckpoint(consumerId);
   }
 
   private insertMessage(message: RuntimeMessage): void {

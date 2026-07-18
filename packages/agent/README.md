@@ -92,7 +92,7 @@ class AgentRuntime {
   abortRun(runId: AgentRunId, reason?: string): Promise<void>;
   consumeEvents(
     consumerId: string,
-    listener: (event: RuntimeEvent) => void | Promise<void>,
+    listener: RuntimeEventListener,
   ): () => void;
   listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]>;
   stop(): Promise<void>;
@@ -434,6 +434,23 @@ transitions.
 ```ts
 const stopConsuming = runtime.consumeEvents("deployment-observer", async (event) => {
   await deliverRuntimeFact(event);
+});
+```
+
+A consumer may instead return an `enqueue` disposition to turn the current
+Event into Agent Input. Rowan enqueues the input and advances the Consumer
+Checkpoint in one Runtime State transaction, then schedules the target Agent.
+
+```ts
+const stopRouting = runtime.consumeEvents("delegated-results", (event) => {
+  if (event.kind !== "run_completed" || !event.agentId) return;
+  return {
+    type: "enqueue",
+    agentId: targetAgentId,
+    input: createMessage("user", JSON.stringify(event.payload), {
+      sourceEventId: event.id,
+    }),
+  };
 });
 ```
 

@@ -4,6 +4,7 @@ import {
   AgentRun,
   AgentRuntime,
   InMemoryRuntimeStateStore,
+  createMessage,
   type AgentContext,
   type SessionManagerProvider,
   type StreamFn,
@@ -422,6 +423,134 @@ test("Runtime Event Consumer advances its Checkpoint only after successful deliv
 
     expect(deliveries[0]?.replace("failed:", "")).toBe(deliveries[1]?.replace("ok:", ""));
     expect(deliveries).toHaveLength(deliveredAfterSuccess);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("Runtime Event Consumer atomically forwards one Event as Agent Input", async () => {
+  const sessionProvider = sessions();
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider,
+  });
+  const requests: string[] = [];
+  const targetStream: StreamFn = async function* (request, streamOptions) {
+    requests.push(JSON.stringify(request));
+    yield* scriptedStream(request, streamOptions);
+  };
+  const consumerId = "runtime-event-forwarding";
+  const forwardedInput = createMessage("user", "A delegated Agent completed.", { kind: "delegated_agent_result" });
+
+  try {
+    const target = await runtime.createAgent({ ...options(), stream: targetStream });
+    await runtime.pauseAgent(target.id);
+    const source = await runtime.createAgent(options());
+    const stop = runtime.consumeEvents(consumerId, (event) => {
+      if (event.kind !== "agent_created" || event.agentId !== source.id) return;
+      return {
+        type: "enqueue" as const,
+        agentId: target.id,
+        input: forwardedInput,
+      };
+    });
+
+    await runtime.resumeAgent(target.id);
+    await waitFor(() => requests.length === 1);
+    const targetContext = await (await sessionProvider.open(target.sessionId))!.buildAgentContext();
+    expect(targetContext.messages.some((message) => message.id === forwardedInput.id)).toBe(true);
+    stop();
+
+    let replayedEvents = 0;
+    const stopCaughtUp = runtime.consumeEvents(consumerId, () => {
+      replayedEvents += 1;
+    });
+    await runtime.createAgent(options());
+    await waitFor(() => replayedEvents === 1);
+    stopCaughtUp();
+
+    expect(requests).toHaveLength(1);
+    expect(replayedEvents).toBe(1);
+    expect(requests[0]).toContain("A delegated Agent completed.");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("forwarded Runtime Event input survives Agent reconstruction", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const sessionProvider = sessions();
+  const firstRuntime = await AgentRuntime.start({ stateStore, sessionProvider });
+  const firstRequests: string[] = [];
+  const firstStream: StreamFn = async function* (request, streamOptions) {
+    firstRequests.push(JSON.stringify(request));
+    yield* scriptedStream(request, streamOptions);
+  };
+  const target = await firstRuntime.createAgent({ ...options(), stream: firstStream });
+  const source = await firstRuntime.createAgent(options());
+  const stop = firstRuntime.consumeEvents("reconstruct-forwarded-input", (event) => {
+    if (event.kind !== "agent_created" || event.agentId !== source.id) return;
+    return {
+      type: "enqueue" as const,
+      agentId: target.id,
+      input: createMessage("user", "Persist this delegated result.", { kind: "delegated_agent_result" }),
+    };
+  });
+  await waitFor(() => firstRequests.length === 1);
+  stop();
+  await firstRuntime.stop();
+
+  const secondRequests: string[] = [];
+  const secondStream: StreamFn = async function* (request, streamOptions) {
+    secondRequests.push(JSON.stringify(request));
+    yield* scriptedStream(request, streamOptions);
+  };
+  const secondRuntime = await AgentRuntime.start({ stateStore, sessionProvider });
+  try {
+    const reconstructed = await secondRuntime.reconstructAgent(target.id, { ...options(), stream: secondStream });
+    await (await reconstructed.send("continue")).result();
+    expect(secondRequests.at(-1)).toContain("Persist this delegated result.");
+  } finally {
+    await secondRuntime.stop();
+  }
+});
+
+test("reconstructing an unbound Agent runs input forwarded while it was offline", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const sessionProvider = sessions();
+  const targetSession = await sessionProvider.create({
+    id: "ses_offline_target",
+    systemPrompt: "Offline target",
+    input: "",
+    skills: [],
+  });
+  const targetRecord = await stateStore.createAgent({ sessionId: targetSession.getSessionId() });
+  const runtime = await AgentRuntime.start({ stateStore, sessionProvider });
+  const requests: string[] = [];
+  const stream: StreamFn = async function* (request, streamOptions) {
+    requests.push(JSON.stringify(request));
+    yield* scriptedStream(request, streamOptions);
+  };
+
+  try {
+    const source = await runtime.createAgent(options());
+    const stop = runtime.consumeEvents("offline-target-forwarding", (event) => {
+      if (event.kind !== "agent_created" || event.agentId !== source.id) return;
+      return {
+        type: "enqueue" as const,
+        agentId: targetRecord.id,
+        input: createMessage("user", "Run after reconstruction."),
+      };
+    });
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if ((await stateStore.listRuns({ agentId: targetRecord.id })).length === 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    await runtime.reconstructAgent(targetRecord.id, { ...options(), stream });
+    await waitFor(() => requests.length === 1);
+    stop();
+    expect(requests[0]).toContain("Run after reconstruction.");
   } finally {
     await runtime.stop();
   }

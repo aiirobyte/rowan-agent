@@ -26,6 +26,22 @@ export type EnqueueAgentInput = {
   input: AgentMessage;
 };
 
+export type AcknowledgeEventAndEnqueueAgentInput = EnqueueAgentInput & {
+  consumerId: string;
+  eventId: RuntimeEventId;
+};
+
+export type EnqueuedAgentInput = {
+  message: RuntimeMessage;
+  run: AgentRunRecord;
+  resumed: boolean;
+};
+
+export type AcknowledgeEventAndEnqueueAgentInputResult = {
+  checkpoint: RuntimeEventCheckpoint;
+  enqueued?: EnqueuedAgentInput;
+};
+
 export type ListRunsInput = {
   agentId?: AgentId;
   states?: AgentRunRecord["state"][];
@@ -108,11 +124,7 @@ export interface RuntimeStateStore {
   listAgents(): Promise<AgentRecord[]>;
   setAgentState(agentId: AgentId, state: AgentLifecycleState): Promise<AgentRecord>;
 
-  enqueueAgentInput(input: EnqueueAgentInput): Promise<{
-    message: RuntimeMessage;
-    run: AgentRunRecord;
-    resumed: boolean;
-  }>;
+  enqueueAgentInput(input: EnqueueAgentInput): Promise<EnqueuedAgentInput>;
   getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined>;
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
   listRuns(input?: ListRunsInput): Promise<AgentRunRecord[]>;
@@ -136,4 +148,7 @@ export interface RuntimeStateStore {
   recordEvent(input: RecordRuntimeEventInput): Promise<RuntimeEvent>;
   getEventCheckpoint(consumerId: string): Promise<RuntimeEventCheckpoint>;
   acknowledgeEvent(consumerId: string, eventId: RuntimeEventId): Promise<RuntimeEventCheckpoint>;
+  acknowledgeEventAndEnqueueAgentInput(
+    input: AcknowledgeEventAndEnqueueAgentInput,
+  ): Promise<AcknowledgeEventAndEnqueueAgentInputResult>;
 }

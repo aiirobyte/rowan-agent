@@ -49,6 +49,7 @@ export const publicTypeExports = [
   "PhaseState",
   "RuntimeEvent",
   "RuntimeEventCursor",
+  "RuntimeEventDisposition",
   "RuntimeEventKind",
   "RuntimeEventListener",
   "SessionManagerProvider",

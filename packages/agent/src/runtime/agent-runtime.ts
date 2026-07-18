@@ -12,7 +12,7 @@ import type {
   RuntimeEvent,
   RuntimeEventCursor,
 } from "./domain";
-import type { Outcome } from "../protocol";
+import type { AgentMessage, Outcome } from "../protocol";
 import type { SessionManagerProvider } from "../harness/session/session-manager";
 import type { RuntimeStateStore } from "./store";
 import { ToolRuntime, type ToolRuntimePolicy } from "./tool-runtime";
@@ -50,7 +50,15 @@ export type RuntimeRunHandle = {
   notify(run: AgentRunRecord): void;
 };
 
-export type RuntimeEventListener = (event: RuntimeEvent) => void | Promise<void>;
+export type RuntimeEventDisposition = {
+  type: "enqueue";
+  agentId: AgentId;
+  input: AgentMessage;
+};
+
+export type RuntimeEventListener = (
+  event: RuntimeEvent,
+) => RuntimeEventDisposition | void | Promise<RuntimeEventDisposition | void>;
 
 let activeRuntime: AgentRuntime | undefined;
 
@@ -207,6 +215,7 @@ export class AgentRuntime {
       throw new Error(`Agent ${agentId} is already bound to a live Agent.`);
     }
     this.bindings.set(agentId, agent);
+    void this.pump();
     if (!this.pausedAgents.has(agentId)) void this.scheduleQueuedRuns(agentId);
   }
 
@@ -455,6 +464,11 @@ export class AgentRuntime {
         leaseDurationMs: this.leaseDurationMs,
       });
       this.notifyRun(leased.run);
+      try {
+        await binding.persistInput(leased.message.input);
+      } catch (error) {
+        throw new InfrastructureFailureError("Agent Input persistence failed.", { cause: error });
+      }
       renewalTimer = setInterval(() => {
         void this.stateStore.renewLease({
           runId: job.runId,
@@ -567,8 +581,21 @@ export class AgentRuntime {
         );
         for (const event of events) {
           if (this.eventSubscriptions.get(subscription.consumerId) !== subscription) return;
-          await subscription.listener(structuredClone(event));
-          await this.stateStore.acknowledgeEvent(subscription.consumerId, event.id);
+          const disposition = await subscription.listener(structuredClone(event));
+          if (disposition?.type === "enqueue") {
+            const delivered = await this.stateStore.acknowledgeEventAndEnqueueAgentInput({
+              consumerId: subscription.consumerId,
+              eventId: event.id,
+              agentId: disposition.agentId,
+              input: disposition.input,
+            });
+            if (delivered.enqueued) {
+              this.scheduleRun(delivered.enqueued.run.agentId, delivered.enqueued.run.id);
+              this.publishEvents();
+            }
+          } else {
+            await this.stateStore.acknowledgeEvent(subscription.consumerId, event.id);
+          }
         }
       } while (subscription.redeliver);
     } finally {

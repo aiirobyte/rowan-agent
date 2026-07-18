@@ -16,12 +16,15 @@ import type {
   RuntimeToolCallId,
 } from "./domain";
 import type {
+  AcknowledgeEventAndEnqueueAgentInput,
+  AcknowledgeEventAndEnqueueAgentInputResult,
   CompleteRunInput,
   ExhaustRunInput,
   CompleteToolCallInput,
   CreateAgentInput,
   CreateToolCallInput,
   EnqueueAgentInput,
+  EnqueuedAgentInput,
   IndeterminateToolCallInput,
   LeaseRunInput,
   LeasedRun,
@@ -98,7 +101,11 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return clone(agent);
   }
 
-  async enqueueAgentInput(input: EnqueueAgentInput): Promise<{ message: RuntimeMessage; run: AgentRunRecord; resumed: boolean }> {
+  async enqueueAgentInput(input: EnqueueAgentInput): Promise<EnqueuedAgentInput> {
+    return this.enqueueAgentInputState(input);
+  }
+
+  private enqueueAgentInputState(input: EnqueueAgentInput): EnqueuedAgentInput {
     this.requireAgent(input.agentId);
     const suspended = [...this.runs.values()]
       .filter((run) => run.agentId === input.agentId && run.state === "suspended")
@@ -477,6 +484,33 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     };
     this.eventCheckpoints.set(consumerId, checkpoint);
     return clone(checkpoint);
+  }
+
+  async acknowledgeEventAndEnqueueAgentInput(
+    input: AcknowledgeEventAndEnqueueAgentInput,
+  ): Promise<AcknowledgeEventAndEnqueueAgentInputResult> {
+    const event = this.events.find((candidate) => candidate.id === input.eventId);
+    if (!event) throw new Error(`Runtime Event not found: ${input.eventId}.`);
+    const current = this.eventCheckpoints.get(input.consumerId) ?? {
+      consumerId: input.consumerId,
+      sequence: 0,
+      updatedAt: createTimestamp(new Date(0)),
+    };
+    if (event.sequence <= current.sequence) return { checkpoint: clone(current) };
+    if (event.sequence !== current.sequence + 1) {
+      throw new Error(`Runtime Event Consumer Checkpoint cannot advance from sequence ${current.sequence} to ${event.sequence}.`);
+    }
+    this.requireAgent(input.agentId);
+
+    const enqueued = this.enqueueAgentInputState(input);
+    const checkpoint: RuntimeEventCheckpoint = {
+      consumerId: input.consumerId,
+      sequence: event.sequence,
+      eventId: event.id,
+      updatedAt: createTimestamp(),
+    };
+    this.eventCheckpoints.set(input.consumerId, checkpoint);
+    return { checkpoint: clone(checkpoint), enqueued };
   }
 
   private requireAgent(agentId: AgentId): AgentRecord {
