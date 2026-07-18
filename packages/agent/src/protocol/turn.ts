@@ -1,4 +1,4 @@
-import type { LlmModelUsage, LlmModelRef } from "./model";
+import type { LlmModelUsage, ModelRef } from "./model";
 import type { LlmRequest, LlmResponse } from "@rowan-agent/models";
 
 export type ExecutionTurn = {
@@ -8,7 +8,7 @@ export type ExecutionTurn = {
   phase: string;
   requestedAtMs: number;
   completedAtMs: number;
-  model: LlmModelRef;
+  model: ModelRef;
   usage?: LlmModelUsage;
 };
 

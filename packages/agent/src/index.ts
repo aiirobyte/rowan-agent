@@ -14,7 +14,7 @@ export type {
   AgentEvent,
   AgentEventListener,
   StreamFn,
-  LlmModelRef,
+  ModelRef,
   BeforeToolCall,
   AfterToolCall,
   Unsubscribe,

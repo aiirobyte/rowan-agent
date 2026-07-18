@@ -109,7 +109,7 @@ export type ProviderConfig = {
 // Backward-compatible model reference
 // ---------------------------------------------------------------------------
 
-export type LlmModelRef = {
+export type ModelRef = {
   provider: string;
   id: string;
 };
@@ -199,7 +199,7 @@ export type LlmToolCall = {
 export type LlmToolChoice = "auto" | "required" | "none" | { type: "tool"; name: string };
 
 export type LlmRequest = {
-  model: LlmModelRef;
+  model: ModelRef;
   system?: string;
   messages: LlmMessage[];
   tools?: LlmToolDefinition[];
@@ -262,7 +262,7 @@ export type LlmStreamEvent =
   | { type: "tool_call_start"; id: string; name: string; partial: AssistantMessagePartial }
   | { type: "tool_call_delta"; id: string; arguments: string; partial: AssistantMessagePartial }
   | { type: "tool_call_end"; id: string; name: string; arguments: string; partial: AssistantMessagePartial }
-  | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage }
+  | { type: "model_requested"; model: ModelRef; usage: LlmModelUsage }
   | { type: "error"; error: Error }
   | { type: "done"; response?: LlmResponse };
 
@@ -384,7 +384,7 @@ export type AgentEvent =
       outcome?: Outcome;
       ts: string;
     }
-  | { type: "model_requested"; model: LlmModelRef; usage: LlmModelUsage; ts: string }
+  | { type: "model_requested"; model: ModelRef; usage: LlmModelUsage; ts: string }
   | { type: "phase_start"; phase: string; ts: string }
   | { type: "phase_end"; phase: string; ts: string }
   | { type: "user_prompt_requested"; phase: string; ts: string }

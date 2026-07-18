@@ -178,7 +178,7 @@ class Agent {
 ### AgentOptions
 
 ```ts
-type ModelConfig = LlmModelRef & {
+type ModelConfig = ModelRef & {
   protocol: Protocol;
   baseUrl: string;
   apiKey: string;
@@ -197,14 +197,14 @@ type AgentCommonOptions = {
   // Lifecycle hooks
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
-  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
+  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: Outcome) => Promise<void>;
 };
 
 type AgentOptions = AgentCommonOptions & (
   | { model: ModelConfig; stream?: never }
-  | { model: LlmModelRef; stream: StreamFn }
+  | { model: ModelRef; stream: StreamFn }
 );
 
 type AgentCreateOptions = AgentOptions & {
@@ -737,7 +737,7 @@ type LoopMetrics = {
 | `SessionManagerProvider` | Session lifecycle seam used by the Runtime |
 | `JsonlSessionStore` / `InMemorySessionStore` | JSONL and in-memory Session adapters |
 | `ExtensionAPI` / `ExtensionFactory` | Extension developer interface |
-| `StreamFn` / `LlmModelRef` | Model stream function and model reference |
+| `StreamFn` / `ModelRef` | Model stream function and model reference |
 
 ## Documentation
 

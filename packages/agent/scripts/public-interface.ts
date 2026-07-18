@@ -33,7 +33,7 @@ export const publicTypeExports = [
   "HookEvent",
   "HookEventType",
   "HookHandler",
-  "LlmModelRef",
+  "ModelRef",
   "LoadExtensionsResult",
   "LoadedExtension",
   "LoopMetrics",

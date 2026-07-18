@@ -21,7 +21,7 @@ import {
   type AgentId,
   type AgentContext,
   type LoadedExtension,
-  type LlmModelRef,
+  type ModelRef,
   type PhaseRegistry,
 } from "@rowan-agent/agent";
 import {
@@ -464,7 +464,7 @@ async function createConfiguredAgent(
   // Load config file and register providers/models
   const configFile = await loadConfigFile(workspace);
 
-  let defaultModelRef: LlmModelRef;
+  let defaultModelRef: ModelRef;
 
   if (configFile) {
     registerConfigModels(configFile);

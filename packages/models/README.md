@@ -146,11 +146,11 @@ for await (const sse of iterateSseMessages(response.body!, signal)) {
 Shared types for LLM requests, responses, stream events, and agent-level constructs.
 
 ```ts
-type LlmRequest = { model: LlmModelRef; system?: string; messages: LlmMessage[]; tools?: LlmToolDefinition[]; toolChoice?: LlmToolChoice; maxTokens?: number; temperature?: number };
+type LlmRequest = { model: ModelRef; system?: string; messages: LlmMessage[]; tools?: LlmToolDefinition[]; toolChoice?: LlmToolChoice; maxTokens?: number; temperature?: number };
 type LlmResponse = { content: string; thinking?: string; toolCalls?: LlmToolCall[]; stopReason?: LlmStopReason; usage?: LlmTokenUsage };
 type LlmStreamEvent = { type: "start" } | { type: "text_delta"; delta: string } | { type: "thinking_delta"; delta: string } | { type: "tool_call_start"; ... } | { type: "done"; stopReason: LlmStopReason } | ...;
 type StreamFn = (request: LlmRequest, options: LlmStreamOptions) => AsyncIterable<LlmStreamEvent>;
-type LlmModelRef = { provider: string; name: string };
+type ModelRef = { provider: string; name: string };
 type Model = { id: string; name: string; api: Api; provider: Provider; baseUrl: string; reasoning: boolean; input: ("text" | "image")[]; cost: ModelCost; contextWindow: number; maxTokens: number };
 type KnownApi = "openai-completions" | "openai-responses" | "anthropic-messages";
 type KnownProvider = "openai" | "anthropic" | "deepseek" | "openrouter" | "groq" | "together" | "fireworks" | "xai" | "cerebras";

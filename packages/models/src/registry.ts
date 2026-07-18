@@ -1,4 +1,4 @@
-import type { Protocol, ApiStreamFn, Model, ModelConfig, LlmModelRef, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
+import type { Protocol, ApiStreamFn, Model, ModelConfig, ModelRef, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
 import { getModel, resolveModel } from "./models";
 import { streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
@@ -13,7 +13,7 @@ export interface ApiProvider {
   stream: ApiStreamFn;
 }
 
-export function parseModelRef(input?: string): LlmModelRef | undefined {
+export function parseModelRef(input?: string): ModelRef | undefined {
   if (!input) return undefined;
   const slashIndex = input.indexOf("/");
   if (slashIndex === -1) return { provider: "*", id: input };
@@ -97,7 +97,7 @@ export function stream(model: Model, request: LlmRequest, options: LlmStreamOpti
 }
 
 /**
- * Convenience: resolve model from a "provider/model" string or LlmModelRef,
+ * Convenience: resolve model from a "provider/model" string or ModelRef,
  * then stream.
  */
 export function streamByRef(

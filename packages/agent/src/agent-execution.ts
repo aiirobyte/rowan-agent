@@ -18,7 +18,7 @@ import { createMessage } from "./types";
 import type {
   AgentMessage,
   Skill,
-  LlmModelRef,
+  ModelRef,
   StreamFn,
   BeforeToolCall,
   Tool,
@@ -53,7 +53,7 @@ export type AgentStatus = {
   agentId?: AgentId;
   sessionId?: string;
   context: AgentContext;
-  model: LlmModelRef;
+  model: ModelRef;
   tools: Tool[];
   initialized: boolean;
   running: boolean;
@@ -272,7 +272,7 @@ export class AgentExecution {
     return this.runtimeRunId;
   }
 
-  setModel(model: LlmModelRef): void {
+  setModel(model: ModelRef): void {
     this.options = {
       ...this.options,
       model,
@@ -315,7 +315,7 @@ export class AgentExecution {
     };
   }
 
-  getModel(): LlmModelRef {
+  getModel(): ModelRef {
     return this.state.model;
   }
 

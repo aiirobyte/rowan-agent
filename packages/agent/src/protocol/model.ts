@@ -1,4 +1,4 @@
 export type {
   LlmModelUsage,
-  LlmModelRef,
+  ModelRef,
 } from "@rowan-agent/models";

@@ -1,6 +1,6 @@
 import type { ExecutionTurn, Outcome, StepFilter, ModelTranscript } from "../../protocol";
 import type { SessionState } from "../../loop/types";
-import type { LlmModelRef } from "../../protocol";
+import type { ModelRef } from "../../protocol";
 import { messageContentText } from "../../types";
 import { createTimestamp } from "../../utils";
 import {
@@ -78,7 +78,7 @@ export type ModelTranscriptSessionEntry = SessionEntryBase & {
   type: "model_transcript";
   transcript: ModelTranscript;
   phase?: string;
-  model?: LlmModelRef;
+  model?: ModelRef;
 };
 
 export type SessionEntry =
@@ -140,7 +140,7 @@ export type SessionManager = {
   getSessionId(): string;
   appendMessage(message: AgentMessage): Promise<string>;
   appendOutcome(outcome: Outcome): Promise<string>;
-  appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: LlmModelRef }): Promise<string>;
+  appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: ModelRef }): Promise<string>;
   buildAgentContext<TTool = unknown>(input?: BuildAgentContextInput<TTool>): Promise<SessionAgentContext<TTool>>;
 };
 
@@ -253,7 +253,7 @@ export class InMemorySessionManager implements SessionManager {
     return this.appendEntry({ type: "session_state", state: clone(state) });
   }
 
-  async appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: LlmModelRef }): Promise<string> {
+  async appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: ModelRef }): Promise<string> {
     return this.appendEntry({
       type: "model_transcript",
       transcript: clone(transcript),

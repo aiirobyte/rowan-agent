@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { parseModelRef, registerModel } from "@rowan-agent/models";
-import type { LlmModelRef, Model, ModelCost, Protocol } from "@rowan-agent/models";
+import type { ModelRef, Model, ModelCost, Protocol } from "@rowan-agent/models";
 import type { WorkspacePaths } from "./workspace";
 
 export { parseModelRef } from "@rowan-agent/models";
@@ -194,7 +194,7 @@ function validateConfigFile(parsed: unknown, configFilename: string): AgentConfi
 // Default model resolution
 // ---------------------------------------------------------------------------
 
-export function resolveDefaultModel(config: AgentConfigFile): LlmModelRef | undefined {
+export function resolveDefaultModel(config: AgentConfigFile): ModelRef | undefined {
   // 1. Top-level model: override
   if (config.model) {
     return { provider: config.model.provider, id: config.model.id };

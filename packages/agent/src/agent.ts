@@ -7,7 +7,7 @@ import type {
   AgentEventListener,
   AgentMessage,
   BeforeToolCall,
-  LlmModelRef,
+  ModelRef,
   StreamFn,
   ToolResult,
   Unsubscribe,
@@ -29,17 +29,17 @@ type AgentCommonOptions = {
   afterToolCall?: AfterToolCall;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: Outcome) => Promise<void>;
-  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
+  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
 };
 
 type AgentModelOptions =
   | { model: ModelConfig; stream?: never }
-  | { model: LlmModelRef; stream: StreamFn };
+  | { model: ModelRef; stream: StreamFn };
 
 export type AgentOptions = AgentCommonOptions & AgentModelOptions;
 
 export type StreamAgentOptions = AgentCommonOptions & {
-  model: LlmModelRef;
+  model: ModelRef;
   stream: StreamFn;
 };
 

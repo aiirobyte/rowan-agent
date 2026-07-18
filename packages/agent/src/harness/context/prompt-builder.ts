@@ -1,5 +1,5 @@
 import type { AgentMessage, Skill } from "../../protocol";
-import type { LlmRequest, LlmMessage, LlmModelRef } from "@rowan-agent/models";
+import type { LlmRequest, LlmMessage, ModelRef } from "@rowan-agent/models";
 import { buildSystemPrompt } from "./system-prompt";
 import { messageContentText } from "../../types";
 
@@ -74,7 +74,7 @@ type ModelRequestInput = {
 
 export function buildModelRequest(
   input: ModelRequestInput,
-  options?: { model?: LlmModelRef },
+  options?: { model?: ModelRef },
 ): LlmRequest {
   const toolMeta = input.tools.map((t) => ({
     name: t.name,

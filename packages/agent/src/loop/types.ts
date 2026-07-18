@@ -3,7 +3,7 @@ import type {
   AgentMessage,
   AfterToolCall,
   BeforeToolCall,
-  LlmModelRef,
+  ModelRef,
   StreamFn,
   ToolCall,
   ToolResult,
@@ -44,7 +44,7 @@ export type SessionState = {
 };
 
 export type AgentConfig = {
-  model: LlmModelRef;
+  model: ModelRef;
   stream: StreamFn;
   context: AgentContext;
   sessionId?: string;
@@ -58,7 +58,7 @@ export type AgentConfig = {
   beforePhase?: BeforePhaseHook;
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
-  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
+  onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */

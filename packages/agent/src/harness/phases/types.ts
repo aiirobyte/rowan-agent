@@ -1,4 +1,4 @@
-import type { AgentMessage, LlmModelRef } from "@rowan-agent/models";
+import type { AgentMessage, ModelRef } from "@rowan-agent/models";
 import type { Tool, Skill } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
@@ -107,7 +107,7 @@ export interface Phase {
   /** PHASE.md body content */
   content: string;
   /** Model override for this phase (resolved from frontmatter) */
-  model?: LlmModelRef;
+  model?: ModelRef;
   /** ExtensionAPI factory function (default export pattern) */
   factory?: (api: ExtensionAPI) => Promise<void>;
   /** Legacy run function */

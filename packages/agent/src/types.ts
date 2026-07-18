@@ -24,7 +24,7 @@ export type { PhaseContext, PhaseState, PhaseOutput, PhaseRegistry } from "./har
 export type {
   AgentMessage,
   Skill,
-  LlmModelRef,
+  ModelRef,
   LlmModelUsage,
   LlmRequest,
   LlmStreamEvent,
