@@ -22,6 +22,12 @@ export type AgentRunState = "queued" | "running" | "suspended" | "completed" | "
 /** Opaque execution checkpoint owned by the Agent loop and persisted by Runtime. */
 export type AgentRunExecutionState = Readonly<Record<string, unknown>>;
 
+export type AgentInputRequest = {
+  phase: string;
+  prompt: string;
+  requestedAt: string;
+};
+
 export type RuntimeToolCallState = "queued" | "running" | "completed" | "failed" | "indeterminate";
 
 export type AgentRecord = {
@@ -63,6 +69,7 @@ export type AgentRunRecord = {
   leaseId?: LeaseId;
   outcome?: Outcome;
   suspensionReason?: string;
+  inputRequest?: AgentInputRequest;
   executionState?: AgentRunExecutionState;
   createdAt: string;
   updatedAt: string;

@@ -373,6 +373,7 @@ export class AgentRuntime {
     if (!this.bindings.has(agentId)) throw new Error(`Agent ${agentId} has no live Agent Binding.`);
     const enqueued = await this.stateStore.enqueueAgentInput({ agentId, input });
     await persist();
+    if (enqueued.resumed) this.notifyRun(enqueued.run);
     const run = createAgentRun({
       register: (handle) => this.registerRunHandle(enqueued.run.id, handle),
       getRun: (runId) => this.stateStore.getRun(runId),
@@ -424,10 +425,10 @@ export class AgentRuntime {
     let suspended = false;
     const suspendedSignal = new Promise<void>((resolve) => { suspendedResolve = resolve; });
     const control: AgentRunControl = {
-      suspend: async (reason, executionState) => {
+      suspend: async (reason, executionState, inputRequest) => {
         if (suspended) return;
         suspended = true;
-        const current = await this.stateStore.suspendRun({ runId: job.runId, reason, executionState });
+        const current = await this.stateStore.suspendRun({ runId: job.runId, reason, executionState, inputRequest });
         this.notifyRun(current);
         this.publishEvents();
         suspendedResolve?.();

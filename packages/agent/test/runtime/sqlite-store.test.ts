@@ -40,7 +40,33 @@ test("SqliteRuntimeStateStore persists records and leases across reopen", async 
     expect(recovered).toHaveLength(1);
     expect(await reopened.getRun(enqueued.run.id)).toMatchObject({ state: "queued" });
     expect(await reopened.getMessage(enqueued.message.id)).toMatchObject({ state: "queued" });
+    await reopened.leaseRun({
+      runId: enqueued.run.id,
+      workerId: "worker-2",
+      leaseDurationMs: 30_000,
+      now: new Date("2026-01-01T00:02:00.000Z"),
+    });
+    await reopened.suspendRun({
+      runId: enqueued.run.id,
+      reason: "Agent requested input.",
+      inputRequest: {
+        phase: "verify",
+        prompt: "Which verification environment should I use?",
+        requestedAt: "2026-01-01T00:02:01.000+00:00",
+      },
+    });
     reopened.close();
+
+    const suspended = new SqliteRuntimeStateStore(filename);
+    expect(await suspended.getRun(enqueued.run.id)).toMatchObject({
+      state: "suspended",
+      inputRequest: {
+        phase: "verify",
+        prompt: "Which verification environment should I use?",
+        requestedAt: "2026-01-01T00:02:01.000+00:00",
+      },
+    });
+    suspended.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -127,6 +127,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       suspended.state = "queued";
       suspended.messageId = messageId;
       delete suspended.suspensionReason;
+      delete suspended.inputRequest;
       suspended.updatedAt = timestamp;
       message.runId = suspended.id;
     }
@@ -231,6 +232,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const { timestamp } = now();
     run.state = "suspended";
     run.suspensionReason = input.reason;
+    if (input.inputRequest) run.inputRequest = clone(input.inputRequest);
     if (input.executionState) run.executionState = clone(input.executionState);
     delete run.leaseId;
     run.updatedAt = timestamp;
@@ -253,6 +255,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const state = input.state ?? "completed";
     run.state = state;
     run.outcome = clone(input.outcome);
+    delete run.inputRequest;
     delete run.executionState;
     delete run.leaseId;
     run.updatedAt = timestamp;
@@ -295,6 +298,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const { timestamp } = now();
     run.state = "failed";
     run.outcome = clone(input.outcome);
+    delete run.inputRequest;
     delete run.executionState;
     delete run.leaseId;
     run.updatedAt = timestamp;
@@ -319,6 +323,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const { timestamp } = now();
     run.state = "cancelled";
     run.outcome = clone(input.outcome);
+    delete run.inputRequest;
     delete run.executionState;
     delete run.leaseId;
     run.updatedAt = timestamp;

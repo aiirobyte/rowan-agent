@@ -4,7 +4,6 @@ import {
   InMemoryRuntimeStateStore,
   createMessage,
   type AgentContext,
-  type AgentEvent,
   type RuntimeEvent,
 } from "../../src";
 import Type from "typebox";
@@ -64,7 +63,7 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
   const events: RuntimeEvent[] = [];
   const stream: import("../../src").StreamFn = async function* (request) {
     if (request.messages.filter((message) => message.role === "user").length < 2) {
-      yield { type: "text_delta", text: "waiting", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "waiting" }] } };
+      yield { type: "text_delta", text: "Which deployment target should I use?", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Which deployment target should I use?" }] } };
       yield { type: "done" };
       return;
     }
@@ -86,11 +85,25 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
     } }));
     const first = await agent.send("need input");
     await waitFor(async () => (await stateStore.getRun(first.id))?.state === "suspended");
+    const suspended = await stateStore.getRun(first.id);
+    expect(suspended).toMatchObject({
+      state: "suspended",
+      inputRequest: {
+        phase: "plan",
+        prompt: "Which deployment target should I use?",
+      },
+    });
+    expect(first.inputRequest).toMatchObject({
+      phase: "plan",
+      prompt: "Which deployment target should I use?",
+    });
     await runtime.pauseAgent(agent.id);
     await runtime.resumeAgent(agent.id);
     const second = await agent.send("continue");
     expect(second.id).toBe(first.id);
     await second.result();
+    expect((await stateStore.getRun(first.id))?.inputRequest).toBeUndefined();
+    expect(first.inputRequest).toBeUndefined();
     expect(events.map((event) => event.kind)).toEqual(expect.arrayContaining(["run_suspended", "agent_paused", "agent_resumed"]));
   } finally {
     unsubscribe();
@@ -161,7 +174,7 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
   };
   const context = { ...createTestContext(), phases };
   const waitingStream: import("../../src").StreamFn = async function* () {
-    yield { type: "text_delta", text: "waiting", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "waiting" }] } };
+    yield { type: "text_delta", text: "Which target should I use?", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Which target should I use?" }] } };
     yield { type: "done" };
   };
   const firstRuntime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
@@ -172,6 +185,13 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
   const outcomes: string[] = [];
   const restarted = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
   try {
+    expect(await stateStore.getRun(first.id)).toMatchObject({
+      state: "suspended",
+      inputRequest: {
+        phase: "plan",
+        prompt: "Which target should I use?",
+      },
+    });
     const reconstructed = await restarted.reconstructAgent(agent.id, options({
       context,
       onOutcome: async (outcome) => { outcomes.push(outcome.message); },

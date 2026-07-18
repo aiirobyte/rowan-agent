@@ -40,6 +40,7 @@ import { snapshotMessage, snapshotMessages } from "./state";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
 import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
+import type { AgentInputRequest } from "../runtime/domain";
 
 // ============================================================================
 // Phase State Utilities
@@ -535,7 +536,17 @@ async function runPhaseLoop(
           previousPhaseMsgId = undefined;
           return completeRun(config, state, createOutcome.aborted());
         }
-        config.emit?.({ type: "user_prompt_requested", phase: currentPhaseId, ts: createTimestamp() });
+        const requestedAt = createTimestamp();
+        const inputRequest: AgentInputRequest = {
+          phase: currentPhaseId,
+          prompt: output.message,
+          requestedAt,
+        };
+        config.emit?.({
+          type: "user_prompt_requested",
+          phase: currentPhaseId,
+          ts: requestedAt,
+        });
         state.status = "suspended";
         state.continuation = {
           isContinuing,
@@ -544,7 +555,7 @@ async function runPhaseLoop(
           pendingInstruction,
           previousPhaseMessageId: previousPhaseMsgId,
         };
-        const userMessages = await config.waitForInput(state);
+        const userMessages = await config.waitForInput(state, inputRequest);
         state.status = "running";
         const abortResult = LoopGuard.checkAbort(config.signal);
         if (abortResult.stopReason !== "none") {

@@ -1,6 +1,7 @@
 import type { AgentMessage, Outcome, ToolResult } from "../protocol";
 import type {
   AgentId,
+  AgentInputRequest,
   AgentRecord,
   AgentRunRecord,
   AgentRunId,
@@ -75,6 +76,7 @@ export type RenewLeaseInput = {
 export type SuspendRunInput = {
   runId: AgentRunId;
   reason?: string;
+  inputRequest?: AgentInputRequest;
   executionState?: import("./domain").AgentRunExecutionState;
 };
 

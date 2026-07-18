@@ -64,6 +64,7 @@ export { InMemoryRuntimeStateStore } from "./runtime/memory-store";
 export { SqliteRuntimeStateStore } from "./runtime/sqlite-store";
 export type {
   AgentId,
+  AgentInputRequest,
   AgentRunExecutionState,
   AgentRunId,
   AgentRunRecord,

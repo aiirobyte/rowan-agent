@@ -211,6 +211,11 @@ console.log((await second.result()).message);
 If a Run is suspended waiting for input, the next `send()` to that Agent resumes
 the same Run instead of creating a second one.
 
+Suspended Runs persist the current input request in `AgentRunRecord.inputRequest`
+so a reconstructed Runtime can show the question without replaying a transient
+Agent Event. The request contains its phase, prompt, and timestamp; it is cleared
+when the Run resumes.
+
 ### Updating Runtime Resources
 
 Resources are fixed for a live Agent Binding. Apply a new model, prompt, Tool
@@ -236,11 +241,18 @@ durable. The handle exposes cached state for synchronous inspection and can
 refresh from the Runtime Store when needed.
 
 ```ts
+type AgentInputRequest = {
+  phase: string;
+  prompt: string;
+  requestedAt: string;
+};
+
 class AgentRun {
   readonly id: AgentRunId;
   readonly messageId: string;
   readonly status: AgentRunState;
   readonly state: AgentRunState; // alias of status
+  readonly inputRequest?: AgentInputRequest;
 
   getStatus(): Promise<AgentRunState>;
   subscribe(listener: AgentRunListener): () => void;

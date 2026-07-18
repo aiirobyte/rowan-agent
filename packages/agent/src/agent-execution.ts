@@ -34,7 +34,7 @@ import type {
 } from "./types";
 import type { ModelTranscript } from "./protocol/turn";
 import { createId } from "./utils";
-import type { AgentId, AgentRunExecutionState } from "./runtime/domain";
+import type { AgentId, AgentInputRequest, AgentRunExecutionState } from "./runtime/domain";
 import type { AgentRunControl, StreamAgentOptions } from "./agent";
 
 type AgentExecutionOptions = StreamAgentOptions & {
@@ -48,7 +48,7 @@ type AgentExecutionOptions = StreamAgentOptions & {
 export type RunOptions = Partial<AgentExecutionOptions>;
 
 type RuntimeRunHooks = {
-  onSuspend?: (reason?: string, state?: SessionState) => Promise<void> | void;
+  onSuspend?: (reason?: string, state?: SessionState, inputRequest?: AgentInputRequest) => Promise<void> | void;
 };
 
 type PersistedExecutionState = {
@@ -189,7 +189,11 @@ export class AgentExecution {
     this.runtimeRunId = runId;
     this.options.sessionState = executionState ? restoreSessionState(executionState) : undefined;
     const internal: RuntimeRunHooks = {
-      onSuspend: (reason, state) => control.suspend(reason, state ? snapshotExecutionState(state) : undefined),
+      onSuspend: (reason, state, inputRequest) => control.suspend(
+        reason,
+        state ? snapshotExecutionState(state) : undefined,
+        inputRequest,
+      ),
     };
     try {
       return (await this.runWithMessage(input, undefined, internal)).outcome;
@@ -479,7 +483,7 @@ export class AgentExecution {
 
     const abortController = new AbortController();
     let suspensionRequested = false;
-    const waitForInput = (state?: SessionState) => {
+    const waitForInput = (state?: SessionState, inputRequest?: AgentInputRequest) => {
       const waiting = new Promise<AgentMessage[]>((resolve) => {
         const activeRun = this.activeRun!;
         activeRun.resume = (messages) => {
@@ -489,7 +493,7 @@ export class AgentExecution {
       });
       if (!suspensionRequested) {
         suspensionRequested = true;
-        void hooks.onSuspend?.("Agent requested input.", state);
+        void hooks.onSuspend?.("Agent requested input.", state, inputRequest);
       }
       return waiting;
     };

@@ -20,9 +20,11 @@ import {
   type AgentRun,
   type AgentId,
   type AgentContext,
+  type AgentInputRequest,
   type LoadedExtension,
   type ModelRef,
   type PhaseRegistry,
+  type AgentRunRecord,
 } from "@rowan-agent/agent";
 import {
   pinoAgentEventLogger,
@@ -338,6 +340,11 @@ type CliAgentListItem = {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  run?: {
+    id: string;
+    state: AgentRunRecord["state"];
+    inputRequest?: AgentInputRequest;
+  };
 };
 type AgentResources = {
   skills: AgentContext["skills"];
@@ -347,6 +354,7 @@ type AgentResources = {
 type ConfiguredAgent = {
   agent: Agent;
   configFile?: AgentConfigFile;
+  pendingRun?: AgentRunRecord;
   close(): Promise<void>;
 };
 
@@ -434,8 +442,13 @@ async function runListCommand(_args: CliArgs): Promise<void> {
   );
   const stateStore = new SqliteRuntimeStateStore(join(workspace.rowanDir, "runtime.sqlite"));
   try {
+    const runs = await stateStore.listRuns();
     const agents = (await stateStore.listAgents()).map<CliAgentListItem>((agent) => {
       const session = sessions.get(agent.sessionId);
+      const run = runs
+        .filter((candidate) => candidate.agentId === agent.id)
+        .filter((candidate) => candidate.state === "suspended")
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
       return {
         id: agent.id,
         sessionId: agent.sessionId,
@@ -444,6 +457,13 @@ async function runListCommand(_args: CliArgs): Promise<void> {
         createdAt: agent.createdAt,
         updatedAt: agent.updatedAt,
         messageCount: session?.messageCount ?? 0,
+        ...(run ? {
+          run: {
+            id: run.id,
+            state: run.state,
+            ...(run.inputRequest ? { inputRequest: run.inputRequest } : {}),
+          },
+        } : {}),
       };
     }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     console.log(formatJsonOutput(agents));
@@ -551,9 +571,11 @@ async function createConfiguredAgent(
     const agent = args.agentId
       ? await runtime.reconstructAgent(args.agentId, options)
       : await runtime.createAgent(options);
+    const pendingRun = (await stateStore.listRuns({ agentId: agent.id, states: ["suspended"] }))[0];
     return {
       agent,
       configFile,
+      ...(pendingRun ? { pendingRun } : {}),
       close: async () => {
         try {
           await runtime!.stop();
@@ -706,6 +728,12 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   };
 
   printSessionOnce();
+
+  if (configured.pendingRun?.inputRequest) {
+    const request = configured.pendingRun.inputRequest;
+    console.error(`Suspended Run id: ${configured.pendingRun.id}`);
+    console.error(`Input requested [${request.phase}]: ${request.prompt}`);
+  }
 
   let activeRun: Promise<void> | undefined;
   let activeAgentRun: AgentRun | undefined;

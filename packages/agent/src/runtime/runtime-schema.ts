@@ -31,6 +31,7 @@ const RUNTIME_SCHEMA_SQL = `
       lease_id TEXT,
       outcome_json TEXT,
       suspension_reason TEXT,
+      input_request_json TEXT,
       execution_state_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

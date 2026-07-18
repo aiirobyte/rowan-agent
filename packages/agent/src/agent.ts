@@ -12,7 +12,7 @@ import type {
   ToolResult,
   Unsubscribe,
 } from "./types";
-import type { AgentId, AgentRunId, AgentRunExecutionState } from "./runtime/domain";
+import type { AgentId, AgentInputRequest, AgentRunId, AgentRunExecutionState } from "./runtime/domain";
 import type { AgentRun } from "./runtime/agent-run";
 import type { RuntimeToolExecutionInput } from "./runtime/tool-runtime";
 import type { Outcome } from "./protocol";
@@ -44,7 +44,7 @@ export type StreamAgentOptions = AgentCommonOptions & {
 };
 
 export type AgentRunControl = {
-  suspend(reason?: string, state?: AgentRunExecutionState): Promise<void>;
+  suspend(reason?: string, state?: AgentRunExecutionState, inputRequest?: AgentInputRequest): Promise<void>;
 };
 
 const AGENT_CONSTRUCTION = Symbol("rowan.agent.construction");

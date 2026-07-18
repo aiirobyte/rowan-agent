@@ -12,6 +12,7 @@ import type {
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
+import type { AgentInputRequest } from "../runtime/domain";
 
 export type BeforePhaseHook = (phaseId: string, input: PhaseContext) => Promise<BeforePhaseHookResult>;
 export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;
@@ -71,7 +72,7 @@ export type AgentConfig = {
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */
-  waitForInput?: (state?: SessionState) => Promise<AgentMessage[]>;
+  waitForInput?: (state?: SessionState, inputRequest?: AgentInputRequest) => Promise<AgentMessage[]>;
 };
 
 

@@ -1,5 +1,6 @@
 import type { Outcome } from "../protocol";
 import type {
+  AgentInputRequest,
   AgentRunRecord,
   AgentRunId,
   AgentRunState,
@@ -59,6 +60,10 @@ export class AgentRun implements RuntimeRunHandle {
 
   get state(): AgentRunState {
     return this.current.state;
+  }
+
+  get inputRequest(): AgentInputRequest | undefined {
+    return this.current.inputRequest ? structuredClone(this.current.inputRequest) : undefined;
   }
 
   async getStatus(): Promise<AgentRunState> {

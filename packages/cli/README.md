@@ -18,7 +18,7 @@ bun run rowan "what files are in this directory?"
 # Reconstruct an Agent by its durable identity
 bun run rowan --agent agt_12345678 "continue the previous topic"
 
-# Discover Agent IDs and their Session metadata
+# Discover Agent IDs, Session metadata, and active Run status
 bun run rowan list
 
 # Load skills or override the model
@@ -48,7 +48,7 @@ bun run rowan config
 | Command | Description |
 |---|---|
 | `rowan config` | Print resolved configuration as redacted JSON |
-| `rowan list` | List durable Agents with Agent ID, Session ID, and metadata |
+| `rowan list` | List durable Agents with Agent ID, Session ID, metadata, and active Run status |
 
 When no command is given, positional arguments are joined as Agent Input.
 
@@ -59,8 +59,9 @@ When no command is given, positional arguments are joined as Agent Input.
 | `:session` | Print the bound Session ID |
 | `:exit` / `:quit` | Exit and abort an active Agent Run |
 
-The CLI prints Agent, Session, and Message IDs to stderr. Assistant output goes
-to stdout. Runtime State is stored at `.rowan/runtime.sqlite`, Sessions at
+The CLI prints Agent, Session, and Message IDs to stderr. When reconstructing an
+Agent with a suspended Run, it also prints the persisted phase and input question.
+Assistant output goes to stdout. Runtime State is stored at `.rowan/runtime.sqlite`, Sessions at
 `.rowan/sessions/`, and logs at `.rowan/runs/`.
 
 ## Runtime Wiring

@@ -55,6 +55,11 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     const suspended = await store.suspendRun({
       runId: enqueued.run.id,
       reason: "waiting for human input",
+      inputRequest: {
+        phase: "plan",
+        prompt: "Which deployment target should I use?",
+        requestedAt: "2026-01-01T00:00:01.000+00:00",
+      },
       executionState: {
         currentPhase: "plan",
         attempt: 1,
@@ -71,6 +76,15 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect(suspended.state).toBe("suspended");
     expect(suspended.leaseId).toBeUndefined();
     expect(suspended.executionState?.currentPhase).toBe("plan");
+    expect(suspended.inputRequest).toEqual({
+      phase: "plan",
+      prompt: "Which deployment target should I use?",
+      requestedAt: "2026-01-01T00:00:01.000+00:00",
+    });
+    expect(await store.getRun(enqueued.run.id)).toMatchObject({
+      state: "suspended",
+      inputRequest: suspended.inputRequest,
+    });
 
     await expect(
       store.completeRun({
