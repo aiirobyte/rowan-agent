@@ -271,6 +271,10 @@ export class AgentRuntime {
     this.publishEvents();
   }
 
+  async getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined> {
+    return this.stateStore.getRun(runId);
+  }
+
   async abortRun(runId: AgentRunId, reason = "Agent Run aborted by caller."): Promise<void> {
     const run = await this.stateStore.getRun(runId);
     if (!run || ["completed", "failed", "cancelled"].includes(run.state)) return;

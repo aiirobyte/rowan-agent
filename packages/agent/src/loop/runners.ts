@@ -9,7 +9,7 @@ import type {
   ToolResult,
 } from "../types";
 import { createMessage } from "../types";
-import { createTimestamp } from "../utils";
+import { createId, createTimestamp } from "../utils";
 import type { SessionState, AgentConfig } from "./types";
 
 // Execution types (loop-level)
@@ -426,6 +426,10 @@ async function runPhaseLoop(
       messages: messageManager.visible(),
       tools: phaseTools,
       skills: phaseSkills,
+      invocation: {
+        mode: "serial",
+        instanceId: currentPhaseId,
+      },
       state: {
         current: currentPhaseId,
         available: Array.from(registry.phases.keys()),
@@ -559,6 +563,8 @@ async function runPhaseLoop(
 
       // Build instance IDs: unique phases get plain id, duplicates get #1, #2, ...
       const instanceIds = buildInstanceIds(routeDecision.decision.map(t => t.phase));
+      const groupId = createId("phase-group");
+      const count = routeDecision.decision.length;
 
       // Launch all targets concurrently — each as an independent execution
       for (let i = 0; i < routeDecision.decision.length; i++) {
@@ -571,7 +577,20 @@ async function runPhaseLoop(
         const context = pt.isolated ? [] : contextSnapshot;
         const payload = target.payload !== undefined ? normalizePayload(target.payload) : undefined;
 
-        const promise = executeParallelPhase(config, state, registry, pt, payload, context, availablePhases, currentPhaseId);
+        const promise = executeParallelPhase(
+          config,
+          state,
+          registry,
+          pt,
+          payload,
+          context,
+          availablePhases,
+          instanceId,
+          groupId,
+          i,
+          count,
+          currentPhaseId,
+        );
         parallelTasks.set(instanceId, { promise, phaseId: target.phase });
       }
 
@@ -918,7 +937,11 @@ async function executeParallelPhase(
   payload: unknown,
   context: AgentMessage[],
   availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
-  currentPhaseId: string,
+  instanceId: string,
+  groupId: string,
+  index: number,
+  count: number,
+  sourcePhaseId: string,
 ): Promise<ParallelResult> {
   const messages = [...context];
 
@@ -941,6 +964,14 @@ async function executeParallelPhase(
     messages,
     tools: phaseTools,
     skills: phaseSkills,
+    invocation: {
+      mode: "parallel",
+      instanceId,
+      groupId,
+      index,
+      count,
+      sourcePhaseId,
+    },
     state: {
       current: phase.id,
       available: Array.from(registry.phases.keys()),
@@ -958,7 +989,7 @@ async function executeParallelPhase(
     ? undefined
     : injectPhaseContent(
         phase,
-        { results: payload !== undefined ? [{ name: currentPhaseId, output: payload }] : [] },
+        { results: payload !== undefined ? [{ name: sourcePhaseId, output: payload }] : [] },
         messageManager,
       );
 
@@ -977,7 +1008,7 @@ async function executeParallelPhase(
     ? normalizePayload(decision.decision[0].payload)
     : output.payload);
 
-  return { instanceId: "", phaseId: phase.id, payload: resultPayload, content: output.message };
+  return { instanceId, phaseId: phase.id, payload: resultPayload, content: output.message };
 }
 
 async function waitForBackgroundTasks(

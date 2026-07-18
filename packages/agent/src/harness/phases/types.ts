@@ -26,6 +26,20 @@ export interface PhaseState {
   payload?: unknown;
 }
 
+export type PhaseInvocation =
+  | {
+      mode: "serial";
+      instanceId: string;
+    }
+  | {
+      mode: "parallel";
+      instanceId: string;
+      groupId: string;
+      index: number;
+      count: number;
+      sourcePhaseId: string;
+    };
+
 /** Everything a phase needs to execute */
 export interface PhaseContext {
   systemPrompt: string;
@@ -36,6 +50,8 @@ export interface PhaseContext {
   skills: Skill[];
   /** Phase machine state */
   state: PhaseState;
+  /** Identity and dispatch metadata for this phase execution */
+  readonly invocation: PhaseInvocation;
   /** Additional guideline bullets appended to the system prompt */
   promptGuidelines?: string[];
   /** Text to append after the system prompt */
@@ -110,7 +126,7 @@ export interface Phase {
   model?: ModelRef;
   /** ExtensionAPI factory function (default export pattern) */
   factory?: (api: ExtensionAPI) => Promise<void>;
-  /** Legacy run function */
+  /** Direct run function */
   run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 }
 

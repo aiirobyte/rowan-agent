@@ -241,7 +241,7 @@ export async function run(context, execution) {
 
 ```typescript
 type PhaseRun = (
-  context: PhaseContext,    // systemPrompt, messages, tools, skills, state
+  context: PhaseContext,    // systemPrompt, messages, tools, skills, state, invocation
   execution: PhaseExecution, // execution utilities
 ) => Promise<PhaseOutput | void>;
 ```
@@ -401,6 +401,32 @@ When parallel phases complete, the loop collects all their outputs and stashes t
 
 The `<instruction>` field appears only when the `route` tool call included one (shared guidance for all targets). The `<phase name="...">` entries use the parallel instance id: unique phases get plain id (`lint`), duplicates get `lint#1`, `lint#2`, etc. The entry phase can then `route` onward (e.g. to `stop`).
 
+### Invocation Metadata
+
+Every `PhaseContext` includes an `invocation` discriminated union. A serial phase receives its current phase ID as `instanceId`:
+
+```typescript
+{
+  mode: "serial",
+  instanceId: "review",
+}
+```
+
+Parallel phases additionally receive batch metadata:
+
+```typescript
+{
+  mode: "parallel",
+  instanceId: "review#1",
+  groupId: "phase-group_12345678",
+  index: 0,
+  count: 2,
+  sourcePhaseId: "dispatch",
+}
+```
+
+All invocations in one parallel dispatch share the same opaque `groupId`. `index` is the zero-based position in the route decision array, `count` is the number of decisions in that batch, and `sourcePhaseId` identifies the phase that dispatched the batch. Narrow on `invocation.mode` before reading parallel-only fields.
+
 ---
 
 ## Inter-Phase Data
@@ -491,9 +517,26 @@ interface PhaseContext {
   tools: Tool[];               // phase-filtered tools
   skills: Skill[];             // phase-filtered skills
   state: PhaseState;           // { current, available, iterations, payload }
+  readonly invocation: PhaseInvocation;
   promptGuidelines?: string[];
   appendSystemPrompt?: string;
 }
+```
+
+```typescript
+type PhaseInvocation =
+  | {
+      mode: "serial";
+      instanceId: string;
+    }
+  | {
+      mode: "parallel";
+      instanceId: string;
+      groupId: string;
+      index: number;
+      count: number;
+      sourcePhaseId: string;
+    };
 ```
 
 ### PhaseOutput

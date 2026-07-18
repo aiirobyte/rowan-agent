@@ -43,6 +43,7 @@ export type {
   PhaseRegistry,
   Phase,
   PhaseContext,
+  PhaseInvocation,
   PhaseState,
   PhaseOutput,
 } from "./harness/phases/types";
@@ -66,6 +67,7 @@ export { SqliteRuntimeStateStore } from "./runtime/sqlite-store";
 export type {
   AgentId,
   AgentRunId,
+  AgentRunRecord,
   AgentRunState,
   RuntimeEvent,
   RuntimeEventCursor,

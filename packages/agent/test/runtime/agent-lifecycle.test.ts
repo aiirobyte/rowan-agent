@@ -111,7 +111,7 @@ test("Agent.send persists a Run before returning and resolves through AgentRun",
     expect(outcome.message).toContain("Direct response");
     expect(run.status).toBe("completed");
 
-    const persisted = await stateStore.getRun(run.id);
+    const persisted = await runtime.getRun(run.id);
     expect(persisted).toMatchObject({ id: run.id, state: "completed", outcome: { message: outcome.message } });
   } finally {
     await runtime.stop();

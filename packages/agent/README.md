@@ -89,6 +89,7 @@ class AgentRuntime {
   reconstructAgent(agentId: AgentId, options: AgentOptions): Promise<Agent>;
   pauseAgent(agentId: AgentId): Promise<void>;
   resumeAgent(agentId: AgentId): Promise<void>;
+  getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
   abortRun(runId: AgentRunId, reason?: string): Promise<void>;
   consumeEvents(
     consumerId: string,

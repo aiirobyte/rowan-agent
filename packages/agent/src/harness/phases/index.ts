@@ -2,6 +2,7 @@ export type {
   PhaseFrontmatter,
   Phase,
   PhaseContext,
+  PhaseInvocation,
   PhaseRegistry,
 } from "./types";
 
