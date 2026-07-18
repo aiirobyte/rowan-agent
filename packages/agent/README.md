@@ -75,7 +75,6 @@ Events, and Tool Call control. Always stop it during host shutdown.
 type AgentRuntimeOptions = {
   stateStore: InMemoryRuntimeStateStore | SqliteRuntimeStateStore;
   sessionProvider?: InMemorySessionStore | JsonlSessionStore;
-  factories?: ReadonlyMap<string, AgentFactory> | Readonly<Record<string, AgentFactory>>;
   toolPolicy?: ToolRuntimePolicy;
   maxConcurrentRuns?: number;
   maxInfrastructureAttempts?: number;
@@ -85,7 +84,7 @@ type AgentRuntimeOptions = {
 
 class AgentRuntime {
   static start(options: AgentRuntimeOptions): Promise<AgentRuntime>;
-  createAgent(options: AgentCreateOptions): Promise<Agent>;
+  createAgent(options: AgentOptions): Promise<Agent>;
   reconstructAgent(agentId: AgentId, options: AgentOptions): Promise<Agent>;
   pauseAgent(agentId: AgentId): Promise<void>;
   resumeAgent(agentId: AgentId): Promise<void>;
@@ -124,35 +123,20 @@ The Runtime renews active leases and retries them up to
 `maxInfrastructureAttempts`; exhausted work fails and its triggering Message is
 dead-lettered.
 
-### Factory Recovery
+### Process Recovery
 
-An optional opaque Factory ID lets the Runtime reconstruct active Agents after
-a restart. The Factory supplies current executable resources; Rowan persists
-the Agent and Session identities, not model clients, Tools, Phases, or
-Extensions.
+Runtime startup recovers abandoned Leases into durable queued work without
+constructing Agent Bindings. The host supplies its current executable resources
+when it reconstructs an Agent:
 
 ```ts
-const factoryId = "coding-agent";
-const factories = new Map([
-  [factoryId, async () => currentAgentOptions],
-]);
-
-const runtime = await AgentRuntime.start({
-  stateStore,
-  sessionProvider,
-  factories,
-});
-
-const agent = await runtime.createAgent({
-  ...currentAgentOptions,
-  factoryId,
-});
+const runtime = await AgentRuntime.start({ stateStore, sessionProvider });
+const agent = await runtime.reconstructAgent(agentId, currentAgentOptions);
 ```
 
-On the next `AgentRuntime.start()` with the same durable adapters and Factory,
-the active Agent is reconstructed with its original Agent ID and Session ID.
-Missing or declining Factories leave the Agent unbound and emit a durable
-Runtime Event.
+Reconstruction preserves the Agent ID and Session ID. Establishing the Binding
+automatically schedules queued Runs. A suspended Agent may remain unbound until
+the host has new input, then reconstruct before calling `send()`.
 
 ## Agent
 
@@ -207,13 +191,6 @@ type AgentOptions = AgentCommonOptions & (
   | { model: ModelConfig; stream?: never }
   | { model: ModelRef; stream: StreamFn }
 );
-
-type AgentCreateOptions = AgentOptions & {
-  // Seeds the Session; it does not schedule a Run.
-  input?: string;
-  // Enables automatic reconstruction through a registered Factory.
-  factoryId?: string;
-};
 ```
 
 ### Conversation Continuation

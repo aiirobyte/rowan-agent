@@ -30,7 +30,7 @@ function sessions(): SessionManagerProvider {
   };
 }
 
-function options(input = "") {
+function options() {
   const context: AgentContext = {
     systemPrompt: "Runtime-owned lifecycle test",
     messages: [],
@@ -41,7 +41,6 @@ function options(input = "") {
     context,
     model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
-    input,
   };
 }
 
@@ -60,7 +59,7 @@ test("Runtime creates an Agent that accepts durable input", async () => {
   });
 
   try {
-    const agent = await runtime.createAgent(options("hello"));
+    const agent = await runtime.createAgent(options());
     expect(agent.id).toMatch(/^agt_/);
     expect(agent.sessionId).toMatch(/^ses_/);
 
@@ -75,11 +74,38 @@ test("Runtime creates an Agent that accepts durable input", async () => {
   }
 });
 
+test("first send executes its input without creation-time duplication", async () => {
+  const requests: Parameters<StreamFn>[0][] = [];
+  const stream: StreamFn = async function* (request, streamOptions) {
+    requests.push(request);
+    yield* scriptedStream(request, streamOptions);
+  };
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: sessions(),
+  });
+
+  try {
+    const legacyOptions = { ...options(), input: "first input", stream };
+    const agent = await runtime.createAgent(legacyOptions);
+    expect(requests).toHaveLength(0);
+
+    await (await agent.send("first input")).result();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.messages.filter((message) => (
+      message.role === "user" && message.content === "first input"
+    ))).toHaveLength(1);
+  } finally {
+    await runtime.stop();
+  }
+});
+
 test("Runtime reconstructs an existing Agent by Agent ID", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const sessionManager = sessions();
   const firstRuntime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
-  const created = await firstRuntime.createAgent(options("hello"));
+  const created = await firstRuntime.createAgent(options());
   const agentId = created.id;
   const sessionId = created.sessionId;
   await firstRuntime.stop();

@@ -18,7 +18,7 @@ Rowan needs an embedded, durable Runtime behind the `Agent` SDK. It must preserv
 4. Let different Agents run concurrently without coupling their Agent Runs.
 5. Persist Runtime Messages, Agent Runs, leases, control state, Runtime Events, and Tool Calls for recovery.
 6. Resume suspended Runs after human input without retaining scheduler or model capacity while waiting.
-7. Restore unfinished Agents after process restart through host-provided Agent Factories.
+7. Restore unfinished Agents after process restart when hosts reconstruct their Bindings with current Agent Options.
 8. Centralize Tool permission enforcement, rate limiting, abort, and uncertain-side-effect handling.
 9. Keep Rowan independent of host business concepts.
 
@@ -57,7 +57,6 @@ Scheduler
 const runtime = await AgentRuntime.start({
   stateStore,
   sessionProvider,
-  factories,
   toolPolicy,
 });
 
@@ -91,15 +90,15 @@ The Runtime must be explicitly started before Agent creation. A second Runtime s
 
 Session Manager continues to own JSONL conversation records. A Session contains messages, model transcripts, outcomes, and the information needed to rebuild model-visible conversation context, but it does not own mailbox, scheduling, delivery, or business state.
 
-Agent reconstruction continues writing to the original Session ID. The caller or Agent Factory supplies current model, System Prompt, Tools, Skills, Phases, and host Context; Rowan does not serialize executable definitions or pin a definition version in the Session.
+Agent reconstruction continues writing to the original Session ID. The caller supplies current model, System Prompt, Tools, Skills, Phases, and host Context through `currentOptions`; Rowan does not serialize executable definitions or pin a definition version in the Session.
 
-## Agent and Factory Registries
+## Agent Registry and Reconstruction
 
 The live Agent Registry is private to the Runtime. Successful Agent creation or reconstruction automatically binds the in-memory object by Agent ID; there is no public `bind()` or `registerAgent()` lifecycle step.
 
-The durable Agent record contains at least Agent ID, Session ID, opaque Factory ID, lifecycle state, and timestamps. Hosts register Factories by Factory ID during Runtime startup. Rowan treats Factory IDs and Agent IDs as opaque and does not inspect their business meaning.
+The durable Agent record contains Agent ID, Session ID, lifecycle state, and timestamps. Agent Options remain process-local because they may contain executable model, Tool, Phase, Extension, and callback definitions; Rowan does not persist or infer them.
 
-On restart, the Runtime uses Factory ID to request current Agent construction options, enters the same reconstruction path used explicitly, restores the original Session, and binds the new object to the original Agent ID. The host stores its own business-object-to-Agent-ID associations. A missing Factory or host association leaves the Agent unbound and emits an actionable Runtime Event rather than guessing.
+On restart, the Runtime recovers abandoned Leases into durable queued work without synthesizing Agent Bindings. The host calls `reconstructAgent(agentId, currentOptions)` for an Agent it can currently construct; reconstruction restores the original Session and establishes the Binding under the original Agent ID. Establishing an active Binding automatically schedules that Agent's queued Runs. A suspended Agent may remain unbound until the host has new input, then reconstruct before `send()` resumes the same Run.
 
 ## Runtime Messages
 
@@ -148,8 +147,8 @@ The host chooses the Runtime Store location. A typical embedder may use one glob
 ## Functional Requirements
 
 1. `AgentRuntime.start()` starts exactly one Runtime for the current process and validates all required adapters.
-2. `AgentRuntime.createAgent()` asynchronously creates an Agent ID, Session, durable Agent record, and private Agent Binding.
-3. `AgentRuntime.reconstructAgent()` requires an existing Agent ID and Session, restores the same IDs, and rejects a duplicate Agent Binding.
+2. `AgentRuntime.createAgent(options)` asynchronously creates an Agent ID, Session, durable Agent record, and private Agent Binding without enqueuing Agent Input or creating a Run.
+3. `AgentRuntime.reconstructAgent(agentId, currentOptions)` requires an existing Agent ID and Session, restores the same IDs using caller-supplied current Agent Options, establishes the private Binding, schedules existing queued Runs, and rejects a duplicate live Binding.
 4. Public direct `new Agent()` construction, static Agent lifecycle factories, and direct execution methods are removed.
 5. Session persistence callbacks and reconstruction currently implemented by embedders move behind the Runtime-owned Agent lifecycle.
 6. `Agent.send()` durably enqueues Agent Input and creates or resumes an Agent Run before returning its handle.
@@ -160,8 +159,8 @@ The host chooses the Runtime Store location. A typical embedder may use one glob
 11. Runtime Commands preempt queued or active work according to their control semantics.
 12. Runtime Messages are delivered at least once and deduplicated by stable identity.
 13. Scheduler retries only explicit Infrastructure Failures, renews active Leases, and atomically dead-letters exhausted work.
-14. Factory recovery uses opaque Agent and Factory IDs without Session-ID pattern matching.
-15. Factory recovery uses current host configuration and never serializes executable Agent definitions.
+14. Runtime startup recovers abandoned Leases without constructing Agent Bindings or serializing executable Agent definitions.
+15. Hosts explicitly reconstruct Agent Bindings with current Agent Options; suspended Agents may defer reconstruction until new input arrives.
 16. Runtime control state and Session conversation state remain logically and physically separate.
 17. Runtime Events needed for recovery are durable; consumer Checkpoints advance only after successful delivery; Stream Events remain transient.
 18. Every Tool Call is authorized and observed by Tool Runtime before adapter execution.
@@ -174,7 +173,7 @@ The host chooses the Runtime Store location. A typical embedder may use one glob
 
 - An embedder can create and reconstruct an Agent, suspend and resume its Run, abort work, and restore execution without an external AgentHost.
 - Two Agents can execute concurrently while two Runs for the same Agent cannot.
-- Killing and restarting the host leaves queued and suspended work recoverable through registered Factories.
+- Killing and restarting the host leaves queued and suspended work recoverable after the host reconstructs the Agent Binding with current Agent Options.
 - Re-delivering a completed Message does not re-run the completed Agent Run.
 - A Tool Call interrupted after a potentially completed side effect becomes indeterminate rather than executing again.
 - Existing Agents reconstruct by Agent ID, retain their original Session IDs, and use current caller-provided capabilities.

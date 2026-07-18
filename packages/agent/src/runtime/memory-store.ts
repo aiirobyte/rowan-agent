@@ -72,7 +72,6 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const agent: AgentRecord = {
       id: createId("agt") as AgentId,
       sessionId: input.sessionId,
-      ...(input.factoryId ? { factoryId: input.factoryId } : {}),
       state: "active",
       createdAt: timestamp,
       updatedAt: timestamp,

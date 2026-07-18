@@ -1,5 +1,5 @@
 export { Agent } from "./agent";
-export type { AgentOptions, AgentCreateOptions } from "./agent";
+export type { AgentOptions } from "./agent";
 export type { ModelConfig } from "@rowan-agent/models";
 
 export { createMessage } from "./types";
@@ -54,8 +54,6 @@ export type { ExecutionTurn, Outcome, ModelTranscript } from "./protocol";
 
 export { AgentRuntime } from "./runtime/agent-runtime";
 export type {
-  AgentFactory,
-  AgentFactoryIdentity,
   AgentRuntimeOptions,
   RuntimeEventDisposition,
   RuntimeEventListener,

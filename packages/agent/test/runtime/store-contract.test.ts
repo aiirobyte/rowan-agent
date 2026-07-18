@@ -8,10 +8,7 @@ import {
 export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateStore): void {
   test("creates opaque Agents and atomically enqueues Agent Input with a Run", async () => {
     const store = createStore();
-    const agent = await store.createAgent({
-      sessionId: "session-1",
-      factoryId: "factory-test",
-    });
+    const agent = await store.createAgent({ sessionId: "session-1" });
 
     const enqueued = await store.enqueueAgentInput({
       agentId: agent.id,

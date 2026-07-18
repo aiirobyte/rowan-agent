@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   AgentRuntime,
   InMemoryRuntimeStateStore,
-  type AgentCreateOptions,
+  type AgentOptions,
   type ModelConfig,
 } from "../../src";
 import { InMemorySessionStore } from "../../src/harness/session/store";
@@ -122,7 +122,7 @@ test("AgentRuntime rejects a complete model config combined with a custom stream
     context: createTestContext(),
     model,
     stream: async function* () { yield { type: "done" }; },
-  } as unknown as AgentCreateOptions;
+  } as unknown as AgentOptions;
 
   try {
     await expect(runtime.createAgent(invalidOptions))

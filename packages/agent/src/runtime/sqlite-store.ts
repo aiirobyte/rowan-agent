@@ -41,7 +41,6 @@ import { initializeRuntimeSchema } from "./runtime-schema";
 type AgentRow = {
   id: string;
   session_id: string;
-  factory_id: string | null;
   state: AgentRecord["state"];
   created_at: string;
   updated_at: string;
@@ -158,15 +157,14 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     const agent: AgentRecord = {
       id: createId("agt") as AgentId,
       sessionId: input.sessionId,
-      ...(input.factoryId ? { factoryId: input.factoryId } : {}),
       state: "active",
       createdAt: timestamp,
       updatedAt: timestamp,
     };
     const create = this.database.transaction(() => {
       this.database.run(
-        "INSERT INTO agents (id, session_id, factory_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-        [agent.id, agent.sessionId, agent.factoryId ?? null, agent.state, agent.createdAt, agent.updatedAt],
+        "INSERT INTO agents (id, session_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        [agent.id, agent.sessionId, agent.state, agent.createdAt, agent.updatedAt],
       );
       this.recordEvent("agent_created", { agentId: agent.id });
     });
@@ -715,7 +713,6 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     return {
       id: row.id as AgentId,
       sessionId: row.session_id,
-      ...(row.factory_id ? { factoryId: row.factory_id as AgentRecord["factoryId"] } : {}),
       state: row.state,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

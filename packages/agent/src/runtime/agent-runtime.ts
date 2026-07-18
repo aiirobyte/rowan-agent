@@ -1,8 +1,7 @@
 import { Agent, attachAgent } from "../agent";
 import type { AgentRunControl, AttachedAgentBinding } from "../agent";
-import { createMessage } from "../types";
 import { createId } from "../utils";
-import type { AgentCreateOptions, AgentOptions } from "../agent";
+import type { AgentOptions } from "../agent";
 import { createModelStream } from "@rowan-agent/models";
 import type { ModelConfig } from "@rowan-agent/models";
 import type {
@@ -18,20 +17,9 @@ import type { RuntimeStateStore } from "./store";
 import { ToolRuntime, type ToolRuntimePolicy } from "./tool-runtime";
 import { createAgentRun } from "./agent-run";
 
-export type AgentFactoryIdentity = {
-  agentId: AgentId;
-  sessionId: string;
-  factoryId: string;
-};
-
-export type AgentFactory = (
-  identity: AgentFactoryIdentity,
-) => Promise<AgentOptions | undefined> | AgentOptions | undefined;
-
 export type AgentRuntimeOptions = {
   stateStore: RuntimeStateStore;
   sessionProvider?: SessionManagerProvider;
-  factories?: ReadonlyMap<string, AgentFactory> | Readonly<Record<string, AgentFactory>>;
   toolPolicy?: ToolRuntimePolicy;
   maxConcurrentRuns?: number;
   maxInfrastructureAttempts?: number;
@@ -82,7 +70,6 @@ export class AgentRuntime {
   private readonly leaseDurationMs: number;
   private readonly leaseRenewalIntervalMs: number;
   private readonly toolRuntime: ToolRuntime;
-  private readonly factories: ReadonlyMap<string, AgentFactory>;
   private readonly bindings = new Map<AgentId, AttachedAgentBinding>();
   private readonly runHandles = new Map<AgentRunId, RuntimeRunHandle>();
   private readonly runWaiters = new Map<AgentRunId, Set<() => void>>();
@@ -105,12 +92,6 @@ export class AgentRuntime {
     this.leaseDurationMs = options.leaseDurationMs ?? 60_000;
     this.leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? Math.max(1, Math.floor(this.leaseDurationMs / 2));
     this.toolRuntime = new ToolRuntime(options.stateStore, options.toolPolicy, () => this.publishEvents());
-    this.factories = options.factories instanceof Map
-      ? new Map([...options.factories.entries()].map(([id, factory]) => [String(id), factory]))
-      : new Map(Object.entries(options.factories ?? {}));
-    for (const id of this.factories.keys()) {
-      if (id.trim().length === 0) throw new Error("Factory ID must not be empty.");
-    }
   }
 
   static async start(options: AgentRuntimeOptions): Promise<AgentRuntime> {
@@ -145,23 +126,18 @@ export class AgentRuntime {
     }
   }
 
-  async createAgent(options: AgentCreateOptions): Promise<Agent> {
+  async createAgent(options: AgentOptions): Promise<Agent> {
     this.assertRunning();
     assertAgentOptions(options);
-    if (options.factoryId !== undefined && options.factoryId.trim().length === 0) {
-      throw new Error("Factory ID must not be empty.");
-    }
     const provider = this.sessionProvider;
     if (!provider) throw new Error("Agent Runtime requires a SessionManager provider to create an Agent.");
     const manager = await provider.create({
       systemPrompt: options.context.systemPrompt,
-      input: options.input ?? "",
+      input: "",
       skills: options.context.skills,
     });
-    if (options.input) await manager.appendMessage(createMessage("user", options.input));
     const record = await this.stateStore.createAgent({
       sessionId: manager.getSessionId(),
-      ...(options.factoryId ? { factoryId: options.factoryId } : {}),
     });
     this.pausedAgents.delete(record.id);
     const agent = await this.attachAgent(record, manager, options);
@@ -327,32 +303,6 @@ export class AgentRuntime {
     const agents = await this.stateStore.listAgents();
     for (const record of agents) {
       if (record.state === "paused") this.pausedAgents.add(record.id);
-    }
-    for (const record of agents) {
-      if (record.state !== "active" || !record.factoryId) continue;
-      const factory = this.factories.get(String(record.factoryId));
-      if (!factory) {
-        await this.stateStore.recordEvent({ kind: "factory_missing", related: { agentId: record.id }, payload: { factoryId: record.factoryId } });
-        continue;
-      }
-      try {
-        const options = await factory({ agentId: record.id, sessionId: record.sessionId, factoryId: record.factoryId });
-        if (!options) {
-          await this.stateStore.recordEvent({
-            kind: "agent_recovery_failed",
-            related: { agentId: record.id },
-            payload: { factoryId: record.factoryId, error: "Factory returned no reconstruction options." },
-          });
-          continue;
-        }
-        await this.reconstructAgent(record.id, options);
-        await this.stateStore.recordEvent({ kind: "agent_recovered", related: { agentId: record.id }, payload: { factoryId: record.factoryId } });
-      } catch (error) {
-        await this.stateStore.recordEvent({ kind: "agent_recovery_failed", related: { agentId: record.id }, payload: { factoryId: record.factoryId, error: error instanceof Error ? error.message : String(error) } });
-      }
-    }
-    for (const record of await this.stateStore.listAgents()) {
-      if (this.bindings.has(record.id)) await this.scheduleQueuedRuns(record.id);
     }
     this.publishEvents();
   }

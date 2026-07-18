@@ -17,12 +17,12 @@ The exclusive association that makes one Agent ID available to an active Runtime
 _Avoid_: Agent registration, Session binding
 
 **Agent Reconstruction**:
-Rebuilding an Agent Binding from an existing Agent ID, its Session, and current Context. Reconstruction never creates or adopts an Agent identity.
+Rebuilding an Agent Binding from an existing Agent ID and Session using current Agent Options supplied by the host.
 _Avoid_: Agent resume, Session resume, Legacy adoption
 
-**Agent Factory**:
-A host-provided rule that rebuilds an Agent from current capabilities and context. Rowan identifies the rule by an opaque Factory ID without interpreting its business meaning.
-_Avoid_: Agent type, serialized Agent
+**Agent Options**:
+The host-supplied process-local configuration used to create or reconstruct an Agent Binding without becoming durable Runtime State.
+_Avoid_: Agent snapshot, serialized Agent, Runtime State
 
 ## Conversation
 
@@ -48,8 +48,12 @@ _Avoid_: Job, Workflow Run, Turn Promise
 A Runtime-owned execution failure that leaves an Agent Run safe to attempt again. It is the only failure category eligible for automatic retry.
 _Avoid_: Agent failure, Tool failure, Business failure
 
+**Recovery**:
+Reestablishing execution after process loss by reclaiming abandoned Leases and scheduling queued work when the host reconstructs its Agent Binding with current Agent Options.
+_Avoid_: Resume, Restart
+
 **Suspension**:
-A non-terminal Agent Run state that releases execution capacity while waiting for input. New Agent Input resumes the same Agent Run.
+A non-terminal but non-runnable Agent Run state that releases execution capacity while waiting for input. New Agent Input makes the same Agent Run runnable again.
 _Avoid_: Completion, Blocking wait
 
 **Outcome**:

@@ -18,7 +18,6 @@ import type {
 
 export type CreateAgentInput = {
   sessionId: string;
-  factoryId?: string;
 };
 
 export type EnqueueAgentInput = {

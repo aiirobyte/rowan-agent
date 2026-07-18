@@ -14,6 +14,7 @@ Sessions remain conversation records, while mutable runtime control state lives 
 - The Runtime SQLite schema is from-scratch; existing Runtime databases are replaced rather than migrated.
 - One Agent owns one Session, but Agent ID and Session ID remain distinct.
 - Agent reconstruction is addressed only by Agent ID; `resume` is reserved for the Runtime Command that removes an Agent pause.
+- Runtime startup recovers abandoned Leases but does not synthesize Agent Bindings; hosts explicitly reconstruct with current Agent Options, after which queued Runs become schedulable.
 - Each durable state transition owns all related Run, Message, Lease, Outcome, and Runtime Event changes atomically behind the Runtime Store seam.
 - Runtime Event acknowledgement belongs to a stable Runtime Event Consumer Checkpoint rather than to an Event globally.
 - Scheduler policy and Tool Call execution remain Runtime implementation details; Store, Session, Model, and Tool implementations sit behind explicit adapter seams.

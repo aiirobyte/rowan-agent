@@ -37,7 +37,6 @@ function provider(): TestProvider {
 function options(input: {
   context?: AgentContext;
   stream?: AgentContext["messages"] extends never ? never : import("../../src").StreamFn;
-  factoryId?: string;
   onOutcome?: (outcome: import("../../src").Outcome) => Promise<void>;
 } = {}) {
   return {
@@ -47,7 +46,6 @@ function options(input: {
       yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
       yield { type: "done" };
     }),
-    ...(input.factoryId ? { factoryId: input.factoryId } : {}),
     ...(input.onOutcome ? { onOutcome: input.onOutcome } : {}),
   };
 }
@@ -100,50 +98,25 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
   }
 });
 
-test("Runtime restart reconstructs unfinished Agents through opaque Factory IDs", async () => {
+test("Runtime waits for host reconstruction before running recovered work", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const sessionManager = provider();
-  const factoryId = "factory_current";
   const outcomes: string[] = [];
-  const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
-  let agentId: import("../../src").AgentId;
-  let sessionId: string;
+  const firstRuntime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  const agent = await firstRuntime.createAgent(options());
+  await firstRuntime.stop();
+  const enqueued = await stateStore.enqueueAgentInput({ agentId: agent.id, input: createMessage("user", "recover me") });
+  const restarted = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
   try {
-    const agent = await runtime.createAgent(options({ factoryId: "factory_current", onOutcome: async (outcome) => { outcomes.push(outcome.message); } }));
-    agentId = agent.id;
-    sessionId = agent.sessionId;
-  } finally {
-    await runtime.stop();
-  }
+    expect(await stateStore.getRun(enqueued.run.id)).toMatchObject({ state: "queued" });
 
-  await stateStore.enqueueAgentInput({ agentId: agentId!, input: createMessage("user", "recover me") });
-  const restarted = await AgentRuntime.start({
-    stateStore,
-    sessionProvider: sessionManager,
-    factories: new Map([[factoryId, async () => options({ onOutcome: async (outcome) => { outcomes.push(outcome.message); } })]]),
-  });
-  try {
+    await restarted.reconstructAgent(agent.id, options({
+      onOutcome: async (outcome) => { outcomes.push(outcome.message); },
+    }));
     await waitFor(async () => outcomes.length > 0);
-    expect(await stateStore.getAgent(agentId!)).toMatchObject({ sessionId, factoryId, state: "active" });
+    expect(await stateStore.getRun(enqueued.run.id)).toMatchObject({ state: "completed" });
   } finally {
     await restarted.stop();
-  }
-});
-
-test("Factory refusal is observable as Agent recovery failure, not a missing Factory", async () => {
-  const stateStore = new InMemoryRuntimeStateStore();
-  const factoryId = "declining-factory";
-  const agent = await stateStore.createAgent({ sessionId: "missing-host-association", factoryId });
-  const runtime = await AgentRuntime.start({
-    stateStore,
-    factories: new Map([[factoryId, () => undefined]]),
-  });
-  try {
-    const recoveryEvents = (await runtime.listEvents()).filter((event) => event.agentId === agent.id);
-    expect(recoveryEvents.map((event) => event.kind)).toContain("agent_recovery_failed");
-    expect(recoveryEvents.map((event) => event.kind)).not.toContain("factory_missing");
-  } finally {
-    await runtime.stop();
   }
 });
 

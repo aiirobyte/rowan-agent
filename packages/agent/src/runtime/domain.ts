@@ -24,7 +24,6 @@ export type RuntimeToolCallState = "queued" | "running" | "completed" | "failed"
 export type AgentRecord = {
   id: AgentId;
   sessionId: string;
-  factoryId?: string;
   state: AgentLifecycleState;
   createdAt: string;
   updatedAt: string;
@@ -69,9 +68,6 @@ export type RuntimeEventKind =
   | "agent_created"
   | "agent_paused"
   | "agent_resumed"
-  | "agent_recovered"
-  | "agent_recovery_failed"
-  | "factory_missing"
   | "message_enqueued"
   | "run_enqueued"
   | "run_leased"

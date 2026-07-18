@@ -20,7 +20,7 @@ These slices are ordered for test-driven implementation. Each slice must leave t
 
 ## Slice 1: Define the Runtime domain and Store contract
 
-Introduce Agent ID, Factory ID, Agent Run, Runtime Message, Runtime Event, Tool Call, lifecycle states, and a `RuntimeStateStore` interface. Implement an in-memory adapter with transactional state-transition tests.
+Introduce Agent ID, Agent Run, Runtime Message, Runtime Event, Tool Call, lifecycle states, and a `RuntimeStateStore` interface. Implement an in-memory adapter with transactional state-transition tests.
 
 Acceptance:
 
@@ -108,24 +108,23 @@ Acceptance:
 
 - Input requests suspend the current Run and release its lease and capacity.
 - The next `send()` resumes the same Run rather than creating another Run.
-- Suspended Runs survive Store reopen and Factory reconstruction.
+- Suspended Runs survive Store reopen and explicit Agent reconstruction with current Options.
 - Abort terminates running or suspended work without becoming a Session message.
 - Pause and resume produce durable Runtime Events.
 
 Depends on: Slice 6.
 
-## Slice 8: Add Factory recovery
+## Slice 8: Recover durable work through explicit Agent reconstruction
 
-Register host Factories by opaque Factory ID and automatically reconstruct unfinished or messaged Agents after Runtime restart.
+Recover abandoned Leases during Runtime startup and resume durable work after the host explicitly reconstructs an Agent with current Options.
 
 Acceptance:
 
-- Runtime records Agent ID, Session ID, and Factory ID without inspecting business meaning.
-- Factory recovery does not match on Session ID patterns.
-- Factories receive opaque recovery identity and return current Agent construction options.
-- Missing Factory or host association leaves the Agent unbound and observable.
-- Factory recovery and explicit reconstruction call the same private Agent Binding path.
-- No executable Agent definition or definition version is serialized.
+- Runtime startup returns abandoned running work to a durable queued state without constructing Agent Bindings.
+- `reconstructAgent(agentId, currentOptions)` restores the original Session and establishes the private Binding.
+- Establishing an active Binding automatically schedules that Agent's queued Runs.
+- A suspended Agent may remain unbound until the host reconstructs it before sending new input.
+- Agent records persist identity and lifecycle state, but no executable Agent Options or definition version.
 
 Depends on: Slices 3-7.
 
@@ -162,7 +161,7 @@ Depends on: Slices 2, 6-7.
 
 ## Slice 11: Migrate Rowan CLI and remove the legacy lifecycle
 
-Move Rowan CLI and examples to explicit Runtime startup, `runtime.createAgent()` / `runtime.reconstructAgent()`, `send()`, AgentRun, and Factory registration. Remove public direct construction, static lifecycle factories, ambient Runtime access, and duplicate execution paths.
+Move Rowan CLI and examples to explicit Runtime startup, `runtime.createAgent()` / `runtime.reconstructAgent(agentId, currentOptions)`, `send()`, and AgentRun. Remove public direct construction, static lifecycle factories, ambient Runtime access, and duplicate execution paths.
 
 Acceptance:
 

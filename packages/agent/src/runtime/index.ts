@@ -4,8 +4,6 @@ export { InMemoryRuntimeStateStore } from "./memory-store";
 export { SqliteRuntimeStateStore } from "./sqlite-store";
 export { AgentRuntime } from "./agent-runtime";
 export type {
-  AgentFactory,
-  AgentFactoryIdentity,
   AgentRuntimeOptions,
   RuntimeEventDisposition,
 } from "./agent-runtime";

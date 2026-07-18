@@ -27,12 +27,11 @@ function createSessionProvider(): TestSessionProvider {
   };
 }
 
-function agentOptions(input?: string) {
+function agentOptions() {
   return {
     context: createTestContext({ systemPrompt: "Current system prompt" }),
     model: { provider: "test", id: "scripted" },
     stream: scriptedStream,
-    ...(input !== undefined ? { input } : {}),
   };
 }
 
@@ -42,7 +41,7 @@ test("Runtime creates and binds durable Agent and Session records", async () => 
   const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
 
   try {
-    const agent = await runtime.createAgent(agentOptions("hello"));
+    const agent = await runtime.createAgent(agentOptions());
     expect(agent.id).toMatch(/^agt_/);
     expect(agent.sessionId).toMatch(/^ses_/);
 
@@ -64,7 +63,7 @@ test("Runtime reconstructs the same Agent and Session IDs with current Context",
   let restarted: AgentRuntime | undefined;
 
   try {
-    const created = await runtime.createAgent(agentOptions("hello"));
+    const created = await runtime.createAgent(agentOptions());
     const agentId = created.id;
     const sessionId = created.sessionId;
     await runtime.stop();
@@ -90,7 +89,7 @@ test("Runtime reconstruction rejects a duplicate live binding", async () => {
   const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
 
   try {
-    const created = await runtime.createAgent(agentOptions("hello"));
+    const created = await runtime.createAgent(agentOptions());
     await expect(runtime.reconstructAgent(created.id, agentOptions()))
       .rejects.toThrow("already bound");
   } finally {
@@ -103,7 +102,7 @@ test("Agent.send persists a Run before returning and resolves through AgentRun",
   const runtime = await AgentRuntime.start({ stateStore, sessionProvider: createSessionProvider() });
 
   try {
-    const agent = await runtime.createAgent(agentOptions("hello"));
+    const agent = await runtime.createAgent(agentOptions());
     const run = await agent.send("continue");
     expect(["queued", "running", "completed"]).toContain(run.status);
 

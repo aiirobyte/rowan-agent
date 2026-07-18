@@ -334,7 +334,6 @@ type CliAgentListItem = {
   id: AgentId;
   sessionId: string;
   state: "active" | "paused";
-  factoryId?: string;
   title?: string;
   createdAt: string;
   updatedAt: string;
@@ -441,7 +440,6 @@ async function runListCommand(_args: CliArgs): Promise<void> {
         id: agent.id,
         sessionId: agent.sessionId,
         state: agent.state,
-        ...(agent.factoryId ? { factoryId: agent.factoryId } : {}),
         ...(session?.title ? { title: session.title } : {}),
         createdAt: agent.createdAt,
         updatedAt: agent.updatedAt,

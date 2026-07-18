@@ -43,11 +43,6 @@ export type StreamAgentOptions = AgentCommonOptions & {
   stream: StreamFn;
 };
 
-export type AgentCreateOptions = AgentOptions & {
-  input?: string;
-  factoryId?: string;
-};
-
 export type AgentRunControl = {
   suspend(reason?: string): Promise<void>;
 };

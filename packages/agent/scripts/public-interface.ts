@@ -13,11 +13,8 @@ export const publicValueExports = [
 export const publicTypeExports = [
   "AfterToolCall",
   "AgentContext",
-  "AgentCreateOptions",
   "AgentEvent",
   "AgentEventListener",
-  "AgentFactory",
-  "AgentFactoryIdentity",
   "AgentId",
   "AgentMessage",
   "AgentOptions",

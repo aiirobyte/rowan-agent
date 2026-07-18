@@ -4,7 +4,6 @@ const RUNTIME_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY NOT NULL,
       session_id TEXT NOT NULL,
-      factory_id TEXT,
       state TEXT NOT NULL CHECK (state IN ('active', 'paused')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
