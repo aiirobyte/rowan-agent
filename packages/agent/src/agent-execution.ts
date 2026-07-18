@@ -52,6 +52,7 @@ type RuntimeRunHooks = {
 };
 
 type PersistedExecutionState = {
+  version: 1;
   currentPhase: string;
   attempt: number;
   metrics: SessionState["metrics"];
@@ -720,7 +721,7 @@ export class AgentExecution {
 }
 
 function restoreSessionState(state: AgentRunExecutionState): SessionState {
-  const persisted = state as PersistedExecutionState;
+  const persisted = parsePersistedExecutionState(state);
   return {
     ...persisted,
     status: "suspended",
@@ -739,6 +740,7 @@ function restoreSessionState(state: AgentRunExecutionState): SessionState {
 
 function snapshotExecutionState(state: SessionState): AgentRunExecutionState {
   return {
+    version: 1,
     currentPhase: state.currentPhase,
     attempt: state.attempt,
     metrics: {
@@ -752,6 +754,17 @@ function snapshotExecutionState(state: SessionState): AgentRunExecutionState {
       },
     } : {}),
   };
+}
+
+function parsePersistedExecutionState(state: AgentRunExecutionState): PersistedExecutionState {
+  if (!state || state.version !== 1 || typeof state.currentPhase !== "string" || typeof state.attempt !== "number") {
+    throw new Error("Invalid Agent Run execution checkpoint.");
+  }
+  const metrics = state.metrics as { phaseTransitions?: unknown } | undefined;
+  if (!metrics || !Array.isArray(metrics.phaseTransitions)) {
+    throw new Error("Invalid Agent Run execution checkpoint metrics.");
+  }
+  return state as unknown as PersistedExecutionState;
 }
 
 function clonePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {

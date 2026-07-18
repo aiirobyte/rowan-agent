@@ -167,9 +167,15 @@ export class AgentRuntime {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    const suspendedAgents = new Set(
-      (await this.stateStore.listRuns({ states: ["suspended"] })).map((run) => run.agentId),
-    );
+    let suspendedAgents: Set<AgentId>;
+    try {
+      suspendedAgents = new Set(
+        (await this.stateStore.listRuns({ states: ["suspended"] }))
+          .map((run) => run.agentId),
+      );
+    } catch {
+      suspendedAgents = new Set();
+    }
     for (const [agentId, binding] of this.bindings) {
       if (!suspendedAgents.has(agentId) && !binding.isSuspended()) binding.abort("Agent Runtime stopped.");
     }
