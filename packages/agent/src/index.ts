@@ -1,5 +1,6 @@
 export { Agent } from "./agent";
 export type { AgentOptions, AgentCreateOptions } from "./agent";
+export type { ModelConfig } from "@rowan-agent/models";
 
 export { createMessage } from "./types";
 export type {

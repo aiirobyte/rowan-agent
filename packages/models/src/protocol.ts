@@ -55,6 +55,25 @@ export interface Model {
   retryDelayMs?: number;
 }
 
+/** Complete connection config for one model, with optional catalog metadata. */
+export type ModelConfig = {
+  id: string;
+  provider: Provider;
+  protocol: Protocol;
+  baseUrl: string;
+  apiKey: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: ("text" | "image")[];
+  cost?: Partial<ModelCost>;
+  contextWindow?: number;
+  maxTokens?: number;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+};
+
 // ---------------------------------------------------------------------------
 // Provider configuration (used by extension registerProvider)
 // ---------------------------------------------------------------------------

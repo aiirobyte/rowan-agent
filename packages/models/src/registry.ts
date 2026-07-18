@@ -1,4 +1,4 @@
-import type { Protocol, ApiStreamFn, Model, LlmModelRef, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
+import type { Protocol, ApiStreamFn, Model, ModelConfig, LlmModelRef, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
 import { getModel, resolveModel } from "./models";
 import { streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
@@ -129,15 +129,55 @@ export function registerProvider(name: string, factory: ProviderFactory): void {
   legacyProviders.set(name, factory);
 }
 
-export function createModelStream(): StreamFn {
-  // Auto-register built-in providers if none registered
-  if (apiProviderRegistry.size === 0) {
+const ZERO_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+} as const;
+
+function modelFromConfig(config: ModelConfig): Model {
+  return {
+    id: config.id,
+    name: config.name,
+    protocol: config.protocol,
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    reasoning: config.reasoning ?? false,
+    input: config.input ?? ["text"],
+    cost: { ...ZERO_COST, ...config.cost },
+    contextWindow: config.contextWindow ?? 128_000,
+    maxTokens: config.maxTokens ?? 4096,
+    ...(config.headers ? { headers: config.headers } : {}),
+    ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
+    ...(config.maxRetries !== undefined ? { maxRetries: config.maxRetries } : {}),
+    ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
+  };
+}
+
+export function createModelStream(config?: ModelConfig): StreamFn {
+  // A bound model always uses Rowan's built-in protocol providers. Legacy
+  // registry-backed streams retain the historical lazy registration behavior.
+  if (config || apiProviderRegistry.size === 0) {
     registerBuiltInApiProviders();
   }
+  const configuredModel = config ? modelFromConfig(config) : undefined;
 
   return async function* modelStream(request, options) {
-    // Try to resolve a full Model from the registry
-    const model = getModel(request.model.provider, request.model.id)
+    if (
+      configuredModel
+      && (configuredModel.provider !== request.model.provider || configuredModel.id !== request.model.id)
+    ) {
+      throw new Error(
+        `Model stream is configured for "${configuredModel.provider}/${configuredModel.id}", `
+        + `not "${request.model.provider}/${request.model.id}".`,
+      );
+    }
+
+    // A configured Model is Agent-local; registry lookup remains for legacy callers.
+    const model = configuredModel
+      ?? getModel(request.model.provider, request.model.id)
       ?? resolveModel(request.model.id);
 
     if (model) {

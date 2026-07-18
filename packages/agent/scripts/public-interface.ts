@@ -38,6 +38,7 @@ export const publicTypeExports = [
   "LoadedExtension",
   "LoopMetrics",
   "ModelTranscript",
+  "ModelConfig",
   "Outcome",
   "Phase",
   "PhaseContext",

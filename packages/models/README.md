@@ -83,7 +83,8 @@ import { stream, streamByRef, createModelStream, registerApiProvider } from "@ro
 for await (const event of stream(model, request, { signal })) { ... }
 for await (const event of streamByRef("openai/gpt-4.1-mini", request)) { ... }
 
-const streamFn = createModelStream();  // reusable StreamFn
+const streamFn = createModelStream();         // registry-backed StreamFn
+const boundStream = createModelStream(model); // StreamFn bound to one Model
 registerApiProvider({ api: "my-api", stream: myApiStreamFn });  // custom provider
 ```
 

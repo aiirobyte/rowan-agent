@@ -18,11 +18,10 @@ import type { RuntimeToolExecutionInput } from "./runtime/tool-runtime";
 import type { Outcome } from "./protocol";
 import type { ModelTranscript } from "./protocol/turn";
 import type { SessionManager } from "./harness/session/session-manager";
+import type { ModelConfig } from "@rowan-agent/models";
 
-export type AgentOptions = {
+type AgentCommonOptions = {
   context: AgentContext;
-  model: LlmModelRef;
-  stream: StreamFn;
   cwd?: string;
   extensions?: LoadedExtension[];
   maxAttempts?: number;
@@ -31,6 +30,17 @@ export type AgentOptions = {
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: LlmModelRef }) => Promise<void>;
+};
+
+type AgentModelOptions =
+  | { model: ModelConfig; stream?: never }
+  | { model: LlmModelRef; stream: StreamFn };
+
+export type AgentOptions = AgentCommonOptions & AgentModelOptions;
+
+export type StreamAgentOptions = AgentCommonOptions & {
+  model: LlmModelRef;
+  stream: StreamFn;
 };
 
 export type AgentCreateOptions = AgentOptions & {
@@ -51,7 +61,7 @@ export type AttachedAgentBinding = {
 };
 
 export type AttachAgentInput = {
-  options: AgentOptions;
+  options: StreamAgentOptions;
   agentId: AgentId;
   sessionId: string;
   manager: SessionManager;

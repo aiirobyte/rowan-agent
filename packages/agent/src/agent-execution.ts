@@ -34,9 +34,9 @@ import type {
 import type { ModelTranscript } from "./protocol/turn";
 import { createId } from "./utils";
 import type { AgentId } from "./runtime/domain";
-import type { AgentOptions, AgentRunControl } from "./agent";
+import type { AgentRunControl, StreamAgentOptions } from "./agent";
 
-type AgentExecutionOptions = AgentOptions & {
+type AgentExecutionOptions = StreamAgentOptions & {
   sessionId?: string;
   agentId?: AgentId;
   onInput?: (message: AgentMessage) => Promise<void>;
@@ -680,7 +680,7 @@ export class AgentExecution {
     return prepareAgentContext(this.options.context);
   }
 
-  private cloneOptions(options: AgentOptions): AgentOptions {
+  private cloneOptions(options: StreamAgentOptions): StreamAgentOptions {
     return {
       ...options,
       context: prepareAgentContext(options.context),

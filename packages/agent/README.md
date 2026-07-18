@@ -23,7 +23,6 @@ import {
   InMemorySessionStore,
   createCoreTools,
 } from "@rowan-agent/agent";
-import { createModelStream } from "@rowan-agent/models";
 
 const runtime = await AgentRuntime.start({
   stateStore: new InMemoryRuntimeStateStore(),
@@ -42,8 +41,13 @@ try {
         entryPhaseId: default,
       },
     },
-    model: { provider: "openai", id: "gpt-4.1-mini" },
-    stream: createModelStream(),
+    model: {
+      provider: "openai",
+      id: "gpt-4.1-mini",
+      protocol: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: process.env.OPENAI_API_KEY!,
+    },
   });
 
   agent.subscribe((event) => console.log(event.type));
@@ -174,10 +178,18 @@ class Agent {
 ### AgentOptions
 
 ```ts
-type AgentOptions = {
+type ModelConfig = LlmModelRef & {
+  protocol: Protocol;
+  baseUrl: string;
+  apiKey: string;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+};
+
+type AgentCommonOptions = {
   context: AgentContext;
-  model: LlmModelRef;
-  stream: StreamFn;
   cwd?: string;
   extensions?: LoadedExtension[];
   maxAttempts?: number;
@@ -189,6 +201,11 @@ type AgentOptions = {
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: Outcome) => Promise<void>;
 };
+
+type AgentOptions = AgentCommonOptions & (
+  | { model: ModelConfig; stream?: never }
+  | { model: LlmModelRef; stream: StreamFn }
+);
 
 type AgentCreateOptions = AgentOptions & {
   // Seeds the Session; it does not schedule a Run.
@@ -228,8 +245,7 @@ await runtime.stop();
 const nextRuntime = await AgentRuntime.start({ stateStore, sessionProvider });
 const reconstructed = await nextRuntime.reconstructAgent(agentId, {
   context: currentContext,
-  model: { provider: "openai", id: "gpt-4.1" },
-  stream: createModelStream(),
+  model: currentModelConfig,
 });
 ```
 
@@ -665,7 +681,7 @@ export default function myPlugin(rowan: ExtensionAPI) {
 
 ## Model Selection
 
-`AgentOptions` accepts a model reference and stream implementation from `@rowan-agent/models`. Phase frontmatter may override the model for that phase.
+`AgentOptions` accepts either one complete `ModelConfig`, which Rowan binds to an Agent-local default stream, or a model reference plus a custom `StreamFn`. A phase model override therefore requires a custom stream that can resolve the override.
 
 CLI-specific `.rowan/config.yaml` loading and workspace discovery belong to [`@rowan-agent/cli`](../cli/README.md).
 

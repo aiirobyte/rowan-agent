@@ -3,6 +3,8 @@ import type { AgentRunControl, AttachedAgentBinding } from "../agent";
 import { createMessage } from "../types";
 import { createId } from "../utils";
 import type { AgentCreateOptions, AgentOptions } from "../agent";
+import { createModelStream } from "@rowan-agent/models";
+import type { ModelConfig } from "@rowan-agent/models";
 import type {
   AgentId,
   AgentRunRecord,
@@ -137,6 +139,7 @@ export class AgentRuntime {
 
   async createAgent(options: AgentCreateOptions): Promise<Agent> {
     this.assertRunning();
+    assertAgentOptions(options);
     if (options.factoryId !== undefined && options.factoryId.trim().length === 0) {
       throw new Error("Factory ID must not be empty.");
     }
@@ -163,6 +166,7 @@ export class AgentRuntime {
     options: AgentOptions,
   ): Promise<Agent> {
     this.assertRunning();
+    assertAgentOptions(options);
     const record = await this.stateStore.getAgent(agentId);
     if (!record) throw new Error(`Agent not found: ${agentId}.`);
     if (record.state === "paused") this.pausedAgents.add(record.id);
@@ -351,8 +355,14 @@ export class AgentRuntime {
     manager: import("../harness/session/session-manager").SessionManager,
     options: AgentOptions,
   ): Promise<Agent> {
+    const model = { provider: options.model.provider, id: options.model.id };
+    const resolvedOptions = {
+      ...options,
+      model,
+      stream: options.stream ?? createModelStream(options.model),
+    };
     const attached = await attachAgent({
-      options,
+      options: resolvedOptions,
       agentId: record.id,
       sessionId: record.sessionId,
       manager,
@@ -568,6 +578,17 @@ export class AgentRuntime {
 
   private assertRunning(): void {
     if (this.stopped || activeRuntime !== this) throw new Error("Agent Runtime is stopped.");
+  }
+}
+
+function isModelConfig(value: unknown): value is ModelConfig {
+  if (typeof value !== "object" || value === null) return false;
+  return "protocol" in value && "baseUrl" in value && "apiKey" in value;
+}
+
+function assertAgentOptions(options: AgentOptions): void {
+  if (options.stream && isModelConfig(options.model)) {
+    throw new Error("AgentOptions accepts either a complete model config or a custom stream, not both.");
   }
 }
 
