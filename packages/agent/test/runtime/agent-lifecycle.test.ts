@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { AgentRuntime, InMemoryRuntimeStateStore } from "../../src";
+import { AgentRuntime, InMemoryRuntimeStateStore, createMessage } from "../../src";
 import { InMemorySessionManager } from "../../src/harness/session";
 import type { SessionManagerProvider } from "../../src/harness/session/session-manager";
 import type { CreateSessionManagerInput, SessionManager } from "../../src/harness/session/session-manager";
@@ -112,6 +112,37 @@ test("Agent.send persists a Run before returning and resolves through AgentRun",
 
     const persisted = await runtime.getRun(run.id);
     expect(persisted).toMatchObject({ id: run.id, state: "completed", outcome: { message: outcome.message } });
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("AgentRuntime reads a persisted Runtime Message by Event message ID", async () => {
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: createSessionProvider(),
+  });
+
+  try {
+    const agent = await runtime.createAgent(agentOptions());
+    const input = createMessage("user", "run workflow", {
+      kind: "everyield.workflow-run",
+      projectId: "project-1",
+      taskId: "task-1",
+      workflowId: "workflow-1",
+      attempt: 2,
+    });
+    const run = await agent.send(input);
+    const event = (await runtime.listEvents())
+      .find((candidate) => candidate.kind === "run_enqueued" && candidate.runId === run.id);
+    if (!event?.messageId) throw new Error("Expected run_enqueued Event with a Message ID.");
+
+    expect(await runtime.getMessage(event.messageId)).toMatchObject({
+      id: event.messageId,
+      agentId: agent.id,
+      runId: run.id,
+      input,
+    });
   } finally {
     await runtime.stop();
   }

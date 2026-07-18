@@ -10,6 +10,10 @@ import type {
   AgentRunId,
   RuntimeEvent,
   RuntimeEventCursor,
+  RuntimeMessage,
+  RuntimeMessageId,
+  RuntimeToolCall,
+  RuntimeToolCallId,
 } from "./domain";
 import type { AgentMessage, Outcome } from "../protocol";
 import type { SessionManagerProvider } from "../harness/session/session-manager";
@@ -258,6 +262,14 @@ export class AgentRuntime {
 
   async getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined> {
     return this.stateStore.getRun(runId);
+  }
+
+  async getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined> {
+    return this.stateStore.getMessage(messageId);
+  }
+
+  async getToolCall(toolCallId: RuntimeToolCallId): Promise<RuntimeToolCall | undefined> {
+    return this.stateStore.getToolCall(toolCallId);
   }
 
   async abortRun(runId: AgentRunId, reason = "Agent Run aborted by caller."): Promise<void> {

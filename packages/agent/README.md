@@ -88,6 +88,8 @@ class AgentRuntime {
   reconstructAgent(agentId: AgentId, options: AgentOptions): Promise<Agent>;
   pauseAgent(agentId: AgentId): Promise<void>;
   resumeAgent(agentId: AgentId): Promise<void>;
+  getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined>;
+  getToolCall(toolCallId: RuntimeToolCallId): Promise<RuntimeToolCall | undefined>;
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
   abortRun(runId: AgentRunId, reason?: string): Promise<void>;
   consumeEvents(
@@ -415,6 +417,35 @@ const stopConsuming = runtime.consumeEvents("deployment-observer", async (event)
 });
 ```
 
+Runtime Messages and their related Events are committed together. A durable
+consumer can use a `run_enqueued` Event as an outbox signal, read immutable
+business correlation metadata from its Message, and update an external index
+before its Checkpoint advances:
+
+```ts
+const stopIndexing = runtime.consumeEvents("everyield-run-index", async (event) => {
+  if (event.kind !== "run_enqueued" || !event.messageId || !event.runId) return;
+  const message = await runtime.getMessage(event.messageId);
+  if (!message) throw new Error(`Runtime Message not found: ${event.messageId}`);
+  await upsertRunIndex(event.runId, message.input.metadata);
+});
+```
+
+If the listener fails, Rowan leaves the Checkpoint unchanged and redelivers the
+Event after the consumer restarts. `getMessage()` is read-only; Rowan treats the
+Agent Message metadata as opaque host data.
+
+Tool Call Events can likewise be resolved to their durable record. This is
+especially useful when a `tool_call_indeterminate` Event requires host recovery
+or human review:
+
+```ts
+if (event.kind === "tool_call_indeterminate" && event.toolCallId) {
+  const toolCall = await runtime.getToolCall(event.toolCallId);
+  await reviewIndeterminateToolCall(toolCall);
+}
+```
+
 A consumer may instead return an `enqueue` disposition to turn the current
 Event into Agent Input. Rowan enqueues the input and advances the Consumer
 Checkpoint in one Runtime State transaction, then schedules the target Agent.
@@ -702,6 +733,8 @@ type LoopMetrics = {
 | `AgentRun` | Durable Run handle for state, terminal Outcome, observation, and abort |
 | `SqliteRuntimeStateStore` / `InMemoryRuntimeStateStore` | Durable and test Runtime Store adapters |
 | `RuntimeEvent` / consumer ID string | Durable lifecycle facts and checkpointed consumer identity |
+| `RuntimeMessage` / `RuntimeMessageId` | Durable Agent Input and its stable lookup identity |
+| `RuntimeToolCall` / `RuntimeToolCallId` | Durable Tool Call state and its stable lookup identity |
 | `AgentContext` | System prompt, messages, tools, skills, phases |
 | `AgentMessage` | Typed message with role, content, metadata |
 | `AgentEvent` | Discriminated union of 13 event types |

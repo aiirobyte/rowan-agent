@@ -280,7 +280,7 @@ test("Tool errors are passed to the model transcript as tool_result, not blockin
     // Tool call is recorded as failed in state store
     const toolEvent = (await runtime.listEvents()).find((event) => event.kind === "tool_call_failed");
     expect(toolEvent?.runId).toBe(run.id);
-    expect(await stateStore.getToolCall(toolEvent!.toolCallId!)).toMatchObject({
+    expect(await runtime.getToolCall(toolEvent!.toolCallId!)).toMatchObject({
       state: "failed",
       result: { ok: false, error: exactError },
     });

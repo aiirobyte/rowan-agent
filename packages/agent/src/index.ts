@@ -71,5 +71,9 @@ export type {
   RuntimeEvent,
   RuntimeEventCursor,
   RuntimeEventKind,
+  RuntimeMessage,
+  RuntimeMessageId,
+  RuntimeToolCall,
+  RuntimeToolCallId,
 } from "./runtime/domain";
 export type { ToolRuntimePolicy } from "./runtime/tool-runtime";
