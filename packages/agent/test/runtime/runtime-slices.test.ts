@@ -120,6 +120,75 @@ test("Runtime waits for host reconstruction before running recovered work", asyn
   }
 });
 
+test("reconstructed queued input is included in the model request once", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const sessionManager = provider();
+  const firstRuntime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  const agent = await firstRuntime.createAgent(options());
+  const input = createMessage("user", "already persisted");
+  await sessionManager.get(agent.sessionId)!.appendMessage(input);
+  await firstRuntime.stop();
+  const enqueued = await stateStore.enqueueAgentInput({ agentId: agent.id, input });
+  const requests: Parameters<import("../../src").StreamFn>[0][] = [];
+  const restarted = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  try {
+    await restarted.reconstructAgent(agent.id, options({
+      stream: async function* (request) {
+        requests.push(request);
+        yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
+        yield { type: "done" };
+      },
+    }));
+    await waitFor(async () => (await stateStore.getRun(enqueued.run.id))?.state === "completed");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.messages.filter((message) => (
+      message.role === "user" && message.content === "already persisted"
+    ))).toHaveLength(1);
+  } finally {
+    await restarted.stop();
+  }
+});
+
+test("reconstructed suspended input resumes from the persisted phase", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const sessionManager = provider();
+  const phases = {
+    phases: new Map([
+      ["plan", { id: "plan", name: "Plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
+      ["verify", { id: "verify", name: "Verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
+    ]),
+    entryPhaseId: "plan",
+  };
+  const context = { ...createTestContext(), phases };
+  const waitingStream: import("../../src").StreamFn = async function* () {
+    yield { type: "text_delta", text: "waiting", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "waiting" }] } };
+    yield { type: "done" };
+  };
+  const firstRuntime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  const agent = await firstRuntime.createAgent(options({ context, stream: waitingStream }));
+  const first = await agent.send("need input");
+  await waitFor(async () => (await stateStore.getRun(first.id))?.state === "suspended");
+  await firstRuntime.stop();
+  const outcomes: string[] = [];
+  const restarted = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  try {
+    const reconstructed = await restarted.reconstructAgent(agent.id, options({
+      context,
+      onOutcome: async (outcome) => { outcomes.push(outcome.message); },
+      stream: async function* (request) {
+        yield* yieldRouteToolCall("stop");
+        yield { type: "done" };
+      },
+    }));
+    const resumed = await reconstructed.send("continue");
+    expect(resumed.id).toBe(first.id);
+    await waitFor(async () => (await stateStore.getRun(first.id))?.state === "completed");
+    expect(outcomes).toEqual(["Plan phase completed."]);
+  } finally {
+    await restarted.stop();
+  }
+});
+
 test("Tool Runtime narrows capabilities, enforces concurrency, and records indeterminate aborts", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const agent = await stateStore.createAgent({ sessionId: "session-tools" });

@@ -14,6 +14,7 @@ import type { LoadExtensionsResult } from "./extensions/types";
 import type { BeforePhaseHookResult, AfterPhaseHookResult } from "./extensions";
 import { DEFAULT_PHASE_ID, createDefaultPhase } from "./harness/phases/default";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "./harness/phases/types";
+import type { SessionContinuationState, SessionState } from "./loop/types";
 import { createMessage } from "./types";
 import type {
   AgentMessage,
@@ -33,12 +34,13 @@ import type {
 } from "./types";
 import type { ModelTranscript } from "./protocol/turn";
 import { createId } from "./utils";
-import type { AgentId } from "./runtime/domain";
+import type { AgentId, AgentRunExecutionState } from "./runtime/domain";
 import type { AgentRunControl, StreamAgentOptions } from "./agent";
 
 type AgentExecutionOptions = StreamAgentOptions & {
   sessionId?: string;
   agentId?: AgentId;
+  sessionState?: SessionState;
   onInput?: (message: AgentMessage) => Promise<void>;
   runtime?: import("./loop/types").AgentRuntimePort;
 };
@@ -46,7 +48,14 @@ type AgentExecutionOptions = StreamAgentOptions & {
 export type RunOptions = Partial<AgentExecutionOptions>;
 
 type RuntimeRunHooks = {
-  onSuspend?: (reason?: string) => Promise<void> | void;
+  onSuspend?: (reason?: string, state?: SessionState) => Promise<void> | void;
+};
+
+type PersistedExecutionState = {
+  currentPhase: string;
+  attempt: number;
+  metrics: SessionState["metrics"];
+  continuation?: SessionContinuationState;
 };
 
 export type AgentStatus = {
@@ -163,14 +172,24 @@ export class AgentExecution {
     if (activeRun) {
       return Promise.reject(new Error("Agent is already running."));
     }
-    this.appendMessage(message);
+    if (!this.options.context.messages.some((candidate) => candidate.id === message.id)) {
+      this.appendMessage(message);
+    }
     return this.run(options, internalHooks);
   }
 
   /** Internal Runtime seam: executes one leased Agent Input. */
-  async executeAgentInput(input: AgentMessage, runId: import("./runtime/domain").AgentRunId, control: AgentRunControl): Promise<Outcome> {
+  async executeAgentInput(
+    input: AgentMessage,
+    runId: import("./runtime/domain").AgentRunId,
+    control: AgentRunControl,
+    executionState?: AgentRunExecutionState,
+  ): Promise<Outcome> {
     this.runtimeRunId = runId;
-    const internal: RuntimeRunHooks = { onSuspend: control.suspend };
+    this.options.sessionState = executionState ? restoreSessionState(executionState) : undefined;
+    const internal: RuntimeRunHooks = {
+      onSuspend: (reason, state) => control.suspend(reason, state ? snapshotExecutionState(state) : undefined),
+    };
     try {
       return (await this.runWithMessage(input, undefined, internal)).outcome;
     } finally {
@@ -450,7 +469,7 @@ export class AgentExecution {
   }
 
   private runWithLifecycle(
-    executor: (input: { signal: AbortSignal; waitForInput: () => Promise<AgentMessage[]> }) => Promise<RunResult>,
+    executor: (input: { signal: AbortSignal; waitForInput: (state?: SessionState) => Promise<AgentMessage[]> }) => Promise<RunResult>,
     hooks: RuntimeRunHooks = {},
   ): Promise<RunResult> {
     if (this.activeRun) {
@@ -459,18 +478,19 @@ export class AgentExecution {
 
     const abortController = new AbortController();
     let suspensionRequested = false;
-    const waitForInput = () => {
-      if (!suspensionRequested) {
-        suspensionRequested = true;
-        void hooks.onSuspend?.("Agent requested input.");
-      }
-      return new Promise<AgentMessage[]>((resolve) => {
+    const waitForInput = (state?: SessionState) => {
+      const waiting = new Promise<AgentMessage[]>((resolve) => {
         const activeRun = this.activeRun!;
         activeRun.resume = (messages) => {
           activeRun.resume = undefined;
           resolve(messages);
         };
       });
+      if (!suspensionRequested) {
+        suspensionRequested = true;
+        void hooks.onSuspend?.("Agent requested input.", state);
+      }
+      return waiting;
     };
     const promise = Promise.resolve()
       .then(() => executor({ signal: abortController.signal, waitForInput }))
@@ -519,7 +539,10 @@ export class AgentExecution {
       const extensions = resolved.extensions ?? [];
       await this.loadExtensions(extensions, resolved.cwd);
       const runContext = prepareAgentContext(resolved.context, this.extensionRunner);
-      const entryPhaseId = this.state.initialized ? DEFAULT_PHASE_ID : runContext.phases?.entryPhaseId ?? DEFAULT_PHASE_ID;
+      const resumingSuspendedRun = resolved.sessionState?.status === "suspended";
+      const entryPhaseId = resumingSuspendedRun
+        ? resolved.sessionState?.currentPhase || runContext.phases?.entryPhaseId || DEFAULT_PHASE_ID
+        : this.state.initialized ? DEFAULT_PHASE_ID : runContext.phases?.entryPhaseId ?? DEFAULT_PHASE_ID;
       const loopContext = {
         ...runContext,
         phases: {
@@ -573,6 +596,7 @@ export class AgentExecution {
         model: resolved.model,
         stream: resolved.stream,
         maxAttempts: resolved.maxAttempts,
+        sessionState: resolved.sessionState,
         signal,
         beforeToolCall,
         afterToolCall,
@@ -599,6 +623,7 @@ export class AgentExecution {
         ...resolved,
         sessionId: result.sessionId,
         context: nextContext,
+        sessionState: undefined,
       };
       return result;
     }, internalHooks);
@@ -606,6 +631,10 @@ export class AgentExecution {
 
   abort(reason = "Aborted by caller."): void {
     this.abortLocal(reason);
+  }
+
+  isSuspended(): boolean {
+    return Boolean(this.activeRun?.resume);
   }
 
   private abortLocal(reason: string): void {
@@ -688,6 +717,41 @@ export class AgentExecution {
     };
   }
 
+}
+
+function restoreSessionState(state: AgentRunExecutionState): SessionState {
+  const persisted = state as PersistedExecutionState;
+  return {
+    ...persisted,
+    status: "suspended",
+    metrics: {
+      ...persisted.metrics,
+      phaseTransitions: persisted.metrics.phaseTransitions.map((transition) => ({ ...transition })),
+    },
+    ...(persisted.continuation ? {
+      continuation: {
+        ...persisted.continuation,
+        previousResults: persisted.continuation.previousResults.map((result) => ({ ...result })),
+      },
+    } : {}),
+  };
+}
+
+function snapshotExecutionState(state: SessionState): AgentRunExecutionState {
+  return {
+    currentPhase: state.currentPhase,
+    attempt: state.attempt,
+    metrics: {
+      ...state.metrics,
+      phaseTransitions: state.metrics.phaseTransitions.map((transition) => ({ ...transition })),
+    },
+    ...(state.continuation ? {
+      continuation: {
+        ...state.continuation,
+        previousResults: state.continuation.previousResults.map((result) => ({ ...result })),
+      },
+    } : {}),
+  };
 }
 
 function clonePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {

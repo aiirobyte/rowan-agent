@@ -16,6 +16,7 @@ export const publicTypeExports = [
   "AgentEvent",
   "AgentEventListener",
   "AgentId",
+  "AgentRunExecutionState",
   "AgentMessage",
   "AgentOptions",
   "AgentRunId",

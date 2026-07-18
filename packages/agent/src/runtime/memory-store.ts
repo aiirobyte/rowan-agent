@@ -231,6 +231,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const { timestamp } = now();
     run.state = "suspended";
     run.suspensionReason = input.reason;
+    if (input.executionState) run.executionState = clone(input.executionState);
     delete run.leaseId;
     run.updatedAt = timestamp;
     requireTransition("Runtime Message", message.id, message.state, "acknowledge", ["leased"]);
@@ -252,6 +253,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const state = input.state ?? "completed";
     run.state = state;
     run.outcome = clone(input.outcome);
+    delete run.executionState;
     delete run.leaseId;
     run.updatedAt = timestamp;
     message.state = "acknowledged";
@@ -293,6 +295,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const { timestamp } = now();
     run.state = "failed";
     run.outcome = clone(input.outcome);
+    delete run.executionState;
     delete run.leaseId;
     run.updatedAt = timestamp;
     message.state = "dead_lettered";
@@ -316,6 +319,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     const { timestamp } = now();
     run.state = "cancelled";
     run.outcome = clone(input.outcome);
+    delete run.executionState;
     delete run.leaseId;
     run.updatedAt = timestamp;
     if (message.state === "queued" || message.state === "leased") {

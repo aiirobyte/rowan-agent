@@ -19,6 +19,9 @@ export type RuntimeMessageState = "queued" | "leased" | "acknowledged" | "dead_l
 
 export type AgentRunState = "queued" | "running" | "suspended" | "completed" | "failed" | "cancelled";
 
+/** Opaque execution checkpoint owned by the Agent loop and persisted by Runtime. */
+export type AgentRunExecutionState = Readonly<Record<string, unknown>>;
+
 export type RuntimeToolCallState = "queued" | "running" | "completed" | "failed" | "indeterminate";
 
 export type AgentRecord = {
@@ -60,6 +63,7 @@ export type AgentRunRecord = {
   leaseId?: LeaseId;
   outcome?: Outcome;
   suspensionReason?: string;
+  executionState?: AgentRunExecutionState;
   createdAt: string;
   updatedAt: string;
 };

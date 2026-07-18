@@ -73,6 +73,7 @@ type RunRow = {
   lease_id: string | null;
   outcome_json: string | null;
   suspension_reason: string | null;
+  execution_state_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -238,8 +239,8 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       );
     } else {
       this.database.run(
-        "INSERT INTO agent_runs (id, agent_id, message_id, state, attempt, lease_id, outcome_json, suspension_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [run.id, run.agentId, run.messageId, run.state, run.attempt, null, null, null, run.createdAt, run.updatedAt],
+        "INSERT INTO agent_runs (id, agent_id, message_id, state, attempt, lease_id, outcome_json, suspension_reason, execution_state_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [run.id, run.agentId, run.messageId, run.state, run.attempt, null, null, null, null, run.createdAt, run.updatedAt],
       );
     }
     this.recordEventInternal("message_enqueued", { agentId: input.agentId, messageId });
@@ -351,8 +352,8 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       requireTransition("Runtime Message", message.id, message.state, "acknowledge", ["leased"]);
       const { timestamp } = timestampFor();
       this.database.run(
-        "UPDATE agent_runs SET state = ?, lease_id = NULL, suspension_reason = ?, updated_at = ? WHERE id = ?",
-        ["suspended", input.reason ?? null, timestamp, current.id],
+        "UPDATE agent_runs SET state = ?, lease_id = NULL, suspension_reason = ?, execution_state_json = ?, updated_at = ? WHERE id = ?",
+        ["suspended", input.reason ?? null, input.executionState ? json(input.executionState) : null, timestamp, current.id],
       );
       this.database.run(
         "UPDATE runtime_messages SET state = ?, updated_at = ? WHERE id = ?",
@@ -376,7 +377,7 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       const { timestamp } = timestampFor();
       const state = input.state ?? "completed";
       this.database.run(
-        "UPDATE agent_runs SET state = ?, lease_id = NULL, outcome_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE agent_runs SET state = ?, lease_id = NULL, outcome_json = ?, execution_state_json = NULL, updated_at = ? WHERE id = ?",
         [state, json(input.outcome), timestamp, current.id],
       );
       this.database.run(
@@ -428,7 +429,7 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       requireTransition("Runtime Message", message.id, message.state, "dead-letter", ["leased"]);
       const { timestamp } = timestampFor();
       this.database.run(
-        "UPDATE agent_runs SET state = 'failed', lease_id = NULL, outcome_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE agent_runs SET state = 'failed', lease_id = NULL, outcome_json = ?, execution_state_json = NULL, updated_at = ? WHERE id = ?",
         [json(input.outcome), timestamp, current.id],
       );
       this.database.run(
@@ -455,7 +456,7 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       const message = this.requireMessage(current.messageId);
       const { timestamp } = timestampFor();
       this.database.run(
-        "UPDATE agent_runs SET state = 'cancelled', lease_id = NULL, outcome_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE agent_runs SET state = 'cancelled', lease_id = NULL, outcome_json = ?, execution_state_json = NULL, updated_at = ? WHERE id = ?",
         [json(input.outcome), timestamp, current.id],
       );
       if (message.state === "queued" || message.state === "leased") {
@@ -754,6 +755,7 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       ...(row.lease_id ? { leaseId: row.lease_id as LeaseId } : {}),
       ...(row.outcome_json ? { outcome: parse(row.outcome_json) } : {}),
       ...(row.suspension_reason ? { suspensionReason: row.suspension_reason } : {}),
+      ...(row.execution_state_json ? { executionState: parse(row.execution_state_json) } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

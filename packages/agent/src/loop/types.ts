@@ -40,7 +40,16 @@ export type SessionState = {
   currentPhase: string;
   attempt: number;
   metrics: LoopMetrics;
-  status: "idle" | "running" | "completed" | "aborted" | "failed";
+  status: "idle" | "running" | "suspended" | "completed" | "aborted" | "failed";
+  continuation?: SessionContinuationState;
+};
+
+export type SessionContinuationState = {
+  isContinuing: boolean;
+  previousPayload?: unknown;
+  previousResults: Array<{ name: string; output?: unknown }>;
+  pendingInstruction?: string;
+  previousPhaseMessageId?: string;
 };
 
 export type AgentConfig = {
@@ -62,7 +71,7 @@ export type AgentConfig = {
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */
-  waitForInput?: () => Promise<AgentMessage[]>;
+  waitForInput?: (state?: SessionState) => Promise<AgentMessage[]>;
 };
 
 

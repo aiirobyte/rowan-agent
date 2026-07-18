@@ -55,9 +55,22 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     const suspended = await store.suspendRun({
       runId: enqueued.run.id,
       reason: "waiting for human input",
+      executionState: {
+        currentPhase: "plan",
+        attempt: 1,
+        metrics: {
+          iterations: 2,
+          phaseTransitions: [],
+          compactionCount: 0,
+          retryCount: 0,
+          startedAt: "2026-01-01T00:00:00.000+00:00",
+          startedAtMs: 1,
+        },
+      },
     });
     expect(suspended.state).toBe("suspended");
     expect(suspended.leaseId).toBeUndefined();
+    expect(suspended.executionState?.currentPhase).toBe("plan");
 
     await expect(
       store.completeRun({

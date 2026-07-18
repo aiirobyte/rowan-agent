@@ -357,12 +357,24 @@ async function runPhaseLoop(
   state: SessionState,
   registry: PhaseRegistry,
 ): Promise<RunResult> {
-  let currentPhaseId = registry.entryPhaseId!;
-  let isContinuing = false;
-  let previousPayload: unknown = undefined;
-  let previousPhaseMsgId: string | undefined = undefined;
-  let previousResults: Array<{ name: string; output?: unknown }> = [];
-  let pendingInstruction: string | undefined = undefined;
+  const resumingSuspendedRun = state.status === "suspended" && Boolean(state.currentPhase);
+  let currentPhaseId = resumingSuspendedRun ? state.currentPhase : registry.entryPhaseId!;
+  let isContinuing = resumingSuspendedRun
+    ? state.continuation?.isContinuing ?? true
+    : false;
+  if (resumingSuspendedRun) {
+    state.status = "running";
+  }
+  let previousPayload: unknown = resumingSuspendedRun ? state.continuation?.previousPayload : undefined;
+  let previousPhaseMsgId: string | undefined = resumingSuspendedRun
+    ? state.continuation?.previousPhaseMessageId
+    : undefined;
+  let previousResults: Array<{ name: string; output?: unknown }> = resumingSuspendedRun
+    ? state.continuation?.previousResults?.map((result) => ({ ...result })) ?? []
+    : [];
+  let pendingInstruction: string | undefined = resumingSuspendedRun
+    ? state.continuation?.pendingInstruction
+    : undefined;
 
   while (currentPhaseId) {
     // Build available phases list for route tool from the explicit registry.
@@ -524,7 +536,16 @@ async function runPhaseLoop(
           return completeRun(config, state, createOutcome.aborted());
         }
         config.emit?.({ type: "user_prompt_requested", phase: currentPhaseId, ts: createTimestamp() });
-        const userMessages = await config.waitForInput();
+        state.status = "suspended";
+        state.continuation = {
+          isContinuing,
+          previousPayload,
+          previousResults: previousResults.map((result) => ({ ...result })),
+          pendingInstruction,
+          previousPhaseMessageId: previousPhaseMsgId,
+        };
+        const userMessages = await config.waitForInput(state);
+        state.status = "running";
         const abortResult = LoopGuard.checkAbort(config.signal);
         if (abortResult.stopReason !== "none") {
           config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });

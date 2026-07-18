@@ -167,8 +167,11 @@ export class AgentRuntime {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    for (const binding of this.bindings.values()) {
-      binding.abort("Agent Runtime stopped.");
+    const suspendedAgents = new Set(
+      (await this.stateStore.listRuns({ states: ["suspended"] })).map((run) => run.agentId),
+    );
+    for (const [agentId, binding] of this.bindings) {
+      if (!suspendedAgents.has(agentId) && !binding.isSuspended()) binding.abort("Agent Runtime stopped.");
     }
     this.bindings.clear();
     this.pendingRuns.length = 0;
@@ -396,10 +399,10 @@ export class AgentRuntime {
     let suspended = false;
     const suspendedSignal = new Promise<void>((resolve) => { suspendedResolve = resolve; });
     const control: AgentRunControl = {
-      suspend: async (reason) => {
+      suspend: async (reason, executionState) => {
         if (suspended) return;
         suspended = true;
-        const current = await this.stateStore.suspendRun({ runId: job.runId, reason });
+        const current = await this.stateStore.suspendRun({ runId: job.runId, reason, executionState });
         this.notifyRun(current);
         this.publishEvents();
         suspendedResolve?.();
@@ -436,7 +439,7 @@ export class AgentRuntime {
           failRenewal(failure);
         });
       }, this.leaseRenewalIntervalMs);
-      const execution = binding.execute(leased.message.input, job.runId, control);
+      const execution = binding.execute(leased.message.input, job.runId, control, leased.run.executionState);
       const outcome = await Promise.race([
         execution.then((value) => ({ kind: "terminal" as const, value })).catch((error) => ({ kind: "error" as const, error })),
         suspendedSignal.then(() => ({ kind: "suspended" as const })),

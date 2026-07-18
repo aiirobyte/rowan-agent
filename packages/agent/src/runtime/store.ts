@@ -75,6 +75,7 @@ export type RenewLeaseInput = {
 export type SuspendRunInput = {
   runId: AgentRunId;
   reason?: string;
+  executionState?: import("./domain").AgentRunExecutionState;
 };
 
 export type CompleteRunInput = {

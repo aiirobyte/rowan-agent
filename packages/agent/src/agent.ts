@@ -12,7 +12,7 @@ import type {
   ToolResult,
   Unsubscribe,
 } from "./types";
-import type { AgentId, AgentRunId } from "./runtime/domain";
+import type { AgentId, AgentRunId, AgentRunExecutionState } from "./runtime/domain";
 import type { AgentRun } from "./runtime/agent-run";
 import type { RuntimeToolExecutionInput } from "./runtime/tool-runtime";
 import type { Outcome } from "./protocol";
@@ -44,7 +44,7 @@ export type StreamAgentOptions = AgentCommonOptions & {
 };
 
 export type AgentRunControl = {
-  suspend(reason?: string): Promise<void>;
+  suspend(reason?: string, state?: AgentRunExecutionState): Promise<void>;
 };
 
 const AGENT_CONSTRUCTION = Symbol("rowan.agent.construction");
@@ -52,8 +52,9 @@ const ATTACH_AGENT = Symbol("rowan.agent.attach");
 
 export type AttachedAgentBinding = {
   abort(reason?: string): void;
+  isSuspended(): boolean;
   persistInput(input: AgentMessage): Promise<void>;
-  execute(input: AgentMessage, runId: AgentRunId, control: AgentRunControl): Promise<Outcome>;
+  execute(input: AgentMessage, runId: AgentRunId, control: AgentRunControl, executionState?: AgentRunExecutionState): Promise<Outcome>;
 };
 
 export type AttachAgentInput = {
@@ -187,8 +188,9 @@ export async function attachAgent(input: AttachAgentInput): Promise<{
     agent,
     binding: {
       abort: (reason) => execution.abortFromRuntime(reason),
+      isSuspended: () => execution.isSuspended(),
       persistInput,
-      execute: (message, runId, control) => execution.executeAgentInput(message, runId, control),
+      execute: (message, runId, control, executionState) => execution.executeAgentInput(message, runId, control, executionState),
     },
   };
 }
