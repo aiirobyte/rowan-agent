@@ -120,6 +120,23 @@ test("Runtime reconstructs an existing Agent by Agent ID", async () => {
   }
 });
 
+test("Runtime returns its live Agent facade without reconstructing it", async () => {
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: sessions(),
+  });
+
+  const agent = await runtime.createAgent(options());
+  try {
+    expect(runtime.getAgent(agent.id)).toBe(agent);
+    expect(runtime.getAgent("agt_missing" as typeof agent.id)).toBeUndefined();
+  } finally {
+    await runtime.stop();
+  }
+
+  expect(runtime.getAgent(agent.id)).toBeUndefined();
+});
+
 test("Agent exposes no compatibility lifecycle", async () => {
   expect(Object.hasOwn(Agent, "create")).toBe(false);
   expect(Object.hasOwn(Agent, "resume")).toBe(false);

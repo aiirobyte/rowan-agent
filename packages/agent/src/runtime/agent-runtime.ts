@@ -75,6 +75,7 @@ export class AgentRuntime {
   private readonly leaseRenewalIntervalMs: number;
   private readonly toolRuntime: ToolRuntime;
   private readonly bindings = new Map<AgentId, AttachedAgentBinding>();
+  private readonly agents = new Map<AgentId, Agent>();
   private readonly runHandles = new Map<AgentRunId, RuntimeRunHandle>();
   private readonly runWaiters = new Map<AgentRunId, Set<() => void>>();
   private readonly pendingRuns: PendingJob[] = [];
@@ -184,6 +185,7 @@ export class AgentRuntime {
       if (!suspendedAgents.has(agentId) && !binding.isSuspended()) binding.abort("Agent Runtime stopped.");
     }
     this.bindings.clear();
+    this.agents.clear();
     this.pendingRuns.length = 0;
     this.scheduledRunIds.clear();
     this.pausedAgents.clear();
@@ -262,6 +264,10 @@ export class AgentRuntime {
 
   async getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined> {
     return this.stateStore.getRun(runId);
+  }
+
+  getAgent(agentId: AgentId): Agent | undefined {
+    return this.agents.get(agentId);
   }
 
   async getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined> {
@@ -354,6 +360,7 @@ export class AgentRuntime {
       executeTool: (input) => this.toolRuntime.execute(input),
     });
     this.bindAgent(record.id, attached.binding);
+    this.agents.set(record.id, attached.agent);
     return attached.agent;
   }
 
