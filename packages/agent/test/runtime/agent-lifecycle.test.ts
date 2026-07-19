@@ -149,7 +149,7 @@ test("AgentRuntime reads a persisted Runtime Message by Event message ID", async
   }
 });
 
-test("AgentRuntime exposes a catch-up barrier for durable Event consumers", async () => {
+test("AgentRuntime exposes a catch-up handle for durable Event consumers", async () => {
   const runtime = await AgentRuntime.start({
     stateStore: new InMemoryRuntimeStateStore(),
     sessionProvider: createSessionProvider(),
@@ -161,11 +161,77 @@ test("AgentRuntime exposes a catch-up barrier for durable Event consumers", asyn
       teamId: "team-1",
     }));
     const events: RuntimeEvent[] = [];
-    const stop = await runtime.consumeEventsAndCatchUp("catch-up-barrier", (event) => {
+    const consumer = runtime.consumeEvents("catch-up-barrier", (event) => {
       events.push(event);
     });
+    await consumer.caughtUp;
     expect(events.some((event) => event.kind === "run_enqueued" && event.runId === run.id)).toBe(true);
-    stop();
+    consumer.stop();
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("AgentRuntime lists historical Runs in stable createdAt and id order", async () => {
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: createSessionProvider(),
+  });
+  try {
+    const agent = await runtime.createAgent(agentOptions());
+    const first = await agent.send("first");
+    const second = await agent.send("second");
+    await first.result();
+    await second.result();
+    const runs = await runtime.listRuns({ agentId: agent.id });
+    expect(runs).toEqual([...runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || String(a.id).localeCompare(String(b.id))));
+    expect(await runtime.listRuns({ states: ["completed"] })).toHaveLength(2);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("stopping a consumer before catch-up rejects its barrier with AbortError", async () => {
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: createSessionProvider(),
+  });
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    const agent = await runtime.createAgent(agentOptions());
+    await agent.send("blocked consumer");
+    const consumer = runtime.consumeEvents("abort-before-catch-up", async () => {
+      entered();
+      await blocked;
+    });
+    await started;
+    consumer.stop();
+    await expect(consumer.caughtUp).rejects.toMatchObject({ name: "AbortError" });
+    release();
+  } finally {
+    release?.();
+    await runtime.stop();
+  }
+});
+
+test("AgentRun runtime event consumers return the same catch-up handle", async () => {
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: createSessionProvider(),
+  });
+  try {
+    const agent = await runtime.createAgent(agentOptions());
+    const run = await agent.send("run-specific events");
+    const events: RuntimeEvent[] = [];
+    const consumer = run.consumeRuntimeEvents("run-specific-consumer", (event) => {
+      events.push(event);
+    });
+    await consumer.caughtUp;
+    expect(events.every((event) => event.runId === run.id)).toBe(true);
+    consumer.stop();
   } finally {
     await runtime.stop();
   }

@@ -6,7 +6,7 @@ import type {
   AgentRunState,
   RuntimeEvent,
 } from "./domain";
-import type { RuntimeEventListener, RuntimeRunHandle } from "./agent-runtime";
+import type { RuntimeEventConsumer, RuntimeEventListener, RuntimeRunHandle } from "./agent-runtime";
 
 export type AgentRunListener = (state: AgentRunState) => void | Promise<void>;
 
@@ -15,7 +15,7 @@ type AgentRunHost = {
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
   waitForRunChange(runId: AgentRunId, state: AgentRunState, updatedAt: string): Promise<void>;
   abortRun(runId: AgentRunId, reason: string): Promise<void>;
-  consumeEvents(consumerId: string, listener: RuntimeEventListener): () => void;
+  consumeEvents(consumerId: string, listener: RuntimeEventListener): RuntimeEventConsumer;
 };
 
 const AGENT_RUN_CONSTRUCTION = Symbol("rowan.agentRun.construction");
@@ -77,7 +77,7 @@ export class AgentRun implements RuntimeRunHandle {
     return () => this.listeners.delete(listener);
   }
 
-  consumeRuntimeEvents(consumerId: string, listener: RuntimeEventListener): () => void {
+  consumeRuntimeEvents(consumerId: string, listener: RuntimeEventListener): RuntimeEventConsumer {
     return this.host.consumeEvents(consumerId, (event: RuntimeEvent) => {
       if (event.runId === this.id) return listener(event);
     });

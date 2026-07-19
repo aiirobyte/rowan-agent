@@ -452,20 +452,20 @@ test("Runtime Event Consumer advances its Checkpoint only after successful deliv
     });
     await runtime.createAgent(options());
     await waitFor(() => deliveries.length === 1);
-    stopFailingConsumer();
+    stopFailingConsumer.stop();
 
     const stopSuccessfulConsumer = runtime.consumeEvents(consumerId, (event) => {
       deliveries.push(`ok:${event.id}`);
     });
     await waitFor(() => deliveries.some((delivery) => delivery.startsWith("ok:")));
-    stopSuccessfulConsumer();
+    stopSuccessfulConsumer.stop();
 
     const deliveredAfterSuccess = deliveries.length;
     const stopCaughtUpConsumer = runtime.consumeEvents(consumerId, (event) => {
       deliveries.push(`unexpected:${event.id}`);
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    stopCaughtUpConsumer();
+    stopCaughtUpConsumer.stop();
 
     expect(deliveries[0]?.replace("failed:", "")).toBe(deliveries[1]?.replace("ok:", ""));
     expect(deliveries).toHaveLength(deliveredAfterSuccess);
@@ -492,7 +492,7 @@ test("Runtime Event Consumer atomically forwards one Event as Agent Input", asyn
     const target = await runtime.createAgent({ ...options(), stream: targetStream });
     await runtime.pauseAgent(target.id);
     const source = await runtime.createAgent(options());
-    const stop = runtime.consumeEvents(consumerId, (event) => {
+    const consumer = runtime.consumeEvents(consumerId, (event) => {
       if (event.kind !== "agent_created" || event.agentId !== source.id) return;
       return {
         type: "enqueue" as const,
@@ -505,7 +505,7 @@ test("Runtime Event Consumer atomically forwards one Event as Agent Input", asyn
     await waitFor(() => requests.length === 1);
     const targetContext = await (await sessionProvider.open(target.sessionId))!.buildAgentContext();
     expect(targetContext.messages.some((message) => message.id === forwardedInput.id)).toBe(true);
-    stop();
+    consumer.stop();
 
     let replayedEvents = 0;
     const stopCaughtUp = runtime.consumeEvents(consumerId, () => {
@@ -513,7 +513,7 @@ test("Runtime Event Consumer atomically forwards one Event as Agent Input", asyn
     });
     await runtime.createAgent(options());
     await waitFor(() => replayedEvents === 1);
-    stopCaughtUp();
+    stopCaughtUp.stop();
 
     expect(requests).toHaveLength(1);
     expect(replayedEvents).toBe(1);
@@ -534,7 +534,7 @@ test("forwarded Runtime Event input survives Agent reconstruction", async () => 
   };
   const target = await firstRuntime.createAgent({ ...options(), stream: firstStream });
   const source = await firstRuntime.createAgent(options());
-  const stop = firstRuntime.consumeEvents("reconstruct-forwarded-input", (event) => {
+  const consumer = firstRuntime.consumeEvents("reconstruct-forwarded-input", (event) => {
     if (event.kind !== "agent_created" || event.agentId !== source.id) return;
     return {
       type: "enqueue" as const,
@@ -543,7 +543,7 @@ test("forwarded Runtime Event input survives Agent reconstruction", async () => 
     };
   });
   await waitFor(() => firstRequests.length === 1);
-  stop();
+  consumer.stop();
   await firstRuntime.stop();
 
   const secondRequests: string[] = [];
@@ -580,7 +580,7 @@ test("reconstructing an unbound Agent runs input forwarded while it was offline"
 
   try {
     const source = await runtime.createAgent(options());
-    const stop = runtime.consumeEvents("offline-target-forwarding", (event) => {
+    const consumer = runtime.consumeEvents("offline-target-forwarding", (event) => {
       if (event.kind !== "agent_created" || event.agentId !== source.id) return;
       return {
         type: "enqueue" as const,
@@ -595,7 +595,7 @@ test("reconstructing an unbound Agent runs input forwarded while it was offline"
 
     await runtime.reconstructAgent(targetRecord.id, { ...options(), stream });
     await waitFor(() => requests.length === 1);
-    stop();
+    consumer.stop();
     expect(requests[0]).toContain("Run after reconstruction.");
   } finally {
     await runtime.stop();
@@ -610,7 +610,7 @@ test("slow Runtime Event Consumers do not block durable state transitions", asyn
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const consumerId = "slow-runtime-consumer";
-  const stop = runtime.consumeEvents(consumerId, () => gate);
+  const consumer = runtime.consumeEvents(consumerId, () => gate);
 
   try {
     const creation = runtime.createAgent(options());
@@ -621,7 +621,7 @@ test("slow Runtime Event Consumers do not block durable state transitions", asyn
     expect(result).toBe("created");
   } finally {
     release();
-    stop();
+    consumer.stop();
     await runtime.stop();
   }
 });

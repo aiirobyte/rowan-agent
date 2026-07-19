@@ -72,6 +72,13 @@ Agent creation and reconstruction, durable input, scheduling, leases, Runtime
 Events, and Tool Call control. Always stop it during host shutdown.
 
 ```ts
+type RuntimeEventConsumer = {
+  caughtUp: Promise<void>;
+  stop(): void;
+};
+```
+
+```ts
 type AgentRuntimeOptions = {
   stateStore: InMemoryRuntimeStateStore | SqliteRuntimeStateStore;
   sessionProvider?: InMemorySessionStore | JsonlSessionStore;
@@ -91,16 +98,13 @@ class AgentRuntime {
   getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined>;
   getToolCall(toolCallId: RuntimeToolCallId): Promise<RuntimeToolCall | undefined>;
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
+  listRuns(input?: { agentId?: AgentId; states?: AgentRunRecord["state"][] }): Promise<AgentRunRecord[]>;
   listActiveRuns(): Promise<AgentRunRecord[]>;
   abortRun(runId: AgentRunId, reason?: string): Promise<void>;
   consumeEvents(
     consumerId: string,
     listener: RuntimeEventListener,
-  ): () => void;
-  consumeEventsAndCatchUp(
-    consumerId: string,
-    listener: RuntimeEventListener,
-  ): Promise<() => void>;
+  ): RuntimeEventConsumer;
   listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]>;
   stop(): Promise<void>;
 }
@@ -264,7 +268,7 @@ class AgentRun {
   consumeRuntimeEvents(
     consumerId: string,
     listener: (event: RuntimeEvent) => void | Promise<void>,
-  ): () => void;
+  ): RuntimeEventConsumer;
   result(): Promise<Outcome>;
   abort(reason?: string): Promise<void>;
 }
@@ -429,9 +433,10 @@ is asynchronous, so a slow or unavailable consumer does not block state
 transitions.
 
 ```ts
-const stopConsuming = runtime.consumeEvents("deployment-observer", async (event) => {
+const consumer = runtime.consumeEvents("deployment-observer", async (event) => {
   await deliverRuntimeFact(event);
 });
+await consumer.caughtUp;
 ```
 
 Runtime Messages and their related Events are committed together. A durable
@@ -440,12 +445,13 @@ business correlation metadata from its Message, and update an external index
 before its Checkpoint advances:
 
 ```ts
-const stopIndexing = runtime.consumeEvents("everyield-run-index", async (event) => {
+const indexConsumer = runtime.consumeEvents("everyield-run-index", async (event) => {
   if (event.kind !== "run_enqueued" || !event.messageId || !event.runId) return;
   const message = await runtime.getMessage(event.messageId);
   if (!message) throw new Error(`Runtime Message not found: ${event.messageId}`);
   await upsertRunIndex(event.runId, message.input.metadata);
 });
+await indexConsumer.caughtUp;
 ```
 
 If the listener fails, Rowan leaves the Checkpoint unchanged and redelivers the
@@ -468,7 +474,7 @@ Event into Agent Input. Rowan enqueues the input and advances the Consumer
 Checkpoint in one Runtime State transaction, then schedules the target Agent.
 
 ```ts
-const stopRouting = runtime.consumeEvents("delegated-results", (event) => {
+const routingConsumer = runtime.consumeEvents("delegated-results", (event) => {
   if (event.kind !== "run_completed" || !event.agentId) return;
   return {
     type: "enqueue",
@@ -478,6 +484,7 @@ const stopRouting = runtime.consumeEvents("delegated-results", (event) => {
     }),
   };
 });
+await routingConsumer.caughtUp;
 ```
 
 Only one live subscription may use a Consumer ID. If delivery fails, its
@@ -490,8 +497,10 @@ delivery contract filtered to one Run.
 is persisted with the Run and echoed on `run_enqueued`, suspension, completion,
 and abort Event payloads. `listActiveRuns()` returns queued, running, and
 suspended Runs for host-side Agent reconstruction with current `AgentOptions`.
-Use `consumeEventsAndCatchUp()` when startup must wait until all Events through
-the durable Consumer checkpoint have been delivered before recovery continues.
+Use the returned `consumer.caughtUp` Promise when startup must wait until all
+Events through the durable Consumer checkpoint have been delivered before
+recovery continues. Call `consumer.stop()` during shutdown. `run.consumeRuntimeEvents()`
+returns the same handle shape.
 
 ### Parallel Phase Events
 

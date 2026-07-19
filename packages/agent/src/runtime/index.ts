@@ -5,6 +5,7 @@ export { SqliteRuntimeStateStore } from "./sqlite-store";
 export { AgentRuntime } from "./agent-runtime";
 export type {
   AgentRuntimeOptions,
+  RuntimeEventConsumer,
   RuntimeEventDisposition,
 } from "./agent-runtime";
 export { AgentRun } from "./agent-run";

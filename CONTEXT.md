@@ -100,9 +100,9 @@ _Avoid_: Stream subscriber, Extension listener
 Opaque host-owned correlation data persisted with an Agent Run and echoed on its enqueue and terminal Runtime Events. Rowan stores and transports it without interpreting its fields.
 _Avoid_: Business state, Outcome payload
 
-**Active Run Listing**:
-The Runtime view of all queued, running, and suspended Agent Runs. It is used by a host to reconstruct the corresponding Agent Bindings with current Agent Options.
-_Avoid_: Historical Run query, Workflow index
+**Run Listing**:
+The Runtime view of Agent Runs, optionally filtered by Agent or lifecycle state, returned in stable `createdAt, runId` order. Hosts use active listings for reconstruction and all-state listings for read-only status views.
+_Avoid_: Workflow index, Business Run record
 
 **Checkpoint**:
 The last contiguous Runtime Event sequence durably acknowledged by one Runtime Event Consumer. Checkpoints belong to consumers, not to Runtime Events globally and cannot skip undelivered Events.

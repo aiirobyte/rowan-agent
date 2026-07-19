@@ -55,6 +55,7 @@ export type { ExecutionTurn, Outcome, ModelTranscript } from "./protocol";
 export { AgentRuntime } from "./runtime/agent-runtime";
 export type {
   AgentRuntimeOptions,
+  RuntimeEventConsumer,
   RuntimeEventDisposition,
   RuntimeEventListener,
 } from "./runtime/agent-runtime";

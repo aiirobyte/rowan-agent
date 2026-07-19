@@ -71,7 +71,7 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
     yield { type: "done" };
   };
   const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
-  const unsubscribe = runtime.consumeEvents("runtime-slices", (event) => { events.push(event); });
+  const consumer = runtime.consumeEvents("runtime-slices", (event) => { events.push(event); });
   try {
     const agent = await runtime.createAgent(options({ stream, context: {
       ...createTestContext(),
@@ -106,7 +106,7 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
     expect(first.inputRequest).toBeUndefined();
     expect(events.map((event) => event.kind)).toEqual(expect.arrayContaining(["run_suspended", "agent_paused", "agent_resumed"]));
   } finally {
-    unsubscribe();
+    consumer.stop();
     await runtime.stop();
   }
 });
@@ -141,7 +141,7 @@ test("repeated suspended Agent Input persists each suspension on the same Run", 
     },
   };
   const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
-  const unsubscribe = runtime.consumeEvents("repeated-suspension", (event) => { events.push(event); });
+  const consumer = runtime.consumeEvents("repeated-suspension", (event) => { events.push(event); });
   try {
     const agent = await runtime.createAgent(options({ context, stream }));
     const first = await agent.send("first input");
@@ -156,7 +156,7 @@ test("repeated suspended Agent Input persists each suspension on the same Run", 
     await third.result();
     expect(events.filter((event) => event.kind === "run_suspended")).toHaveLength(2);
   } finally {
-    unsubscribe();
+    consumer.stop();
     await runtime.stop();
   }
 });

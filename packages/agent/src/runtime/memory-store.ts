@@ -163,7 +163,7 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     return clone([...this.runs.values()]
       .filter((run) => input.agentId === undefined || run.agentId === input.agentId)
       .filter((run) => !input.states || input.states.includes(run.state))
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || String(a.id).localeCompare(String(b.id))));
   }
 
   async listActiveRuns(): Promise<AgentRunRecord[]> {

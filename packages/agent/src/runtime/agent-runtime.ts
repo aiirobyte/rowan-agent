@@ -17,7 +17,7 @@ import type {
 } from "./domain";
 import type { AgentMessage, Outcome } from "../protocol";
 import type { SessionManagerProvider } from "../harness/session/session-manager";
-import type { RuntimeStateStore } from "./store";
+import type { ListRunsInput, RuntimeStateStore } from "./store";
 import { ToolRuntime, type ToolRuntimePolicy } from "./tool-runtime";
 import { createAgentRun } from "./agent-run";
 
@@ -51,6 +51,11 @@ export type RuntimeEventDisposition = {
 export type RuntimeEventListener = (
   event: RuntimeEvent,
 ) => RuntimeEventDisposition | void | Promise<RuntimeEventDisposition | void>;
+
+export type RuntimeEventConsumer = {
+  caughtUp: Promise<void>;
+  stop(): void;
+};
 
 let activeRuntime: AgentRuntime | undefined;
 
@@ -270,6 +275,10 @@ export class AgentRuntime {
     return this.stateStore.listActiveRuns();
   }
 
+  async listRuns(input?: ListRunsInput): Promise<AgentRunRecord[]> {
+    return this.stateStore.listRuns(input);
+  }
+
   getAgent(agentId: AgentId): Agent | undefined {
     return this.agents.get(agentId);
   }
@@ -302,27 +311,13 @@ export class AgentRuntime {
     this.publishEvents();
   }
 
-  consumeEvents(consumerId: string, listener: RuntimeEventListener): () => void {
+  consumeEvents(consumerId: string, listener: RuntimeEventListener): RuntimeEventConsumer {
     const subscription = this.registerEventConsumer(consumerId, listener);
-    void subscription.ready.catch(() => undefined);
-    return subscription.stop;
+    void subscription.caughtUp.catch(() => undefined);
+    return subscription;
   }
 
-  async consumeEventsAndCatchUp(consumerId: string, listener: RuntimeEventListener): Promise<() => void> {
-    const subscription = this.registerEventConsumer(consumerId, listener);
-    try {
-      await subscription.ready;
-      return subscription.stop;
-    } catch (error) {
-      subscription.stop();
-      throw error;
-    }
-  }
-
-  private registerEventConsumer(consumerId: string, listener: RuntimeEventListener): {
-    stop: () => void;
-    ready: Promise<void>;
-  } {
+  private registerEventConsumer(consumerId: string, listener: RuntimeEventListener): RuntimeEventConsumer {
     this.assertRunning();
     if (consumerId.trim().length === 0) {
       throw new Error("Runtime Event Consumer ID must not be empty.");
@@ -337,13 +332,39 @@ export class AgentRuntime {
       redeliver: false,
     };
     this.eventSubscriptions.set(consumerId, subscription);
+    let caughtUpSettled = false;
+    let resolveCaughtUp!: () => void;
+    let rejectCaughtUp!: (error: unknown) => void;
+    const caughtUp = new Promise<void>((resolve, reject) => {
+      resolveCaughtUp = resolve;
+      rejectCaughtUp = reject;
+    });
     const stop = () => {
       if (this.eventSubscriptions.get(consumerId) === subscription) {
         this.eventSubscriptions.delete(consumerId);
       }
+      if (!caughtUpSettled) {
+        caughtUpSettled = true;
+        const error = new Error("Runtime Event Consumer stopped before catch-up completed.");
+        error.name = "AbortError";
+        rejectCaughtUp(error);
+      }
     };
-    const ready = this.deliverEvents(subscription);
-    return { stop, ready };
+    void this.deliverEvents(subscription).then(
+      () => {
+        if (!caughtUpSettled) {
+          caughtUpSettled = true;
+          resolveCaughtUp();
+        }
+      },
+      (error) => {
+        if (!caughtUpSettled) {
+          caughtUpSettled = true;
+          rejectCaughtUp(error);
+        }
+      },
+    );
+    return { caughtUp, stop };
   }
 
   async listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]> {

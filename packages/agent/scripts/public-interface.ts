@@ -50,6 +50,7 @@ export const publicTypeExports = [
   "PhaseRegistry",
   "PhaseState",
   "RuntimeEvent",
+  "RuntimeEventConsumer",
   "RuntimeEventCursor",
   "RuntimeEventDisposition",
   "RuntimeEventKind",
