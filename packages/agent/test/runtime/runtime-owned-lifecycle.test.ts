@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   Agent,
   AgentRun,
@@ -12,9 +15,9 @@ import {
 } from "../../src";
 import Type from "typebox";
 import { ProviderError } from "@rowan-agent/models";
-import { InMemorySessionManager } from "../../src/harness/session";
+import { InMemorySessionManager, JsonlSessionStore } from "../../src/harness/session";
 import type { CreateSessionManagerInput, MessageSessionEntry, SessionManager } from "../../src/harness/session/session-manager";
-import { buildTestPartial, buildToolCallPartial, scriptedStream } from "../support/scripted-stream";
+import { buildTestPartial, buildToolCallPartial, scriptedStream, yieldRouteToolCall } from "../support/scripted-stream";
 
 function sessions(): SessionManagerProvider {
   const managers = new Map<string, SessionManager>();
@@ -69,6 +72,164 @@ test("Runtime creates an Agent that accepts durable input", async () => {
     const outcome = await run.result();
     expect(outcome.message).toContain("Direct response");
     expect(states).toContain("completed");
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("Runtime persists a route tool result with the matching call ID", async () => {
+  const sessionProvider = sessions();
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider,
+  });
+
+  try {
+    const agent = await runtime.createAgent({
+      ...options(),
+      stream: async function* () {
+        yield* yieldRouteToolCall("stop", "Done.");
+        yield { type: "done" };
+      },
+    });
+    await (await agent.send("finish")).result();
+
+    const manager = await sessionProvider.open(agent.sessionId) as InMemorySessionManager;
+    const entries = await manager.listEntries();
+    const messages = entries
+      .filter((entry): entry is MessageSessionEntry => entry.type === "message")
+      .map((entry) => entry.message);
+    const routeCall = messages
+      .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+      .find((part) => part.type === "tool_use" && part.name === "route");
+    const routeCallId = routeCall?.type === "tool_use" ? routeCall.id : undefined;
+    if (!routeCallId) throw new Error("Expected a persisted route tool call.");
+    expect(messages
+      .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+      .find((part) => part.type === "tool_result" && part.toolUseId === routeCallId)).toEqual({
+        type: "tool_result",
+        toolUseId: routeCallId,
+        content: '{"ok": true}',
+      });
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("Runtime persists route results when another input is queued", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-route-result-"));
+  const sessionProvider = new JsonlSessionStore(join(root, "sessions"));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider,
+  });
+
+  try {
+    const agent = await runtime.createAgent({
+      ...options(),
+      stream: async function* () {
+        calls += 1;
+        if (calls === 1) await gate;
+        yield* yieldRouteToolCall("stop", `Done ${calls}.`);
+        yield { type: "done" };
+      },
+    });
+    const first = await agent.send("first");
+    const second = await agent.send("second");
+    release();
+    await first.result();
+    await second.result();
+
+    const manager = await sessionProvider.open(agent.sessionId);
+    const messages = (await manager?.buildAgentContext())?.messages ?? [];
+    const routeCalls = messages
+      .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+      .filter((part) => part.type === "tool_use" && part.name === "route");
+    const routeResults = messages
+      .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+      .filter((part) => part.type === "tool_result");
+    expect(routeCalls).toHaveLength(2);
+    expect(routeResults).toHaveLength(2);
+    for (const routeCall of routeCalls) {
+      if (routeCall.type !== "tool_use") continue;
+      expect(routeResults.some((result) => result.type === "tool_result" && result.toolUseId === routeCall.id)).toBe(true);
+    }
+  } finally {
+    await runtime.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Runtime canonicalizes Tool Call identity before the next model request", async () => {
+  const providerToolCallId = "call_provider_identity";
+  let modelCalls = 0;
+  let runtimeToolCallId: string | undefined;
+  const tool: Tool = {
+    name: "identity",
+    description: "Return the Runtime Tool Call identity.",
+    parameters: Type.Object({}),
+    async execute(_args, context) {
+      runtimeToolCallId = context.toolCallId;
+      return {
+        toolCallId: context.toolCallId,
+        toolName: "identity",
+        ok: true,
+        content: "done",
+      };
+    },
+  };
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const args = "{}";
+      const partial = buildToolCallPartial(providerToolCallId, tool.name, args);
+      yield { type: "tool_call_start", id: providerToolCallId, name: tool.name, partial };
+      yield { type: "tool_call_delta", id: providerToolCallId, arguments: args, partial };
+      yield { type: "tool_call_end", id: providerToolCallId, name: tool.name, arguments: args, partial };
+      yield { type: "done" };
+      return;
+    }
+
+    const toolResult = request.messages
+      .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+      .find((part) => part.type === "tool_result");
+    if (toolResult?.type !== "tool_result" || toolResult.toolUseId !== providerToolCallId) {
+      throw new ProviderError({
+        code: "invalid_tool_call_id",
+        message: `Expected tool result for ${providerToolCallId}, received ${toolResult?.type === "tool_result" ? toolResult.toolUseId : "none"}.`,
+        retryable: false,
+      });
+    }
+    yield { type: "text_delta", text: "Tool result accepted.", partial: buildTestPartial("Tool result accepted.") };
+    yield { type: "done" };
+  };
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: sessions(),
+  });
+
+  try {
+    const base = options();
+    const agent = await runtime.createAgent({
+      ...base,
+      context: { ...base.context, tools: [tool] },
+      stream,
+      afterToolCall: async ({ result }) => ({
+        ...result,
+        toolCallId: "call_reviewer_override",
+      }),
+    });
+    const run = await agent.send("use identity");
+    const outcome = await run.result();
+
+    expect(runtimeToolCallId).toMatch(/^call_/);
+    expect(runtimeToolCallId).not.toBe(providerToolCallId);
+    expect(modelCalls).toBe(2);
+    expect(run.status).toBe("completed");
+    expect(outcome.message).toBe("Tool result accepted.");
   } finally {
     await runtime.stop();
   }
@@ -411,7 +572,7 @@ test("Lease renewal failure aborts the attempt and retries it as an Infrastructu
   }
 });
 
-test("Runtime startup recovers every Lease abandoned by the previous process", async () => {
+test("Runtime startup recovers an expired Lease abandoned by the previous process", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const agent = await stateStore.createAgent({ sessionId: "session-abandoned" });
   const enqueued = await stateStore.enqueueAgentInput({
@@ -426,7 +587,8 @@ test("Runtime startup recovers every Lease abandoned by the previous process", a
   await stateStore.leaseRun({
     runId: enqueued.run.id,
     workerId: "dead-process",
-    leaseDurationMs: 48 * 60 * 60 * 1_000,
+    leaseDurationMs: 10,
+    now: new Date("2026-01-01T00:00:00.000Z"),
   });
 
   const runtime = await AgentRuntime.start({ stateStore });

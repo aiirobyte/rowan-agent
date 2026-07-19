@@ -57,8 +57,9 @@ function extractUserRequest(messages: LlmRequest["messages"]): string {
   // Find the first user message (the actual user input, not phase instructions)
   for (const msg of messages) {
     if (msg.role === "user" && typeof msg.content === "string") {
-      // Skip phase instruction messages (they start with "Phase:")
-      if (msg.content.startsWith("Phase:")) continue;
+      // Skip phase instruction messages; the runtime sends them as user
+      // context, before the actual user input.
+      if (msg.content.startsWith("Phase:") || msg.content.startsWith("<phase_content")) continue;
       return msg.content;
     }
   }

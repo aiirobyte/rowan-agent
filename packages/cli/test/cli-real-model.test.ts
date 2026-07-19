@@ -481,7 +481,7 @@ test("CLI config reports resolved flags without exposing API key material", asyn
         idOrPath: "example",
       },
     ]);
-    expect(config.tools).toEqual(["read", "write", "edit", "bash"]);
+    expect(config.tools).toEqual(["read", "bash", "edit", "write"]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

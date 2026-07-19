@@ -265,6 +265,38 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
   }
 });
 
+test("Tool Runtime keeps its durable Tool Call identity internal", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const agent = await stateStore.createAgent({ sessionId: "session-tool-identity" });
+  const enqueued = await stateStore.enqueueAgentInput({ agentId: agent.id, input: createMessage("user", "tools") });
+  const leased = await stateStore.leaseRun({ runId: enqueued.run.id, workerId: "test", leaseDurationMs: 10_000 });
+  let executionToolCallId: string | undefined;
+  const runtime = new ToolRuntime(stateStore);
+
+  const result = await runtime.execute({
+    agentId: agent.id,
+    runId: leased.run.id,
+    tool: {
+      name: "identity",
+      description: "identity",
+      parameters: Type.Object({}),
+      execute: async (_args, context) => {
+        executionToolCallId = context.toolCallId;
+        return { toolCallId: context.toolCallId, toolName: "identity", ok: true, content: "done" };
+      },
+    },
+    toolCall: { id: "call_provider_identity", name: "identity", args: {} },
+    context: { skills: [] },
+  });
+
+  if (!executionToolCallId) throw new Error("Expected the Tool to receive a Runtime Call ID.");
+  expect(executionToolCallId).toMatch(/^call_/);
+  expect(executionToolCallId).not.toBe("call_provider_identity");
+  expect(result.toolCallId).toBe(executionToolCallId);
+  const completed = (await stateStore.listEvents()).find((event) => event.kind === "tool_call_completed");
+  expect(String(completed?.toolCallId)).toBe(executionToolCallId);
+});
+
 test("Tool Runtime narrows capabilities, enforces concurrency, and records indeterminate aborts", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const agent = await stateStore.createAgent({ sessionId: "session-tools" });

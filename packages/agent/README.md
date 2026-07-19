@@ -136,9 +136,9 @@ dead-lettered.
 
 ### Process Recovery
 
-Runtime startup recovers abandoned Leases into durable queued work without
-constructing Agent Bindings. The host supplies its current executable resources
-when it reconstructs an Agent:
+Runtime startup and periodic recovery return expired Leases to durable queued
+work without disturbing unexpired Leases owned by another process. The host
+supplies its current executable resources when it reconstructs an Agent:
 
 ```ts
 const runtime = await AgentRuntime.start({ stateStore, sessionProvider });
@@ -337,17 +337,17 @@ const tools = createCoreTools({
   bashTimeoutMs?,      // default: 30s
   maxBashOutputBytes?, // default: 64KB
 });
-// Returns: read, write, edit, bash
+// Returns: read, bash, edit, write
 ```
 
 ### Built-in Tools
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `read` | Reads a text file within the workspace | `path` (required), `maxBytes?`, `type?` ("skill" \| "phase" \| "markdown" \| "code" \| "file") |
-| `write` | Writes content to a file, creating parent directories as needed | `path` (required), `content` (required) |
-| `edit` | Replaces exact `oldText` with `newText` in a file | `path` (required), `oldText` (required), `newText` (required), `replaceAll?` |
-| `bash` | Runs a bash command within the workspace | `command` (required), `cwd?`, `timeoutMs?`, `maxOutputBytes?` |
+| `read` | Reads a file, optionally by line range | `path` (required), `offset?`, `limit?` |
+| `bash` | Runs a bash command in the workspace | `command` (required), `timeout?` (seconds) |
+| `edit` | Applies exact replacements, including multiple disjoint edits in one call | `path` (required), `edits[]` (each with `oldText` and `newText`) |
+| `write` | Creates or overwrites a file | `path` (required), `content` (required) |
 
 ### Custom Tools
 

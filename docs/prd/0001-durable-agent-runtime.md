@@ -98,7 +98,7 @@ The live Agent Registry is private to the Runtime. Successful Agent creation or 
 
 The durable Agent record contains Agent ID, Session ID, lifecycle state, and timestamps. Agent Options remain process-local because they may contain executable model, Tool, Phase, Extension, and callback definitions; Rowan does not persist or infer them.
 
-On restart, the Runtime recovers abandoned Leases into durable queued work without synthesizing Agent Bindings. The host calls `reconstructAgent(agentId, currentOptions)` for an Agent it can currently construct; reconstruction restores the original Session and establishes the Binding under the original Agent ID. Establishing an active Binding automatically schedules that Agent's queued Runs. A suspended Agent may remain unbound until the host has new input, then reconstruct before `send()` resumes the same Run.
+On restart and during periodic recovery, the Runtime recovers expired Leases into durable queued work without disturbing unexpired Leases owned by another process or synthesizing Agent Bindings. The host calls `reconstructAgent(agentId, currentOptions)` for an Agent it can currently construct; reconstruction restores the original Session and establishes the Binding under the original Agent ID. Establishing an active Binding automatically schedules that Agent's queued Runs. A suspended Agent may remain unbound until the host has new input, then reconstruct before `send()` resumes the same Run.
 
 ## Runtime Messages
 
@@ -159,7 +159,7 @@ The host chooses the Runtime Store location. A typical embedder may use one glob
 11. Runtime Commands preempt queued or active work according to their control semantics.
 12. Runtime Messages are delivered at least once and deduplicated by stable identity.
 13. Scheduler retries only explicit Infrastructure Failures, renews active Leases, and atomically dead-letters exhausted work.
-14. Runtime startup recovers abandoned Leases without constructing Agent Bindings or serializing executable Agent definitions.
+14. Runtime startup and periodic recovery reclaim expired Leases without disturbing unexpired Leases, constructing Agent Bindings, or serializing executable Agent definitions.
 15. Hosts explicitly reconstruct Agent Bindings with current Agent Options; suspended Agents may defer reconstruction until new input arrives.
 16. Runtime control state and Session conversation state remain logically and physically separate.
 17. Runtime Events needed for recovery are durable; consumer Checkpoints advance only after successful delivery; Stream Events remain transient.

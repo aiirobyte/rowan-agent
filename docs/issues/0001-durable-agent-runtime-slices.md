@@ -116,11 +116,11 @@ Depends on: Slice 6.
 
 ## Slice 8: Recover durable work through explicit Agent reconstruction
 
-Recover abandoned Leases during Runtime startup and resume durable work after the host explicitly reconstructs an Agent with current Options.
+Recover expired Leases during Runtime startup and periodic recovery, then resume durable work after the host explicitly reconstructs an Agent with current Options.
 
 Acceptance:
 
-- Runtime startup returns abandoned running work to a durable queued state without constructing Agent Bindings.
+- Runtime startup and periodic recovery return expired running work to a durable queued state without disturbing unexpired Leases or constructing Agent Bindings.
 - `reconstructAgent(agentId, currentOptions)` restores the original Session and establishes the private Binding.
 - Establishing an active Binding automatically schedules that Agent's queued Runs.
 - A suspended Agent may remain unbound until the host reconstructs it before sending new input.

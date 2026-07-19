@@ -60,6 +60,25 @@ function removePhaseMessage(messages: AgentMessage[], msgId: string | undefined)
   if (idx !== -1) messages.splice(idx, 1);
 }
 
+function findLatestUserInputMessage(messages: AgentMessage[]): AgentMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const kind = message.metadata?.kind;
+    if (message.role === "user" && kind !== "phase_prompt" && kind !== "phase_input") {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+function moveMessageBefore(messages: AgentMessage[], messageId: string, targetId: string): void {
+  const messageIndex = messages.findIndex((message) => message.id === messageId);
+  const targetIndex = messages.findIndex((message) => message.id === targetId);
+  if (messageIndex === -1 || targetIndex === -1 || messageIndex < targetIndex) return;
+  const [message] = messages.splice(messageIndex, 1);
+  if (message) messages.splice(targetIndex, 0, message);
+}
+
 /** Normalize payload: parse JSON strings to objects for consistent downstream handling. */
 function normalizePayload(payload: unknown): unknown {
   if (typeof payload === 'string') {
@@ -280,6 +299,16 @@ function createToolResultContent(result: ToolResult): LlmContentPart[] {
   ];
 }
 
+function createRouteToolResultContent(toolCall: ToolCall): LlmContentPart[] {
+  return [
+    {
+      type: "tool_result",
+      toolUseId: toolCall.id,
+      content: '{"ok": true}',
+    },
+  ];
+}
+
 async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
   const executableToolNames = new Set(
     ctx.context.tools
@@ -307,6 +336,14 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       phase: ctx.phase.name,
       toolCalls: collected.toolCalls,
     };
+
+    for (const toolCall of collected.toolCalls) {
+      if (toolCall.name !== PhaseRouteTool) continue;
+      const messageId = ctx.messageManager.start("tool", createRouteToolResultContent(toolCall), {
+        phase: ctx.phase.id,
+      });
+      await ctx.messageManager.end(messageId);
+    }
 
     const executableToolCalls = collected.toolCalls.filter((toolCall) =>
       executableToolNames.has(toolCall.name),
@@ -378,6 +415,7 @@ async function runPhaseLoop(
   let previousPhaseMsgId: string | undefined = resumingSuspendedRun
     ? state.continuation?.previousPhaseMessageId
     : undefined;
+  let previousPhaseInputMsgId: string | undefined;
   let previousResults: Array<{ name: string; output?: unknown }> = resumingSuspendedRun
     ? state.continuation?.previousResults?.map((result) => ({ ...result })) ?? []
     : [];
@@ -395,7 +433,9 @@ async function runPhaseLoop(
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
       return completeRun(config, state, createOutcome.aborted());
     }
 
@@ -474,13 +514,17 @@ async function runPhaseLoop(
       if (extBefore.abort) {
         config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
+        removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
+        previousPhaseInputMsgId = undefined;
         return completeRun(config, state, extBefore.abort);
       }
       if (extBefore.skip) {
         config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
+        removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
+        previousPhaseInputMsgId = undefined;
         if (extBefore.skip.route === "stop") {
           return completeRun(config, state, {
             id: "skip",
@@ -507,13 +551,32 @@ async function runPhaseLoop(
       // ephemeral prompt.
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
       removePhaseMessage(phaseContext.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
+      removePhaseMessage(phaseContext.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
+      const latestUserInputMessage = findLatestUserInputMessage(config.context.messages);
+      const lastMessageBeforePhase = config.context.messages.at(-1);
       previousPhaseMsgId = injectPhaseContent(
         phase,
         { results: previousResults, instruction: pendingInstruction },
         config.context.messages,
         phaseContext.messages,
       );
+      if (previousPhaseMsgId) {
+        if (lastMessageBeforePhase?.role === "user") {
+          moveMessageBefore(config.context.messages, previousPhaseMsgId, lastMessageBeforePhase.id);
+          moveMessageBefore(phaseContext.messages, previousPhaseMsgId, lastMessageBeforePhase.id);
+        } else if (latestUserInputMessage) {
+          const phaseInputMessage = createMessage("user", latestUserInputMessage.content, {
+            kind: "phase_input",
+            phase: phase.id,
+          });
+          config.context.messages.push(phaseInputMessage);
+          phaseContext.messages.push(phaseInputMessage);
+          previousPhaseInputMsgId = phaseInputMessage.id;
+        }
+      }
       previousResults = [];
       pendingInstruction = undefined;
     }
@@ -537,7 +600,9 @@ async function runPhaseLoop(
       if (extAfter.abort) {
         config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
+        removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
+        previousPhaseInputMsgId = undefined;
         return completeRun(config, state, extAfter.abort);
       }
       if (extAfter.retry && (phase.run || phase.factory)) {
@@ -558,7 +623,9 @@ async function runPhaseLoop(
         if (preAbort.stopReason !== "none") {
           config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
           removePhaseMessage(config.context.messages, previousPhaseMsgId);
+          removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
           previousPhaseMsgId = undefined;
+          previousPhaseInputMsgId = undefined;
           return completeRun(config, state, createOutcome.aborted());
         }
         const requestedAt = createTimestamp();
@@ -586,7 +653,9 @@ async function runPhaseLoop(
         if (abortResult.stopReason !== "none") {
           config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
           removePhaseMessage(config.context.messages, previousPhaseMsgId);
+          removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
           previousPhaseMsgId = undefined;
+          previousPhaseInputMsgId = undefined;
           return completeRun(config, state, createOutcome.aborted());
         }
         for (const message of userMessages) {
@@ -597,7 +666,9 @@ async function runPhaseLoop(
       }
       config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
       return completeRun(config, state, createOutcome.default(output, config.context.messages));
     }
 
@@ -664,7 +735,9 @@ async function runPhaseLoop(
       const entryPhaseId = phase.target ?? registry.entryPhaseId!;
       if (entryPhaseId === "stop") {
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
+        removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
+        previousPhaseInputMsgId = undefined;
         return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
       }
       currentPhaseId = entryPhaseId;
@@ -685,7 +758,9 @@ async function runPhaseLoop(
     // Handle stop — end execution
     if (nextRoute === "stop") {
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
       return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
     }
 
@@ -693,7 +768,9 @@ async function runPhaseLoop(
     const targetPhaseId = nextRoute;
     if (!registry.phases.has(targetPhaseId)) {
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
       return completeRun(config, state, createOutcome.phaseNotFound(output));
     }
 
@@ -854,25 +931,34 @@ async function executeToolCall(input: {
   tools: Tool[];
   toolCall: ToolCall;
 }): Promise<ToolResult> {
+  let result: ToolResult;
   if (input.config.runtime?.tools) {
-    return input.config.runtime.tools({
+    result = await input.config.runtime.tools({
       config: input.config,
       toolCall: input.toolCall,
     });
+  } else {
+    const toolContext = {
+      skills: input.config.context.skills,
+      toolCallId: input.toolCall.id,
+    };
+    result = await executeRuntimeToolCall({
+      tools: input.tools,
+      toolCall: input.toolCall,
+      toolContext,
+      beforeToolCall: input.config.beforeToolCall,
+      afterToolCall: input.config.afterToolCall,
+      signal: input.config.signal,
+    });
   }
 
-  const toolContext = {
-    skills: input.config.context.skills,
+  // A managed Runtime gives the Tool a separate durable Call identity. Only
+  // the provider Call identity may cross this model-facing execution seam.
+  return {
+    ...result,
     toolCallId: input.toolCall.id,
+    toolName: input.toolCall.name,
   };
-  return executeRuntimeToolCall({
-    tools: input.tools,
-    toolCall: input.toolCall,
-    toolContext,
-    beforeToolCall: input.config.beforeToolCall,
-    afterToolCall: input.config.afterToolCall,
-    signal: input.config.signal,
-  });
 }
 
 // ============================================================================

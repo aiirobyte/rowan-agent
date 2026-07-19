@@ -33,40 +33,36 @@ type ResolvedCoreToolPath = {
 type NormalizedCoreToolContext = Required<CoreToolContext>;
 
 const ReadArgsSchema = Type.Object({
-  path: Type.String(),
-  maxBytes: Type.Optional(Type.Number()),
-  type: Type.Optional(Type.Union([
-    Type.Literal("skill"), Type.Literal("phase"),
-    Type.Literal("markdown"), Type.Literal("code"), Type.Literal("file"),
-  ])),
+  path: Type.String({ description: "Path to the file to read." }),
+  offset: Type.Optional(Type.Number({ description: "1-based line to start from." })),
+  limit: Type.Optional(Type.Number({ description: "Maximum number of lines." })),
 });
 
 type ReadArgs = Type.Static<typeof ReadArgsSchema>;
 const ReadArgsValidator = Schema.Compile(ReadArgsSchema);
 
 const WriteArgsSchema = Type.Object({
-  path: Type.String(),
-  content: Type.String(),
+  path: Type.String({ description: "Path to the file to write." }),
+  content: Type.String({ description: "Complete file contents." }),
 });
 
 type WriteArgs = Type.Static<typeof WriteArgsSchema>;
 const WriteArgsValidator = Schema.Compile(WriteArgsSchema);
 
 const EditArgsSchema = Type.Object({
-  path: Type.String(),
-  oldText: Type.String(),
-  newText: Type.String(),
-  replaceAll: Type.Optional(Type.Boolean()),
+  path: Type.String({ description: "Path to the file to edit." }),
+  edits: Type.Array(Type.Object({
+    oldText: Type.String({ description: "Exact unique text to replace." }),
+    newText: Type.String({ description: "Replacement text." }),
+  }), { description: "One or more non-overlapping replacements." }),
 });
 
 type EditArgs = Type.Static<typeof EditArgsSchema>;
 const EditArgsValidator = Schema.Compile(EditArgsSchema);
 
 const BashArgsSchema = Type.Object({
-  command: Type.String(),
-  cwd: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  maxOutputBytes: Type.Optional(Type.Number()),
+  command: Type.String({ description: "Bash command to execute." }),
+  timeout: Type.Optional(Type.Number({ description: "Timeout in seconds." })),
 });
 
 type BashArgs = Type.Static<typeof BashArgsSchema>;
@@ -226,12 +222,7 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
   await input.observe?.({ type: "tool_start", tool, args });
 
   try {
-    const rawResult = await tool.execute(args, input.toolContext, input.signal);
-    let result: ToolResult = {
-      ...rawResult,
-      toolCallId: input.toolCall.id,
-      toolName: tool.name,
-    };
+    let result = await tool.execute(args, input.toolContext, input.signal);
     if (input.afterToolCall) {
       await input.observe?.({
         type: "result_review_requested",
@@ -266,6 +257,23 @@ function positiveNumber(value: number, name: string): string | undefined {
     return `${name} must be a positive number.`;
   }
   return undefined;
+}
+
+function positiveInteger(value: number, name: string): string | undefined {
+  if (!Number.isInteger(value) || value <= 0) {
+    return `${name} must be a positive integer.`;
+  }
+  return undefined;
+}
+
+function readTextLines(text: string, offset?: number, limit?: number): string {
+  if (offset === undefined && limit === undefined) {
+    return text;
+  }
+
+  const start = (offset ?? 1) - 1;
+  const lines = text.split(/\r\n|\n|\r/);
+  return lines.slice(start, limit === undefined ? undefined : start + limit).join("\n");
 }
 
 async function captureStream(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<CapturedOutput> {
@@ -313,17 +321,26 @@ async function captureStream(stream: ReadableStream<Uint8Array>, maxBytes: numbe
 export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArgs> {
   return {
     name: "read",
-    description: "Reads a text file within the workspace.",
+    description: "Read a file in the workspace.",
     parameters: ReadArgsSchema,
-    promptSnippet: "Read a text file (max 64KB default).",
-    promptGuidelines: [
-      "Always read a file before editing or writing to understand its current content.",
-      "Use maxBytes to limit output for large files.",
-    ],
+    promptSnippet: "Read file contents.",
+    promptGuidelines: ["Read files before editing them."],
     async execute(args: ReadArgs, toolContext: ToolContext): Promise<ToolResult> {
       const parsed = ReadArgsValidator.Parse(args);
+      const offsetError = parsed.offset === undefined ? undefined : positiveInteger(parsed.offset, "offset");
+      const limitError = parsed.limit === undefined ? undefined : positiveInteger(parsed.limit, "limit");
+      if (offsetError || limitError) {
+        return toolResult({
+          context: toolContext,
+          toolName: "read",
+          ok: false,
+          content: null,
+          error: offsetError ?? limitError,
+        });
+      }
+
       const resolved = resolveCoreToolPath(context, parsed.path);
-      const maxBytes = parsed.maxBytes ?? context.maxReadBytes;
+      const maxBytes = context.maxReadBytes;
       const invalidLimit = positiveNumber(maxBytes, "maxBytes");
       if (invalidLimit) {
         return toolResult({
@@ -347,11 +364,14 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
       }
 
       const bytes = await readFile(resolved.absolutePath);
-      const sliced = bytes.subarray(0, maxBytes);
+      const source = new TextDecoder().decode(bytes);
+      const selected = readTextLines(source, parsed.offset, parsed.limit);
+      const selectedBytes = new TextEncoder().encode(selected);
+      const sliced = selectedBytes.subarray(0, maxBytes);
       const text = new TextDecoder().decode(sliced);
 
       // Resolve resource type and name
-      const resourceType: ResourceType = parsed.type ?? detectResourceType(resolved.absolutePath);
+      const resourceType: ResourceType = detectResourceType(resolved.absolutePath);
       let name: string;
       let baseDir: string | undefined;
 
@@ -364,16 +384,16 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
         name = inferResourceName(resolved.absolutePath, basename(resolved.absolutePath));
       }
 
+      const formatted = resourceType === "skill" || resourceType === "phase"
+        ? formatResourceOutput({ type: resourceType, name, location: resolved.absolutePath, content: text, baseDir })
+        : text;
+      const content = selectedBytes.byteLength > maxBytes ? `${formatted}\n[truncated]` : formatted;
+
       return toolResult({
         context: toolContext,
         toolName: "read",
         ok: true,
-        content: {
-          path: resolved.relativePath,
-          content: formatResourceOutput({ type: resourceType, name, location: resolved.absolutePath, content: text, baseDir }),
-          sizeBytes: bytes.byteLength,
-          truncated: bytes.byteLength > maxBytes,
-        },
+        content,
       });
     },
   };
@@ -382,13 +402,10 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
 export function createWriteTool(context: NormalizedCoreToolContext): Tool<WriteArgs> {
   return {
     name: "write",
-    description: "Writes provided text content to a workspace file, creating parent directories as needed.",
+    description: "Create or overwrite a file in the workspace.",
     parameters: WriteArgsSchema,
-    promptSnippet: "Write content to a file (creates parent dirs automatically).",
-    promptGuidelines: [
-      "Use write for new files or full file rewrites.",
-      "For partial edits, prefer the edit tool to avoid overwriting unchanged content.",
-    ],
+    promptSnippet: "Create or overwrite files.",
+    promptGuidelines: ["Use edit for partial changes."],
     async execute(args: WriteArgs, toolContext: ToolContext): Promise<ToolResult> {
       const parsed = WriteArgsValidator.Parse(args);
       const resolved = resolveCoreToolPath(context, parsed.path);
@@ -399,76 +416,85 @@ export function createWriteTool(context: NormalizedCoreToolContext): Tool<WriteA
         context: toolContext,
         toolName: "write",
         ok: true,
-        content: {
-          path: resolved.relativePath,
-          bytesWritten: new TextEncoder().encode(parsed.content).byteLength,
-        },
+        content: `Successfully wrote ${parsed.content.length} bytes to ${resolved.relativePath}.`,
       });
     },
   };
 }
 
+function applyEditReplacements(
+  current: string,
+  edits: EditArgs["edits"],
+): { content: string; replacements: number } {
+  if (edits.length === 0) {
+    throw new Error("edits must contain at least one replacement.");
+  }
+
+  const matches: Array<{ start: number; end: number; newText: string }> = [];
+  for (const edit of edits) {
+    if (!edit.oldText) throw new Error("oldText must not be empty.");
+
+    const start = current.indexOf(edit.oldText);
+    if (start < 0) throw new Error(`oldText not found in file.`);
+    const second = current.indexOf(edit.oldText, start + edit.oldText.length);
+    if (second >= 0) {
+      const count = current.split(edit.oldText).length - 1;
+      throw new Error(`oldText appears ${count} times; provide more context.`);
+    }
+
+    matches.push({ start, end: start + edit.oldText.length, newText: edit.newText });
+  }
+
+  matches.sort((a, b) => a.start - b.start);
+  for (let index = 1; index < matches.length; index += 1) {
+    const previous = matches[index - 1];
+    const currentMatch = matches[index];
+    if (currentMatch.start < previous.end) {
+      throw new Error("edits must not overlap.");
+    }
+  }
+
+  let content = current;
+  for (let index = matches.length - 1; index >= 0; index -= 1) {
+    const match = matches[index];
+    content = content.slice(0, match.start) + match.newText + content.slice(match.end);
+  }
+  return { content, replacements: matches.length };
+}
+
 export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArgs> {
   return {
     name: "edit",
-    description: "Edits a workspace text file by replacing exact oldText with newText.",
+    description: "Apply exact text replacements to a workspace file.",
     parameters: EditArgsSchema,
-    promptSnippet: "Replace exact text in a file (oldText → newText).",
-    promptGuidelines: [
-      "Read the file first to get the exact oldText to replace.",
-      "oldText must be an exact match including whitespace and indentation.",
-      "If oldText appears multiple times, set replaceAll=true or provide more surrounding context.",
-    ],
+    promptSnippet: "Apply exact text replacements.",
+    promptGuidelines: ["Read the file first; each oldText must match exactly once."],
     async execute(args: EditArgs, toolContext: ToolContext): Promise<ToolResult> {
       const parsed = EditArgsValidator.Parse(args);
-      if (!parsed.oldText) {
-        return toolResult({
-          context: toolContext,
-          toolName: "edit",
-          ok: false,
-          content: null,
-          error: "oldText must not be empty.",
-        });
-      }
-
       const resolved = resolveCoreToolPath(context, parsed.path);
       const current = await readFile(resolved.absolutePath, "utf8");
-      if (!current.includes(parsed.oldText)) {
+      let next: string;
+      let replacements: number;
+      try {
+        const result = applyEditReplacements(current, parsed.edits);
+        next = result.content;
+        replacements = result.replacements;
+      } catch (error) {
         return toolResult({
           context: toolContext,
           toolName: "edit",
           ok: false,
           content: null,
-          error: `oldText not found in ${resolved.relativePath}.`,
+          error: error instanceof Error ? error.message : String(error),
         });
       }
-
-      const matches = current.split(parsed.oldText).length - 1;
-      if (matches > 1 && !parsed.replaceAll) {
-        return toolResult({
-          context: toolContext,
-          toolName: "edit",
-          ok: false,
-          content: null,
-          error: `oldText appears ${matches} times in ${resolved.relativePath}; set replaceAll=true or provide more context.`,
-        });
-      }
-
-      const replacements = parsed.replaceAll ? matches : 1;
-      const next = parsed.replaceAll
-        ? current.split(parsed.oldText).join(parsed.newText)
-        : current.replace(parsed.oldText, parsed.newText);
       await writeFile(resolved.absolutePath, next, "utf8");
 
       return toolResult({
         context: toolContext,
         toolName: "edit",
         ok: true,
-        content: {
-          path: resolved.relativePath,
-          replacements,
-          bytesWritten: new TextEncoder().encode(next).byteLength,
-        },
+        content: `Successfully replaced ${replacements} block(s) in ${resolved.relativePath}.`,
       });
     },
   };
@@ -477,19 +503,15 @@ export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArg
 export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArgs> {
   return {
     name: "bash",
-    description: "Runs a bash command within the workspace.",
+    description: "Run a bash command in the workspace.",
     parameters: BashArgsSchema,
-    promptSnippet: "Execute a bash command (30s timeout, 64KB output limit).",
-    promptGuidelines: [
-      "Use bash for build commands, tests, git operations, and system tools.",
-      "Prefer dedicated tools (read/write/edit) for file operations.",
-      "Set timeoutMs for long-running commands.",
-    ],
+    promptSnippet: "Run shell commands.",
+    promptGuidelines: ["Use read/write/edit for file operations."],
     async execute(args: BashArgs, toolContext: ToolContext, signal?: AbortSignal): Promise<ToolResult> {
       const parsed = BashArgsValidator.Parse(args);
-      const timeoutMs = parsed.timeoutMs ?? context.bashTimeoutMs;
-      const maxOutputBytes = parsed.maxOutputBytes ?? context.maxBashOutputBytes;
-      const invalidTimeout = positiveNumber(timeoutMs, "timeoutMs");
+      const timeoutMs = parsed.timeout === undefined ? context.bashTimeoutMs : parsed.timeout * 1000;
+      const maxOutputBytes = context.maxBashOutputBytes;
+      const invalidTimeout = positiveNumber(timeoutMs, "timeout");
       const invalidOutputLimit = positiveNumber(maxOutputBytes, "maxOutputBytes");
 
       if (invalidTimeout || invalidOutputLimit) {
@@ -502,7 +524,7 @@ export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArg
         });
       }
 
-      const cwd = resolveCoreToolPath(context, parsed.cwd ?? ".");
+      const cwd = resolveCoreToolPath(context, ".");
       let timedOut = false;
       let aborted = false;
       const proc = Bun.spawn(["bash", "-lc", parsed.command], {
@@ -531,20 +553,14 @@ export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArg
           proc.exited,
         ]);
         const ok = exitCode === 0 && !timedOut && !aborted;
+        const output = [stdout.text, stderr.text].filter(Boolean).join(stdout.text && stderr.text ? "\n" : "");
+        const content = stdout.truncated || stderr.truncated ? `${output}\n[truncated]` : output;
 
         return toolResult({
           context: toolContext,
           toolName: "bash",
           ok,
-          content: {
-            command: parsed.command,
-            cwd: cwd.relativePath,
-            exitCode,
-            stdout: stdout.text,
-            stderr: stderr.text,
-            stdoutTruncated: stdout.truncated,
-            stderrTruncated: stderr.truncated,
-          },
+          content,
           ...(ok
             ? {}
             : {
@@ -567,8 +583,8 @@ export function createCoreTools(input: CoreToolContext = {}): Tool[] {
   const context = createCoreToolContext(input);
   return [
     createReadTool(context),
-    createWriteTool(context),
-    createEditTool(context),
     createBashTool(context),
+    createEditTool(context),
+    createWriteTool(context),
   ];
 }

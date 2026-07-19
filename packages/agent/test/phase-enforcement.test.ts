@@ -121,6 +121,38 @@ test("route in same turn extracts route normally — no forced routing", async (
   ]);
 });
 
+test("route to stop records a matching tool result before completing", async () => {
+  const phases = buildPhaseRegistry([
+    buildTestPhase({ id: "plan" }),
+  ], "plan");
+
+  const stream: StreamFn = async function* () {
+    yield* yieldRouteToolCall("stop", "Done.");
+    yield { type: "done" };
+  };
+
+  const result = await runAgentLoop({
+    context: { ...createContext({ systemPrompt: "Test", input: "finish" }), phases },
+    model: { provider: "test", id: "scripted" },
+    stream,
+  });
+
+  const routeCall = result.messages
+    .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+    .find((part) => part.type === "tool_use" && part.name === "route");
+  const routeCallId = routeCall?.type === "tool_use" ? routeCall.id : undefined;
+  if (!routeCallId) throw new Error("Expected a route tool call in the result transcript.");
+
+  const routeResult = result.messages
+    .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+    .find((part) => part.type === "tool_result" && part.toolUseId === routeCallId);
+  expect(routeResult).toEqual({
+    type: "tool_result",
+    toolUseId: routeCallId,
+    content: '{"ok": true}',
+  });
+});
+
 
 test("phase content is injected as a user context message and replaced on transition", async () => {
   const phases = buildPhaseRegistry([
@@ -163,6 +195,15 @@ test("phase content is injected as a user context message and replaced on transi
     role: "user",
     content: expect.stringContaining('<phase_content name="plan">'),
   }));
+  const initialPhaseContentIndex = requests[0].messages.findIndex((message) =>
+    message.role === "user"
+      && typeof message.content === "string"
+      && message.content.includes('<phase_content name="plan">'),
+  );
+  const initialInputIndex = requests[0].messages.findIndex((message) =>
+    message.role === "user" && message.content === "do something",
+  );
+  expect(initialPhaseContentIndex).toBeLessThan(initialInputIndex);
   expect(requests[1].messages).toContainEqual(expect.objectContaining({
     role: "user",
     content: expect.stringContaining('<phase_content name="execute">'),
@@ -170,9 +211,39 @@ test("phase content is injected as a user context message and replaced on transi
   expect(requests[1].messages.some((message) =>
     typeof message.content === "string" && message.content.includes('<phase_content name="plan">'),
   )).toBe(false);
+  const transitionPhaseContentIndex = requests[1].messages.findIndex((message) =>
+    message.role === "user"
+      && typeof message.content === "string"
+      && message.content.includes('<phase_content name="execute">'),
+  );
+  const reverseTransitionInputIndex = [...requests[1].messages].reverse().findIndex((message) =>
+    message.role === "user" && message.content === "do something",
+  );
+  const transitionInputIndex = reverseTransitionInputIndex === -1
+    ? -1
+    : requests[1].messages.length - 1 - reverseTransitionInputIndex;
+  expect(transitionPhaseContentIndex).toBeLessThan(transitionInputIndex);
 
-  // Phase context messages are model input, not tool protocol messages.
-  expect(requests.flatMap((request) => request.messages).some((message) => message.role === "tool")).toBe(false);
+  // Phase context stays a user message; the tool message only acknowledges the
+  // real route call that entered the next phase.
+  const routeCall = requests[1].messages
+    .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+    .find((part) => part.type === "tool_use" && part.name === "route");
+  const routeCallId = routeCall?.type === "tool_use" ? routeCall.id : undefined;
+  if (!routeCallId) throw new Error("Expected the transition request to include a route tool call.");
+  const routeResult = requests[1].messages
+    .flatMap((message) => typeof message.content === "string" ? [] : message.content)
+    .find((part) => part.type === "tool_result" && part.toolUseId === routeCallId);
+  expect(routeResult).toEqual({
+    type: "tool_result",
+    toolUseId: routeCallId,
+    content: '{"ok": true}',
+  });
+  expect(requests.flatMap((request) => request.messages).some((message) =>
+    message.role === "tool"
+      && typeof message.content !== "string"
+      && message.content.some((part) => part.type === "tool_result" && part.content.includes("<phase_content")),
+  )).toBe(false);
   expect(result.messages.some((message) => message.metadata?.kind === "phase_prompt")).toBe(false);
 });
 

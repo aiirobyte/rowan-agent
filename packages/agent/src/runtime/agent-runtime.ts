@@ -92,6 +92,7 @@ export class AgentRuntime {
   private runningRuns = 0;
   private pumping = false;
   private nextWorkerId = 0;
+  private leaseRecoveryTimer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
 
   private constructor(options: AgentRuntimeOptions) {
@@ -129,6 +130,7 @@ export class AgentRuntime {
     activeRuntime = runtime;
     try {
       await runtime.recover();
+      runtime.startLeaseRecovery();
       return runtime;
     } catch (error) {
       await runtime.stop().catch(() => undefined);
@@ -177,6 +179,10 @@ export class AgentRuntime {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    if (this.leaseRecoveryTimer) {
+      clearInterval(this.leaseRecoveryTimer);
+      this.leaseRecoveryTimer = undefined;
+    }
     let suspendedAgents: Set<AgentId>;
     try {
       suspendedAgents = new Set(
@@ -372,12 +378,27 @@ export class AgentRuntime {
   }
 
   private async recover(): Promise<void> {
-    await this.stateStore.recoverLeases();
+    await this.recoverExpiredLeases();
     const agents = await this.stateStore.listAgents();
     for (const record of agents) {
       if (record.state === "paused") this.pausedAgents.add(record.id);
     }
     this.publishEvents();
+  }
+
+  private startLeaseRecovery(): void {
+    this.leaseRecoveryTimer = setInterval(() => {
+      void this.recoverExpiredLeases().catch(() => undefined);
+    }, this.leaseRenewalIntervalMs);
+  }
+
+  private async recoverExpiredLeases(): Promise<void> {
+    const recovered = await this.stateStore.recoverExpiredLeases();
+    for (const run of recovered) {
+      this.notifyRun(run);
+      if (this.bindings.has(run.agentId)) this.scheduleRun(run.agentId, run.id);
+    }
+    if (recovered.length > 0) this.publishEvents();
   }
 
   private async scheduleQueuedRuns(agentId: AgentId): Promise<void> {
