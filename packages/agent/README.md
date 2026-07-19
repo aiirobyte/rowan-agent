@@ -91,11 +91,16 @@ class AgentRuntime {
   getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined>;
   getToolCall(toolCallId: RuntimeToolCallId): Promise<RuntimeToolCall | undefined>;
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
+  listActiveRuns(): Promise<AgentRunRecord[]>;
   abortRun(runId: AgentRunId, reason?: string): Promise<void>;
   consumeEvents(
     consumerId: string,
     listener: RuntimeEventListener,
   ): () => void;
+  consumeEventsAndCatchUp(
+    consumerId: string,
+    listener: RuntimeEventListener,
+  ): Promise<() => void>;
   listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]>;
   stop(): Promise<void>;
 }
@@ -480,6 +485,13 @@ Checkpoint stays put and the Event is delivered again when that Consumer is
 started later. `runtime.listEvents()` inspects the durable stream without
 advancing a Consumer Checkpoint. Use `run.consumeRuntimeEvents()` for the same
 delivery contract filtered to one Run.
+
+`AgentRunMetadata` is optional opaque host data on `AgentMessage.metadata`. It
+is persisted with the Run and echoed on `run_enqueued`, suspension, completion,
+and abort Event payloads. `listActiveRuns()` returns queued, running, and
+suspended Runs for host-side Agent reconstruction with current `AgentOptions`.
+Use `consumeEventsAndCatchUp()` when startup must wait until all Events through
+the durable Consumer checkpoint have been delivered before recovery continues.
 
 ### Parallel Phase Events
 

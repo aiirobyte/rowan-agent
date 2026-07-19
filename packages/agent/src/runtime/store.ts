@@ -130,6 +130,7 @@ export interface RuntimeStateStore {
   getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined>;
   getRun(runId: AgentRunId): Promise<AgentRunRecord | undefined>;
   listRuns(input?: ListRunsInput): Promise<AgentRunRecord[]>;
+  listActiveRuns(): Promise<AgentRunRecord[]>;
   leaseRun(input: LeaseRunInput): Promise<LeasedRun>;
   renewLease(input: RenewLeaseInput): Promise<RuntimeLease>;
   suspendRun(input: SuspendRunInput): Promise<AgentRunRecord>;

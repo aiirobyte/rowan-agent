@@ -15,6 +15,7 @@ import type {
   RuntimeToolCall,
   RuntimeToolCallId,
 } from "./domain";
+import { runEventPayload } from "./domain";
 import type {
   AcknowledgeEventAndEnqueueAgentInput,
   AcknowledgeEventAndEnqueueAgentInputResult,
@@ -137,13 +138,14 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       messageId,
       state: "queued",
       attempt: 0,
+      ...(suspended?.metadata ? { metadata: clone(suspended.metadata) } : input.input.metadata ? { metadata: clone(input.input.metadata) } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
     this.messages.set(message.id, message);
     this.runs.set(run.id, suspended ?? run);
     this.recordEvent("message_enqueued", { agentId: input.agentId, messageId });
-    this.recordEvent("run_enqueued", { agentId: input.agentId, messageId, runId });
+    this.recordEvent("run_enqueued", { agentId: input.agentId, messageId, runId }, runEventPayload(suspended?.metadata ?? input.input.metadata));
     return { message: clone(message), run: clone(suspended ?? run), resumed: Boolean(suspended) };
   }
 
@@ -162,6 +164,10 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       .filter((run) => input.agentId === undefined || run.agentId === input.agentId)
       .filter((run) => !input.states || input.states.includes(run.state))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+  }
+
+  async listActiveRuns(): Promise<AgentRunRecord[]> {
+    return this.listRuns({ states: ["queued", "running", "suspended"] });
   }
 
   async leaseRun(input: LeaseRunInput): Promise<LeasedRun> {
@@ -240,9 +246,9 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     message.state = "acknowledged";
     delete message.lease;
     message.updatedAt = timestamp;
-    this.recordEvent("run_suspended", { agentId: run.agentId, messageId: message.id, runId: run.id }, {
+    this.recordEvent("run_suspended", { agentId: run.agentId, messageId: message.id, runId: run.id }, runEventPayload(run.metadata, {
       reason: input.reason,
-    });
+    }));
     return clone(run);
   }
 
@@ -262,10 +268,10 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     message.state = "acknowledged";
     delete message.lease;
     message.updatedAt = timestamp;
-    this.recordEvent("run_completed", { agentId: run.agentId, messageId: run.messageId, runId: run.id }, {
+    this.recordEvent("run_completed", { agentId: run.agentId, messageId: run.messageId, runId: run.id }, runEventPayload(run.metadata, {
       state,
       outcome: input.outcome,
-    });
+    }));
     this.recordEvent("message_acknowledged", { agentId: message.agentId, messageId: message.id });
     return clone(run);
   }
@@ -306,10 +312,10 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     message.deadLetterReason = input.reason;
     delete message.lease;
     message.updatedAt = timestamp;
-    this.recordEvent("run_completed", { agentId: run.agentId, messageId: message.id, runId: run.id }, {
+    this.recordEvent("run_completed", { agentId: run.agentId, messageId: message.id, runId: run.id }, runEventPayload(run.metadata, {
       state: "failed",
       outcome: input.outcome,
-    });
+    }));
     this.recordEvent("message_dead_lettered", { agentId: run.agentId, messageId: message.id }, {
       reason: input.reason,
     });
@@ -332,9 +338,10 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       delete message.lease;
       message.updatedAt = timestamp;
     }
-    this.recordEvent("run_aborted", { agentId: run.agentId, messageId: message.id, runId: run.id }, {
+    this.recordEvent("run_aborted", { agentId: run.agentId, messageId: message.id, runId: run.id }, runEventPayload(run.metadata, {
+      state: "cancelled",
       outcome: input.outcome,
-    });
+    }));
     return clone(run);
   }
 

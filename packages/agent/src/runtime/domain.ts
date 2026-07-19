@@ -22,6 +22,16 @@ export type AgentRunState = "queued" | "running" | "suspended" | "completed" | "
 /** Opaque execution checkpoint owned by the Agent loop and persisted by Runtime. */
 export type AgentRunExecutionState = Readonly<Record<string, unknown>>;
 
+/** Host-owned correlation data persisted with a Run and echoed by Runtime Events. */
+export type AgentRunMetadata = Readonly<Record<string, unknown>>;
+
+export function runEventPayload(
+  metadata: AgentRunMetadata | undefined,
+  payload: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return metadata ? { ...payload, metadata: structuredClone(metadata) } : payload;
+}
+
 export type AgentInputRequest = {
   phase: string;
   prompt: string;
@@ -71,6 +81,7 @@ export type AgentRunRecord = {
   suspensionReason?: string;
   inputRequest?: AgentInputRequest;
   executionState?: AgentRunExecutionState;
+  metadata?: AgentRunMetadata;
   createdAt: string;
   updatedAt: string;
 };

@@ -33,6 +33,7 @@ const RUNTIME_SCHEMA_SQL = `
       suspension_reason TEXT,
       input_request_json TEXT,
       execution_state_json TEXT,
+      metadata_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -95,6 +96,13 @@ export function initializeRuntimeSchema(database: Database): void {
       if (sql.length > 0) {
         database.run(sql);
       }
+    }
+    try {
+      database.run("ALTER TABLE agent_runs ADD COLUMN metadata_json TEXT");
+    } catch (error) {
+      // Existing Runtime databases already have the column; SQLite has no
+      // portable IF NOT EXISTS form for ADD COLUMN.
+      if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error;
     }
   });
   initialize();

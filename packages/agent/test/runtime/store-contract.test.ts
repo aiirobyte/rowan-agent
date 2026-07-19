@@ -30,6 +30,43 @@ export function defineRuntimeStateStoreContract(createStore: () => RuntimeStateS
     expect(enqueued.run.messageId).toBe(enqueued.message.id);
   });
 
+  test("persists opaque Run metadata, exposes active Runs, and propagates metadata through lifecycle events", async () => {
+    const store = createStore();
+    const agent = await store.createAgent({ sessionId: "session-metadata" });
+    const metadata = {
+      kind: "everyield.workflow-run",
+      teamId: "team-1",
+      invocation: { mode: "serial", instanceId: "inv-1" },
+    };
+    const enqueued = await store.enqueueAgentInput({
+      agentId: agent.id,
+      input: {
+        id: "message-metadata",
+        role: "user",
+        content: "run workflow",
+        metadata,
+        createdAt: "2026-01-01T00:00:00.000+00:00",
+      },
+    });
+
+    expect(enqueued.run.metadata).toEqual(metadata);
+    expect(await store.listActiveRuns()).toEqual([enqueued.run]);
+    expect((await store.listEvents()).find((event) => event.kind === "run_enqueued")?.payload).toEqual({ metadata });
+
+    await store.leaseRun({ runId: enqueued.run.id, workerId: "worker-metadata", leaseDurationMs: 30_000 });
+    const completed = await store.completeRun({
+      runId: enqueued.run.id,
+      outcome: { id: "outcome-metadata", message: "done" },
+    });
+    expect(completed.metadata).toEqual(metadata);
+    expect(await store.listActiveRuns()).toEqual([]);
+    expect((await store.listEvents()).find((event) => event.kind === "run_completed")?.payload).toEqual({
+      state: "completed",
+      outcome: { id: "outcome-metadata", message: "done" },
+      metadata,
+    });
+  });
+
   test("moves a Run through lease, suspension, and completion states", async () => {
     const store = createStore();
     const agent = await store.createAgent({ sessionId: "session-1" });

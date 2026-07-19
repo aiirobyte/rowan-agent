@@ -66,6 +66,7 @@ export type {
   AgentId,
   AgentInputRequest,
   AgentRunExecutionState,
+  AgentRunMetadata,
   AgentRunId,
   AgentRunRecord,
   AgentRunState,

@@ -18,6 +18,7 @@ import type {
   RuntimeToolCallId,
   RuntimeToolCallState,
 } from "./domain";
+import { runEventPayload } from "./domain";
 import type {
   AcknowledgeEventAndEnqueueAgentInput,
   AcknowledgeEventAndEnqueueAgentInputResult,
@@ -75,6 +76,7 @@ type RunRow = {
   suspension_reason: string | null;
   input_request_json: string | null;
   execution_state_json: string | null;
+  metadata_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -226,6 +228,7 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       messageId,
       state: "queued",
       attempt: 0,
+      ...(suspendedRow?.metadata_json ? { metadata: parse(suspendedRow.metadata_json) } : input.input.metadata ? { metadata: clone(input.input.metadata) } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -240,13 +243,13 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       );
     } else {
       this.database.run(
-        "INSERT INTO agent_runs (id, agent_id, message_id, state, attempt, lease_id, outcome_json, suspension_reason, input_request_json, execution_state_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [run.id, run.agentId, run.messageId, run.state, run.attempt, null, null, null, null, null, run.createdAt, run.updatedAt],
+        "INSERT INTO agent_runs (id, agent_id, message_id, state, attempt, lease_id, outcome_json, suspension_reason, input_request_json, execution_state_json, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [run.id, run.agentId, run.messageId, run.state, run.attempt, null, null, null, null, null, run.metadata ? json(run.metadata) : null, run.createdAt, run.updatedAt],
       );
     }
     this.recordEventInternal("message_enqueued", { agentId: input.agentId, messageId });
-    this.recordEventInternal("run_enqueued", { agentId: input.agentId, messageId, runId });
     const storedRun = this.requireRun(runId);
+    this.recordEventInternal("run_enqueued", { agentId: input.agentId, messageId, runId }, runEventPayload(storedRun.metadata));
     return { message: clone(message), run: clone(storedRun), resumed: Boolean(suspendedRow) };
   }
 
@@ -273,6 +276,13 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.database.query(`SELECT * FROM agent_runs ${where} ORDER BY created_at, id`).all(...params) as RunRow[];
+    return rows.map((row) => this.runFromRow(row));
+  }
+
+  async listActiveRuns(): Promise<AgentRunRecord[]> {
+    const rows = this.database.query(
+      "SELECT * FROM agent_runs WHERE state IN ('queued', 'running', 'suspended') ORDER BY created_at, id",
+    ).all() as RunRow[];
     return rows.map((row) => this.runFromRow(row));
   }
 
@@ -361,9 +371,9 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
         ["acknowledged", timestamp, message.id],
       );
       this.database.run("DELETE FROM runtime_leases WHERE run_id = ?", [current.id]);
-      this.recordEvent("run_suspended", { agentId: current.agentId, messageId: message.id, runId: current.id }, {
+      this.recordEvent("run_suspended", { agentId: current.agentId, messageId: message.id, runId: current.id }, runEventPayload(current.metadata, {
         reason: input.reason,
-      });
+      }));
       return this.requireRun(current.id);
     })();
     return clone(run);
@@ -386,10 +396,10 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
         [timestamp, message.id],
       );
       this.database.run("DELETE FROM runtime_leases WHERE run_id = ?", [current.id]);
-      this.recordEvent("run_completed", { agentId: current.agentId, messageId: current.messageId, runId: current.id }, {
+      this.recordEvent("run_completed", { agentId: current.agentId, messageId: current.messageId, runId: current.id }, runEventPayload(current.metadata, {
         state,
         outcome: input.outcome,
-      });
+      }));
       this.recordEvent("message_acknowledged", { agentId: message.agentId, messageId: message.id });
       return this.requireRun(current.id);
     })();
@@ -438,10 +448,10 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
         [input.reason, timestamp, message.id],
       );
       this.database.run("DELETE FROM runtime_leases WHERE run_id = ?", [current.id]);
-      this.recordEvent("run_completed", { agentId: current.agentId, messageId: message.id, runId: current.id }, {
+      this.recordEvent("run_completed", { agentId: current.agentId, messageId: message.id, runId: current.id }, runEventPayload(current.metadata, {
         state: "failed",
         outcome: input.outcome,
-      });
+      }));
       this.recordEvent("message_dead_lettered", { agentId: current.agentId, messageId: message.id }, {
         reason: input.reason,
       });
@@ -467,9 +477,10 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
         ]);
       }
       this.database.run("DELETE FROM runtime_leases WHERE run_id = ?", [current.id]);
-      this.recordEvent("run_aborted", { agentId: current.agentId, messageId: message.id, runId: current.id }, {
+      this.recordEvent("run_aborted", { agentId: current.agentId, messageId: message.id, runId: current.id }, runEventPayload(current.metadata, {
+        state: "cancelled",
         outcome: input.outcome,
-      });
+      }));
       return this.requireRun(current.id);
     })();
     return clone(run);
@@ -758,6 +769,7 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       ...(row.suspension_reason ? { suspensionReason: row.suspension_reason } : {}),
       ...(row.input_request_json ? { inputRequest: parse(row.input_request_json) } : {}),
       ...(row.execution_state_json ? { executionState: parse(row.execution_state_json) } : {}),
+      ...(row.metadata_json ? { metadata: parse(row.metadata_json) } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { AgentRuntime, InMemoryRuntimeStateStore, createMessage } from "../../src";
+import type { RuntimeEvent } from "../../src";
 import { InMemorySessionManager } from "../../src/harness/session";
 import type { SessionManagerProvider } from "../../src/harness/session/session-manager";
 import type { CreateSessionManagerInput, SessionManager } from "../../src/harness/session/session-manager";
@@ -143,6 +144,28 @@ test("AgentRuntime reads a persisted Runtime Message by Event message ID", async
       runId: run.id,
       input,
     });
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("AgentRuntime exposes a catch-up barrier for durable Event consumers", async () => {
+  const runtime = await AgentRuntime.start({
+    stateStore: new InMemoryRuntimeStateStore(),
+    sessionProvider: createSessionProvider(),
+  });
+  try {
+    const agent = await runtime.createAgent(agentOptions());
+    const run = await agent.send(createMessage("user", "catch up", {
+      kind: "everyield.workflow-run",
+      teamId: "team-1",
+    }));
+    const events: RuntimeEvent[] = [];
+    const stop = await runtime.consumeEventsAndCatchUp("catch-up-barrier", (event) => {
+      events.push(event);
+    });
+    expect(events.some((event) => event.kind === "run_enqueued" && event.runId === run.id)).toBe(true);
+    stop();
   } finally {
     await runtime.stop();
   }

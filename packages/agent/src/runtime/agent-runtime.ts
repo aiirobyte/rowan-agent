@@ -266,6 +266,10 @@ export class AgentRuntime {
     return this.stateStore.getRun(runId);
   }
 
+  async listActiveRuns(): Promise<AgentRunRecord[]> {
+    return this.stateStore.listActiveRuns();
+  }
+
   getAgent(agentId: AgentId): Agent | undefined {
     return this.agents.get(agentId);
   }
@@ -299,6 +303,26 @@ export class AgentRuntime {
   }
 
   consumeEvents(consumerId: string, listener: RuntimeEventListener): () => void {
+    const subscription = this.registerEventConsumer(consumerId, listener);
+    void subscription.ready.catch(() => undefined);
+    return subscription.stop;
+  }
+
+  async consumeEventsAndCatchUp(consumerId: string, listener: RuntimeEventListener): Promise<() => void> {
+    const subscription = this.registerEventConsumer(consumerId, listener);
+    try {
+      await subscription.ready;
+      return subscription.stop;
+    } catch (error) {
+      subscription.stop();
+      throw error;
+    }
+  }
+
+  private registerEventConsumer(consumerId: string, listener: RuntimeEventListener): {
+    stop: () => void;
+    ready: Promise<void>;
+  } {
     this.assertRunning();
     if (consumerId.trim().length === 0) {
       throw new Error("Runtime Event Consumer ID must not be empty.");
@@ -313,12 +337,13 @@ export class AgentRuntime {
       redeliver: false,
     };
     this.eventSubscriptions.set(consumerId, subscription);
-    void this.deliverEvents(subscription).catch(() => undefined);
-    return () => {
+    const stop = () => {
       if (this.eventSubscriptions.get(consumerId) === subscription) {
         this.eventSubscriptions.delete(consumerId);
       }
     };
+    const ready = this.deliverEvents(subscription);
+    return { stop, ready };
   }
 
   async listEvents(cursor?: RuntimeEventCursor): Promise<RuntimeEvent[]> {

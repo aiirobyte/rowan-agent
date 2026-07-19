@@ -81,6 +81,7 @@ export class AgentExecution {
     promise: Promise<RunResult>;
     abortController: AbortController;
     resume?: (messages: AgentMessage[]) => void;
+    onSuspend?: RuntimeRunHooks["onSuspend"];
   };
   private extensionRunner?: ExtensionRunner;
   private loadedExtensions?: LoadedExtension[];
@@ -167,6 +168,7 @@ export class AgentExecution {
   runWithMessage(message: AgentMessage, options?: RunOptions, internalHooks: RuntimeRunHooks = {}): Promise<RunResult> {
     const activeRun = this.activeRun;
     if (activeRun?.resume) {
+      if (internalHooks.onSuspend) activeRun.onSuspend = internalHooks.onSuspend;
       activeRun.resume([message]);
       return activeRun.promise;
     }
@@ -488,12 +490,13 @@ export class AgentExecution {
         const activeRun = this.activeRun!;
         activeRun.resume = (messages) => {
           activeRun.resume = undefined;
+          suspensionRequested = false;
           resolve(messages);
         };
       });
       if (!suspensionRequested) {
         suspensionRequested = true;
-        void hooks.onSuspend?.("Agent requested input.", state, inputRequest);
+        void this.activeRun?.onSuspend?.("Agent requested input.", state, inputRequest);
       }
       return waiting;
     };
@@ -506,7 +509,7 @@ export class AgentExecution {
       .finally(() => {
         this.finishRun();
       });
-    this.activeRun = { promise, abortController };
+    this.activeRun = { promise, abortController, onSuspend: hooks.onSuspend };
     this.state.running = true;
     return promise;
   }

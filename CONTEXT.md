@@ -96,6 +96,14 @@ _Avoid_: Runtime Message, Stream Event
 A stable delivery identity that receives Runtime Events and owns an independent durable Checkpoint. Failed delivery leaves its Checkpoint unchanged so Events remain replayable.
 _Avoid_: Stream subscriber, Extension listener
 
+**Run Metadata**:
+Opaque host-owned correlation data persisted with an Agent Run and echoed on its enqueue and terminal Runtime Events. Rowan stores and transports it without interpreting its fields.
+_Avoid_: Business state, Outcome payload
+
+**Active Run Listing**:
+The Runtime view of all queued, running, and suspended Agent Runs. It is used by a host to reconstruct the corresponding Agent Bindings with current Agent Options.
+_Avoid_: Historical Run query, Workflow index
+
 **Checkpoint**:
 The last contiguous Runtime Event sequence durably acknowledged by one Runtime Event Consumer. Checkpoints belong to consumers, not to Runtime Events globally and cannot skip undelivered Events.
 _Avoid_: Global acknowledgement, In-memory cursor

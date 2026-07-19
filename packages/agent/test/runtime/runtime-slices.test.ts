@@ -111,6 +111,56 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
   }
 });
 
+test("repeated suspended Agent Input persists each suspension on the same Run", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const sessionManager = provider();
+  const events: RuntimeEvent[] = [];
+  let requests = 0;
+  const stream: import("../../src").StreamFn = async function* () {
+    requests += 1;
+    if (requests <= 2) {
+      yield {
+        type: "text_delta",
+        text: `Question ${requests}?`,
+        partial: { role: "assistant", contentBlocks: [{ type: "text", text: `Question ${requests}?` }] },
+      };
+      yield { type: "done" };
+      return;
+    }
+    yield* yieldRouteToolCall("stop");
+    yield { type: "done" };
+  };
+  const context = {
+    ...createTestContext(),
+    phases: {
+      phases: new Map([
+        ["plan", { id: "plan", name: "Plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
+        ["verify", { id: "verify", name: "Verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
+      ]),
+      entryPhaseId: "plan",
+    },
+  };
+  const runtime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  const unsubscribe = runtime.consumeEvents("repeated-suspension", (event) => { events.push(event); });
+  try {
+    const agent = await runtime.createAgent(options({ context, stream }));
+    const first = await agent.send("first input");
+    await waitFor(async () => (await stateStore.getRun(first.id))?.state === "suspended");
+
+    const second = await agent.send("second input");
+    expect(second.id).toBe(first.id);
+    await waitFor(async () => (await stateStore.getRun(first.id))?.state === "suspended");
+
+    const third = await agent.send("third input");
+    expect(third.id).toBe(first.id);
+    await third.result();
+    expect(events.filter((event) => event.kind === "run_suspended")).toHaveLength(2);
+  } finally {
+    unsubscribe();
+    await runtime.stop();
+  }
+});
+
 test("Runtime waits for host reconstruction before running recovered work", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const sessionManager = provider();
