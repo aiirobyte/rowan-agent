@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   formatResourceOutput,
   detectResourceType,
+  buildPhaseDirectiveMessage,
   type ResourceOutput,
 } from "../../../src/harness/context/resource-formatter";
 
@@ -89,4 +90,19 @@ test("formatResourceOutput escapes XML special characters in attributes", () => 
 
   expect(output).toContain('name="test&quot;file"');
   expect(output).toContain('location="/path/with&lt;special&gt;"');
+});
+
+test("buildPhaseDirectiveMessage returns user context text", () => {
+  const output = buildPhaseDirectiveMessage(
+    { name: "review", content: "Review the change." },
+    { instruction: "Check the output.", results: [{ name: "plan", output: { ok: true } }] },
+  );
+
+  expect(typeof output).toBe("string");
+  expect(output).toContain('<phase_content name="review">');
+  expect(output).toContain("Review the change.");
+  expect(output).toContain("<prev_phase_outputs>");
+  expect(output).toContain("<instruction>Check the output.</instruction>");
+  expect(output).toContain("<ok>true</ok>");
+  expect(output).toContain("</phase_content>");
 });

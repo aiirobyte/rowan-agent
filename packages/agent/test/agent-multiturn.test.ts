@@ -64,7 +64,7 @@ test("Agent exposes high-level message continuation helpers", async () => {
   const seenUserInputs: string[] = [];
   const stream: StreamFn = async function* continuationStream(request) {
     const userMessages = request.messages
-      .filter((message) => message.role === "user")
+      .filter((message) => message.role === "user" && !messageContentText(message.content).includes("<phase_content"))
       .map((message) => messageContentText(message.content));
     const currentInput = userMessages[userMessages.length - 1] ?? "";
     seenUserInputs.push(currentInput);
@@ -98,7 +98,9 @@ test("Agent keeps conversation messages separate from execution steps", async ()
   const stream: StreamFn = async function* taskMultiTurnStream(request, options) {
     contexts.push(request.messages.map((message) => message.content as string));
     // Simple response without phase routing
-    const userMessages = request.messages.filter(m => m.role === "user" && typeof m.content === "string" && !m.content.startsWith("Phase:"));
+    const userMessages = request.messages.filter(m =>
+      m.role === "user" && !messageContentText(m.content).includes("<phase_content") && typeof m.content === "string" && !m.content.startsWith("Phase:"),
+    );
     const lastUser = userMessages.length > 0 ? userMessages[userMessages.length - 1] : undefined;
     const currentRequest = lastUser && typeof lastUser.content === "string" ? lastUser.content : "";
     const text = `Response to: ${currentRequest}`;
@@ -176,7 +178,7 @@ test("Agent.runWithUserInput resumes a paused planning phase and only resolves o
     model: { provider: "test", id: "hitl" },
     stream: (async function* (request) {
       const userTexts = request.messages
-        .filter((m: any) => m.role === "user" && typeof m.content === "string" && !m.content.startsWith("Phase:"))
+        .filter((m: any) => m.role === "user" && !String(m.content).includes("<phase_content") && typeof m.content === "string" && !m.content.startsWith("Phase:"))
         .map((m: any) => m.content as string);
       const last = userTexts[userTexts.length - 1] ?? "";
       if (last === "plan this") {
@@ -243,7 +245,7 @@ test("Agent propagates a resumed run failure to both callers", async () => {
     model: { provider: "test", id: "hitl-failure" },
     stream: (async function* (request) {
       const userTexts = request.messages
-        .filter((message: any) => message.role === "user" && typeof message.content === "string")
+        .filter((message: any) => message.role === "user" && !String(message.content).includes("<phase_content") && typeof message.content === "string")
         .map((message: any) => message.content as string);
       if (userTexts.at(-1) === "go") {
         throw new Error("provider failed after resume");

@@ -65,7 +65,14 @@ test("parallel PhaseContexts expose their shared invocation contract", async () 
   const worker = buildTestPhase({
     id: "worker",
     isolated: true,
+    content: "Worker instructions.",
     run: async (context) => {
+      expect(context.systemPrompt).toBe("Test system prompt");
+      expect(context.messages).toContainEqual(expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining('<phase_content name="worker">'),
+      }));
+      expect(context.messages.some((message) => message.role === "tool")).toBe(false);
       invocations.push(context.invocation);
       return { message: "done", route: "stop" };
     },

@@ -62,7 +62,7 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
   const sessionManager = provider();
   const events: RuntimeEvent[] = [];
   const stream: import("../../src").StreamFn = async function* (request) {
-    if (request.messages.filter((message) => message.role === "user").length < 2) {
+    if (request.messages.filter((message) => message.role === "user" && !String(message.content).includes("<phase_content")).length < 2) {
       yield { type: "text_delta", text: "Which deployment target should I use?", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Which deployment target should I use?" }] } };
       yield { type: "done" };
       return;
@@ -233,6 +233,7 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
   await waitFor(async () => (await stateStore.getRun(first.id))?.state === "suspended");
   await firstRuntime.stop();
   const outcomes: string[] = [];
+  const resumedRequests: Parameters<import("../../src").StreamFn>[0][] = [];
   const restarted = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
   try {
     expect(await stateStore.getRun(first.id)).toMatchObject({
@@ -246,6 +247,7 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
       context,
       onOutcome: async (outcome) => { outcomes.push(outcome.message); },
       stream: async function* (request) {
+        resumedRequests.push(request);
         yield* yieldRouteToolCall("stop");
         yield { type: "done" };
       },
@@ -254,6 +256,10 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
     expect(resumed.id).toBe(first.id);
     await waitFor(async () => (await stateStore.getRun(first.id))?.state === "completed");
     expect(outcomes).toEqual(["Plan phase completed."]);
+    expect(resumedRequests[0]?.messages).toContainEqual(expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining('<phase_content name="plan">'),
+    }));
   } finally {
     await restarted.stop();
   }

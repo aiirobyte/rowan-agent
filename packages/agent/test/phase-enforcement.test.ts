@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { AssistantMessagePartial } from "@rowan-agent/models";
+import type { AssistantMessagePartial, LlmRequest } from "@rowan-agent/models";
 import { runAgentLoop } from "../src/agent-loop";
 import type { AgentContext, AgentMessage, StreamFn, Tool } from "../src/types";
 import { createMessage } from "../src/types";
@@ -122,14 +122,16 @@ test("route in same turn extracts route normally — no forced routing", async (
 });
 
 
-test("phase tool_result message is cleaned up on route transition", async () => {
+test("phase content is injected as a user context message and replaced on transition", async () => {
   const phases = buildPhaseRegistry([
     buildTestPhase({ id: "plan", content: "You are planning." }),
     buildTestPhase({ id: "execute", content: "You are executing." }),
   ], "plan");
 
   let requestCount = 0;
+  const requests: LlmRequest[] = [];
   const stream: StreamFn = async function* (request) {
+    requests.push(request);
     requestCount++;
     if (requestCount === 1) {
       yield { type: "text_delta", text: "Done.", partial: buildTestPartial("Done.") };
@@ -156,12 +158,22 @@ test("phase tool_result message is cleaned up on route transition", async () => 
     expect.objectContaining({ from: "plan", to: "execute" }),
   ]);
 
-  // Synthetic phase tool_result messages should NOT be in the final messages
-  const phaseMessages = result.messages.filter(
-    m => m.role === "tool" && Array.isArray(m.content) &&
-      m.content.some((c: any) => c.toolUseId?.startsWith("phase_")),
-  );
-  expect(phaseMessages).toHaveLength(0);
+  expect(requests).toHaveLength(2);
+  expect(requests[0].messages).toContainEqual(expect.objectContaining({
+    role: "user",
+    content: expect.stringContaining('<phase_content name="plan">'),
+  }));
+  expect(requests[1].messages).toContainEqual(expect.objectContaining({
+    role: "user",
+    content: expect.stringContaining('<phase_content name="execute">'),
+  }));
+  expect(requests[1].messages.some((message) =>
+    typeof message.content === "string" && message.content.includes('<phase_content name="plan">'),
+  )).toBe(false);
+
+  // Phase context messages are model input, not tool protocol messages.
+  expect(requests.flatMap((request) => request.messages).some((message) => message.role === "tool")).toBe(false);
+  expect(result.messages.some((message) => message.metadata?.kind === "phase_prompt")).toBe(false);
 });
 
 
@@ -201,12 +213,16 @@ test("missing route pauses via waitForInput and resumes the SAME phase until rou
 
   let requestCount = 0;
   const seenUserInputs: string[] = [];
+  const seenPhasePrompts: string[] = [];
   const stream: StreamFn = async function* (request) {
     requestCount++;
     // Record user messages visible to the model this turn.
     for (const m of request.messages) {
       if (m.role === "user" && typeof m.content === "string" && !m.content.startsWith("Phase:")) {
         seenUserInputs.push(m.content);
+      }
+      if (m.role === "user" && typeof m.content === "string" && m.content.includes("<phase_content")) {
+        seenPhasePrompts.push(m.content);
       }
     }
     const text = requestCount === 1 ? "need more info" : requestCount === 2 ? "still thinking" : "done";
@@ -238,6 +254,8 @@ test("missing route pauses via waitForInput and resumes the SAME phase until rou
 
   // Three model turns, all within "plan" — no phase transitions.
   expect(requestCount).toBe(3);
+  expect(seenPhasePrompts).toHaveLength(3);
+  expect(new Set(seenPhasePrompts).size).toBe(1);
   expect(result.metrics.phaseTransitions).toEqual([]);
   // The model saw both followups across turns (transcript is cumulative).
   expect(seenUserInputs).toEqual(expect.arrayContaining(["plan this", "first followup", "second followup"]));
@@ -271,14 +289,7 @@ test("aborting while paused removes the phase directive before completion", asyn
   const result = await runPromise;
 
   expect(result.outcome.message).toBe("Agent run aborted.");
-  expect(
-    result.messages.some(
-      (message) =>
-        message.role === "tool" &&
-        Array.isArray(message.content) &&
-        message.content.some((part: any) => part.toolUseId?.startsWith("phase_")),
-    ),
-  ).toBe(false);
+  expect(result.messages.some((message) => message.metadata?.kind === "phase_prompt")).toBe(false);
 });
 
 test("LLM phase with forced target does not require route tool call", async () => {

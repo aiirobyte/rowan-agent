@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import {
   buildModelRequest,
+  latestUserInput,
 } from "../../../src/harness/context/prompt-builder";
 import type { AgentMessage } from "@rowan-agent/models";
 import { createMessage } from "@rowan-agent/agent";
@@ -112,6 +113,18 @@ test("buildRequest returns LlmRequest with correct messages", () => {
   expect(req.messages.length).toBeGreaterThanOrEqual(1);
   const userMsg = req.messages.find(m => m.role === "user");
   expect(userMsg?.content).toBe("Review this code.");
+});
+
+test("latestUserInput ignores phase context messages", () => {
+  const messages = [
+    createMessage("user", "Review this code."),
+    createMessage("user", '<phase_content name="review">Follow the review phase.</phase_content>', {
+      kind: "phase_prompt",
+      phase: "review",
+    }),
+  ];
+
+  expect(latestUserInput(messages)).toBe("Review this code.");
 });
 
 test("prompt builder includes tool and routing messages in conversation", () => {

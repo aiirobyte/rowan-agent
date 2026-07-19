@@ -100,14 +100,20 @@ export function compactMessages(
   // Calculate boundaries
   const recentStart = Math.max(messages.length - keepRecent, firstUserIdx + 1);
   const oldMessages = messages.slice(firstUserIdx >= 0 ? firstUserIdx + 1 : 0, recentStart);
+  const protectedPhaseMessages = oldMessages.filter(
+    (message) => message.metadata?.kind === "phase_prompt",
+  );
+  const summarizableMessages = oldMessages.filter(
+    (message) => message.metadata?.kind !== "phase_prompt",
+  );
 
   // Don't compact if there aren't enough old messages
-  if (oldMessages.length < minCompact) {
+  if (summarizableMessages.length < minCompact) {
     return { compacted: false, messages };
   }
 
   const recentMessages = messages.slice(recentStart);
-  const summary = buildSummary(oldMessages);
+  const summary = buildSummary(summarizableMessages);
 
   // Build compacted message list
   const result: AgentMessage[] = [];
@@ -121,9 +127,13 @@ export function compactMessages(
   result.push(
     createMessage("assistant", `[Context compaction summary]\n\n${summary}`, {
       type: "compaction_summary",
-      compactedCount: oldMessages.length,
+      compactedCount: summarizableMessages.length,
     }),
   );
+
+  // Keep active Phase instructions as user context after the summary so they
+  // remain immediately available without treating them as conversation history.
+  result.push(...protectedPhaseMessages);
 
   // Add recent messages
   result.push(...recentMessages);
@@ -131,7 +141,7 @@ export function compactMessages(
   return {
     compacted: true,
     messages: result,
-    summarizedCount: oldMessages.length,
+    summarizedCount: summarizableMessages.length,
     summary,
   };
 }

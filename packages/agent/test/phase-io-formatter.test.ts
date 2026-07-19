@@ -216,19 +216,10 @@ describe("Phase payload flow", () => {
     let requestCount = 0;
     const stream: StreamFn = async function* (request) {
       requestCount++;
-      // Capture the messages sent to the model
+      // Capture user context messages sent to the model.
       for (const msg of request.messages) {
-        if (msg.role === "tool") {
-          if (typeof msg.content === "string") {
-            messages.push(msg.content);
-          } else if (Array.isArray(msg.content)) {
-            // Extract content from tool_result blocks
-            for (const block of msg.content) {
-              if (block.type === "tool_result" && typeof block.content === "string") {
-                messages.push(block.content);
-              }
-            }
-          }
+        if (msg.role === "user" && typeof msg.content === "string") {
+          messages.push(msg.content);
         }
       }
 
@@ -271,7 +262,7 @@ describe("Phase payload flow", () => {
     const stream: StreamFn = async function* (request) {
       requestCount++;
       for (const msg of request.messages) {
-        if (msg.role === "tool" && typeof msg.content === "string") {
+        if (msg.role === "user" && typeof msg.content === "string") {
           messages.push(msg.content);
         }
       }
@@ -311,19 +302,10 @@ describe("Phase payload flow", () => {
     let requestCount = 0;
     const stream: StreamFn = async function* (request) {
       requestCount++;
-      // Capture the messages sent to the model
+      // Capture user context messages sent to the model.
       for (const msg of request.messages) {
-        if (msg.role === "tool") {
-          if (typeof msg.content === "string") {
-            messages.push(msg.content);
-          } else if (Array.isArray(msg.content)) {
-            // Extract content from tool_result blocks
-            for (const block of msg.content) {
-              if (block.type === "tool_result" && typeof block.content === "string") {
-                messages.push(block.content);
-              }
-            }
-          }
+        if (msg.role === "user" && typeof msg.content === "string") {
+          messages.push(msg.content);
         }
       }
 

@@ -116,7 +116,7 @@ function normalizeHttpError(
 type ResponsesInputMessage =
   | { role: "user"; content: string }
   | { role: "assistant"; content: string }
-  | { type: "function_call"; id: string; name: string; arguments: string }
+  | { type: "function_call"; call_id: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string };
 
 function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
@@ -148,7 +148,7 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
           if (part.type === "tool_use") {
             result.push({
               type: "function_call",
-              id: part.id,
+              call_id: part.id,
               name: part.name,
               arguments: JSON.stringify(sanitizeToolInput(part.input)),
             });
@@ -245,13 +245,13 @@ function mapStopReason(reason: string | null | undefined): "end_turn" | "max_tok
 
 type ResponsesStreamEvent =
   | { type: "response.created"; response: { id: string } }
-  | { type: "response.output_item.added"; output_index: number; item: { type: string; id?: string; name?: string } }
+  | { type: "response.output_item.added"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string } }
   | { type: "response.content_part.added"; output_index: number; content_index: number; part: { type: string } }
   | { type: "response.output_text.delta"; output_index: number; content_index: number; delta: string }
   | { type: "response.output_text.done"; output_index: number; content_index: number; text: string }
-  | { type: "response.function_call_arguments.delta"; output_index: number; item_id: string; delta: string }
-  | { type: "response.function_call_arguments.done"; output_index: number; item_id: string; arguments: string }
-  | { type: "response.output_item.done"; output_index: number; item: { type: string; id?: string; name?: string; arguments?: string } }
+  | { type: "response.function_call_arguments.delta"; output_index: number; item_id: string; call_id?: string; delta: string }
+  | { type: "response.function_call_arguments.done"; output_index: number; item_id: string; call_id?: string; name?: string; arguments: string }
+  | { type: "response.output_item.done"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string; arguments?: string } }
   | { type: "response.completed"; response: { usage?: { input_tokens: number; output_tokens: number; total_tokens: number } } }
   | { type: "response.incomplete"; response: { usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; incomplete_details?: { reason: string } } }
   | { type: "error"; error: { message: string; type?: string } };
@@ -340,7 +340,7 @@ async function* streamResponses(
 
           case "response.output_item.added":
             if (event.item.type === "function_call") {
-              const tc = { id: event.item.id ?? "", name: event.item.name ?? "", arguments: "" };
+              const tc = { id: event.item.call_id ?? event.item.id ?? "", name: event.item.name ?? "", arguments: "" };
               toolCalls.set(event.output_index, tc);
               rebuildPartial();
               hasPartialOutput = true;
@@ -351,6 +351,7 @@ async function* streamResponses(
           case "response.function_call_arguments.delta": {
             const tc = toolCalls.get(event.output_index);
             if (tc) {
+              if (event.call_id) tc.id = event.call_id;
               tc.arguments += event.delta;
               rebuildPartial();
               hasPartialOutput = true;
@@ -362,6 +363,8 @@ async function* streamResponses(
           case "response.function_call_arguments.done": {
             const tc = toolCalls.get(event.output_index);
             if (tc) {
+              if (event.call_id) tc.id = event.call_id;
+              if (event.name) tc.name = event.name;
               tc.arguments = event.arguments;
             }
             break;
@@ -371,6 +374,8 @@ async function* streamResponses(
             if (event.item.type === "function_call") {
               const tc = toolCalls.get(event.output_index);
               if (tc) {
+                if (event.item.call_id) tc.id = event.item.call_id;
+                if (event.item.name) tc.name = event.item.name;
                 if (event.item.arguments) tc.arguments = event.item.arguments;
                 rebuildPartial();
                 hasPartialOutput = true;

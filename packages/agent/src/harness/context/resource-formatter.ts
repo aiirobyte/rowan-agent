@@ -1,5 +1,3 @@
-import type { LlmContentPart } from "@rowan-agent/models";
-
 /**
  * Structured formatting utilities for system prompt sections.
  *
@@ -138,25 +136,24 @@ export function jsonToXml(value: unknown, depth: number): string {
 // Phase result message construction
 // ---------------------------------------------------------------------------
 
-/** Construct phase directive message as LlmContentPart[] — shared by parallel and serial paths.
+/** Construct phase context content as a plain user message — shared by parallel and serial paths.
  *
  * Output structure:
- *   <phase name="{name}">
- *     <content>{content}</content>
+ *   <phase_content name="{name}">
+ *     {content}
  *     [<prev_phase_outputs>                       (only when results non-empty)
  *        [<instruction>...</instruction>]         (only when instruction set)
  *        <phase name="{source}">{payload xml}</phase>
  *     </prev_phase_outputs>]
- *   </phase>
+ *   </phase_content>
  */
 export function buildPhaseDirectiveMessage(
   phase: { name: string; content: string },
   output: { instruction?: string; results?: Array<{ name: string; output?: unknown }> },
-  toolUseId: string,
-): LlmContentPart[] {
+): string {
   const parts: string[] = [];
-  parts.push(`<phase name="${escapeXml(phase.name)}">`);
-  parts.push(`  <content>${phase.content}</content>`);
+  parts.push(`<phase_content name="${escapeXml(phase.name)}">`);
+  parts.push(phase.content);
   if (output.results && output.results.length > 0) {
     parts.push(`  <prev_phase_outputs>`);
     if (output.instruction) {
@@ -171,11 +168,6 @@ export function buildPhaseDirectiveMessage(
     }
     parts.push(`  </prev_phase_outputs>`);
   }
-  parts.push(`</phase>`);
-  return [{
-    type: "tool_result",
-    toolUseId,
-    content: parts.join("\n"),
-    isError: false,
-  }];
+  parts.push(`</phase_content>`);
+  return parts.join("\n");
 }

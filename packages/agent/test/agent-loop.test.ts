@@ -96,7 +96,7 @@ test("runAgentLoop requests the LLM with a fixed request object", async () => {
   expect(request.model).toEqual({ provider: "test-provider", id: "test-model" });
   expect(request.system).toContain("Test system");
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
-  // Phase content is injected as a tool_result, so the last message is not the user message
+  // The phase prompt is not part of the default phase's empty content path.
   expect(request.messages?.some((message) => message.role === "user" && message.content === "hello")).toBe(true);
   // Default loop (no phases) includes user-configured tools plus route tool
   expect(request.tools).toEqual(
@@ -136,8 +136,8 @@ test("runAgentLoop completes task with simple response", async () => {
   expect(outcome.outcome).not.toHaveProperty("evidence");
   expect(outcome.outcome).not.toHaveProperty("failedCriteria");
   expect(events).toContain("phase_end");
-  // Phase content is injected as a tool_result on phase entry
-  expect(session.messages.some((message) => message.role === "tool")).toBe(true);
+  // Phase context is ephemeral and is removed when the run completes.
+  expect(session.messages.some((message) => message.metadata?.kind === "phase_prompt")).toBe(false);
   expect(events.length).toBeGreaterThan(0);
 });
 
@@ -218,8 +218,8 @@ test("runAgentLoop keeps executing tool calls after the old tool round threshold
       return;
     }
 
-    // +1 for the phase_default tool_result injected on phase entry
-    expect(request.messages.filter((message) => message.role === "tool")).toHaveLength(toolCallCount + 1);
+    // The phase prompt is a user context message, not a tool protocol message.
+    expect(request.messages.filter((message) => message.role === "tool")).toHaveLength(toolCallCount);
     const text = "Finished after nine tool calls.";
     yield { type: "text_delta", text, partial: buildTestPartial(text) };
     yield { type: "done" };
@@ -457,7 +457,7 @@ test("runAgentLoop does not append an assistant message when the model stream er
     }),
   ).rejects.toThrow("provider down");
 
-  // Phase content is injected as a tool_result before the model errors
+  // Phase content is injected as user context before the model errors
   expect(session.messages.some((message) => message.role === "assistant")).toBe(false);
   expect(events.some((event) => event.type === "message_start" && event.message.role === "assistant")).toBe(false);
 });
