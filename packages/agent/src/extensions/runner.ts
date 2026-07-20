@@ -33,6 +33,14 @@ import { createExtension, createExtensionRuntime } from "./types";
 import { parseModelRef } from "@rowan-agent/models";
 import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
+import {
+  validateDescription,
+  validatePhaseTarget,
+  validateResourceId,
+  validateResourceName,
+  validateSkillReferences,
+  warnResourceDiagnostics,
+} from "../harness/resource-validation";
 import { HooksManager } from "./hooks";
 import type {
   HookEventType,
@@ -414,8 +422,8 @@ export class ExtensionRunner {
   // Phase management
   // ---------------------------------------------------------------------------
 
-  getPhase(id: string): Phase | undefined {
-    const reg = this.getRegisteredPhase(id);
+  getPhase(name: string): Phase | undefined {
+    const reg = this.getRegisteredPhase(name);
     if (!reg) return undefined;
     return this.adaptToPhase(reg);
   }
@@ -431,8 +439,8 @@ export class ExtensionRunner {
   ): PhaseRegistry {
     const registered = this.collectRegisteredPhases();
     const phases = new Map<string, Phase>();
-    for (const [id, reg] of registered) {
-      phases.set(id, this.adaptToPhase(reg));
+    for (const [name, reg] of registered) {
+      phases.set(name, this.adaptToPhase(reg));
     }
     // Default to null (start from "none") unless explicitly provided
     const entryPhaseId = input.entryPhaseId ?? null;
@@ -443,9 +451,8 @@ export class ExtensionRunner {
   private adaptToPhase(reg: RegisteredPhase): Phase {
     const def = reg.definition;
     return {
-      id: def.id,
-      name: def.name ?? def.id,
-      description: def.description ?? "",
+      name: def.name,
+      description: def.description,
       tools: def.tools,
       skills: def.skills,
       target: def.target,
@@ -749,24 +756,31 @@ export class ExtensionRunner {
     extension: Extension,
     registration: PhaseRegistration,
   ): void {
-    if (!registration.id) {
-      throw new Error(`Phase registration requires an "id" field.`);
-    }
-    if (!registration.name) {
-      throw new Error(`Phase registration "${registration.id}" requires a "name" field.`);
-    }
-    if (!registration.description) {
-      throw new Error(`Phase registration "${registration.id}" requires a "description" field.`);
+    if (typeof registration.name !== "string" || registration.name.length === 0) {
+      throw new Error(`Phase registration requires a "name" field.`);
     }
 
-    if (this.phases.has(registration.id)) {
-      throw new Error(`Duplicate phase id: ${registration.id}`);
+    const name = registration.name;
+    const description = validateDescription(registration.description);
+    const errors = validateResourceId(name, "name");
+    if (description.missing) errors.push(...description.warnings);
+    errors.push(...validateSkillReferences(registration.skills));
+    errors.push(...validatePhaseTarget(registration.target));
+
+    if (errors.length > 0) {
+      throw new Error(`Invalid phase registration "${name}": ${errors.join("; ")}`);
+    }
+    if (description.warnings.length > 0) {
+      warnResourceDiagnostics("phase", `extension ${extension.path}`, description.warnings);
+    }
+
+    if (this.phases.has(name)) {
+      throw new Error(`Duplicate phase name: ${name}`);
     }
 
     const definition: PhaseDefinition = {
-      id: registration.id,
-      name: registration.name,
-      description: registration.description,
+      name,
+      description: description.description!,
       run: registration.run,
       ...(registration.model ? { model: registration.model } : {}),
     };
@@ -776,10 +790,10 @@ export class ExtensionRunner {
       source: { extensionPath: extension.path },
     };
 
-    this.phases.set(registration.id, registered);
+    this.phases.set(name, registered);
 
     // Track in extension object
-    extension.phases.set(registration.id, registered);
+    extension.phases.set(name, registered);
 
     this._phaseCache = null;
   }
@@ -811,8 +825,8 @@ export class ExtensionRunner {
     this.pendingProviders.length = 0;
   }
 
-  private getRegisteredPhase(id: string): RegisteredPhase | undefined {
-    return this.collectRegisteredPhases().get(id);
+  private getRegisteredPhase(name: string): RegisteredPhase | undefined {
+    return this.collectRegisteredPhases().get(name);
   }
 
   private collectRegisteredPhases(): Map<string, RegisteredPhase> {

@@ -90,7 +90,7 @@ import type { AgentMessage } from "../types";
  */
 export interface BeforePhaseEvent {
   type: "before_phase";
-  /** Phase ID about to execute */
+  /** Phase name about to execute */
   phaseId: string;
   /** Phase input */
   input: PhaseContext;
@@ -105,7 +105,7 @@ export interface BeforePhaseEvent {
  */
 export interface AfterPhaseEvent {
   type: "after_phase";
-  /** Phase ID that completed */
+  /** Phase name that completed */
   phaseId: string;
   /** Phase output */
   output: PhaseOutput;
@@ -118,7 +118,7 @@ export interface AfterPhaseEvent {
  */
 export interface BeforePromptEvent {
   type: "before_prompt";
-  /** Current phase ID */
+  /** Current phase name */
   phaseId: string;
   /** Phase input (modifiable) */
   input: PhaseContext;

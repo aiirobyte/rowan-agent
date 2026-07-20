@@ -40,7 +40,7 @@ function createContext(input: { systemPrompt: string; input: string; tools?: Too
     messages: [createMessage("user", input.input)],
     tools: input.tools?.slice() ?? [],
     skills: input.skills?.slice() ?? [],
-    phases: { phases: new Map([[defaultPhase.id, defaultPhase]]), entryPhaseId: defaultPhase.id },
+    phases: { phases: new Map([[defaultPhase.name, defaultPhase]]), entryPhaseId: defaultPhase.name },
   };
 }
 

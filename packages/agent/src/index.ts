@@ -58,6 +58,7 @@ export type {
   RuntimeEventConsumer,
   RuntimeEventDisposition,
   RuntimeEventListener,
+  RuntimeSessionSummary,
 } from "./runtime/agent-runtime";
 export { AgentRun } from "./runtime/agent-run";
 export type { AgentRunListener } from "./runtime/agent-run";
@@ -78,5 +79,6 @@ export type {
   RuntimeMessageId,
   RuntimeToolCall,
   RuntimeToolCallId,
+  SessionLifecycleState,
 } from "./runtime/domain";
 export type { ToolRuntimePolicy } from "./runtime/tool-runtime";

@@ -14,6 +14,7 @@ export type LeaseId = OpaqueId<"LeaseId">;
 export type RuntimeToolCallId = OpaqueId<"RuntimeToolCallId">;
 
 export type AgentLifecycleState = "active" | "paused";
+export type SessionLifecycleState = "active" | "archived" | "deleting";
 
 export type RuntimeMessageState = "queued" | "leased" | "acknowledged" | "dead_lettered";
 
@@ -44,6 +45,8 @@ export type AgentRecord = {
   id: AgentId;
   sessionId: string;
   state: AgentLifecycleState;
+  lifecycleState: SessionLifecycleState;
+  parentSessionId?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -90,6 +93,8 @@ export type RuntimeEventKind =
   | "agent_created"
   | "agent_paused"
   | "agent_resumed"
+  | "session_archived"
+  | "session_unarchived"
   | "message_enqueued"
   | "run_enqueued"
   | "run_leased"

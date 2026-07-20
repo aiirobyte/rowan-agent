@@ -7,6 +7,7 @@ export type {
   AgentRuntimeOptions,
   RuntimeEventConsumer,
   RuntimeEventDisposition,
+  RuntimeSessionSummary,
 } from "./agent-runtime";
 export { AgentRun } from "./agent-run";
 export type { AgentRunListener } from "./agent-run";

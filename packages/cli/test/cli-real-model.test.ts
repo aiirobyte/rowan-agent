@@ -245,7 +245,7 @@ test("CLI loads file phases from workspace .rowan directory", async () => {
     const phaseDir = join(workspace, ".rowan", "phases", "default");
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: CLI Default
+name: default
 description: Runs from the CLI-loaded phase file.
 ---
 
@@ -277,7 +277,7 @@ test("CLI session continuation loads current workspace skills from file", async 
     const skillDir = join(workspace, ".rowan", "skills", "example");
     await mkdir(skillDir, { recursive: true });
     await writeFile(join(skillDir, "SKILL.md"), `---
-name: Example
+name: example
 description: Loaded from file during session continuation.
 ---
 
@@ -333,7 +333,7 @@ test("CLI keeps resources fixed for one live Agent Binding", async () => {
     const skillPath = join(skillDir, "SKILL.md");
     await mkdir(skillDir, { recursive: true });
     await writeFile(skillPath, `---
-name: Example
+name: example
 description: First skill description.
 ---
 
@@ -347,7 +347,7 @@ First skill version.
           requests.push(await request.json());
           if (requests.length === 1) {
             await writeFile(skillPath, `---
-name: Example
+name: example
 description: Second skill description.
 ---
 
@@ -1049,7 +1049,7 @@ test("CLI resumes a paused phase run from the next interactive prompt", async ()
   try {
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: Helper
+name: helper
 description: Extra phase that makes routing required.
 ---
 
@@ -1122,7 +1122,7 @@ test("CLI displays a programmatic phase outcome after a streamed paused turn", a
   try {
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: Image generation
+name: image-gen
 description: Generates an image without an LLM.
 ---
 

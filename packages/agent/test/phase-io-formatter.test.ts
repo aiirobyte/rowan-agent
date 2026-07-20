@@ -33,16 +33,16 @@ function createContext(input: { input: string; tools?: Tool[] }): AgentContext {
     messages: [createMessage("user", input.input)],
     tools: input.tools?.slice() ?? [echoTool],
     skills: [],
-    phases: { phases: new Map([[defaultPhase.id, defaultPhase]]), entryPhaseId: defaultPhase.id },
+    phases: { phases: new Map([[defaultPhase.name, defaultPhase]]), entryPhaseId: defaultPhase.name },
   };
 }
 
 function buildPhaseRegistry(phases: Phase[], entryPhaseId?: string): PhaseRegistry {
   const map = new Map<string, Phase>();
   for (const phase of phases) {
-    map.set(phase.id, phase);
+    map.set(phase.name, phase);
   }
-  const entry = entryPhaseId ?? phases[0]?.id ?? null;
+  const entry = entryPhaseId ?? phases[0]?.name ?? null;
   return { phases: map, entryPhaseId: entry };
 }
 

@@ -10,8 +10,8 @@ export type RouteToolArgs = {
   instruction?: string;
 };
 
-function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>): Record<string, string> {
-  const entry: Record<string, string> = { id: p.id, description: p.description };
+function buildPhaseEntry(p: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>): Record<string, string> {
+  const entry: Record<string, string> = { name: p.name, description: p.description };
   if (p.tools && p.tools.length > 0) {
     entry.available_tools = p.tools.join(", ");
   }
@@ -26,10 +26,10 @@ function buildPhaseEntry(p: Pick<Phase, 'id' | 'name' | 'description' | 'tools' 
   return entry;
 }
 
-function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): string {
+function buildRouteDescription(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): string {
   const phasesBlock = buildStructuredSection("phase", [
     ...availablePhases.map(buildPhaseEntry),
-    { id: "stop", description: "Terminate the workflow and return final result to the user" },
+    { name: "stop", description: "Terminate the workflow and return final result to the user" },
   ]);
 
   return [
@@ -50,14 +50,14 @@ function buildRouteDescription(availablePhases: Pick<Phase, 'id' | 'name' | 'des
 }
 
 /**
- * Create a route tool with the available phase IDs as valid route targets.
+ * Create a route tool with the available phase names as valid route targets.
  * The execute function is a no-op placeholder - phase routing is handled by
  * intercepting route tool calls in each phase's run function.
  */
-export function createRouteTool(availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): Tool<RouteToolArgs> {
+export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): Tool<RouteToolArgs> {
   const DecisionTarget = Type.Object({
     phase: Type.Union([
-      ...availablePhases.map(p => Type.Literal(p.id)),
+      ...availablePhases.map(p => Type.Literal(p.name)),
       Type.Literal("stop"),
     ]),
     reason: Type.Optional(Type.String({ description: "Brief reason for this decision" })),

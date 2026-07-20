@@ -45,7 +45,6 @@ export type PhaseRun = (context: PhaseContext, execution: PhaseExecution) => Pro
 
 /** Phase definition shape used by extensions */
 export type PhaseDefinition = {
-  id: string;
   name: string;
   description: string;
   run?: PhaseRun;
@@ -56,7 +55,7 @@ export type PhaseDefinition = {
   model?: string;
 };
 
-export type PhaseRegistration = Partial<Omit<PhaseDefinition, 'run'>> & {
+export type PhaseRegistration = Omit<PhaseDefinition, 'run'> & {
   /** Optional execution override — takes over model invocation */
   run?: PhaseRun;
 };
@@ -76,7 +75,6 @@ export type ExtensionPackageManifest = {
   rowan?: {
     extensions?: string[];
     phase?: {
-      id?: string;
       name?: string;
       description?: string;
       tools?: string[];
@@ -344,7 +342,6 @@ export interface ExtensionManifest {
   entry?: string;
   name?: string;
   phase?: {
-    id?: string;
     name?: string;
     description?: string;
     tools?: string[];

@@ -8,10 +8,9 @@ import type { Phase, PhaseRegistry } from "../src/harness/phases/types";
 import { createId } from "../src/utils";
 import { buildTestPartial } from "./support/scripted-stream";
 
-function buildTestPhase(overrides: Partial<Phase> & { id: string }): Phase {
+function buildTestPhase(overrides: Partial<Phase> & { name: string }): Phase {
   return {
-    name: overrides.id,
-    description: `${overrides.id} phase`,
+    description: `${overrides.name} phase`,
     filePath: "",
     baseDir: "",
     content: "",
@@ -21,7 +20,7 @@ function buildTestPhase(overrides: Partial<Phase> & { id: string }): Phase {
 
 function buildContext(phases: Phase[], entryPhaseId: string): AgentContext {
   const registry: PhaseRegistry = {
-    phases: new Map(phases.map(phase => [phase.id, phase])),
+    phases: new Map(phases.map(phase => [phase.name, phase])),
     entryPhaseId,
   };
   return {
@@ -40,7 +39,7 @@ const unusedStream: StreamFn = async function* () {
 test("serial PhaseContext exposes its invocation contract", async () => {
   let invocation: PhaseInvocation | undefined;
   const serial = buildTestPhase({
-    id: "serial-worker",
+    name: "serial-worker",
     run: async (context) => {
       invocation = context.invocation;
       return { message: "done", route: "stop" };
@@ -48,7 +47,7 @@ test("serial PhaseContext exposes its invocation contract", async () => {
   });
 
   await runAgentLoop({
-    context: buildContext([serial], serial.id),
+    context: buildContext([serial], serial.name),
     model: { provider: "test", id: "unused" },
     stream: unusedStream,
   });
@@ -61,9 +60,9 @@ test("serial PhaseContext exposes its invocation contract", async () => {
 
 test("parallel PhaseContexts expose their shared invocation contract", async () => {
   const invocations: PhaseInvocation[] = [];
-  const dispatcher = buildTestPhase({ id: "dispatcher", target: "stop" });
+  const dispatcher = buildTestPhase({ name: "dispatcher", target: "stop" });
   const worker = buildTestPhase({
-    id: "worker",
+    name: "worker",
     isolated: true,
     content: "Worker instructions.",
     run: async (context) => {
@@ -103,7 +102,7 @@ test("parallel PhaseContexts expose their shared invocation contract", async () 
   };
 
   await runAgentLoop({
-    context: buildContext([dispatcher, worker], dispatcher.id),
+    context: buildContext([dispatcher, worker], dispatcher.name),
     model: { provider: "test", id: "scripted" },
     stream,
   });

@@ -41,7 +41,7 @@ test("loadSkill reads SKILL.md and infers id from parent directory", async () =>
   const skillDir = join(root, "example");
   await mkdir(skillDir);
   const skillPath = join(skillDir, "SKILL.md");
-  await writeFile(skillPath, "# Example\n\nUse echo.");
+  await writeFile(skillPath, "---\ndescription: Use echo.\n---\n\n# Example\n\nUse echo.");
 
   const skill = await loadSkill(skillPath);
   const session = createSession({

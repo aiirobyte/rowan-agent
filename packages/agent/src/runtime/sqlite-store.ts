@@ -42,7 +42,9 @@ import { initializeRuntimeSchema } from "./runtime-schema";
 type AgentRow = {
   id: string;
   session_id: string;
+  parent_session_id: string | null;
   state: AgentRecord["state"];
+  lifecycle_state: AgentRecord["lifecycleState"];
   created_at: string;
   updated_at: string;
 };
@@ -162,13 +164,15 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       id: createId("agt") as AgentId,
       sessionId: input.sessionId,
       state: "active",
+      lifecycleState: "active",
+      ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
     const create = this.database.transaction(() => {
       this.database.run(
-        "INSERT INTO agents (id, session_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        [agent.id, agent.sessionId, agent.state, agent.createdAt, agent.updatedAt],
+        "INSERT INTO agents (id, session_id, parent_session_id, state, lifecycle_state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [agent.id, agent.sessionId, agent.parentSessionId ?? null, agent.state, agent.lifecycleState, agent.createdAt, agent.updatedAt],
       );
       this.recordEvent("agent_created", { agentId: agent.id });
     });
@@ -178,6 +182,11 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
 
   async getAgent(agentId: AgentId): Promise<AgentRecord | undefined> {
     const row = this.database.query("SELECT * FROM agents WHERE id = ?").get(agentId) as AgentRow | null;
+    return row ? this.agentFromRow(row) : undefined;
+  }
+
+  async getAgentBySessionId(sessionId: string): Promise<AgentRecord | undefined> {
+    const row = this.database.query("SELECT * FROM agents WHERE session_id = ?").get(sessionId) as AgentRow | null;
     return row ? this.agentFromRow(row) : undefined;
   }
 
@@ -196,6 +205,36 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       return this.requireAgent(agentId);
     })();
     return clone(updated);
+  }
+
+  async setAgentLifecycleState(agentId: AgentId, state: AgentRecord["lifecycleState"]): Promise<AgentRecord> {
+    const current = this.requireAgent(agentId);
+    if (current.lifecycleState === state) return clone(current);
+    const { timestamp } = timestampFor();
+    const updated = this.database.transaction(() => {
+      this.database.run("UPDATE agents SET lifecycle_state = ?, updated_at = ? WHERE id = ?", [state, timestamp, agentId]);
+      if (state === "archived") this.recordEvent("session_archived", { agentId });
+      if (state === "active" && current.lifecycleState === "archived") this.recordEvent("session_unarchived", { agentId });
+      return this.requireAgent(agentId);
+    })();
+    return clone(updated);
+  }
+
+  async deleteAgentData(agentId: AgentId): Promise<void> {
+    this.database.transaction(() => {
+      const agent = this.requireAgent(agentId);
+      const runIds = (this.database.query("SELECT id FROM agent_runs WHERE agent_id = ?").all(agentId) as Array<{ id: string }>).map((row) => row.id);
+      if (runIds.length > 0) {
+        const marks = runIds.map(() => "?").join(",");
+        this.database.run(`DELETE FROM runtime_tool_calls WHERE run_id IN (${marks})`, runIds);
+        this.database.run(`DELETE FROM runtime_leases WHERE run_id IN (${marks})`, runIds);
+        this.database.run(`DELETE FROM runtime_events WHERE agent_id = ? OR run_id IN (${marks})`, [agentId, ...runIds]);
+        this.database.run(`DELETE FROM agent_runs WHERE id IN (${marks})`, runIds);
+      }
+      this.database.run("DELETE FROM runtime_messages WHERE agent_id = ?", [agentId]);
+      this.database.run("DELETE FROM runtime_events WHERE agent_id = ?", [agentId]);
+      this.database.run("DELETE FROM agents WHERE id = ?", [agentId]);
+    })();
   }
 
   async enqueueAgentInput(input: EnqueueAgentInput): Promise<EnqueuedAgentInput> {
@@ -727,6 +766,8 @@ export class SqliteRuntimeStateStore implements RuntimeStateStore {
       id: row.id as AgentId,
       sessionId: row.session_id,
       state: row.state,
+      lifecycleState: row.lifecycle_state,
+      ...(row.parent_session_id ? { parentSessionId: row.parent_session_id } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

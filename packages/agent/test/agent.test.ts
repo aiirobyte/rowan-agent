@@ -44,8 +44,7 @@ test("Agent.run returns a run result and emits events", async () => {
 
 test("Agent publishes display outcomes as assistant messages", async () => {
   const phase: Phase = {
-    id: "image-gen",
-    name: "Image generation",
+    name: "image-gen",
     description: "Generates an image.",
     filePath: "<test>",
     baseDir: "<test>",
@@ -57,7 +56,7 @@ test("Agent publishes display outcomes as assistant messages", async () => {
   const agent = new Agent({
     context: {
       ...createTestContext(),
-      phases: { phases: new Map([[phase.id, phase]]), entryPhaseId: phase.id },
+      phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name },
     },
     model: { provider: "test", id: "display-outcome" },
     stream: async function* unusedStream() {
@@ -122,8 +121,7 @@ test("Agent config shortcuts update subsequent run configuration", async () => {
     yield { type: "done" };
   };
   const customPhase: Phase = {
-    id: "custom",
-    name: "Custom",
+    name: "custom",
     description: "Custom phase.",
     filePath: "<test>",
     baseDir: "<test>",
@@ -174,8 +172,7 @@ test("Agent config shortcuts update subsequent run configuration", async () => {
 test("Agent uses entryPhaseId only until initialized, then starts later turns at default", async () => {
   const phaseStarts: string[] = [];
   const planningPhase: Phase = {
-    id: "planning",
-    name: "Planning",
+    name: "planning",
     description: "Initial planning phase.",
     filePath: "<test>",
     baseDir: "<test>",
@@ -185,8 +182,7 @@ test("Agent uses entryPhaseId only until initialized, then starts later turns at
     },
   };
   const defaultPhase: Phase = {
-    id: "default",
-    name: "Default",
+    name: "default",
     description: "Default continuation phase.",
     filePath: "<test>",
     baseDir: "<test>",
@@ -241,8 +237,7 @@ test("Agent does not mark initialization complete when a run fails", async () =>
     yield { type: "done" };
   };
   const planningPhase: Phase = {
-    id: "planning",
-    name: "Planning",
+    name: "planning",
     description: "Initial planning phase.",
     filePath: "<test>",
     baseDir: "<test>",
@@ -273,8 +268,7 @@ test("Agent does not mark initialization complete when a run fails", async () =>
 
 test("Agent.run can pause and resume with a user message when route is missing", async () => {
   const helperPhase: Phase = {
-    id: "helper",
-    name: "Helper",
+    name: "helper",
     description: "Additional phase that makes routing available.",
     filePath: "<test>",
     baseDir: "<test>",
@@ -336,7 +330,7 @@ test("Agent does not discover custom phases from cwd .rowan extensions", async (
       const extension: ExtensionFactory = (rowan) => {
         rowan.registerPhase({
           id: "echo",
-          name: "Echo",
+          name: "echo",
           description: "Echo extension phase.",
           async run() {
             return { message: "custom extension ran", route: "stop" };
@@ -374,8 +368,7 @@ test("Agent loads phases from LoadedExtension list", async () => {
     factory: (rowan) => {
       capturedCwd = rowan.context.cwd;
       rowan.registerPhase({
-        id: "extension",
-        name: "Extension",
+        name: "extension",
         description: "Extension registered phase.",
         async run() {
           return { message: "extension phase ran", route: "stop" };
@@ -418,8 +411,7 @@ test("Agent passes cwd option to extension context", async () => {
       factory: (rowan) => {
         capturedCwd = rowan.context.cwd;
         rowan.registerPhase({
-          id: "extension",
-          name: "Extension",
+          name: "extension",
           description: "Extension registered phase.",
           async run() {
             return { message: "extension phase ran", route: "stop" };
@@ -455,7 +447,7 @@ test("Agent runs explicitly supplied file phases from configured project rowan d
     const phaseDir = join(root, ".rowan-project", "phases", "default");
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: Custom Default
+name: default
 description: Uses the configured project Rowan directory.
 ---
 
@@ -492,7 +484,7 @@ test("Agent accepts an explicit phase registry in context", async () => {
     const phaseDir = join(root, "phases", "default");
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: Explicit Default
+name: default
 description: Supplied as an Agent option.
 ---
 
@@ -529,7 +521,7 @@ test("Agent lets a user-defined default phase override the built-in default", as
     const phaseDir = join(root, "phases", "default");
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: User Default
+name: default
 description: Overrides the built-in default phase.
 ---
 
@@ -596,7 +588,7 @@ test("Agent.loadPhases picks up markdown and execution edits on repeated loads",
     const phaseDir = join(root, "phases", "default");
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: Reloadable
+name: default
 description: Reloadable phase.
 ---
 
@@ -615,7 +607,7 @@ First phase content.
     });
 
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: Reloadable
+name: default
 description: Reloadable phase.
 ---
 
@@ -651,8 +643,7 @@ test("Agent.run can hot reload extensions loaded by Agent.loadExtensions", async
     const writeExtension = (message: string) => writeFile(extensionPath, `
       export default (rowan: any) => {
         rowan.registerPhase({
-          id: "extension",
-          name: "Extension",
+          name: "extension",
           description: "Reloadable extension phase.",
           async run() {
             return { message: ${JSON.stringify(message)}, route: "stop" };

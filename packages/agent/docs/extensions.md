@@ -74,8 +74,7 @@ import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default function(api: ExtensionAPI) {
   api.registerPhase({
-    id: "review",
-    name: "Code Review",
+    name: "review",
     description: "Review code changes for issues",
     tools: ["read", "bash"],
     run: async (context) => {
@@ -205,7 +204,7 @@ interface ExtensionAPI {
     setPayload(payload: unknown): void;
     setMessage(message: string): void;
     getCurrentPhase(): string;
-    setNextPhase(phaseId: string): void;
+    setNextPhase(phaseName: string): void;
     getNextPhase(): string | undefined;
     getMessage(): string | undefined;
   };
@@ -237,8 +236,8 @@ For extensions running inside a phase (factory pattern):
 | `phase.getPayload()` | Read payload from previous phase |
 | `phase.setPayload(payload)` | Set payload for next phase |
 | `phase.setMessage(message)` | Set the phase outcome message |
-| `phase.getCurrentPhase()` | Get current phase ID |
-| `phase.setNextPhase(id)` | Set next phase (lower priority than `target`) |
+| `phase.getCurrentPhase()` | Get current phase name |
+| `phase.setNextPhase(name)` | Set next phase (lower priority than `target`) |
 | `phase.getNextPhase()` | Get the next phase set by `setNextPhase` |
 | `phase.getMessage()` | Get the message set by `setMessage` |
 
@@ -562,9 +561,8 @@ Register phases programmatically via `api.registerPhase()`. These are equivalent
 
 ```typescript
 interface PhaseRegistration {
-  id: string;
-  name: string;
-  description: string;
+  name: string;              // unique phase identity and display name
+  description: string;       // non-empty, at most 1024 characters
   run?: PhaseRun;          // execution function
   tools?: string[];        // restricted tools
   skills?: string[];       // restricted skills
@@ -577,8 +575,7 @@ interface PhaseRegistration {
 
 ```typescript
 api.registerPhase({
-  id: "deploy",
-  name: "Deploy",
+  name: "deploy",
   description: "Deploy the application",
   tools: ["bash", "read"],
   target: "verify",
@@ -693,7 +690,7 @@ interface ExtensionContext {
   getAvailableSkills?(): Array<{ name: string; description: string }>;
   getSkillContent?(skillName: string): string;
   getAvailablePhases?(): string[];
-  getPhaseContent?(phaseId: string): string;
+  getPhaseContent?(phaseName: string): string;
 }
 ```
 
@@ -848,7 +845,6 @@ type ExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
 
 ```typescript
 type PhaseRegistration = {
-  id: string;
   name: string;
   description: string;
   run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;

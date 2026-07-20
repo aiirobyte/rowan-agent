@@ -12,10 +12,9 @@ import { buildTestPartial } from "./support/scripted-stream";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildTestPhase(overrides: Partial<Phase> & { id: string }): Phase {
+function buildTestPhase(overrides: Partial<Phase> & { name: string }): Phase {
   return {
-    name: overrides.id,
-    description: `${overrides.id} phase`,
+    description: `${overrides.name} phase`,
     filePath: "",
     baseDir: "",
     content: "",
@@ -26,9 +25,9 @@ function buildTestPhase(overrides: Partial<Phase> & { id: string }): Phase {
 function buildPhaseRegistry(phases: Phase[], entryPhaseId?: string): PhaseRegistry {
   const map = new Map<string, Phase>();
   for (const phase of phases) {
-    map.set(phase.id, phase);
+    map.set(phase.name, phase);
   }
-  const entry = entryPhaseId ?? phases[0]?.id ?? null;
+  const entry = entryPhaseId ?? phases[0]?.name ?? null;
   return { phases: map, entryPhaseId: entry };
 }
 
@@ -82,8 +81,8 @@ function* yieldRouteToolCall(route: string, reason?: string): Generator<any> {
 
 test("route in same turn extracts route normally — no forced routing", async () => {
   const phases = buildPhaseRegistry([
-    buildTestPhase({ id: "plan" }),
-    buildTestPhase({ id: "execute" }),
+    buildTestPhase({ name: "plan" }),
+    buildTestPhase({ name: "execute" }),
   ], "plan");
 
   let requestCount = 0;
@@ -123,7 +122,7 @@ test("route in same turn extracts route normally — no forced routing", async (
 
 test("route to stop records a matching tool result before completing", async () => {
   const phases = buildPhaseRegistry([
-    buildTestPhase({ id: "plan" }),
+    buildTestPhase({ name: "plan" }),
   ], "plan");
 
   const stream: StreamFn = async function* () {
@@ -156,8 +155,8 @@ test("route to stop records a matching tool result before completing", async () 
 
 test("phase content is injected as a user context message and replaced on transition", async () => {
   const phases = buildPhaseRegistry([
-    buildTestPhase({ id: "plan", content: "You are planning." }),
-    buildTestPhase({ id: "execute", content: "You are executing." }),
+    buildTestPhase({ name: "plan", content: "You are planning." }),
+    buildTestPhase({ name: "execute", content: "You are executing." }),
   ], "plan");
 
   let requestCount = 0;
@@ -251,10 +250,10 @@ test("phase content is injected as a user context message and replaced on transi
 test("LLM phase without a route call completes via default stop when no input channel", async () => {
   const phases = buildPhaseRegistry([
     buildTestPhase({
-      id: "plan",
+      name: "plan",
       tools: ["echo"],
     }),
-    buildTestPhase({ id: "execute" }),
+    buildTestPhase({ name: "execute" }),
   ], "plan");
 
   let requestCount = 0;
@@ -277,8 +276,8 @@ test("LLM phase without a route call completes via default stop when no input ch
 
 test("missing route pauses via waitForInput and resumes the SAME phase until route:stop", async () => {
   const phases = buildPhaseRegistry([
-    buildTestPhase({ id: "plan" }),
-    buildTestPhase({ id: "execute" }),
+    buildTestPhase({ name: "plan" }),
+    buildTestPhase({ name: "execute" }),
   ], "plan");
   const input = createInputWaiter();
 
@@ -336,8 +335,8 @@ test("missing route pauses via waitForInput and resumes the SAME phase until rou
 
 test("aborting while paused removes the phase directive before completion", async () => {
   const phases = buildPhaseRegistry([
-    buildTestPhase({ id: "plan" }),
-    buildTestPhase({ id: "execute" }),
+    buildTestPhase({ name: "plan" }),
+    buildTestPhase({ name: "execute" }),
   ], "plan");
   const abortController = new AbortController();
   const input = createInputWaiter();
@@ -365,8 +364,8 @@ test("aborting while paused removes the phase directive before completion", asyn
 
 test("LLM phase with forced target does not require route tool call", async () => {
   const phases = buildPhaseRegistry([
-    buildTestPhase({ id: "plan", target: "execute" }),
-    buildTestPhase({ id: "execute", target: "stop" }),
+    buildTestPhase({ name: "plan", target: "execute" }),
+    buildTestPhase({ name: "execute", target: "stop" }),
   ], "plan");
 
   const events: string[] = [];

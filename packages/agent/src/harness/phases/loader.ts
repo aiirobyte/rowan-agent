@@ -7,11 +7,21 @@ import type { PhaseContext } from "./types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
 import {
+  FrontmatterParseError,
   loadMarkdown,
   inferResourceName,
 } from "../loader";
 import { parseModelRef } from "@rowan-agent/models";
 import { formatResourceOutput } from "../context/resource-formatter";
+import {
+  ResourceMetadataError,
+  validateDescription,
+  validatePhaseTarget,
+  validateResourceId,
+  validateResourceName,
+  validateSkillReferences,
+  warnResourceDiagnostics,
+} from "../resource-validation";
 
 const PHASE_MARKER = "PHASE.md";
 
@@ -29,31 +39,47 @@ function resolvePhasePath(input: string): string {
  */
 export async function loadPhase(targetPath: string): Promise<Phase> {
   const resolved = resolvePhasePath(targetPath);
-  const { frontmatter, body } = await loadMarkdown<PhaseFrontmatter>(resolved);
-
-  const id = inferResourceName(resolved, PHASE_MARKER);
-
-  if (!frontmatter.name) {
-    throw new Error(`Phase "${id}" at "${resolved}" is missing required field "name" in PHASE.md frontmatter.`);
+  let loaded: Awaited<ReturnType<typeof loadMarkdown<PhaseFrontmatter>>>;
+  try {
+    loaded = await loadMarkdown<PhaseFrontmatter>(resolved);
+  } catch (error) {
+    if (!(error instanceof FrontmatterParseError)) throw error;
+    warnResourceDiagnostics("phase", resolved, [`frontmatter could not be parsed: ${error.message}`]);
+    throw new ResourceMetadataError("parse_failed", error.message);
   }
-  if (!frontmatter.description) {
-    throw new Error(`Phase "${id}" at "${resolved}" is missing required field "description" in PHASE.md frontmatter.`);
+
+  const directoryName = inferResourceName(resolved, PHASE_MARKER);
+  const { frontmatter, body } = loaded;
+  const metadata = frontmatter as Record<string, unknown>;
+  const frontmatterName = typeof metadata.name === "string" ? metadata.name : undefined;
+  const name = frontmatterName || directoryName;
+  const description = validateDescription(metadata.description);
+  const diagnostics = validateResourceId(directoryName);
+  if (frontmatterName && frontmatterName !== directoryName) {
+    diagnostics.push(...validateResourceName(frontmatterName, directoryName));
+  }
+  diagnostics.push(...description.warnings);
+  diagnostics.push(...validateSkillReferences(metadata.skills));
+  diagnostics.push(...validatePhaseTarget(metadata.target));
+  warnResourceDiagnostics("phase", resolved, diagnostics);
+
+  if (description.missing) {
+    throw new ResourceMetadataError("invalid_metadata", "description is required");
   }
 
   const baseDir = dirname(resolved);
   const phase: Phase = {
-    id,
-    name: frontmatter.name,
-    description: frontmatter.description,
-    tools: frontmatter.tools,
-    skills: frontmatter.skills,
-    target: frontmatter.target,
-    input: frontmatter.input,
-    isolated: frontmatter.isolated,
+    name,
+    description: description.description!,
+    tools: metadata.tools as string[] | undefined,
+    skills: metadata.skills as string[] | undefined,
+    target: metadata.target as string | undefined,
+    input: metadata.input as Record<string, string> | undefined,
+    isolated: metadata.isolated as boolean | undefined,
     filePath: resolved,
     baseDir,
     content: body,
-    model: parseModelRef(frontmatter.model),
+    model: parseModelRef(metadata.model as string | undefined),
   };
 
   // Try to load execution code
@@ -84,7 +110,7 @@ export function readPhaseContent(phase: Phase): string {
  * Scans for subdirectories containing PHASE.md files.
  * Returns PhaseRegistry with entryPhaseId:
  * - null by default (caller must explicitly set to start from a specific phase)
- * - Set to a specific phase id to start from that phase
+ * - Set to a specific phase name to start from that phase
  *
  * When entryPhaseId is null, Agent normalizes the registry to start from its default phase.
  */
@@ -93,14 +119,22 @@ export async function loadPhases(targetPath: string): Promise<PhaseRegistry> {
   const phasesDir = resolve(targetPath);
 
   if (existsSync(phasesDir) && statSync(phasesDir).isFile()) {
-    const phase = await loadPhase(phasesDir);
-    phases.set(phase.id, phase);
+    try {
+      const phase = await loadPhase(phasesDir);
+      phases.set(phase.name, phase);
+    } catch (error) {
+      if (!(error instanceof ResourceMetadataError)) throw error;
+    }
     return { phases, entryPhaseId: null };
   }
 
   if (existsSync(join(phasesDir, PHASE_MARKER))) {
-    const phase = await loadPhase(phasesDir);
-    phases.set(phase.id, phase);
+    try {
+      const phase = await loadPhase(phasesDir);
+      phases.set(phase.name, phase);
+    } catch (error) {
+      if (!(error instanceof ResourceMetadataError)) throw error;
+    }
     return { phases, entryPhaseId: null };
   }
 
@@ -114,8 +148,9 @@ export async function loadPhases(targetPath: string): Promise<PhaseRegistry> {
 
     try {
       const phase = await loadPhase(phaseFile);
-      phases.set(phase.id, phase);
+      phases.set(phase.name, phase);
     } catch (error) {
+      if (error instanceof ResourceMetadataError) continue;
       console.warn(`Failed to load phase "${entry.name}":`, error);
     }
   }
@@ -181,7 +216,7 @@ async function loadPhaseCode(
 export async function reloadPhases(
   registry: PhaseRegistry,
 ): Promise<void> {
-  for (const [id, phase] of registry.phases) {
+  for (const [name, phase] of registry.phases) {
     // Skip extension-registered phases (no file path)
     if (!phase.filePath) {
       continue;
@@ -189,10 +224,11 @@ export async function reloadPhases(
 
     try {
       const fresh = await loadPhase(phase.filePath);
-      registry.phases.set(id, fresh);
+      registry.phases.delete(name);
+      registry.phases.set(fresh.name, fresh);
     } catch (error) {
       // Keep stale version on error
-      console.warn(`Failed to reload phase "${id}":`, error);
+      console.warn(`Failed to reload phase "${name}":`, error);
     }
   }
 }

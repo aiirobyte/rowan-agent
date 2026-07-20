@@ -85,11 +85,11 @@ export interface ExtensionContext {
   /** Get skill content by name */
   getSkillContent?(skillName: string): string;
 
-  /** Get all available phase IDs */
+  /** Get all available phase names */
   getAvailablePhases?(): string[];
 
-  /** Get phase content by ID */
-  getPhaseContent?(phaseId: string): string;
+  /** Get phase content by name */
+  getPhaseContent?(phaseName: string): string;
 }
 
 // ---------------------------------------------------------------------------

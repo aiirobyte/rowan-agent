@@ -57,6 +57,18 @@ export type RuntimeEventConsumer = {
   stop(): void;
 };
 
+export type RuntimeSessionSummary = {
+  id: string;
+  state: import("./domain").SessionLifecycleState;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+  parentSessionId?: string;
+  agentId: AgentId;
+  activeRunCount: number;
+  title?: string;
+};
+
 let activeRuntime: AgentRuntime | undefined;
 
 type PendingJob = {
@@ -81,6 +93,7 @@ export class AgentRuntime {
   private readonly toolRuntime: ToolRuntime;
   private readonly bindings = new Map<AgentId, AttachedAgentBinding>();
   private readonly agents = new Map<AgentId, Agent>();
+  private readonly invalidatedAgents = new Set<AgentId>();
   private readonly runHandles = new Map<AgentRunId, RuntimeRunHandle>();
   private readonly runWaiters = new Map<AgentRunId, Set<() => void>>();
   private readonly pendingRuns: PendingJob[] = [];
@@ -129,6 +142,15 @@ export class AgentRuntime {
     const runtime = new AgentRuntime(options);
     activeRuntime = runtime;
     try {
+      if (options.sessionProvider) {
+        for (const record of await options.stateStore.listAgents()) {
+          if (record.lifecycleState !== "deleting") continue;
+          const activeRuns = await options.stateStore.listRuns({ agentId: record.id, states: ["queued", "running", "suspended"] });
+          if (activeRuns.length > 0) continue;
+          await options.stateStore.deleteAgentData(record.id);
+          await options.sessionProvider.delete(record.sessionId);
+        }
+      }
       await runtime.recover();
       runtime.startLeaseRecovery();
       return runtime;
@@ -148,8 +170,10 @@ export class AgentRuntime {
       input: "",
       skills: options.context.skills,
     });
+    const header = await manager.getHeader();
     const record = await this.stateStore.createAgent({
       sessionId: manager.getSessionId(),
+      parentSessionId: header.parentSessionId,
     });
     this.pausedAgents.delete(record.id);
     const agent = await this.attachAgent(record, manager, options);
@@ -165,6 +189,7 @@ export class AgentRuntime {
     assertAgentOptions(options);
     const record = await this.stateStore.getAgent(agentId);
     if (!record) throw new Error(`Agent not found: ${agentId}.`);
+    if (record.lifecycleState !== "active") throw new Error(`Session ${record.sessionId} is ${record.lifecycleState}.`);
     if (record.state === "paused") this.pausedAgents.add(record.id);
     else this.pausedAgents.delete(record.id);
     const provider = this.sessionProvider;
@@ -283,6 +308,89 @@ export class AgentRuntime {
 
   async listRuns(input?: ListRunsInput): Promise<AgentRunRecord[]> {
     return this.stateStore.listRuns(input);
+  }
+
+  async listSessions(input: { state?: import("./domain").SessionLifecycleState } = {}): Promise<RuntimeSessionSummary[]> {
+    const records = await this.stateStore.listAgents();
+    const items = this.sessionProvider ? await this.sessionProvider.list() : [];
+    const summaries = new Map(items.map((item) => [item.id, item]));
+    const activeRuns = await this.stateStore.listActiveRuns();
+    return records
+      .filter((record) => !input.state || record.lifecycleState === input.state)
+      .map((record) => {
+        const item = summaries.get(record.sessionId);
+        return {
+          id: record.sessionId,
+          state: record.lifecycleState,
+          createdAt: record.createdAt,
+          updatedAt: item?.updatedAt ?? record.updatedAt,
+          ...(record.lifecycleState === "archived" ? { archivedAt: record.updatedAt } : {}),
+          ...(record.parentSessionId ? { parentSessionId: record.parentSessionId } : {}),
+          agentId: record.id,
+          activeRunCount: activeRuns.filter((run) => run.agentId === record.id).length,
+          ...(item?.title ? { title: item.title } : {}),
+        };
+      });
+  }
+
+  async archiveSession(sessionId: string): Promise<void> {
+    const record = await this.requireSessionAgent(sessionId);
+    if (record.lifecycleState === "archived") return;
+    if (record.lifecycleState === "deleting") throw new Error(`Session ${sessionId} is being deleted.`);
+    await this.stateStore.setAgentLifecycleState(record.id, "archived");
+    this.publishEvents();
+  }
+
+  async unarchiveSession(sessionId: string): Promise<void> {
+    const record = await this.requireSessionAgent(sessionId);
+    if (record.lifecycleState === "active") return;
+    if (record.lifecycleState === "deleting") throw new Error(`Session ${sessionId} is being deleted.`);
+    await this.stateStore.setAgentLifecycleState(record.id, "active");
+    await this.scheduleQueuedRuns(record.id);
+    this.publishEvents();
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    this.assertRunning();
+    if (!this.sessionProvider) throw new Error("Agent Runtime requires a SessionManager provider to delete a Session.");
+    if (!this.sessionProvider.delete) throw new Error("Session Manager provider does not support deletion.");
+    const root = await this.requireSessionAgent(sessionId);
+    const records = await this.stateStore.listAgents();
+    const subtree = new Set<AgentId>([root.id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const record of records) {
+        if (record.parentSessionId && records.some((candidate) => subtree.has(candidate.id) && candidate.sessionId === record.parentSessionId) && !subtree.has(record.id)) {
+          subtree.add(record.id);
+          changed = true;
+        }
+      }
+    }
+    const activeRuns = await this.stateStore.listActiveRuns();
+    if (activeRuns.some((run) => subtree.has(run.agentId))) {
+      throw new Error(`Session ${sessionId} has active Runs and cannot be deleted.`);
+    }
+    const targets = records.filter((record) => subtree.has(record.id));
+    for (const record of targets) await this.stateStore.setAgentLifecycleState(record.id, "deleting");
+    for (const record of targets) {
+      this.bindings.delete(record.id);
+      this.agents.delete(record.id);
+      this.invalidatedAgents.add(record.id);
+      this.pausedAgents.delete(record.id);
+      for (let index = this.pendingRuns.length - 1; index >= 0; index -= 1) {
+        if (this.pendingRuns[index]?.agentId === record.id) this.pendingRuns.splice(index, 1);
+      }
+      await this.stateStore.deleteAgentData(record.id);
+      await this.sessionProvider.delete(record.sessionId);
+    }
+    this.publishEvents();
+  }
+
+  private async requireSessionAgent(sessionId: string) {
+    const record = await this.stateStore.getAgentBySessionId(sessionId);
+    if (!record) throw new Error(`Session not found: ${sessionId}.`);
+    return record;
   }
 
   getAgent(agentId: AgentId): Agent | undefined {
@@ -437,7 +545,11 @@ export class AgentRuntime {
     persist: () => Promise<void>,
   ): Promise<import("./agent-run").AgentRun> {
     this.assertRunning();
+    if (this.invalidatedAgents.has(agentId)) throw new Error(`Session for Agent ${agentId} was deleted.`);
     if (!this.bindings.has(agentId)) throw new Error(`Agent ${agentId} has no live Agent Binding.`);
+    const record = await this.stateStore.getAgent(agentId);
+    if (!record) throw new Error(`Agent ${agentId} was deleted.`);
+    if (record.lifecycleState !== "active") throw new Error(`Session ${record.sessionId} is ${record.lifecycleState}.`);
     const enqueued = await this.stateStore.enqueueAgentInput({ agentId, input });
     await persist();
     if (enqueued.resumed) this.notifyRun(enqueued.run);

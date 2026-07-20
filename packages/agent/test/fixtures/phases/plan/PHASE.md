@@ -1,5 +1,5 @@
 ---
-name: Plan
+name: plan
 description: Analyze the user's request and create a task plan
 input:
   task: User request or task description

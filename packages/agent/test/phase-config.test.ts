@@ -5,8 +5,8 @@ import type { LoadedExtension } from "../src/extensions";
 
 test("PhaseRegistry is Map-based with entryPhaseId", () => {
   const phases = new Map();
-  phases.set("a", { id: "a", name: "A", description: "a phase", filePath: "", baseDir: "", content: "" });
-  phases.set("b", { id: "b", name: "B", description: "b phase", filePath: "", baseDir: "", content: "" });
+  phases.set("a", { name: "a", description: "a phase", filePath: "", baseDir: "", content: "" });
+  phases.set("b", { name: "b", description: "b phase", filePath: "", baseDir: "", content: "" });
 
   const registry: PhaseRegistry = { phases, entryPhaseId: "a" };
   expect(registry.entryPhaseId).toBe("a");
@@ -29,8 +29,7 @@ test("ExtensionRunner loads phases from extensions", async () => {
     name: "test",
     factory: (ctx) => {
       ctx.registerPhase({
-        id: "custom",
-        name: "Custom",
+        name: "custom",
         description: "Custom phase",
         run: async () => ({ message: "done", route: "stop" }),
       });
@@ -41,15 +40,16 @@ test("ExtensionRunner loads phases from extensions", async () => {
   runner.bind();
 
   const phases = runner.getPhases();
-  expect(phases.some(p => p.id === "custom")).toBe(true);
+  expect(phases.some(p => p.name === "custom")).toBe(true);
+  expect("id" in phases.find((p) => p.name === "custom")!).toBe(false);
 
   const registry = runner.createPhaseRegistry({ entryPhaseId: "custom" });
   expect(registry.entryPhaseId).toBe("custom");
   expect(registry.phases.has("custom")).toBe(true);
-  expect(registry.phases.get("custom")?.name).toBe("Custom");
+  expect(registry.phases.get("custom")?.name).toBe("custom");
 });
 
-test("ExtensionRunner rejects duplicate phase ids", async () => {
+test("ExtensionRunner rejects duplicate phase names", async () => {
   const runner = createExtensionRunner();
 
   const ext1: LoadedExtension = {
@@ -57,8 +57,7 @@ test("ExtensionRunner rejects duplicate phase ids", async () => {
     name: "test1",
     factory: (ctx) => {
       ctx.registerPhase({
-        id: "dup",
-        name: "Dup",
+        name: "dup",
         description: "Duplicate",
         run: async () => ({ message: "", route: "stop" }),
       });
@@ -70,8 +69,7 @@ test("ExtensionRunner rejects duplicate phase ids", async () => {
     name: "test2",
     factory: (ctx) => {
       ctx.registerPhase({
-        id: "dup",
-        name: "Dup2",
+        name: "dup",
         description: "Duplicate",
         run: async () => ({ message: "", route: "stop" }),
       });
@@ -83,6 +81,39 @@ test("ExtensionRunner rejects duplicate phase ids", async () => {
     await runner.loadExtensions([ext2]);
     expect(true).toBe(false); // Should not reach here
   } catch (error) {
-    expect((error as Error).message).toContain("Duplicate phase id");
+    expect((error as Error).message).toContain("Duplicate phase name");
   }
+});
+
+test("ExtensionRunner rejects invalid phase metadata", async () => {
+  const runner = createExtensionRunner();
+  const extension: LoadedExtension = {
+    path: "<invalid>",
+    name: "invalid",
+    factory: (ctx) => {
+      ctx.registerPhase({
+        name: "Bad_ID",
+        description: "Invalid phase",
+        run: async () => ({ message: "", route: "stop" }),
+      });
+    },
+  };
+
+  await expect(runner.loadExtensions([extension])).rejects.toThrow("invalid characters");
+});
+
+test("ExtensionRunner requires an explicit phase name", async () => {
+  const runner = createExtensionRunner();
+  const extension: LoadedExtension = {
+    path: "<default-name>",
+    name: "default-name",
+    factory: (ctx) => {
+      ctx.registerPhase({
+        description: "Phase with an implicit name",
+        run: async () => ({ message: "", route: "stop" }),
+      } as any);
+    },
+  };
+
+  await expect(runner.loadExtensions([extension])).rejects.toThrow('requires a "name" field');
 });

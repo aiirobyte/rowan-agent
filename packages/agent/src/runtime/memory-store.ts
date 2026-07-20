@@ -74,6 +74,8 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
       id: createId("agt") as AgentId,
       sessionId: input.sessionId,
       state: "active",
+      lifecycleState: "active",
+      ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -84,6 +86,11 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
 
   async getAgent(agentId: AgentId): Promise<AgentRecord | undefined> {
     const agent = this.agents.get(agentId);
+    return agent ? clone(agent) : undefined;
+  }
+
+  async getAgentBySessionId(sessionId: string): Promise<AgentRecord | undefined> {
+    const agent = [...this.agents.values()].find((candidate) => candidate.sessionId === sessionId);
     return agent ? clone(agent) : undefined;
   }
 
@@ -99,6 +106,29 @@ export class InMemoryRuntimeStateStore implements RuntimeStateStore {
     agent.updatedAt = timestamp;
     this.recordEvent(state === "paused" ? "agent_paused" : "agent_resumed", { agentId });
     return clone(agent);
+  }
+
+  async setAgentLifecycleState(agentId: AgentId, state: AgentRecord["lifecycleState"]): Promise<AgentRecord> {
+    const agent = this.requireAgent(agentId);
+    if (agent.lifecycleState === state) return clone(agent);
+    agent.lifecycleState = state;
+    agent.updatedAt = createTimestamp();
+    if (state === "archived") this.recordEvent("session_archived", { agentId });
+    if (state === "active") this.recordEvent("session_unarchived", { agentId });
+    return clone(agent);
+  }
+
+  async deleteAgentData(agentId: AgentId): Promise<void> {
+    this.requireAgent(agentId);
+    const runIds = new Set([...this.runs.values()].filter((run) => run.agentId === agentId).map((run) => run.id));
+    for (const [id, call] of this.toolCalls) if (call.agentId === agentId || runIds.has(call.runId)) this.toolCalls.delete(id);
+    for (const [id, run] of this.runs) if (run.agentId === agentId) this.runs.delete(id);
+    for (const [id, message] of this.messages) if (message.agentId === agentId) this.messages.delete(id);
+    for (let index = this.events.length - 1; index >= 0; index -= 1) {
+      const event = this.events[index];
+      if (event?.agentId === agentId || (event?.runId && runIds.has(event.runId))) this.events.splice(index, 1);
+    }
+    this.agents.delete(agentId);
   }
 
   async enqueueAgentInput(input: EnqueueAgentInput): Promise<EnqueuedAgentInput> {

@@ -70,6 +70,16 @@ test("buildModelRequest includes skills in system prompt when present", () => {
   expect(req.system).toContain("writer");
 });
 
+test("buildModelRequest hides skills with disable-model-invocation", () => {
+  const input = createTestInput({
+    skills: [{ name: "internal", description: "Internal instructions.", filePath: "/skills/internal/SKILL.md", baseDir: "/skills/internal", content: "", disableModelInvocation: true }],
+  });
+  const req = buildModelRequest(input);
+
+  expect(req.system).not.toContain("<available_skills>");
+  expect(req.system).not.toContain("internal");
+});
+
 test("buildModelRequest omits tools when empty", () => {
   const input = createTestInput({ tools: [] });
   const req = buildModelRequest(input);

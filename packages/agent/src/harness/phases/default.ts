@@ -4,8 +4,7 @@ export const DEFAULT_PHASE_ID = "default";
 
 export function createDefaultPhase(): Phase {
   return {
-    id: DEFAULT_PHASE_ID,
-    name: "Execution Phase",
+    name: DEFAULT_PHASE_ID,
     description: "Executes concrete task operations and produces artifacts.",
     filePath: "",
     baseDir: "",

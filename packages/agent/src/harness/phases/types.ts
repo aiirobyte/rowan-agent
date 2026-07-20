@@ -62,15 +62,15 @@ export interface PhaseContext {
  * Frontmatter properties parsed from PHASE.md
  */
 export interface PhaseFrontmatter {
-  /** Display name */
-  name: string;
+  /** Phase name; defaults to the phase directory name when omitted. */
+  name?: string;
   /** Phase description (shown in route tool) */
-  description: string;
+  description?: string;
   /** Restrict available tools */
   tools?: string[];
   /** Restrict available skills */
   skills?: string[];
-  /** Forced next phase id */
+  /** Forced next phase name */
   target?: string;
   /** Expected input fields (key → description) */
   input?: Record<string, string>;
@@ -84,7 +84,6 @@ export interface PhaseFrontmatter {
  * Phase static configuration — describes what a phase is, not how it runs.
  */
 export interface PhaseConfig {
-  id: string;
   name: string;
   description: string;
   tools?: string[];
@@ -100,9 +99,7 @@ export interface PhaseConfig {
  * Loaded Phase object
  */
 export interface Phase {
-  /** Unique identifier */
-  id: string;
-  /** Display name */
+  /** Unique phase identity and display name. */
   name: string;
   /** Description */
   description: string;
@@ -134,8 +131,8 @@ export interface Phase {
  * Phase registry containing all loaded phases
  */
 export interface PhaseRegistry {
-  /** Map of phase id to Phase object */
+  /** Map of phase name to Phase object */
   phases: Map<string, Phase>;
-  /** Entry phase id (null until Agent applies its default phase) */
+  /** Entry phase name (null until Agent applies its default phase) */
   entryPhaseId: string | null;
 }

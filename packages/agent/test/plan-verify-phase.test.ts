@@ -35,9 +35,9 @@ function createContext(input: { input: string; tools?: Tool[] }): AgentContext {
 function buildPhaseRegistry(phases: Phase[], entryPhaseId?: string): PhaseRegistry {
   const map = new Map<string, Phase>();
   for (const phase of phases) {
-    map.set(phase.id, phase);
+    map.set(phase.name, phase);
   }
-  const entry = entryPhaseId ?? phases[0]?.id ?? null;
+  const entry = entryPhaseId ?? phases[0]?.name ?? null;
   return { phases: map, entryPhaseId: entry };
 }
 
@@ -54,16 +54,14 @@ function* yieldTextAndRoute(text: string, route: string, reason?: string): Gener
 describe("Phase file loading", () => {
   test("plan phase loads from filesystem", async () => {
     const phase = await loadPhase(fixturePhase("plan"));
-    expect(phase.id).toBe("plan");
-    expect(phase.name).toBe("Plan");
+    expect(phase.name).toBe("plan");
     // tools can be undefined (empty/undefined = all tools available)
     expect(phase.content).toMatch(/plan/i);
   });
 
   test("verify phase loads from filesystem", async () => {
     const phase = await loadPhase(fixturePhase("verify"));
-    expect(phase.id).toBe("verify");
-    expect(phase.name).toBe("Verify");
+    expect(phase.name).toBe("verify");
     expect(phase.target).toBe("stop");
     // tools can be undefined (empty/undefined = all tools available)
     expect(phase.content).toMatch(/verify/i);

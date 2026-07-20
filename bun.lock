@@ -19,6 +19,7 @@
         "@rowan-agent/models": "workspace:*",
         "jiti": "2.7.0",
         "typebox": "^1.0.0",
+        "yaml": "^2.7.0",
       },
       "devDependencies": {
         "tsup": "^8.5.1",

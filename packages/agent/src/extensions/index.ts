@@ -15,8 +15,7 @@
  *   });
  *
  *   api.registerPhase({
- *     id: "review",
- *     name: "Code Review",
+ *     name: "review",
  *     run: async (context, input) => {
  *       return { message: "Done", route: "stop" };
  *     },

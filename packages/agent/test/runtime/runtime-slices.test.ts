@@ -27,6 +27,8 @@ function provider(): TestProvider {
     async open(id: string) {
       return sessions.get(id);
     },
+    async list() { return []; },
+    async delete(id: string) { return sessions.delete(id); },
     get(id: string) {
       return sessions.get(id);
     },
@@ -77,8 +79,8 @@ test("suspended Agent Input resumes the same Run and Runtime Commands are durabl
       ...createTestContext(),
       phases: {
         phases: new Map([
-          ["plan", { id: "plan", name: "Plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
-          ["verify", { id: "verify", name: "Verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
+          ["plan", { name: "plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
+          ["verify", { name: "verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
         ]),
         entryPhaseId: "plan",
       },
@@ -134,8 +136,8 @@ test("repeated suspended Agent Input persists each suspension on the same Run", 
     ...createTestContext(),
     phases: {
       phases: new Map([
-        ["plan", { id: "plan", name: "Plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
-        ["verify", { id: "verify", name: "Verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
+        ["plan", { name: "plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
+        ["verify", { name: "verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
       ]),
       entryPhaseId: "plan",
     },
@@ -217,8 +219,8 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
   const sessionManager = provider();
   const phases = {
     phases: new Map([
-      ["plan", { id: "plan", name: "Plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
-      ["verify", { id: "verify", name: "Verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
+      ["plan", { name: "plan", description: "Plan", filePath: "test", baseDir: "test", content: "" }],
+      ["verify", { name: "verify", description: "Verify", filePath: "test", baseDir: "test", content: "" }],
     ]),
     entryPhaseId: "plan",
   };
@@ -255,7 +257,7 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
     const resumed = await reconstructed.send("continue");
     expect(resumed.id).toBe(first.id);
     await waitFor(async () => (await stateStore.getRun(first.id))?.state === "completed");
-    expect(outcomes).toEqual(["Plan phase completed."]);
+    expect(outcomes).toEqual(["plan phase completed."]);
     expect(resumedRequests[0]?.messages).toContainEqual(expect.objectContaining({
       role: "user",
       content: expect.stringContaining('<phase_content name="plan">'),

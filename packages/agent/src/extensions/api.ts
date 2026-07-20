@@ -74,10 +74,10 @@ export interface ExtensionAPI {
     setPayload(payload: unknown): void;
     /** Phase Out: set outcome message */
     setMessage(message: string): void;
-    /** Get current phase id */
+    /** Get current phase name */
     getCurrentPhase(): string;
     /** Set next phase (lower priority than PHASE.md target) */
-    setNextPhase(phaseId: string): void;
+    setNextPhase(phaseName: string): void;
     /** Get the next phase set by setNextPhase */
     getNextPhase(): string | undefined;
     /** Get the message set by setMessage */

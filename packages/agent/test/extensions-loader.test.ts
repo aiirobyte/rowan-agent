@@ -14,8 +14,7 @@ import { createMessage } from "../src/types";
 test("loadExtensionFromFactory creates a LoadedExtension object", () => {
   const extension = loadExtensionFromFactory((ctx) => {
     ctx.registerPhase({
-      id: "factory",
-      name: "Factory",
+      name: "factory",
       description: "Factory registered phase.",
       async run() {
         return { message: "Factory loaded.", route: "stop" };
@@ -35,8 +34,7 @@ test("ExtensionRunner loads extensions and registers phases", async () => {
     name: "test",
     factory: (ctx) => {
       ctx.registerPhase({
-        id: "test-phase",
-        name: "Test Phase",
+        name: "test-phase",
         description: "A test phase.",
         async run() {
           return { message: "Test loaded.", route: "stop" };
@@ -50,7 +48,7 @@ test("ExtensionRunner loads extensions and registers phases", async () => {
 
   const phases = runner.getPhases();
   expect(phases.length).toBeGreaterThan(0);
-  expect(phases.some(p => p.id === "test-phase")).toBe(true);
+  expect(phases.some(p => p.name === "test-phase")).toBe(true);
 });
 
 test("ExtensionAPI utils provide helper functions", async () => {
@@ -86,7 +84,7 @@ test("loadExtensionsFromPath loads TypeScript extensions from a directory", asyn
       const extension: ExtensionFactory = (ctx) => {
         ctx.registerPhase({
           id: "echo",
-          name: "Echo",
+          name: "echo",
           description: "Echo test phase.",
           async run() {
             return { message: "Loaded extension", route: "stop" };

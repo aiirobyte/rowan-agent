@@ -1,5 +1,5 @@
 ---
-name: Verify
+name: verify
 description: Review the execution results against acceptance criteria
 target: stop
 ---

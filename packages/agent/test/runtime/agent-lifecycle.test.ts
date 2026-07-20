@@ -22,6 +22,8 @@ function createSessionProvider(): TestSessionProvider {
     async open(sessionId: string): Promise<SessionManager | undefined> {
       return sessions.get(sessionId);
     },
+    async list() { return []; },
+    async delete(sessionId: string) { return sessions.delete(sessionId); },
     get(sessionId: string): InMemorySessionManager | undefined {
       return sessions.get(sessionId);
     },

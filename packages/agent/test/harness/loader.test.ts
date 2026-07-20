@@ -54,14 +54,13 @@ test("parses nested map mixed with flat keys", () => {
 test("skips key with empty value and no indented lines", () => {
   const input = "---\ntop:\nnext: value\n---\n";
   const result = parseFrontmatter(input);
-  expect(result.frontmatter).toEqual({ next: "value" });
-  expect((result.frontmatter as any).top).toBeUndefined();
+  expect(result.frontmatter).toEqual({ top: null, next: "value" });
 });
 
 test("skips key with empty value followed by blank line", () => {
   const input = "---\ntop:\n\nnext: value\n---\n";
   const result = parseFrontmatter(input);
-  expect(result.frontmatter).toEqual({ next: "value" });
+  expect(result.frontmatter).toEqual({ top: null, next: "value" });
 });
 
 test("parses nested map with single entry", () => {
@@ -74,9 +73,13 @@ test("stops nested parsing at non-indented line", () => {
   const input = "---\nnested:\n  a: 1\nnotnested: 2\n---\n";
   const result = parseFrontmatter(input);
   expect(result.frontmatter).toEqual({
-    nested: { a: "1" },
+    nested: { a: 1 },
     notnested: 2,
   });
+});
+
+test("throws on invalid YAML frontmatter", () => {
+  expect(() => parseFrontmatter("---\nname: [\n---\nbody")).toThrow();
 });
 
 // --- inferResourceName ---

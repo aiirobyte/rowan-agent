@@ -138,6 +138,7 @@ export type SessionListItem = {
 
 export type SessionManager = {
   getSessionId(): string;
+  getHeader(): Promise<SessionHeader>;
   appendMessage(message: AgentMessage): Promise<string>;
   appendOutcome(outcome: Outcome): Promise<string>;
   appendModelTranscript(transcript: ModelTranscript, meta?: { phase?: string; model?: ModelRef }): Promise<string>;
@@ -147,6 +148,8 @@ export type SessionManager = {
 export type SessionManagerProvider = {
   create(input: CreateSessionManagerInput): Promise<SessionManager>;
   open(sessionId: string): Promise<SessionManager | undefined>;
+  list(): Promise<SessionListItem[]>;
+  delete(sessionId: string): Promise<boolean>;
 };
 
 function clone<T>(value: T): T {

@@ -616,7 +616,7 @@ Two sources, merged by priority:
 
 ```yaml
 ---
-name: Code Review
+name: review
 description: Review code for correctness and style
 tools: [read, bash]
 target: execute
@@ -625,15 +625,14 @@ target: execute
 Review the current implementation for bugs and style issues.
 ```
 
-**Extension-registered** — via `api.registerPhase()`. Same id overrides file-based phases.
+**Extension-registered** — via `api.registerPhase()`. The phase name is used as its identity.
 
 ```ts
 import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default function myPlugin(api: ExtensionAPI) {
   api.registerPhase({
-    id: "review",
-    name: "Code Review",
+    name: "review",
     description: "Review code for correctness",
     tools: ["read", "bash"],
     async run(context, execution) {
@@ -648,8 +647,7 @@ export default function myPlugin(api: ExtensionAPI) {
 
 ```ts
 interface Phase {
-  id: string;
-  name: string;
+  name: string;                    // unique identity and display name
   description: string;
   tools?: string[];              // restrict tools (undefined = all)
   skills?: string[];             // restrict skills
@@ -674,7 +672,7 @@ interface PhaseContext {
 
 type PhaseOutput = {
   message: string;
-  route: string;                 // "continue" | "stop" | <phase-id>
+  route: string;                 // "continue" | "stop" | <phase-name>
   payload?: unknown;             // data passed to the next phase
 };
 ```
@@ -731,7 +729,7 @@ import type { ExtensionAPI } from "@rowan-agent/agent";
 export default function myPlugin(rowan: ExtensionAPI) {
   rowan.on("agent_start", (event) => { ... });
   rowan.registerTool({ name: "my_tool", description: "...", parameters: {...}, execute: async (args) => {...} });
-  rowan.registerPhase({ id: "review", description: "...", run: async (ctx) => {...} });
+  rowan.registerPhase({ name: "review", description: "...", run: async (ctx) => {...} });
   rowan.events.emit("my-plugin:ready", {});
 }
 ```
@@ -775,7 +773,7 @@ type LoopMetrics = {
 | `Skill` | Loaded skill bundle |
 | `Phase` | Phase definition with content, execution, and routing config |
 | `PhaseContext` / `PhaseOutput` | Phase input and output |
-| `PhaseRegistry` | Map of phase ids to Phase objects plus entry phase id |
+| `PhaseRegistry` | Map of phase names to Phase objects plus entry phase name |
 | `Outcome` | Terminal result with message and tool results |
 | `LoopMetrics` | Loop iteration, timing, and phase transition stats |
 | `SessionManagerProvider` | Session lifecycle seam used by the Runtime |

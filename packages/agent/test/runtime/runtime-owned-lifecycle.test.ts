@@ -30,6 +30,8 @@ function sessions(): SessionManagerProvider {
     async open(sessionId: string) {
       return managers.get(sessionId);
     },
+    async list() { return []; },
+    async delete(sessionId: string) { return managers.delete(sessionId); },
   };
 }
 

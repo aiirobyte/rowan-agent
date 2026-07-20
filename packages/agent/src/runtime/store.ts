@@ -6,6 +6,7 @@ import type {
   AgentRunRecord,
   AgentRunId,
   AgentLifecycleState,
+  SessionLifecycleState,
   RuntimeEvent,
   RuntimeEventId,
   RuntimeMessage,
@@ -19,6 +20,7 @@ import type {
 
 export type CreateAgentInput = {
   sessionId: string;
+  parentSessionId?: string;
 };
 
 export type EnqueueAgentInput = {
@@ -125,6 +127,9 @@ export interface RuntimeStateStore {
   getAgent(agentId: AgentId): Promise<AgentRecord | undefined>;
   listAgents(): Promise<AgentRecord[]>;
   setAgentState(agentId: AgentId, state: AgentLifecycleState): Promise<AgentRecord>;
+  setAgentLifecycleState(agentId: AgentId, state: SessionLifecycleState): Promise<AgentRecord>;
+  getAgentBySessionId(sessionId: string): Promise<AgentRecord | undefined>;
+  deleteAgentData(agentId: AgentId): Promise<void>;
 
   enqueueAgentInput(input: EnqueueAgentInput): Promise<EnqueuedAgentInput>;
   getMessage(messageId: RuntimeMessageId): Promise<RuntimeMessage | undefined>;

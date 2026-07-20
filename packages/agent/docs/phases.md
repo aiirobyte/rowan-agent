@@ -30,7 +30,7 @@ The simplest phase — just a `PHASE.md` with frontmatter. The LLM follows your 
 
 ```markdown
 ---
-name: Summarize
+name: summarize
 description: Summarize a codebase or document
 input:
   target: "What to summarize"
@@ -134,7 +134,7 @@ When the loop resolves the next phase:
 
 ### Built-in "Default" Phase
 
-If no phases are defined, Rowan runs a single LLM-driven phase that processes the user prompt with all available tools. User-defined phases in `.rowan/phases/` can override this by defining a phase with `id: "default"`.
+If no phases are defined, Rowan runs a single LLM-driven phase named `default` that processes the user prompt with all available tools. User-defined phases in `.rowan/phases/` can override it by defining a phase whose `name` is `default`.
 
 ---
 
@@ -143,7 +143,7 @@ If no phases are defined, Rowan runs a single LLM-driven phase that processes th
 Each phase lives in its own directory under `.rowan/phases/`:
 
 ```
-.rowan/phases/<phase-id>/
+.rowan/phases/<phase-name>/
 ├── PHASE.md     # Required — instructions and configuration
 └── index.ts     # Optional — execution code
 ```
@@ -152,11 +152,11 @@ Each phase lives in its own directory under `.rowan/phases/`:
 
 ```yaml
 ---
-name: My Phase              # Display name (defaults to directory name)
-description: What it does    # Shown in route tool options
+name: my-phase              # Should match the directory name; omitted = directory name
+description: What it does   # Required, max 1024 characters
 tools: [read, write, bash]  # Restrict available tools (omit = all tools)
 skills: [my-skill]           # Restrict available skills (omit = all skills)
-target: next-phase           # Force next phase (overrides route tool)
+target: next-phase           # Force next phase name (overrides route tool)
 input:                       # Expected input fields (shown to LLM in route tool)
   task: "The task to perform"
   context: "Additional context"
@@ -166,11 +166,11 @@ isolated: true               # Fresh context when executed in parallel
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Display name |
-| `description` | string | Yes | One-line description shown in route tool |
+| `name` | string | No | Should match the directory name; mismatch warns but still loads; omitted = directory name |
+| `description` | string | Yes | Non-empty, at most 1024 characters; shown in route tool |
 | `tools` | string[] | No | Tool names allowed in this phase. `undefined` = all tools |
 | `skills` | string[] | No | Skill names available. `undefined` = all skills |
-| `target` | string | No | Forced next phase ID. Overrides route tool |
+| `target` | string | No | Forced next phase name. Overrides route tool |
 | `input` | Record<string, string> | No | Expected payload fields with descriptions |
 | `isolated` | boolean | No | Fresh message context in parallel execution |
 
@@ -180,7 +180,7 @@ The markdown body below the frontmatter becomes the phase's system prompt conten
 
 ```markdown
 ---
-name: Review
+name: review
 description: Code review phase
 ---
 
@@ -209,7 +209,7 @@ No `index.ts` needed. The LLM reads `PHASE.md` content as instructions, uses ava
 
 ```markdown
 ---
-name: Analyze
+name: analyze
 description: Analyze code and produce findings
 ---
 
@@ -298,7 +298,7 @@ Every phase gets a `route` tool injected into its tool list. The LLM uses it to 
 ```typescript
 {
   decision: Array<{
-    phase: string;       // target phase id or "stop"
+    phase: string;       // target phase name or "stop"
     reason?: string;     // brief explanation
     payload?: unknown;   // data for the next phase
   }>;
@@ -370,7 +370,7 @@ Set `isolated: true` in `PHASE.md` frontmatter to guarantee a fresh context (emp
 
 ```yaml
 ---
-name: Research
+name: research
 description: Research a topic
 isolated: true
 input:
@@ -383,7 +383,7 @@ input:
 When parallel phases complete, the loop collects all their outputs and stashes them. The next iteration's phase entry message surfaces them under `<prev_phase_outputs>`:
 
 ```
-<phase name="Execution Phase">
+<phase name="default">
   <content>
     ...
   </content>
@@ -399,11 +399,11 @@ When parallel phases complete, the loop collects all their outputs and stashes t
 </phase>
 ```
 
-The `<instruction>` field appears only when the `route` tool call included one (shared guidance for all targets). The `<phase name="...">` entries use the parallel instance id: unique phases get plain id (`lint`), duplicates get `lint#1`, `lint#2`, etc. The entry phase can then `route` onward (e.g. to `stop`).
+The `<instruction>` field appears only when the `route` tool call included one (shared guidance for all targets). The `<phase name="...">` entries use the parallel instance name: unique phases get the plain name (`lint`), duplicates get `lint#1`, `lint#2`, etc. The entry phase can then `route` onward (e.g. to `stop`).
 
 ### Invocation Metadata
 
-Every `PhaseContext` includes an `invocation` discriminated union. A serial phase receives its current phase ID as `instanceId`:
+Every `PhaseContext` includes an `invocation` discriminated union. A serial phase receives its current phase name as `instanceId`:
 
 ```typescript
 {
@@ -465,8 +465,8 @@ The LLM also sees payload data in the route tool's `input` field descriptions, s
 
 ```typescript
 interface PhaseState {
-  current: string;       // current phase id
-  available: string[];   // all phase ids in registry
+  current: string;       // current phase name
+  available: string[];   // all phase names in registry
   iterations: number;    // how many times this phase has looped
   payload?: unknown;     // data from previous phase
 }
@@ -490,8 +490,7 @@ The loaded phase object.
 
 ```typescript
 interface Phase {
-  id: string;                          // unique identifier (directory name)
-  name: string;                        // display name
+  name: string;                        // unique identity and display name
   description: string;                 // shown in route tool
   tools?: string[];                    // restricted tools (undefined = all)
   skills?: string[];                   // restricted skills (undefined = all)
@@ -546,7 +545,7 @@ What a phase returns.
 ```typescript
 type PhaseOutput = {
   message: string;                     // outcome message
-  route: string;                       // next phase id, "continue", or "stop"
+  route: string;                       // next phase name, "continue", or "stop"
   phase?: string;                      // phase name (auto-filled)
   toolCalls?: Array<{ id: string; name: string; args: unknown }>;
   routeReason?: string;                // from route tool call
@@ -593,7 +592,7 @@ const agent = await runtime.createAgent({
 
 ```yaml
 ---
-name: Plan
+name: plan
 description: Create a task plan from the user's request
 input:
   task: "The user's request"
@@ -605,7 +604,7 @@ input:
 
 ```yaml
 ---
-name: Execute
+name: execute
 description: Implement the task plan
 tools: [read, write, edit, bash]
 ---
@@ -615,7 +614,7 @@ tools: [read, write, edit, bash]
 
 ```yaml
 ---
-name: Verify
+name: verify
 description: Review execution results
 target: stop
 ---

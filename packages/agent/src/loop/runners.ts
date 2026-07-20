@@ -117,12 +117,12 @@ function injectPhaseContent(
       ? readPhaseContent(phase)
       : (phase.content ?? phase.description ?? "");
     const content = buildPhaseDirectiveMessage(
-      { name: phase.id, content: phaseContent },
+      { name: phase.name, content: phaseContent },
       output,
     );
     const message = createMessage("user", content, {
       kind: "phase_prompt",
-      phase: phase.id,
+      phase: phase.name,
     });
     messages.push(message);
     if (mirror && mirror !== messages) mirror.push(message);
@@ -228,7 +228,7 @@ function createTerminalOutcome(
 
 function buildToolsWithRouting(
   config: AgentConfig,
-  availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
+  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
 ) {
   const tools = [...config.context.tools];
   if (availablePhases.length > 0) {
@@ -340,7 +340,7 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
     for (const toolCall of collected.toolCalls) {
       if (toolCall.name !== PhaseRouteTool) continue;
       const messageId = ctx.messageManager.start("tool", createRouteToolResultContent(toolCall), {
-        phase: ctx.phase.id,
+        phase: ctx.phase.name,
       });
       await ctx.messageManager.end(messageId);
     }
@@ -355,7 +355,7 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
     for (const toolCall of executableToolCalls) {
       const result = await ctx.execution.executeTool(roundContext, toolCall);
       const messageId = ctx.messageManager.start("tool", createToolResultContent(result), {
-        phase: ctx.phase.id,
+        phase: ctx.phase.name,
       });
       await ctx.messageManager.end(messageId);
     }
@@ -425,9 +425,9 @@ async function runPhaseLoop(
 
   while (currentPhaseId) {
     // Build available phases list for route tool from the explicit registry.
-    const availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[] = [];
+    const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[] = [];
     for (const [, phase] of registry.phases) {
-      availablePhases.push({ id: phase.id, name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input, isolated: phase.isolated });
+      availablePhases.push({ name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input, isolated: phase.isolated });
     }
 
     const abortResult = LoopGuard.checkAbort(config.signal);
@@ -570,7 +570,7 @@ async function runPhaseLoop(
         } else if (latestUserInputMessage) {
           const phaseInputMessage = createMessage("user", latestUserInputMessage.content, {
             kind: "phase_input",
-            phase: phase.id,
+            phase: phase.name,
           });
           config.context.messages.push(phaseInputMessage);
           phaseContext.messages.push(phaseInputMessage);
@@ -782,7 +782,7 @@ async function runPhaseLoop(
 
     // Pass payload to next phase (also surfaced as previousResults for entry injection)
     previousPayload = output.payload;
-    previousResults = output.payload !== undefined ? [{ name: phase.id, output: output.payload }] : [];
+    previousResults = output.payload !== undefined ? [{ name: phase.name, output: output.payload }] : [];
 
     currentPhaseId = targetPhaseId;
   }
@@ -996,7 +996,7 @@ function createPhaseExecution(
     async invokeModel(phaseContext: PhaseContext): Promise<ModelInvokeOutput> {
       // Allow extensions to transform PhaseContext before building request
       if (config.beforePrompt) {
-        phaseContext = await config.beforePrompt(phase.id, phaseContext);
+        phaseContext = await config.beforePrompt(phase.name, phaseContext);
       }
 
       // Build LlmRequest — tools already phase-filtered in PhaseContext
@@ -1026,7 +1026,7 @@ function createPhaseExecution(
             config,
             message: messageManager,
             request,
-            phaseId: phase.id,
+            phaseId: phase.name,
           }),
           {
             signal: config.signal,
@@ -1049,7 +1049,7 @@ function createPhaseExecution(
         ),
       );
 
-      await config.onModelTranscript?.(result.transcript, { phase: phase.id, model: phase.model ?? config.model });
+      await config.onModelTranscript?.(result.transcript, { phase: phase.name, model: phase.model ?? config.model });
       return result;
     },
 
@@ -1082,7 +1082,7 @@ async function executeParallelPhase(
   phase: Phase,
   payload: unknown,
   context: AgentMessage[],
-  availablePhases: Pick<Phase, 'id' | 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
+  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
   instanceId: string,
   groupId: string,
   index: number,
@@ -1117,7 +1117,7 @@ async function executeParallelPhase(
       sourcePhaseId,
     },
     state: {
-      current: phase.id,
+      current: phase.name,
       available: Array.from(registry.phases.keys()),
       iterations: 0,
       payload,
@@ -1149,7 +1149,7 @@ async function executeParallelPhase(
     ? normalizePayload(decision.decision[0].payload)
     : output.payload);
 
-  return { instanceId, phaseId: phase.id, payload: resultPayload, content: output.message };
+  return { instanceId, phaseId: phase.name, payload: resultPayload, content: output.message };
 }
 
 async function waitForBackgroundTasks(

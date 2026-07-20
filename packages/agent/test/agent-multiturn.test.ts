@@ -171,8 +171,8 @@ test("Agent does not carry failed task outcomes into later turns", async () => {
 test("Agent.runWithUserInput resumes a paused planning phase and only resolves on route:stop", async () => {
   // Two-phase registry: planning (chatty, often no route) + execute.
   const phases = new Map<string, any>();
-  phases.set("plan", { id: "plan", name: "plan", description: "plan", filePath: "", baseDir: "", content: "Plan." });
-  phases.set("execute", { id: "execute", name: "execute", description: "execute", filePath: "", baseDir: "", content: "Execute." });
+  phases.set("plan", { name: "plan", description: "plan", filePath: "", baseDir: "", content: "Plan." });
+  phases.set("execute", { name: "execute", description: "execute", filePath: "", baseDir: "", content: "Execute." });
   const agent = new Agent({
     context: { systemPrompt: "Test", messages: [], tools: [], skills: [], phases: { phases, entryPhaseId: "plan" } },
     model: { provider: "test", id: "hitl" },
@@ -238,8 +238,8 @@ test("Agent.runWithUserInput resumes a paused planning phase and only resolves o
 
 test("Agent propagates a resumed run failure to both callers", async () => {
   const phases = new Map<string, any>();
-  phases.set("plan", { id: "plan", name: "plan", description: "plan", filePath: "", baseDir: "", content: "Plan." });
-  phases.set("execute", { id: "execute", name: "execute", description: "execute", filePath: "", baseDir: "", content: "Execute." });
+  phases.set("plan", { name: "plan", description: "plan", filePath: "", baseDir: "", content: "Plan." });
+  phases.set("execute", { name: "execute", description: "execute", filePath: "", baseDir: "", content: "Execute." });
   const agent = new Agent({
     context: { systemPrompt: "Test", messages: [], tools: [], skills: [], phases: { phases, entryPhaseId: "plan" } },
     model: { provider: "test", id: "hitl-failure" },

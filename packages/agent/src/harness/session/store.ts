@@ -4,6 +4,7 @@ import {
   type CreateSessionManagerInput,
   type SessionManager,
   type SessionManagerProvider,
+  type SessionListItem,
 } from "./session-manager";
 
 export class InMemorySessionStore implements SessionManagerProvider {
@@ -18,6 +19,20 @@ export class InMemorySessionStore implements SessionManagerProvider {
   async open(sessionId: string): Promise<SessionManager | undefined> {
     return this.sessions.get(sessionId);
   }
+
+  async list() {
+    return Promise.all([...this.sessions.values()].map(async (session) => {
+      const header = await session.getHeader();
+      const entries = "listEntries" in session && typeof session.listEntries === "function"
+        ? await session.listEntries() : [];
+      return { id: header.id, title: header.title, createdAt: header.createdAt, updatedAt: header.updatedAt,
+        messageCount: entries.filter((entry: { type: string }) => entry.type === "message").length };
+    }));
+  }
+
+  async delete(sessionId: string): Promise<boolean> {
+    return this.sessions.delete(sessionId);
+  }
 }
 
 export class JsonlSessionStore implements SessionManagerProvider {
@@ -31,7 +46,11 @@ export class JsonlSessionStore implements SessionManagerProvider {
     return LocalJsonlSessionManager.open(this.sessionsDir, sessionId);
   }
 
-  list() {
+  list(): Promise<SessionListItem[]> {
     return LocalJsonlSessionManager.list(this.sessionsDir);
+  }
+
+  delete(sessionId: string): Promise<boolean> {
+    return LocalJsonlSessionManager.delete(this.sessionsDir, sessionId);
   }
 }

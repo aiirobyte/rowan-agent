@@ -1,10 +1,15 @@
 import type { Database } from "bun:sqlite";
 
 const RUNTIME_SCHEMA_SQL = `
+    CREATE TABLE IF NOT EXISTS runtime_schema (
+      version INTEGER PRIMARY KEY NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY NOT NULL,
       session_id TEXT NOT NULL,
+      parent_session_id TEXT,
       state TEXT NOT NULL CHECK (state IN ('active', 'paused')),
+      lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('active', 'archived', 'deleting')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -87,6 +92,8 @@ const RUNTIME_SCHEMA_SQL = `
 
     CREATE INDEX IF NOT EXISTS agent_runs_runnable_idx
       ON agent_runs (state, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS agents_session_id_unique
+      ON agents (session_id);
 `;
 
 export function initializeRuntimeSchema(database: Database): void {
@@ -106,5 +113,5 @@ export function initializeRuntimeSchema(database: Database): void {
     }
   });
   initialize();
-
+  database.run("INSERT OR IGNORE INTO runtime_schema (version) VALUES (2)");
 }
