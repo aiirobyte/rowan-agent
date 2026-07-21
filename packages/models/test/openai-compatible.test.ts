@@ -25,7 +25,10 @@ function jsonResponse(content: string, usage?: Record<string, number>): Response
   );
 }
 
-function sseResponse(events: Array<{ data: string | object; event?: string }>): Response {
+function sseResponse(
+  events: Array<{ data: string | object; event?: string }>,
+  contentType = "text/event-stream",
+): Response {
   const encoder = new TextEncoder();
   const chunks = events.map((e) => {
     const data = typeof e.data === "string" ? e.data : JSON.stringify(e.data);
@@ -45,6 +48,23 @@ function sseResponse(events: Array<{ data: string | object; event?: string }>): 
   });
 
   return new Response(stream, {
+    status: 200,
+    headers: { "content-type": contentType },
+  });
+}
+
+function singleChunkSseResponse(events: Array<{ data: string | object }>): Response {
+  const encoder = new TextEncoder();
+  const payload = [
+    ...events.map((event) => `data: ${typeof event.data === "string" ? event.data : JSON.stringify(event.data)}\n\n`),
+    "data: [DONE]\n\n",
+  ].join("");
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload));
+      controller.close();
+    },
+  }), {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
@@ -202,6 +222,7 @@ test("callOpenAICompletions normalizes HTTP errors", async () => {
         baseUrl: "https://api.example/v1",
         apiKey: "test-key",
         model: "test-model",
+        maxRetries: 0,
         fetch: fetchMock,
       },
       { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
@@ -213,6 +234,39 @@ test("callOpenAICompletions normalizes HTTP errors", async () => {
     expect((error as ProviderError).status).toBe(429);
     expect((error as ProviderError).retryable).toBe(true);
     expect((error as ProviderError).message).toContain("rate limited");
+  }
+});
+
+test("callOpenAICompletions hides HTML embedded in a JSON provider error", async () => {
+  const providerMessage = "<html><body><h1>Forbidden</h1></body></html>";
+  const fetchMock: ProviderFetch = async () => new Response(JSON.stringify({
+    error: { message: providerMessage, param: "upstream" },
+  }), {
+    status: 403,
+    statusText: "Forbidden",
+    headers: { "content-type": "application/json" },
+  });
+
+  try {
+    await callOpenAICompletions(
+      {
+        baseUrl: "https://api.example/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        maxRetries: 0,
+        fetch: fetchMock,
+      },
+      { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
+    );
+    throw new Error("Expected request to fail.");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).message).toBe("Request failed with status 403 Forbidden.");
+    expect((error as ProviderError).message).not.toContain("<html>");
+    expect((error as ProviderError).details?.providerError).toEqual({
+      message: providerMessage,
+      param: "upstream",
+    });
   }
 });
 
@@ -263,6 +317,29 @@ test("callOpenAICompletions can disable retries", async () => {
   expect(attempts).toBe(1);
 });
 
+test("callOpenAICompletions treats maxRetries as additional attempts", async () => {
+  let attempts = 0;
+  const fetchMock: ProviderFetch = async () => {
+    attempts += 1;
+    throw new Error("Unable to connect.");
+  };
+
+  await expect(
+    callOpenAICompletions(
+      {
+        baseUrl: "https://api.example/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        maxRetries: 2,
+        retryDelayMs: 0,
+        fetch: fetchMock,
+      },
+      { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
+    ),
+  ).rejects.toThrow("Unable to connect");
+  expect(attempts).toBe(3);
+});
+
 test("callOpenAICompletions supports abort signal", async () => {
   const controller = new AbortController();
   const fetchMock: ProviderFetch = async (_url, init) =>
@@ -284,7 +361,88 @@ test("callOpenAICompletions supports abort signal", async () => {
   );
   controller.abort(new Error("test abort"));
 
-  await expect(promise).rejects.toThrow("test abort");
+  try {
+    await promise;
+    throw new Error("Expected request to be aborted.");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).code).toBe("request_aborted");
+    expect((error as ProviderError).retryable).toBe(false);
+    expect((error as ProviderError).message).toBe("test abort");
+    expect((error as ProviderError).details).toMatchObject({
+      endpoint: "https://api.example/v1/chat/completions",
+      model: "test-model",
+    });
+  }
+});
+
+test("callOpenAICompletions does not retry deterministic response decode failures", async () => {
+  let attempts = 0;
+  const fetchMock: ProviderFetch = async () => {
+    attempts += 1;
+    return new Response("null", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    await callOpenAICompletions(
+      {
+        baseUrl: "https://api.example/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        retryDelayMs: 0,
+        fetch: fetchMock,
+      },
+      { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
+    );
+    throw new Error("Expected response decoding to fail.");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).code).toBe("response_decode_error");
+    expect((error as ProviderError).retryable).toBe(false);
+    expect((error as ProviderError).details).toMatchObject({
+      endpoint: "https://api.example/v1/chat/completions",
+      model: "test-model",
+    });
+  }
+  expect(attempts).toBe(1);
+});
+
+test("callOpenAICompletions times out while waiting for response headers", async () => {
+  const fetchMock: ProviderFetch = async (_url, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      const guard = setTimeout(() => reject(new Error("timeout guard expired")), 50);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(guard);
+        reject(init.signal?.reason);
+      }, { once: true });
+    });
+
+  try {
+    await callOpenAICompletions(
+      {
+        baseUrl: "https://api.example/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        timeoutMs: 10,
+        maxRetries: 0,
+        fetch: fetchMock,
+      },
+      { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
+    );
+    throw new Error("Expected request to time out.");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).code).toBe("request_timeout");
+    expect((error as ProviderError).message).toBe("Request timed out after 10ms.");
+    expect((error as ProviderError).details).toMatchObject({
+      endpoint: "https://api.example/v1/chat/completions",
+      model: "test-model",
+      timeoutMs: 10,
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -332,6 +490,74 @@ test("createOpenAICompletionsStream yields SSE streaming events", async () => {
   }
 });
 
+test("createOpenAICompletionsStream structures HTML HTTP errors", async () => {
+  const responseBody = "<html><body><h1>403 Forbidden</h1></body></html>";
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async () => new Response(responseBody, {
+      status: 403,
+      statusText: "Forbidden",
+      headers: { "content-type": "text/html" },
+    }),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+  const error = events.find((event) => event.type === "error");
+
+  expect(error?.type).toBe("error");
+  if (error?.type === "error") {
+    expect(error.error).toBeInstanceOf(ProviderError);
+    expect(error.error.message).toBe("Request failed with status 403 Forbidden.");
+    expect(error.error.message).not.toContain("<html>");
+    expect((error.error as ProviderError).details).toEqual({
+      endpoint: "https://api.example/v1/chat/completions",
+      model: "test-model",
+      status: 403,
+      responseContentType: "text/html",
+      responseBody,
+    });
+  }
+});
+
+test("createOpenAICompletionsStream times out while waiting for response headers", async () => {
+  const fetchMock: ProviderFetch = async (_url, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      const guard = setTimeout(() => reject(new Error("timeout guard expired")), 50);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(guard);
+        reject(init.signal?.reason);
+      }, { once: true });
+    });
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 10,
+    maxRetries: 0,
+    fetch: fetchMock,
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+  const error = events.find((event) => event.type === "error");
+
+  expect(error?.type).toBe("error");
+  if (error?.type === "error") {
+    expect(error.error).toBeInstanceOf(ProviderError);
+    expect((error.error as ProviderError).code).toBe("request_timeout");
+    expect(error.error.message).toBe("Request timed out after 10ms.");
+  }
+  expect(events.at(-1)).toMatchObject({ type: "done", response: { stopReason: "error" } });
+});
+
 test("createOpenAICompletionsStream treats timeoutMs as an idle timeout", async () => {
   const fetchMock: ProviderFetch = async () => delayedSseResponse([
     { data: { choices: [{ delta: { content: "one" } }] } },
@@ -359,6 +585,118 @@ test("createOpenAICompletionsStream treats timeoutMs as an idle timeout", async 
     "two",
     "three",
   ]);
+  expect(events.some((event) => event.type === "error")).toBe(false);
+});
+
+test("createOpenAICompletionsStream does not count consumer processing as network idle time", async () => {
+  const fetchMock: ProviderFetch = async () => sseResponse([
+    { data: { choices: [{ delta: { content: "one" } }] } },
+    { data: { choices: [{ delta: { content: "two" }, finish_reason: "stop" }] } },
+  ]);
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 10,
+    maxRetries: 0,
+    fetch: fetchMock,
+  });
+
+  const events: LlmStreamEvent[] = [];
+  for await (const event of stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  )) {
+    events.push(event);
+    if (event.type === "text_delta" && event.text === "one") {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+  }
+
+  expect(events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.text : "")).toEqual(["one", "two"]);
+  expect(events.some((event) => event.type === "error")).toBe(false);
+});
+
+test("createOpenAICompletionsStream stops buffered events after caller abort", async () => {
+  const controller = new AbortController();
+  const fetchMock: ProviderFetch = async () => singleChunkSseResponse([
+    { data: { choices: [{ delta: { content: "one" } }] } },
+    { data: { choices: [{ delta: { content: "two" }, finish_reason: "stop" }] } },
+  ]);
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: fetchMock,
+  });
+
+  const events: LlmStreamEvent[] = [];
+  for await (const event of stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    { signal: controller.signal },
+  )) {
+    events.push(event);
+    if (event.type === "text_delta") controller.abort(new Error("stop now"));
+  }
+
+  expect(events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.text : "")).toEqual(["one"]);
+  expect(events.find((event) => event.type === "error")).toMatchObject({
+    type: "error",
+    error: { message: "stop now" },
+  });
+  expect(events.at(-1)).toMatchObject({ type: "done", response: { stopReason: "error" } });
+});
+
+test("createOpenAICompletionsStream cancels the response body when the consumer stops early", async () => {
+  let cancelled = false;
+  const encoder = new TextEncoder();
+  const fetchMock: ProviderFetch = async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"one"}}]}\n\n'));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+
+  for await (const event of stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  )) {
+    if (event.type === "text_delta") break;
+  }
+  await Promise.resolve();
+
+  expect(cancelled).toBe(true);
+});
+
+test("createOpenAICompletionsStream accepts case-insensitive SSE content types", async () => {
+  const fetchMock: ProviderFetch = async () => sseResponse([
+    { data: { choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] } },
+  ], "Text/Event-Stream; Charset=UTF-8");
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(events.find((event) => event.type === "text_delta")).toMatchObject({ type: "text_delta", text: "ok" });
   expect(events.some((event) => event.type === "error")).toBe(false);
 });
 
@@ -454,6 +792,48 @@ test("createOpenAICompletionsStream does not retry after partial output", async 
   expect(attempts).toBe(1);
   expect(events.filter((event) => event.type === "text_delta").map((event) => event.type === "text_delta" ? event.text : "")).toEqual(["partial"]);
   expect(events.filter((event) => event.type === "error")).toHaveLength(1);
+  const error = events.find((event) => event.type === "error");
+  expect(error?.type === "error" ? (error.error as ProviderError).retryable : undefined).toBe(false);
+  expect(error?.type === "error" ? (error.error as ProviderError).details : undefined).toMatchObject({
+    partialOutput: true,
+  });
+});
+
+test("createOpenAICompletionsStream retries before partial output without duplicating lifecycle events", async () => {
+  let attempts = 0;
+  const fetchMock: ProviderFetch = async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.error(new Error("stream disconnected"));
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    return sseChunkResponse("ok");
+  };
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 1,
+    retryDelayMs: 0,
+    fetch: fetchMock,
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(attempts).toBe(2);
+  expect(events.filter((event) => event.type === "model_requested")).toHaveLength(1);
+  expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+  expect(events.find((event) => event.type === "text_delta")).toMatchObject({ type: "text_delta", text: "ok" });
+  expect(events.some((event) => event.type === "error")).toBe(false);
 });
 
 test("createOpenAICompletionsStream sends tools in request body", async () => {
@@ -485,6 +865,30 @@ test("createOpenAICompletionsStream sends tools in request body", async () => {
   expect((requestBody?.tools as unknown[]).length).toBe(1);
   expect((requestBody?.tools as Array<{ function: { name: string } }>)[0]?.function.name).toBe("echo");
   expect(requestBody?.stream).toBe(true);
+});
+
+test("createOpenAICompletionsStream applies custom request headers", async () => {
+  let requestHeaders: Record<string, string> | undefined;
+  const config = {
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    headers: { authorization: "Custom token", "x-tenant": "tenant-1" },
+    fetch: async (_url: Parameters<ProviderFetch>[0], init?: Parameters<ProviderFetch>[1]) => {
+      requestHeaders = init?.headers as Record<string, string>;
+      return sseChunkResponse("ok");
+    },
+  };
+
+  const stream = createOpenAICompletionsStream(config);
+  await collect(stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(requestHeaders?.authorization).toBe("Custom token");
+  expect(requestHeaders?.["x-tenant"]).toBe("tenant-1");
+  expect(requestHeaders?.["content-type"]).toBe("application/json");
 });
 
 test("createOpenAICompletionsStream handles tool calls from SSE stream", async () => {

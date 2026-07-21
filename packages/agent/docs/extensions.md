@@ -606,10 +606,29 @@ Register custom model providers for LLM access.
 
 ```typescript
 api.registerProvider({
-  name: "custom-llm",
-  // ... provider configuration
+  id: "custom-openai",
+  protocol: "openai-completions",
+  baseUrl: "https://llm.example/v1",
+  apiKey: process.env.CUSTOM_LLM_API_KEY!,
+  headers: { "x-tenant": "tenant-1" },
+  timeoutMs: 30_000,
+  maxRetries: 2,
+  retryDelayMs: 500,
+  models: [{
+    id: "custom-model",
+    protocol: "openai-completions",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  }],
 });
 ```
+
+Known protocols use Rowan's built-in adapter. For a new protocol, provide `streamSimple` and build
+it with `executeProviderRequest` or `streamProviderRequest` from
+`@rowan-agent/models/providers` to reuse Rowan's transport behavior.
 
 Provider registrations are queued during extension loading and flushed when the `ExtensionRunner` binds. This allows extensions to register providers before the model registry is fully initialized.
 

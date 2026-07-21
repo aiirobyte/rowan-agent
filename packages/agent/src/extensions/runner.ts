@@ -116,12 +116,16 @@ function applyProviderRegistration(config: ProviderConfig): void {
       protocol: config.protocol,
       provider: config.id,
       baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
       reasoning: modelConfig.reasoning,
       input: modelConfig.input,
       cost: modelConfig.cost,
       contextWindow: modelConfig.contextWindow,
       maxTokens: modelConfig.maxTokens,
       ...(config.headers ? { headers: config.headers } : {}),
+      ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
+      ...(config.maxRetries !== undefined ? { maxRetries: config.maxRetries } : {}),
+      ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
     });
   }
 }

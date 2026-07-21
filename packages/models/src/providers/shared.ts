@@ -1,4 +1,4 @@
-import type { LlmRequest, LlmModelUsage, LlmTokenUsage, LlmStreamOptions } from "../protocol";
+import type { LlmRequest, LlmModelUsage, LlmTokenUsage } from "../protocol";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -74,142 +74,6 @@ export function truncateString(value: string, maxLength = 4_000): string {
 }
 
 // ---------------------------------------------------------------------------
-// Request signal / timeout
-// ---------------------------------------------------------------------------
-
-/**
- * timeoutMs is the maximum idle gap after the first response byte.
- */
-export function createRequestSignal(input: {
-  signal?: AbortSignal;
-  timeoutMs?: number;
-}): { signal?: AbortSignal; onActivity: () => void; cleanup: () => void } {
-  if (!input.signal && !input.timeoutMs) {
-    return { onActivity: () => undefined, cleanup: () => undefined };
-  }
-
-  const controller = new AbortController();
-  let idleTimeout: ReturnType<typeof setTimeout> | undefined;
-
-  const abortFromParent = () => {
-    controller.abort(input.signal?.reason ?? new Error("Request aborted."));
-  };
-
-  if (input.signal?.aborted) {
-    abortFromParent();
-  } else {
-    input.signal?.addEventListener("abort", abortFromParent, { once: true });
-  }
-
-  const onActivity = () => {
-    if (controller.signal.aborted) return;
-
-    if (input.timeoutMs) {
-      if (idleTimeout) clearTimeout(idleTimeout);
-      idleTimeout = setTimeout(() => {
-        controller.abort(new Error(`Request timed out after ${input.timeoutMs}ms.`));
-      }, input.timeoutMs);
-    }
-  };
-
-  return {
-    signal: controller.signal,
-    onActivity,
-    cleanup: () => {
-      if (idleTimeout) clearTimeout(idleTimeout);
-      input.signal?.removeEventListener("abort", abortFromParent);
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// HTTP error handling
-// ---------------------------------------------------------------------------
-
-export async function readErrorBody(response: Response): Promise<unknown> {
-  const contentType = response.headers.get("content-type") ?? "";
-  try {
-    if (contentType.includes("application/json")) {
-      return await response.json();
-    }
-    return await response.text();
-  } catch {
-    return null;
-  }
-}
-
-export function isRetryableStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 429 || status >= 500;
-}
-
-export function normalizeRequestError(error: unknown, signal?: AbortSignal): ProviderError {
-  if (error instanceof ProviderError) return error;
-
-  if (signal?.aborted) {
-    return new ProviderError({
-      code: "request_aborted",
-      message: signal.reason instanceof Error ? signal.reason.message : "Request aborted.",
-      retryable: true,
-    });
-  }
-
-  return new ProviderError({
-    code: "request_failed",
-    message: error instanceof Error ? error.message : "Request failed.",
-    retryable: true,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Retry logic
-// ---------------------------------------------------------------------------
-
-export const DEFAULT_MAX_RETRIES = 2;
-export const DEFAULT_RETRY_DELAY_MS = 500;
-
-export function normalizeRetryNumber(value: number | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-export function shouldRetry(input: {
-  error: ProviderError;
-  attempts: number;
-  maxRetries: number;
-  signal?: AbortSignal;
-}): boolean {
-  return input.error.retryable && input.attempts < input.maxRetries && !input.signal?.aborted;
-}
-
-export async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (delayMs <= 0) return;
-
-  if (signal?.aborted) {
-    throw new ProviderError({
-      code: "request_aborted",
-      message: "Request aborted.",
-      retryable: true,
-    });
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }, delayMs);
-    const abort = () => {
-      clearTimeout(timeout);
-      reject(new ProviderError({
-        code: "request_aborted",
-        message: "Request aborted.",
-        retryable: true,
-      }));
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Usage normalization
 // ---------------------------------------------------------------------------
 
@@ -264,9 +128,35 @@ export type BaseProviderConfig = {
   model: string;
   temperature?: number;
   maxTokens?: number;
-  /** Maximum idle gap between response bytes after the first byte. */
+  headers?: Record<string, string>;
+  /** Maximum idle gap while waiting for response headers or body bytes. */
   timeoutMs?: number;
+  /** Number of retry attempts after the initial request. */
   maxRetries?: number;
   retryDelayMs?: number;
   fetch?: ProviderFetch;
 };
+
+export type BaseProviderConfigInput = Partial<BaseProviderConfig>;
+
+export function resolveBaseProviderConfig(
+  input: BaseProviderConfigInput,
+  defaultBaseUrl: string,
+): BaseProviderConfig {
+  return {
+    baseUrl: normalizeBaseUrl(nonEmpty(input.baseUrl) ?? defaultBaseUrl),
+    apiKey: requireValue(
+      "API key",
+      input.apiKey,
+      "model.apiKey is required (set apiKey in config.yaml or pass --api-key)",
+    ),
+    model: requireValue("model", input.model, "model.id is required"),
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
+    ...(input.headers ? { headers: { ...input.headers } } : {}),
+    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+    ...(input.maxRetries !== undefined ? { maxRetries: input.maxRetries } : {}),
+    ...(input.retryDelayMs !== undefined ? { retryDelayMs: input.retryDelayMs } : {}),
+    ...(input.fetch ? { fetch: input.fetch } : {}),
+  };
+}

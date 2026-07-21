@@ -1,5 +1,4 @@
 import type {
-  Model,
   LlmMessage,
   LlmRequest,
   LlmStreamEvent,
@@ -12,28 +11,12 @@ import type {
   AssistantMessagePartial,
   LlmContentPart,
 } from "../protocol";
-import { iterateSseMessages } from "../sse";
+import { streamProviderRequest } from "./http";
 import {
   ProviderError,
-  type ProviderFetch,
   type BaseProviderConfig,
   normalizeBaseUrl,
-  nonEmpty,
-  requireValue,
-  createRequestSignal,
-  readErrorBody,
-  isRetryableStatus,
-  normalizeRequestError,
-  normalizeUsage,
-  summarizeRequestUsage,
-  normalizeRetryNumber,
-  shouldRetry,
-  waitForRetry,
-  DEFAULT_MAX_RETRIES,
-  DEFAULT_RETRY_DELAY_MS,
-  asTrimmedString,
-  isRecord,
-  truncateString,
+  resolveBaseProviderConfig,
   sanitizeToolInput,
 } from "./shared";
 
@@ -45,68 +28,15 @@ export type OpenAIResponsesConfig = BaseProviderConfig & {
   reasoningEffort?: "low" | "medium" | "high";
 };
 
-export type ResolveOpenAIResponsesConfigInput = {
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  temperature?: number;
-  maxTokens?: number;
-  timeoutMs?: number;
-  maxRetries?: number;
-  retryDelayMs?: number;
-  fetch?: ProviderFetch;
-  reasoningEffort?: "low" | "medium" | "high";
-};
+export type ResolveOpenAIResponsesConfigInput = Partial<OpenAIResponsesConfig>;
 
 export function resolveOpenAIResponsesConfig(
   input: ResolveOpenAIResponsesConfigInput = {},
 ): OpenAIResponsesConfig {
-  const baseUrl = nonEmpty(input.baseUrl) ?? "https://api.openai.com/v1";
-  const apiKey = nonEmpty(input.apiKey);
-  const model = nonEmpty(input.model);
-
   return {
-    baseUrl: normalizeBaseUrl(baseUrl),
-    apiKey: requireValue("API key", apiKey, "model.apiKey is required (set apiKey in config.yaml or pass --api-key)"),
-    model: requireValue("model", model, "model.id is required"),
-    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-    ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
-    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-    ...(input.maxRetries !== undefined ? { maxRetries: input.maxRetries } : {}),
-    ...(input.retryDelayMs !== undefined ? { retryDelayMs: input.retryDelayMs } : {}),
-    ...(input.fetch ? { fetch: input.fetch } : {}),
+    ...resolveBaseProviderConfig(input, "https://api.openai.com/v1"),
     ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
   };
-}
-
-// ---------------------------------------------------------------------------
-// HTTP error
-// ---------------------------------------------------------------------------
-
-function normalizeHttpError(
-  response: Response,
-  body: unknown,
-  context: { endpoint: string; model: string },
-): ProviderError {
-  let providerMessage: string | undefined;
-  if (isRecord(body) && isRecord(body.error)) {
-    providerMessage = asTrimmedString(body.error.message);
-  }
-
-  const statusSummary = response.statusText
-    ? `${response.status} ${response.statusText}`
-    : String(response.status);
-  const message = providerMessage
-    ? `Request failed (${statusSummary}): ${providerMessage}`
-    : `Request failed with status ${statusSummary}.`;
-
-  return new ProviderError({
-    code: "http_error",
-    message,
-    status: response.status,
-    retryable: isRetryableStatus(response.status),
-    details: { endpoint: context.endpoint, model: context.model, status: response.status, ...(isRecord(body) ? { providerError: body.error } : {}) },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -265,39 +195,23 @@ async function* streamResponses(
   request: LlmRequest,
   options: LlmStreamOptions = {},
 ): AsyncGenerator<LlmStreamEvent> {
-  const maxRetries = normalizeRetryNumber(config.maxRetries, DEFAULT_MAX_RETRIES);
-  const retryDelayMs = normalizeRetryNumber(config.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
   const body = buildRequestBody(config, request);
-  const fetchImpl = config.fetch ?? fetch;
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/responses`;
-  const requestUsage = summarizeRequestUsage(request);
-  let attempts = 0;
 
-  while (true) {
-    attempts += 1;
-    const { signal, onActivity, cleanup } = createRequestSignal({
-      signal: options.signal,
-      timeoutMs: config.timeoutMs,
-    });
-    let hasPartialOutput = false;
-
-    try {
-      const response = await fetchImpl(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` },
-        body: JSON.stringify(body),
-        signal,
-      });
-
-      if (!response.ok) {
-        throw normalizeHttpError(response, await readErrorBody(response), { endpoint, model: config.model });
-      }
-      if (!response.body) {
-        throw new ProviderError({ code: "no_body", message: "Response body is null.", retryable: true });
-      }
-
-      yield { type: "model_requested", model: request.model, usage: { ...requestUsage } };
-
+  yield* streamProviderRequest({
+    config,
+    endpoint,
+    llmRequest: request,
+    signal: options.signal,
+    request: () => ({
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    }),
+  }, async function* (response) {
       let content = "";
       let stopReason: string | null = null;
       let usage: LlmTokenUsage | undefined;
@@ -326,7 +240,7 @@ async function* streamResponses(
 
       yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
 
-      for await (const sse of iterateSseMessages(response.body, signal, onActivity)) {
+      for await (const sse of response.sse()) {
         let event: ResponsesStreamEvent;
         try { event = JSON.parse(sse.data) as ResponsesStreamEvent; } catch { continue; }
 
@@ -334,7 +248,6 @@ async function* streamResponses(
           case "response.output_text.delta":
             content += event.delta;
             rebuildPartial();
-            hasPartialOutput = true;
             yield { type: "text_delta", text: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             break;
 
@@ -343,7 +256,6 @@ async function* streamResponses(
               const tc = { id: event.item.call_id ?? event.item.id ?? "", name: event.item.name ?? "", arguments: "" };
               toolCalls.set(event.output_index, tc);
               rebuildPartial();
-              hasPartialOutput = true;
               yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
@@ -354,7 +266,6 @@ async function* streamResponses(
               if (event.call_id) tc.id = event.call_id;
               tc.arguments += event.delta;
               rebuildPartial();
-              hasPartialOutput = true;
               yield { type: "tool_call_delta", id: tc.id, arguments: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
@@ -378,7 +289,6 @@ async function* streamResponses(
                 if (event.item.name) tc.name = event.item.name;
                 if (event.item.arguments) tc.arguments = event.item.arguments;
                 rebuildPartial();
-                hasPartialOutput = true;
                 yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
@@ -432,19 +342,7 @@ async function* streamResponses(
           ...(usage ? { usage } : {}),
         },
       };
-      return;
-    } catch (error) {
-      const requestError = normalizeRequestError(error, signal);
-      if (hasPartialOutput || !shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
-        yield { type: "error", error: requestError };
-        yield { type: "done", response: { content: "", stopReason: "error" } };
-        return;
-      }
-      await waitForRetry(retryDelayMs * 2 ** (attempts - 1), options.signal);
-    } finally {
-      cleanup();
-    }
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +368,7 @@ export const streamOpenAIResponses: ApiStreamFn = (model, request, options) => {
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,
+    headers: model.headers,
   });
   return streamResponses(config, request, options);
 };

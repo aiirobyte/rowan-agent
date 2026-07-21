@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Type from "typebox";
+import { clearModels, getModel } from "@rowan-agent/models";
 import {
   createExtensionRunner,
   createEventBus,
@@ -209,6 +210,51 @@ test("ExtensionAPI registerTool registers LLM-callable tools", async () => {
   expect(toolDef!.name).toBe("search_docs");
 
   expect(runner.getToolDefinition("nonexistent")).toBeUndefined();
+});
+
+test("ExtensionAPI registerProvider preserves model transport configuration", async () => {
+  clearModels();
+  const runner = createExtensionRunner();
+  const ext: LoadedExtension = {
+    path: "<test:provider>",
+    name: "test-provider",
+    factory: (ctx) => {
+      ctx.registerProvider({
+        id: "extension-provider",
+        baseUrl: "https://provider.example/v1",
+        apiKey: "extension-key",
+        protocol: "openai-completions",
+        headers: { "x-tenant": "tenant-1" },
+        timeoutMs: 1_000,
+        maxRetries: 4,
+        retryDelayMs: 25,
+        models: [{
+          id: "extension-model",
+          protocol: "openai-completions",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8_192,
+          maxTokens: 1_024,
+        }],
+      });
+    },
+  };
+
+  try {
+    await runner.loadExtensions([ext]);
+    runner.bind();
+
+    expect(getModel("extension-provider", "extension-model")).toMatchObject({
+      apiKey: "extension-key",
+      headers: { "x-tenant": "tenant-1" },
+      timeoutMs: 1_000,
+      maxRetries: 4,
+      retryDelayMs: 25,
+    });
+  } finally {
+    clearModels();
+  }
 });
 
 test("EventBus supports pub/sub communication", () => {

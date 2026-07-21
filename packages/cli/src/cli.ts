@@ -184,7 +184,7 @@ Skills:
 Config:
   Model providers are configured in <cwd>/.rowan/config.yaml.
   The file defines providers, models, api keys, and the default model.
-  timeoutMs is the streaming idle timeout after the first response byte.
+  timeoutMs limits each wait for response headers or the next response body chunk.
   See config-improving-plan.md for the full schema.
   Without a config file, --model and --api-key are required.
 

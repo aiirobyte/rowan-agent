@@ -1,5 +1,13 @@
 export { ProviderError } from "./shared";
-export type { ProviderFetch, BaseProviderConfig } from "./shared";
+export { resolveBaseProviderConfig } from "./shared";
+export type { ProviderFetch, BaseProviderConfig, BaseProviderConfigInput } from "./shared";
+export { executeProviderRequest, streamProviderRequest } from "./http";
+export type {
+  ProviderRequestSpec,
+  ProviderResponse,
+  ProviderStreamRequestSpec,
+  ProviderTransportConfig,
+} from "./http";
 
 export {
   resolveOpenAICompletionsConfig,

@@ -5,7 +5,7 @@ import type {
   LlmStreamEvent,
   LlmToolCall,
 } from "../src/protocol";
-import type { ProviderFetch } from "../src/providers/shared";
+import { ProviderError, type ProviderFetch } from "../src/providers/shared";
 
 function sseResponse(events: object[]): Response {
   const encoder = new TextEncoder();
@@ -41,6 +41,90 @@ function completedResponse(): Response {
     },
   ]);
 }
+
+test("Responses structures HTML HTTP errors", async () => {
+  const responseBody = "<html><body><h1>403 Forbidden</h1></body></html>";
+  const stream = createOpenAIResponsesStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async () => new Response(responseBody, {
+      status: 403,
+      statusText: "Forbidden",
+      headers: { "content-type": "text/html" },
+    }),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "openai", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+  const error = events.find((event) => event.type === "error");
+
+  expect(error?.type).toBe("error");
+  if (error?.type === "error") {
+    expect(error.error).toBeInstanceOf(ProviderError);
+    expect(error.error.message).toBe("Request failed with status 403 Forbidden.");
+    expect((error.error as ProviderError).details).toEqual({
+      endpoint: "https://api.example/v1/responses",
+      model: "test-model",
+      status: 403,
+      responseContentType: "text/html",
+      responseBody,
+    });
+  }
+});
+
+test("Responses normalizes a string provider error", async () => {
+  const stream = createOpenAIResponsesStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async () => new Response(JSON.stringify({ error: "rate limited" }), {
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "openai", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+  const error = events.find((event) => event.type === "error");
+
+  expect(error?.type).toBe("error");
+  if (error?.type === "error") {
+    expect(error.error.message).toBe("Request failed (429 Too Many Requests): rate limited");
+    expect((error.error as ProviderError).details?.providerError).toEqual({ message: "rate limited" });
+  }
+});
+
+test("Responses applies custom request headers", async () => {
+  let requestHeaders: Record<string, string> | undefined;
+  const config = {
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    headers: { authorization: "Custom token", "x-tenant": "tenant-1" },
+    fetch: async (_url: Parameters<ProviderFetch>[0], init?: Parameters<ProviderFetch>[1]) => {
+      requestHeaders = init?.headers as Record<string, string>;
+      return completedResponse();
+    },
+  };
+
+  const stream = createOpenAIResponsesStream(config);
+  await collect(stream(
+    { model: { provider: "openai", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(requestHeaders?.authorization).toBe("Custom token");
+  expect(requestHeaders?.["x-tenant"]).toBe("tenant-1");
+  expect(requestHeaders?.["content-type"]).toBe("application/json");
+});
 
 test("Responses preserves call_id across a streamed tool call and its output", async () => {
   const requestBodies: Array<Record<string, unknown>> = [];

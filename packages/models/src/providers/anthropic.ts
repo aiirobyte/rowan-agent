@@ -1,5 +1,4 @@
 import type {
-  Model,
   LlmContentPart,
   LlmMessage,
   LlmRequest,
@@ -12,99 +11,30 @@ import type {
   ApiStreamFn,
   AssistantMessagePartial,
 } from "../protocol";
-import { iterateSseMessages } from "../sse";
+import { streamProviderRequest } from "./http";
 import {
-  ProviderError,
-  type ProviderFetch,
+  type BaseProviderConfig,
   normalizeBaseUrl,
-  nonEmpty,
-  requireValue,
-  createRequestSignal,
-  readErrorBody,
-  isRetryableStatus,
-  normalizeRequestError,
-  summarizeRequestUsage,
-  normalizeRetryNumber,
-  shouldRetry,
-  waitForRetry,
-  DEFAULT_MAX_RETRIES,
-  DEFAULT_RETRY_DELAY_MS,
-  isRecord,
-  asTrimmedString,
+  resolveBaseProviderConfig,
 } from "./shared";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-export type AnthropicConfig = {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  maxTokens?: number;
-  timeoutMs?: number;
-  maxRetries?: number;
-  retryDelayMs?: number;
-  fetch?: ProviderFetch;
+export type AnthropicConfig = Omit<BaseProviderConfig, "temperature"> & {
   thinking?: { budgetTokens: number };
 };
 
-export type ResolveAnthropicConfigInput = {
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  maxTokens?: number;
-  timeoutMs?: number;
-  maxRetries?: number;
-  retryDelayMs?: number;
-  fetch?: ProviderFetch;
-  thinking?: { budgetTokens: number };
-};
+export type ResolveAnthropicConfigInput = Partial<AnthropicConfig>;
 
 const DEFAULT_MAX_TOKENS = 8192;
 
 export function resolveAnthropicConfig(input: ResolveAnthropicConfigInput = {}): AnthropicConfig {
-  const baseUrl = nonEmpty(input.baseUrl) ?? "https://api.anthropic.com";
-  const apiKey = nonEmpty(input.apiKey);
-  const model = nonEmpty(input.model);
-
   return {
-    baseUrl: normalizeBaseUrl(baseUrl),
-    apiKey: requireValue("API key", apiKey, "model.apiKey is required (set apiKey in config.yaml or pass --api-key)"),
-    model: requireValue("model", model, "model.id is required"),
-    ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
-    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-    ...(input.maxRetries !== undefined ? { maxRetries: input.maxRetries } : {}),
-    ...(input.retryDelayMs !== undefined ? { retryDelayMs: input.retryDelayMs } : {}),
-    ...(input.fetch ? { fetch: input.fetch } : {}),
+    ...resolveBaseProviderConfig(input, "https://api.anthropic.com"),
     ...(input.thinking ? { thinking: input.thinking } : {}),
   };
-}
-
-// ---------------------------------------------------------------------------
-// HTTP error
-// ---------------------------------------------------------------------------
-
-function normalizeHttpError(response: Response, body: unknown): ProviderError {
-  let providerMessage: string | undefined;
-  if (isRecord(body) && isRecord(body.error)) {
-    providerMessage = asTrimmedString(body.error.message);
-  }
-
-  const statusSummary = response.statusText
-    ? `${response.status} ${response.statusText}`
-    : String(response.status);
-  const message = providerMessage
-    ? `Anthropic request failed (${statusSummary}): ${providerMessage}`
-    : `Anthropic request failed with status ${statusSummary}.`;
-
-  return new ProviderError({
-    code: "http_error",
-    message,
-    status: response.status,
-    retryable: isRetryableStatus(response.status),
-    details: { status: response.status, ...(isRecord(body) ? { providerError: body.error } : {}) },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -266,41 +196,25 @@ async function* streamAnthropicMessages(
   request: LlmRequest,
   options: LlmStreamOptions = {},
 ): AsyncGenerator<LlmStreamEvent> {
-  const maxRetries = normalizeRetryNumber(config.maxRetries, DEFAULT_MAX_RETRIES);
-  const retryDelayMs = normalizeRetryNumber(config.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
   const body = buildRequestBody(config, request);
-  const fetchImpl = config.fetch ?? fetch;
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/v1/messages`;
-  const requestUsage = summarizeRequestUsage(request);
-  let attempts = 0;
 
-  while (true) {
-    attempts += 1;
-    const { signal, onActivity, cleanup } = createRequestSignal({
-      signal: options.signal,
-      timeoutMs: config.timeoutMs,
-    });
-    let hasPartialOutput = false;
-
-    try {
-      const response = await fetchImpl(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": config.apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-
-      if (!response.ok) throw normalizeHttpError(response, await readErrorBody(response));
-      if (!response.body) {
-        throw new ProviderError({ code: "no_body", message: "Response body is null.", retryable: true });
-      }
-
-      yield { type: "model_requested", model: request.model, usage: { ...requestUsage } };
-
+  yield* streamProviderRequest({
+    config,
+    endpoint,
+    llmRequest: request,
+    requestName: "Anthropic request",
+    signal: options.signal,
+    request: () => ({
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": config.apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    }),
+  }, async function* (response) {
       let content = "";
       let thinking = "";
       let stopReason: string | null = null;
@@ -332,7 +246,7 @@ async function* streamAnthropicMessages(
         }
       }
 
-      for await (const sse of iterateSseMessages(response.body, signal, onActivity)) {
+      for await (const sse of response.sse()) {
         if (!sse.event || !MESSAGE_EVENTS.has(sse.event)) continue;
 
         let event: AnthropicStreamEvent;
@@ -350,7 +264,6 @@ async function* streamAnthropicMessages(
               const tc = { id: event.content_block.id ?? "", name: event.content_block.name ?? "", arguments: "" };
               toolCalls.set(event.index, tc);
               rebuildPartial();
-              hasPartialOutput = true;
               yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
@@ -359,19 +272,16 @@ async function* streamAnthropicMessages(
             if (event.delta.type === "text_delta") {
               content += event.delta.text;
               rebuildPartial();
-              hasPartialOutput = true;
               yield { type: "text_delta", text: event.delta.text, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             } else if (event.delta.type === "thinking_delta") {
               thinking += event.delta.thinking;
               rebuildPartial();
-              hasPartialOutput = true;
               yield { type: "thinking_delta", thinking: event.delta.thinking, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             } else if (event.delta.type === "input_json_delta") {
               const tc = toolCalls.get(event.index);
               if (tc) {
                 tc.arguments += event.delta.partial_json;
                 rebuildPartial();
-                hasPartialOutput = true;
                 yield { type: "tool_call_delta", id: tc.id, arguments: event.delta.partial_json, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
@@ -382,7 +292,6 @@ async function* streamAnthropicMessages(
               const tc = toolCalls.get(event.index);
               if (tc) {
                 rebuildPartial();
-                hasPartialOutput = true;
                 yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
@@ -418,19 +327,7 @@ async function* streamAnthropicMessages(
           usage,
         },
       };
-      return;
-    } catch (error) {
-      const requestError = normalizeRequestError(error, signal);
-      if (hasPartialOutput || !shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
-        yield { type: "error", error: requestError };
-        yield { type: "done", response: { content: "", stopReason: "error" } };
-        return;
-      }
-      await waitForRetry(retryDelayMs * 2 ** (attempts - 1), options.signal);
-    } finally {
-      cleanup();
-    }
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +353,7 @@ export const streamAnthropic: ApiStreamFn = (model, request, options) => {
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,
+    headers: model.headers,
   });
   return streamAnthropicMessages(config, request, options);
 };

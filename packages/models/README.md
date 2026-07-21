@@ -68,14 +68,19 @@ const cost = calculateCost(model, {
 
 ## Providers
 
-Three built-in API providers, each with streaming support and exponential backoff retry.
+Three built-in API providers share the same HTTP error normalization, timeout, abort, and
+exponential-backoff retry behavior. `maxRetries` is the number of attempts after the initial
+request. `timeoutMs` is the maximum idle gap while waiting for response headers or body bytes.
+Custom model `headers` are merged after protocol defaults, so they can add or override headers
+without introducing another provider implementation.
 
-For streaming requests, `timeoutMs` is the maximum idle gap between response bytes after
-the first byte.
+Failures use `ProviderError` with stable `code`, `status`, `retryable`, and `details` fields.
+Non-JSON error pages never become the user-facing message; a bounded copy is retained as
+`details.responseBody` for diagnostics.
 
 ### Provider Registry
 
-The model stream routes requests to the right provider based on the model's `api` field.
+The model stream routes requests to the right provider based on the model's `protocol` field.
 
 ```ts
 import { stream, streamByRef, createModelStream, registerApiProvider } from "@rowan-agent/models";
@@ -85,8 +90,24 @@ for await (const event of streamByRef("openai/gpt-4.1-mini", request)) { ... }
 
 const streamFn = createModelStream();         // registry-backed StreamFn
 const boundStream = createModelStream(model); // StreamFn bound to one Model
-registerApiProvider({ api: "my-api", stream: myApiStreamFn });  // custom provider
+registerApiProvider({ protocol: "my-api", stream: myApiStreamFn });  // custom provider
 ```
+
+Extensions implementing a custom protocol can import `executeProviderRequest` or
+`streamProviderRequest` from `@rowan-agent/models/providers`. These public transport operations
+apply the same headers, timeout, abort, structured error, and retry behavior as built-in providers;
+the extension only supplies its request and response decoder.
+
+The transport contract is intentionally small:
+
+- `request()` runs once per attempt; rebuild any one-shot request body there.
+- `config.headers` override headers returned by `request()`.
+- A `ProviderResponse` body can be consumed once through `json()`, `text()`, or `sse()`.
+- `timeoutMs` applies only while awaiting headers or the next body chunk, not while downstream code
+  processes an event.
+- A stream may retry only before text, thinking, or tool-call output is emitted. After partial output,
+  its failure is marked non-retryable to prevent a duplicate Agent Run.
+- Terminal stream failures are emitted as one `error` followed by `done({ stopReason: "error" })`.
 
 ### OpenAI Chat Completions
 
@@ -179,7 +200,8 @@ src/
     ├── openai-completions.ts
     ├── openai-responses.ts
     ├── anthropic.ts
-    └── shared.ts         # ProviderError, retry utilities
+    ├── http.ts           # HTTP lifecycle, structured errors, timeout, abort, retry
+    └── shared.ts         # ProviderError, shared config and usage helpers
 ```
 
 ## Version

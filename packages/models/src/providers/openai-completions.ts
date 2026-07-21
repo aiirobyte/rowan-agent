@@ -1,5 +1,4 @@
 import type {
-  Model,
   LlmMessage,
   LlmRequest,
   LlmStreamEvent,
@@ -12,28 +11,12 @@ import type {
   AssistantMessagePartial,
   LlmContentPart,
 } from "../protocol";
-import { iterateSseMessages } from "../sse";
+import { executeProviderRequest, streamProviderRequest } from "./http";
 import {
-  ProviderError,
-  type ProviderFetch,
   type BaseProviderConfig,
   normalizeBaseUrl,
-  nonEmpty,
-  requireValue,
-  createRequestSignal,
-  readErrorBody,
-  isRetryableStatus,
-  normalizeRequestError,
   normalizeUsage,
-  summarizeRequestUsage,
-  normalizeRetryNumber,
-  shouldRetry,
-  waitForRetry,
-  DEFAULT_MAX_RETRIES,
-  DEFAULT_RETRY_DELAY_MS,
-  asTrimmedString,
-  isRecord,
-  truncateString,
+  resolveBaseProviderConfig,
   sanitizeToolInput,
 } from "./shared";
 
@@ -45,92 +28,15 @@ export type OpenAICompletionsConfig = BaseProviderConfig & {
   responseFormat?: boolean;
 };
 
-export type ResolveOpenAICompletionsConfigInput = {
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  temperature?: number;
-  maxTokens?: number;
-  timeoutMs?: number;
-  maxRetries?: number;
-  retryDelayMs?: number;
-  fetch?: ProviderFetch;
-  responseFormat?: boolean;
-};
+export type ResolveOpenAICompletionsConfigInput = Partial<OpenAICompletionsConfig>;
 
 export function resolveOpenAICompletionsConfig(
   input: ResolveOpenAICompletionsConfigInput = {},
 ): OpenAICompletionsConfig {
-  const baseUrl = nonEmpty(input.baseUrl) ?? "https://api.openai.com/v1";
-  const apiKey = nonEmpty(input.apiKey);
-  const model = nonEmpty(input.model);
-
   return {
-    baseUrl: normalizeBaseUrl(baseUrl),
-    apiKey: requireValue("API key", apiKey, "model.apiKey is required (set apiKey in config.yaml or pass --api-key)"),
-    model: requireValue("model", model, "model.id is required"),
-    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-    ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
-    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-    ...(input.maxRetries !== undefined ? { maxRetries: input.maxRetries } : {}),
-    ...(input.retryDelayMs !== undefined ? { retryDelayMs: input.retryDelayMs } : {}),
-    ...(input.fetch ? { fetch: input.fetch } : {}),
+    ...resolveBaseProviderConfig(input, "https://api.openai.com/v1"),
     ...(input.responseFormat !== undefined ? { responseFormat: input.responseFormat } : {}),
   };
-}
-
-// ---------------------------------------------------------------------------
-// HTTP error
-// ---------------------------------------------------------------------------
-
-function providerErrorFromBody(body: unknown): Record<string, unknown> | undefined {
-  if (typeof body === "string") {
-    const message = asTrimmedString(body);
-    return message ? { message: truncateString(message) } : undefined;
-  }
-  if (!isRecord(body)) return undefined;
-
-  const error = body.error;
-  if (typeof error === "string") {
-    const message = asTrimmedString(error);
-    return message ? { message } : undefined;
-  }
-
-  const source = isRecord(error) ? error : body;
-  const message = asTrimmedString(source.message);
-  const code = asTrimmedString(source.code);
-  const type = asTrimmedString(source.type);
-  if (!message && !code && !type) return undefined;
-
-  return { ...(message ? { message } : {}), ...(code ? { code } : {}), ...(type ? { type } : {}) };
-}
-
-function normalizeHttpError(
-  response: Response,
-  body: unknown,
-  context: { endpoint: string; model: string },
-): ProviderError {
-  const providerError = providerErrorFromBody(body);
-  const providerMessage = asTrimmedString(providerError?.message);
-  const statusSummary = response.statusText
-    ? `${response.status} ${response.statusText}`
-    : String(response.status);
-  const message = providerMessage
-    ? `Request failed (${statusSummary}): ${providerMessage}`
-    : `Request failed with status ${statusSummary}.`;
-
-  return new ProviderError({
-    code: "http_error",
-    message,
-    status: response.status,
-    retryable: isRetryableStatus(response.status),
-    details: {
-      endpoint: context.endpoint,
-      model: context.model,
-      status: response.status,
-      ...(providerError ? { providerError } : {}),
-    },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -317,43 +223,26 @@ async function* streamChatCompletions(
   request: LlmRequest,
   options: LlmStreamOptions = {},
 ): AsyncGenerator<LlmStreamEvent> {
-  const maxRetries = normalizeRetryNumber(config.maxRetries, DEFAULT_MAX_RETRIES);
-  const retryDelayMs = normalizeRetryNumber(config.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
   const body = buildRequestBody(config, request, true);
-  const fetchImpl = config.fetch ?? fetch;
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
-  const requestUsage = summarizeRequestUsage(request);
-  let attempts = 0;
 
-  while (true) {
-    attempts += 1;
-    const { signal, onActivity, cleanup } = createRequestSignal({
-      signal: options.signal,
-      timeoutMs: config.timeoutMs,
-    });
-    let hasPartialOutput = false;
-
-    try {
-      const response = await fetchImpl(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` },
-        body: JSON.stringify(body),
-        signal,
-      });
-
-      if (!response.ok) {
-        throw normalizeHttpError(response, await readErrorBody(response), { endpoint, model: config.model });
-      }
-      if (!response.body) {
-        throw new ProviderError({ code: "no_body", message: "Response body is null.", retryable: true });
-      }
-
-      yield { type: "model_requested", model: request.model, usage: { ...requestUsage } };
-
+  yield* streamProviderRequest({
+    config,
+    endpoint,
+    llmRequest: request,
+    signal: options.signal,
+    request: () => ({
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    }),
+  }, async function* (response) {
       // Non-streaming response
-      if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-        onActivity();
-        const data = await response.json() as ChatCompletionResponse;
+      if (!response.isEventStream) {
+        const data = await response.json<ChatCompletionResponse>();
         const choice = data.choices?.[0];
         const message = choice?.message;
         const content = message?.content ?? "";
@@ -366,7 +255,6 @@ async function* streamChatCompletions(
 
         if (content) {
           partial.contentBlocks.push({ type: "text", text: content });
-          hasPartialOutput = true;
           yield { type: "text_delta", text: content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
         }
 
@@ -376,7 +264,6 @@ async function* streamChatCompletions(
           const name = tc.function?.name ?? "";
           const args = tc.function?.arguments ?? "";
           partial.contentBlocks.push({ type: "tool_call", id, name, args });
-          hasPartialOutput = true;
           yield { type: "tool_call_start", id, name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           yield { type: "tool_call_end", id, name, arguments: args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           let parsedArgs: unknown = args;
@@ -424,7 +311,7 @@ async function* streamChatCompletions(
 
       yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
 
-      for await (const sse of iterateSseMessages(response.body, signal, onActivity)) {
+      for await (const sse of response.sse()) {
         if (sse.data === "[DONE]") break;
 
         let chunk: ChatCompletionChunk;
@@ -440,7 +327,6 @@ async function* streamChatCompletions(
           if (delta.content) {
             content += delta.content;
             rebuildPartial();
-            hasPartialOutput = true;
             yield { type: "text_delta", text: delta.content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           }
           if (delta.tool_calls) {
@@ -451,11 +337,9 @@ async function* streamChatCompletions(
                 toolCalls.set(tc.index, newTc);
                 if (tc.id || tc.function?.name) {
                   rebuildPartial();
-                  hasPartialOutput = true;
                   yield { type: "tool_call_start", id: newTc.id, name: newTc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
                 if (tc.function?.arguments) {
-                  hasPartialOutput = true;
                   yield { type: "tool_call_delta", id: newTc.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
               } else {
@@ -464,7 +348,6 @@ async function* streamChatCompletions(
                 if (tc.function?.arguments) {
                   existing.arguments += tc.function.arguments;
                   rebuildPartial();
-                  hasPartialOutput = true;
                   yield { type: "tool_call_delta", id: existing.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
               }
@@ -476,7 +359,6 @@ async function* streamChatCompletions(
 
       for (const tc of toolCalls.values()) {
         rebuildPartial();
-        hasPartialOutput = true;
         yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       }
 
@@ -496,19 +378,7 @@ async function* streamChatCompletions(
           ...(usage ? { usage } : {}),
         },
       };
-      return;
-    } catch (error) {
-      const requestError = normalizeRequestError(error, signal);
-      if (hasPartialOutput || !shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) {
-        yield { type: "error", error: requestError };
-        yield { type: "done", response: { content: "", stopReason: "error" } };
-        return;
-      }
-      await waitForRetry(retryDelayMs * 2 ** (attempts - 1), options.signal);
-    } finally {
-      cleanup();
-    }
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +404,7 @@ export const streamOpenAICompletions: ApiStreamFn = (model, request, options) =>
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,
+    headers: model.headers,
   });
   return streamChatCompletions(config, request, options);
 };
@@ -543,45 +414,26 @@ export async function callOpenAICompletions(
   request: LlmRequest,
   options: LlmStreamOptions = {},
 ): Promise<{ content: string; usage?: LlmTokenUsage }> {
-  const maxRetries = normalizeRetryNumber(config.maxRetries, DEFAULT_MAX_RETRIES);
-  const retryDelayMs = normalizeRetryNumber(config.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
   const body = buildRequestBody(config, request, false);
-  const fetchImpl = config.fetch ?? fetch;
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
-  let attempts = 0;
 
-  while (true) {
-    attempts += 1;
-    const { signal, onActivity, cleanup } = createRequestSignal({
-      signal: options.signal,
-      timeoutMs: config.timeoutMs,
-    });
-
-    try {
-      const response = await fetchImpl(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` },
-        body: JSON.stringify(body),
-        signal,
-      });
-
-      if (!response.ok) {
-        throw normalizeHttpError(response, await readErrorBody(response), { endpoint, model: config.model });
-      }
-
-      onActivity();
-      const data = await response.json() as {
-        choices?: Array<{ message?: { content?: string | null } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-      };
-
-      return { content: data.choices?.[0]?.message?.content ?? "", usage: normalizeUsage(data.usage) };
-    } catch (error) {
-      const requestError = normalizeRequestError(error, signal);
-      if (!shouldRetry({ error: requestError, attempts, maxRetries, signal: options.signal })) throw requestError;
-      await waitForRetry(retryDelayMs * 2 ** (attempts - 1), options.signal);
-    } finally {
-      cleanup();
-    }
-  }
+  return executeProviderRequest({
+    config,
+    endpoint,
+    signal: options.signal,
+    request: () => ({
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    }),
+  }, async (response) => {
+    const data = await response.json<{
+      choices?: Array<{ message?: { content?: string | null } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    }>();
+    return { content: data.choices?.[0]?.message?.content ?? "", usage: normalizeUsage(data.usage) };
+  });
 }

@@ -70,6 +70,11 @@ function consumeLine(text: string): { line: string; rest: string } | null {
   };
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error("Request was aborted");
+}
+
 export async function* iterateSseMessages(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -79,23 +84,24 @@ export async function* iterateSseMessages(
   const decoder = new TextDecoder();
   const state: SseDecoderState = { event: null, data: [] };
   let buffer = "";
+  let sourceDone = false;
 
   try {
     while (true) {
-      if (signal?.aborted) {
-        throw new Error("Request was aborted");
-      }
+      throwIfAborted(signal);
 
       const { value, done } = await reader.read();
-      if (done) break;
-      if (signal?.aborted) {
-        throw new Error("Request was aborted");
+      if (done) {
+        sourceDone = true;
+        break;
       }
+      throwIfAborted(signal);
       if (value && value.byteLength > 0) onChunk?.();
 
       buffer += decoder.decode(value, { stream: true });
       let consumed = consumeLine(buffer);
       while (consumed) {
+        throwIfAborted(signal);
         buffer = consumed.rest;
         const event = decodeSseLine(consumed.line, state);
         if (event) yield event;
@@ -107,6 +113,7 @@ export async function* iterateSseMessages(
     buffer += decoder.decode();
     let consumed = consumeLine(buffer);
     while (consumed) {
+      throwIfAborted(signal);
       buffer = consumed.rest;
       const event = decodeSseLine(consumed.line, state);
       if (event) yield event;
@@ -114,13 +121,19 @@ export async function* iterateSseMessages(
     }
 
     if (buffer.length > 0) {
+      throwIfAborted(signal);
       const event = decodeSseLine(buffer, state);
       if (event) yield event;
     }
 
+    throwIfAborted(signal);
     const trailingEvent = flushSseEvent(state);
     if (trailingEvent) yield trailingEvent;
   } finally {
-    reader.releaseLock();
+    try {
+      if (!sourceDone) await reader.cancel(signal?.reason).catch(() => undefined);
+    } finally {
+      reader.releaseLock();
+    }
   }
 }

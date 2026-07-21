@@ -50,7 +50,9 @@ export interface Model {
   maxTokens: number;
   headers?: Record<string, string>;
   apiKey?: string;
+  /** Maximum inactivity from request start or between response body chunks. */
   timeoutMs?: number;
+  /** Number of retries after the initial request. */
   maxRetries?: number;
   retryDelayMs?: number;
 }
@@ -69,7 +71,9 @@ export type ModelConfig = {
   contextWindow?: number;
   maxTokens?: number;
   headers?: Record<string, string>;
+  /** Maximum inactivity from request start or between response body chunks. */
   timeoutMs?: number;
+  /** Number of retries after the initial request. */
   maxRetries?: number;
   retryDelayMs?: number;
 };
@@ -96,6 +100,11 @@ export type ProviderConfig = {
   protocol: Protocol;
   streamSimple?: ApiStreamFn;
   headers?: Record<string, string>;
+  /** Maximum inactivity while waiting for response headers or the next body chunk. */
+  timeoutMs?: number;
+  /** Number of retries after the initial request. */
+  maxRetries?: number;
+  retryDelayMs?: number;
   authHeader?: string;
   models: ProviderModelConfig[];
   oauth?: {
