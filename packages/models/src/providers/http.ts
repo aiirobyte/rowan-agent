@@ -1,5 +1,9 @@
 import type { LlmRequest, LlmStreamEvent } from "../protocol";
-import { iterateSseMessages, type ServerSentEvent } from "../sse";
+import {
+  cancelReaderBestEffort,
+  iterateSseMessages,
+  type ServerSentEvent,
+} from "../sse";
 import type { BaseProviderConfig, ProviderFetch } from "./shared";
 import {
   ProviderError,
@@ -13,6 +17,7 @@ const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 const MAX_PROVIDER_MESSAGE_LENGTH = 500;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type ProviderTransportConfig = Pick<
   BaseProviderConfig,
@@ -193,7 +198,7 @@ function createRequestActivity(input: {
 
 interface TrackedBody {
   stream: ReadableStream<Uint8Array>;
-  dispose(reason?: unknown): Promise<void>;
+  dispose(reason?: unknown): void;
 }
 
 function trackedBody(
@@ -210,25 +215,22 @@ function trackedBody(
     released = true;
     reader.releaseLock();
   };
-  const dispose = async (reason?: unknown) => {
+  const dispose = (reason?: unknown) => {
     if (finished) {
       release();
       return;
     }
     finished = true;
     activity.endWait();
-    try {
-      await reader.cancel(reason).catch(() => undefined);
-    } finally {
-      release();
-    }
+    cancelReaderBestEffort(reader, reason);
+    release();
   };
 
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (finished) return;
       if (signal?.aborted) {
-        await dispose(signal.reason);
+        dispose(signal.reason);
         throw normalizeRequestError(signal.reason, signal);
       }
 
@@ -245,14 +247,14 @@ function trackedBody(
         controller.enqueue(value);
       } catch (error) {
         const failure = normalizeRequestError(error, signal);
-        await dispose(failure);
+        dispose(failure);
         throw failure;
       } finally {
         activity.endWait();
       }
     },
-    async cancel(reason) {
-      await dispose(reason);
+    cancel(reason) {
+      dispose(reason);
     },
   }, { highWaterMark: 0 });
 
@@ -280,7 +282,7 @@ async function readText(body: ReadableStream<Uint8Array>, maxBytes?: number): Pr
       capturedBytes += captured.byteLength;
       text += decoder.decode(captured, { stream: true });
       if (captured.byteLength < value.byteLength || capturedBytes > maxBytes) {
-        await reader.cancel("Provider response exceeded capture limit.").catch(() => undefined);
+        cancelReaderBestEffort(reader, "Provider response exceeded capture limit.");
         break;
       }
     }
@@ -337,7 +339,7 @@ async function readErrorBody(response: Response, activity: RequestActivity): Pro
   try {
     text = await readText(body.stream, MAX_ERROR_BODY_BYTES);
   } finally {
-    await body.dispose("Provider error body captured.");
+    body.dispose("Provider error body captured.");
   }
   if (!isJsonContentType(contentTypeOf(response))) return text;
   try { return JSON.parse(text); } catch { return text; }
@@ -377,7 +379,15 @@ async function normalizeHttpError(
 }
 
 interface ManagedProviderResponse extends ProviderResponse {
-  dispose(reason?: unknown): Promise<void>;
+  dispose(reason?: unknown): void;
+}
+
+function cancelStreamBestEffort(stream: ReadableStream<Uint8Array>, reason?: unknown): void {
+  try {
+    void stream.cancel(reason).catch(() => undefined);
+  } catch {
+    // Cancellation is cleanup; it must never replace or delay the primary result.
+  }
 }
 
 function createProviderResponse(response: Response, activity: RequestActivity): ManagedProviderResponse {
@@ -419,15 +429,32 @@ function createProviderResponse(response: Response, activity: RequestActivity): 
     sse() {
       return iterateSseMessages(takeBody(), activity.signal);
     },
-    async dispose(reason) {
+    dispose(reason) {
       if (body) {
-        await body.dispose(reason);
+        body.dispose(reason);
       } else if (!consumed) {
         consumed = true;
-        await response.body!.cancel(reason).catch(() => undefined);
+        cancelStreamBestEffort(response.body!, reason);
       }
     },
   };
+}
+
+function normalizedTimeoutMs(value: number | undefined): number | undefined {
+  if (value === undefined || value <= 0) return undefined;
+  if (!Number.isFinite(value) || value > MAX_TIMER_DELAY_MS) {
+    throw new ProviderError({
+      code: "invalid_config",
+      message: `timeoutMs must be finite and no greater than ${MAX_TIMER_DELAY_MS}ms.`,
+      retryable: false,
+      details: {
+        field: "timeoutMs",
+        received: String(value),
+        maximumMs: MAX_TIMER_DELAY_MS,
+      },
+    });
+  }
+  return value;
 }
 
 async function openResponse(
@@ -493,11 +520,17 @@ async function* runProviderOperation<T>(
   isCommitted: (item: T) => boolean,
 ): AsyncGenerator<T> {
   const retryDelayMs = retryNumber(spec.config.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
+  let timeoutMs: number | undefined;
+  try {
+    timeoutMs = normalizedTimeoutMs(spec.config.timeoutMs);
+  } catch (error) {
+    throw withRequestContext(normalizeRequestError(error, undefined, spec.signal), spec);
+  }
   let attempt = 0;
 
   while (true) {
     attempt += 1;
-    const activity = createRequestActivity({ signal: spec.signal, timeoutMs: spec.config.timeoutMs });
+    const activity = createRequestActivity({ signal: spec.signal, timeoutMs });
     let failure: ProviderError | undefined;
     let committed = false;
     let responseReceived = false;
@@ -524,7 +557,7 @@ async function* runProviderOperation<T>(
         failure = withRequestContext(failure, spec, { retryable: false, partialOutput: true });
       }
     } finally {
-      await response?.dispose(failure ?? new Error("Provider operation finished."));
+      response?.dispose(failure ?? new Error("Provider operation finished."));
       activity.cleanup();
     }
 

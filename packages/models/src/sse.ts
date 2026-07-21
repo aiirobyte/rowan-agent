@@ -75,6 +75,26 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw signal.reason instanceof Error ? signal.reason : new Error("Request was aborted");
 }
 
+/** Start cancellation without allowing a hostile source's Promise to block cleanup. */
+export function cancelReaderBestEffort<T>(
+  reader: ReadableStreamDefaultReader<T>,
+  reason?: unknown,
+): void {
+  try {
+    void reader.cancel(reason).catch(() => undefined);
+  } catch {
+    // Cancellation is cleanup; it must never replace or delay the primary result.
+  }
+}
+
+function releaseReaderBestEffort<T>(reader: ReadableStreamDefaultReader<T>): void {
+  try {
+    reader.releaseLock();
+  } catch {
+    // A non-conforming stream must not turn cleanup into the delivered failure.
+  }
+}
+
 export async function* iterateSseMessages(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -130,10 +150,7 @@ export async function* iterateSseMessages(
     const trailingEvent = flushSseEvent(state);
     if (trailingEvent) yield trailingEvent;
   } finally {
-    try {
-      if (!sourceDone) await reader.cancel(signal?.reason).catch(() => undefined);
-    } finally {
-      reader.releaseLock();
-    }
+    if (!sourceDone) cancelReaderBestEffort(reader, signal?.reason);
+    releaseReaderBestEffort(reader);
   }
 }
