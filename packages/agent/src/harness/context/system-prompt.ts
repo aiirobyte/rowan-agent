@@ -19,16 +19,12 @@ export interface SystemPromptOptions {
     filePath: string;
     disableModelInvocation?: boolean;
   }>;
-  /** Working directory. */
-  cwd?: string;
 }
 
 import { buildSkillsDescription } from "./resource-formatter";
-import { createTimestamp } from "../../utils";
 
 export function buildSystemPrompt(options: SystemPromptOptions): string {
-  const { systemPrompt, promptGuidelines, appendSystemPrompt, tools, skills, cwd } = options;
-  const date = createTimestamp();
+  const { systemPrompt, promptGuidelines, appendSystemPrompt, tools, skills } = options;
 
   // Deduplicated guideline collector
   const guidelinesList: string[] = [];
@@ -52,9 +48,12 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     }
   }
 
-  // Build skills — structured XML-like format
-  const skillsBlock = skills && skills.length > 0
-    ? buildSkillsDescription(skills)
+  // Build skills — structured XML-like format. Skills flagged with
+  // disableModelInvocation are excluded so their descriptions are not injected
+  // into the system prompt (they remain invocable but not auto-suggested).
+  const visibleSkills = (skills ?? []).filter((s) => !s.disableModelInvocation);
+  const skillsBlock = visibleSkills.length > 0
+    ? buildSkillsDescription(visibleSkills)
     : "";
 
   // Collect caller-provided guidelines
@@ -83,13 +82,6 @@ ${toolsList}
 ${skillsSection}
 Guidelines:
 ${guidelines}`;
-
-  if (date || cwd) {
-    const contextParts: string[] = [];
-    if (date) contextParts.push(`Current date: ${date}`);
-    if (cwd) contextParts.push(`Working directory: ${cwd}`);
-    prompt += `\n\n${contextParts.join("\n")}`;
-  }
 
   if (appendSystemPrompt) {
     prompt += `\n\n${appendSystemPrompt}`;
