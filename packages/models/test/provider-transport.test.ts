@@ -64,8 +64,22 @@ test("an extension stream receives the shared structured error contract", async 
   }));
 
   const error = events.find((event) => event.type === "error");
-  expect(error?.type === "error" ? error.error.message : undefined)
-    .toBe("Request failed with status 403 Forbidden.");
+  expect(error).toMatchObject({ type: "error" });
+  if (error?.type !== "error") throw new Error("Expected a structured provider failure.");
+  expect(error.error).toBeInstanceOf(ProviderError);
+  expect(error.error.message).toBe("Request failed with status 403 Forbidden.");
+  expect(error.error).toMatchObject({
+    code: "http_error",
+    status: 403,
+    retryable: false,
+    details: {
+      endpoint: "https://provider.example/generate",
+      model: "extension-model",
+      status: 403,
+      responseContentType: "text/html",
+      responseBody: "<html>forbidden</html>",
+    },
+  });
   expect(events.at(-1)).toMatchObject({ type: "done", response: { stopReason: "error" } });
 });
 
