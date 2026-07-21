@@ -790,4 +790,4 @@ type LoopMetrics = {
 
 ## Version
 
-Current version: **0.6.0**
+Current version: **0.7.1**
