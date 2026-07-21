@@ -72,7 +72,7 @@ test("an extension stream receives the shared structured error contract", async 
 test("a never-settling body cancellation cannot block timeout delivery", async () => {
   const encoder = new TextEncoder();
   let cancelCalled = false;
-  let finishCancel = () => undefined;
+  let finishCancel: () => void = () => undefined;
   const cancelPending = new Promise<void>((resolve) => {
     finishCancel = resolve;
   });
@@ -109,4 +109,36 @@ test("a never-settling body cancellation cannot block timeout delivery", async (
   expect(result).toBeInstanceOf(ProviderError);
   expect(result).toMatchObject({ code: "request_timeout", retryable: true });
   expect(cancelCalled).toBe(true);
+});
+
+test("an unsupported timeout is rejected before the request starts", async () => {
+  let fetchCalled = false;
+  const result = await executeProviderRequest({
+    config: {
+      model: "extension-model",
+      timeoutMs: Number.POSITIVE_INFINITY,
+      maxRetries: 0,
+      fetch: async () => {
+        fetchCalled = true;
+        return Response.json({ value: "unexpected" });
+      },
+    },
+    endpoint: "https://provider.example/generate",
+    request: () => ({ method: "POST" }),
+  }, (response) => response.json()).then(
+    () => "resolved" as const,
+    (error: unknown) => error,
+  );
+
+  expect(result).toBeInstanceOf(ProviderError);
+  expect(result).toMatchObject({
+    code: "invalid_config",
+    retryable: false,
+    details: {
+      field: "timeoutMs",
+      endpoint: "https://provider.example/generate",
+      model: "extension-model",
+    },
+  });
+  expect(fetchCalled).toBe(false);
 });
