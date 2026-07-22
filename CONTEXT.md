@@ -31,7 +31,7 @@ The durable conversation belonging to one Agent. A reconstructed Agent continues
 _Avoid_: Memory, Runtime State
 
 **Context**:
-The current model-facing instructions, messages, tools, skills, and phases supplied to an Agent. Context may be rebuilt from current host state during Agent Reconstruction.
+The current model-facing instructions, messages, Tools, Skills, and Phases supplied to an Agent. Context may be rebuilt from current host state during Agent Reconstruction; Rowan-owned capabilities are assembled internally without a parallel host policy interface.
 _Avoid_: Runtime State, Agent Definition snapshot
 
 ## Execution
@@ -115,7 +115,7 @@ _Avoid_: Runtime Event, State transition
 ## Tools
 
 **Tool Capability**:
-A Tool made available when an Agent Binding is created or reconstructed. It defines the Agent's maximum executable capability and may only be narrowed by Runtime policy.
+A Tool available in an Agent's current Context. It may be narrowed by Phase configuration and Runtime policy but cannot be restored by model-facing state.
 _Avoid_: Prompt permission, Tool request
 
 **Tool Call**:

@@ -204,6 +204,15 @@ type AgentOptions = AgentCommonOptions & (
 );
 ```
 
+`AgentContext.tools`, `skills`, and `phases` are the only host-facing resource-
+supply interface; `AgentOptions` has no parallel name-policy fields.
+
+Rowan internally adds the built-in `route` Tool and `default` Phase, then merges
+code-defined Extension Tools and Phases. Tool or Phase name collisions fail
+before the first model request. Extension Tools join the executable Runtime Tool
+path, while Phase lists, hooks, and Runtime Tool policy may only narrow the
+current Context.
+
 ### Conversation Continuation
 
 Every turn enters through `send()`. The Runtime persists the input before it
@@ -387,7 +396,7 @@ const agent = await runtime.createAgent({
 
 Every managed Tool Call passes through the Runtime before its adapter executes.
 Runtime policy can narrow the Agent's Tool set and cap concurrency, but it can
-never add a capability that was not supplied in `AgentContext`.
+never add a capability absent from the assembled Agent Context.
 
 ```ts
 const runtime = await AgentRuntime.start({

@@ -132,7 +132,7 @@ The existing Extension `EventBus` remains an in-process inter-extension channel.
 
 ## Tool Runtime
 
-Tools supplied during Agent creation or reconstruction define the Agent's maximum Tool Capability set. Runtime policy may narrow this set but cannot add capabilities. Prompt content, model output, and Runtime Messages cannot expand Tool access.
+Tools assembled during Agent creation or reconstruction from the current Agent Context and code-defined Extensions define the Agent's maximum Tool Capability set. Runtime policy may narrow this set but cannot add capabilities. Prompt content, model output, and Runtime Messages cannot expand Tool access.
 
 Every Tool Call passes through the Rowan Tool Runtime for permission checks, concurrency and rate limits, abort propagation, and durable call-state recording. Tool implementations remain adapters supplied by Rowan or the host. A call whose side effect may have occurred without a durable terminal result becomes indeterminate and requires recovery or human resolution instead of blind retry.
 
@@ -176,7 +176,7 @@ The host chooses the Runtime Store location. A typical embedder may use one glob
 - Killing and restarting the host leaves queued and suspended work recoverable after the host reconstructs the Agent Binding with current Agent Options.
 - Re-delivering a completed Message does not re-run the completed Agent Run.
 - A Tool Call interrupted after a potentially completed side effect becomes indeterminate rather than executing again.
-- Existing Agents reconstruct by Agent ID, retain their original Session IDs, and use current caller-provided capabilities.
+- Existing Agents reconstruct by Agent ID, retain their original Session IDs, and use capabilities assembled from the current caller-provided Context and code-defined Extensions.
 - Tests exercise behavior through public Runtime, Agent, AgentRun, Session, Event, and Tool seams rather than private scheduler helpers.
 
 ## Migration

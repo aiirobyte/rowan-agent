@@ -38,10 +38,8 @@ type AgentModelOptions =
 
 export type AgentOptions = AgentCommonOptions & AgentModelOptions;
 
-export type StreamAgentOptions = AgentCommonOptions & {
-  model: ModelRef;
-  stream: StreamFn;
-};
+export type AgentBindingOptions = AgentCommonOptions &
+  Extract<AgentModelOptions, { stream: StreamFn }>;
 
 export type AgentRunControl = {
   suspend(reason?: string, state?: AgentRunExecutionState, inputRequest?: AgentInputRequest): Promise<void>;
@@ -58,7 +56,7 @@ export type AttachedAgentBinding = {
 };
 
 export type AttachAgentInput = {
-  options: StreamAgentOptions;
+  options: AgentBindingOptions;
   agentId: AgentId;
   sessionId: string;
   manager: SessionManager;

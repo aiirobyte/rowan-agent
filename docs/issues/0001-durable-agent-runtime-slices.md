@@ -150,7 +150,7 @@ Route all Tool Calls through one Runtime-controlled executor with capability che
 
 Acceptance:
 
-- Only Tools supplied to the Agent may execute.
+- Only Tools assembled from the current Agent Context and code-defined Extensions may execute.
 - Runtime policy may remove but never add Tool Capability.
 - Global and per-Tool concurrency limits apply across Agents.
 - Abort propagates to active Tool adapters.

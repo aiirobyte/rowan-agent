@@ -35,9 +35,9 @@ import type {
 import type { ModelTranscript } from "./protocol/turn";
 import { createId } from "./utils";
 import type { AgentId, AgentInputRequest, AgentRunExecutionState } from "./runtime/domain";
-import type { AgentRunControl, StreamAgentOptions } from "./agent";
+import type { AgentBindingOptions, AgentRunControl } from "./agent";
 
-type AgentExecutionOptions = StreamAgentOptions & {
+type AgentExecutionOptions = AgentBindingOptions & {
   sessionId?: string;
   agentId?: AgentId;
   sessionState?: SessionState;
@@ -209,7 +209,7 @@ export class AgentExecution {
   }
 
   getContext(): AgentContext {
-    return prepareAgentContext(this.options.context);
+    return prepareAgentContext(this.options.context, this.extensionRunner);
   }
 
   setContext(context: AgentContext): void {
@@ -230,7 +230,7 @@ export class AgentExecution {
     return prepareAgentContext({
       ...this.getContext(),
       ...overrides,
-    });
+    }, this.extensionRunner);
   }
 
   getMessages(): AgentMessage[] {
@@ -446,7 +446,16 @@ export class AgentExecution {
   private async handleBeforePhase(phaseId: string, input: PhaseContext): Promise<BeforePhaseHookResult> {
     const runner = this.extensionRunner;
     if (!runner) return {};
-    return runner.emitBeforePhase(phaseId, input);
+    const result = await runner.emitBeforePhase(phaseId, input);
+    if (!result.input) return result;
+    return {
+      ...result,
+      input: {
+        ...result.input,
+        tools: constrainPhaseCapabilities(input.tools, result.input.tools, ["route"]),
+        skills: constrainPhaseCapabilities(input.skills, result.input.skills),
+      },
+    };
   }
 
   /**
@@ -466,7 +475,12 @@ export class AgentExecution {
   private async handleBeforePrompt(phaseId: string, input: PhaseContext): Promise<PhaseContext> {
     const runner = this.extensionRunner;
     if (!runner) return input;
-    return runner.emitBeforePrompt(phaseId, input);
+    const transformed = await runner.emitBeforePrompt(phaseId, input);
+    return {
+      ...transformed,
+      tools: constrainPhaseCapabilities(input.tools, transformed.tools, ["route"]),
+      skills: constrainPhaseCapabilities(input.skills, transformed.skills),
+    };
   }
 
   private handleRunFailure(error: unknown, aborted: boolean): void {
@@ -547,6 +561,7 @@ export class AgentExecution {
       const extensions = resolved.extensions ?? [];
       await this.loadExtensions(extensions, resolved.cwd);
       const runContext = prepareAgentContext(resolved.context, this.extensionRunner);
+      if (this.extensionRunner) this.extensionRunner.currentContext = runContext;
       const resumingSuspendedRun = resolved.sessionState?.status === "suspended";
       const entryPhaseId = resumingSuspendedRun
         ? resolved.sessionState?.currentPhase || runContext.phases?.entryPhaseId || DEFAULT_PHASE_ID
@@ -625,6 +640,7 @@ export class AgentExecution {
       };
       this.state.sessionId = result.sessionId;
       this.state.context = prepareAgentContext(nextContext, this.extensionRunner);
+      if (this.extensionRunner) this.extensionRunner.currentContext = this.state.context;
       this.state.currentResult = result;
       this.state.initialized = true;
       this.options = {
@@ -717,7 +733,7 @@ export class AgentExecution {
     return prepareAgentContext(this.options.context);
   }
 
-  private cloneOptions(options: StreamAgentOptions): StreamAgentOptions {
+  private cloneOptions(options: AgentBindingOptions): AgentBindingOptions {
     return {
       ...options,
       context: prepareAgentContext(options.context),
@@ -781,21 +797,102 @@ function clonePhaseRegistry(registry: PhaseRegistry): PhaseRegistry {
   };
 }
 
-function prepareAgentContext(context: AgentContext, extensionRunner?: ExtensionRunner): AgentContext {
-  const phases = new Map<string, Phase>();
-  phases.set(DEFAULT_PHASE_ID, createDefaultPhase());
-  for (const [id, phase] of context.phases?.phases ?? []) {
-    phases.set(id, phase);
+function constrainPhaseCapabilities<T extends { name: string }>(
+  maximum: readonly T[],
+  requested: readonly T[],
+  retainedNames: readonly string[] = [],
+): T[] {
+  const names = new Set([...requested.map(({ name }) => name), ...retainedNames]);
+  return maximum.filter((candidate) => names.has(candidate.name));
+}
+
+const builtInPhases = new WeakSet<Phase>();
+const extensionPhases = new WeakSet<Phase>();
+const extensionTools = new WeakSet<Tool>();
+
+function adaptExtensionTools(extensionRunner?: ExtensionRunner): Tool[] {
+  return (extensionRunner?.getAllRegisteredTools() ?? []).map(({ definition }) => {
+    const tool: Tool = {
+      name: definition.name,
+      description: definition.description,
+      parameters: definition.parameters as Tool["parameters"],
+      executionMode: definition.executionMode,
+      async execute(args, context, signal) {
+        const result = await definition.execute(args, signal);
+        const error = result.isError
+          ? result.content.map((block) => block.text ?? JSON.stringify(block)).join("\n")
+          : undefined;
+        return {
+          toolCallId: context.toolCallId,
+          toolName: definition.name,
+          ok: !result.isError,
+          content: result.content,
+          ...(error ? { error } : {}),
+        };
+      },
+    };
+    extensionTools.add(tool);
+    return tool;
+  });
+}
+
+function createBuiltInDefaultPhase(): Phase {
+  const phase = createDefaultPhase();
+  builtInPhases.add(phase);
+  return phase;
+}
+
+function mergeNamedCapabilities<T extends { name: string }>(
+  kind: "Tool" | "Phase",
+  groups: Array<{ source: string; values: Iterable<T> }>,
+  reservedNames: readonly string[] = [],
+): T[] {
+  const sources = new Map(reservedNames.map((name) => [name, "Rowan built-in"]));
+  const merged: T[] = [];
+  for (const group of groups) {
+    for (const value of group.values) {
+      const previousSource = sources.get(value.name);
+      if (previousSource) {
+        throw new Error(
+          `Duplicate ${kind} name "${value.name}" from ${previousSource} and ${group.source}.`,
+        );
+      }
+      sources.set(value.name, group.source);
+      merged.push(value);
+    }
   }
+  return merged;
+}
+
+function prepareAgentContext(
+  context: AgentContext,
+  extensionRunner?: ExtensionRunner,
+): AgentContext {
   const extensionRegistry = extensionRunner?.createPhaseRegistry();
-  for (const [id, phase] of extensionRegistry?.phases ?? []) {
-    phases.set(id, phase);
-  }
+  const registeredExtensionPhases = [...(extensionRegistry?.phases.values() ?? [])];
+  for (const phase of registeredExtensionPhases) extensionPhases.add(phase);
+  const phaseCandidates = mergeNamedCapabilities("Phase", [
+    { source: "Rowan built-in", values: [createBuiltInDefaultPhase()] },
+    {
+      source: "AgentContext",
+      values: [...(context.phases?.phases.values() ?? [])]
+        .filter((phase) => !builtInPhases.has(phase) && !extensionPhases.has(phase)),
+    },
+    { source: "extension", values: registeredExtensionPhases },
+  ]);
+  const phases = new Map(phaseCandidates.map((phase) => [phase.name, phase]));
+  const tools = mergeNamedCapabilities("Tool", [
+    {
+      source: "AgentContext",
+      values: context.tools.filter((tool) => !extensionTools.has(tool)),
+    },
+    { source: "extension", values: adaptExtensionTools(extensionRunner) },
+  ], ["route"]);
 
   return {
     systemPrompt: context.systemPrompt,
     messages: snapshotMessages(context.messages),
-    tools: context.tools.slice(),
+    tools,
     skills: context.skills.slice(),
     phases: {
       phases,

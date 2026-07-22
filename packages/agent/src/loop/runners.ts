@@ -1053,10 +1053,22 @@ function createPhaseExecution(
       return result;
     },
 
-    async executeTool(_context: AgentContext, toolCall: ToolCall): Promise<ToolResult> {
+    async executeTool(phaseContext: AgentContext, toolCall: ToolCall): Promise<ToolResult> {
       return runTurn(config.context, config.emit, async () => {
         await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
-        const result = await executeToolCall({ config, tools: allTools, toolCall });
+        const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
+        const result = await executeToolCall({
+          config: {
+            ...config,
+            context: {
+              ...config.context,
+              tools,
+              skills: phaseContext.skills,
+            },
+          },
+          tools,
+          toolCall,
+        });
         await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
         return result;
       });

@@ -181,30 +181,20 @@ test("Agent uses entryPhaseId only until initialized, then starts later turns at
       return { message: "planning ran", route: "stop" };
     },
   };
-  const defaultPhase: Phase = {
-    name: "default",
-    description: "Default continuation phase.",
-    filePath: "<test>",
-    baseDir: "<test>",
-    content: "Default phase content.",
-    async run() {
-      return { message: "default ran", route: "stop" };
-    },
-  };
   const agent = new Agent({
     context: {
       ...createTestContext(),
       phases: {
-        phases: new Map([
-          ["planning", planningPhase],
-          ["default", defaultPhase],
-        ]),
+        phases: new Map([["planning", planningPhase]]),
         entryPhaseId: "planning",
       },
     },
     model: { provider: "test", id: "initialization" },
-    stream: async function* unusedStream() {
-      throw new Error("test phases should run without invoking the model");
+    stream: async function* defaultStream() {
+      const text = "default ran";
+      yield { type: "text_delta", text, partial: buildTestPartial(text) };
+      yield* yieldRouteToolCall("stop", text, text);
+      yield { type: "done" };
     },
   });
   agent.subscribe((event) => {
@@ -441,13 +431,13 @@ test("Agent passes cwd option to extension context", async () => {
   }
 });
 
-test("Agent runs explicitly supplied file phases from configured project rowan dir", async () => {
+test("Agent runs explicitly supplied non-default file phases from configured project rowan dir", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-agent-rowan-dir-"));
   try {
-    const phaseDir = join(root, ".rowan-project", "phases", "default");
+    const phaseDir = join(root, ".rowan-project", "phases", "configured");
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: default
+name: configured
 description: Uses the configured project Rowan directory.
 ---
 
@@ -463,13 +453,14 @@ Custom phase content.
       throw new Error("configured phase should run without invoking the model");
     };
     const phases = await Agent.loadPhases(join(root, ".rowan-project", "phases"));
+    phases.entryPhaseId = "configured";
     const agent = new Agent({
       context: { ...createTestContext(), phases },
       model: { provider: "test", id: "configured-rowan-dir" },
       stream,
     });
 
-    expect(await agent.phase("default")).toContain("Custom phase content.");
+    expect(await agent.phase("configured")).toContain("Custom phase content.");
     const outcome = await runAgentTurn(agent, "use configured phase");
 
     expect(outcome.outcome.message).toBe("configured project Rowan dir phase ran");
@@ -478,13 +469,13 @@ Custom phase content.
   }
 });
 
-test("Agent accepts an explicit phase registry in context", async () => {
+test("Agent accepts an explicit non-default phase registry in context", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-agent-explicit-phases-"));
   try {
-    const phaseDir = join(root, "phases", "default");
+    const phaseDir = join(root, "phases", "explicit");
     await mkdir(phaseDir, { recursive: true });
     await writeFile(join(phaseDir, "PHASE.md"), `---
-name: default
+name: explicit
 description: Supplied as an Agent option.
 ---
 
@@ -497,6 +488,7 @@ Explicit phase content.
     `);
 
     const phases = await loadPhases(join(root, "phases"));
+    phases.entryPhaseId = "explicit";
     const agent = new Agent({
       context: { ...createTestContext(), phases },
       model: { provider: "test", id: "explicit-phases" },
@@ -506,7 +498,7 @@ Explicit phase content.
       cwd: root,
     });
 
-    expect(await agent.phase("default")).toContain("Explicit phase content.");
+    expect(await agent.phase("explicit")).toContain("Explicit phase content.");
     const outcome = await runAgentTurn(agent, "use explicit phase");
 
     expect(outcome.outcome.message).toBe("explicit phase registry ran");
@@ -515,7 +507,7 @@ Explicit phase content.
   }
 });
 
-test("Agent lets a user-defined default phase override the built-in default", async () => {
+test("Agent rejects a user-defined phase that collides with built-in default", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-agent-user-default-phase-"));
   try {
     const phaseDir = join(root, "phases", "default");
@@ -534,18 +526,13 @@ User default content.
     `);
 
     const phases = await Agent.loadPhases(join(root, "phases"));
-    const agent = new Agent({
+    expect(() => new Agent({
       context: { ...createTestContext(), phases },
       model: { provider: "test", id: "user-default" },
       stream: async function* unusedStream() {
-        throw new Error("user default phase should run without invoking the model");
+        throw new Error("duplicate default must fail before model execution");
       },
-    });
-
-    expect(await agent.phase("default")).toContain("User default content.");
-    const outcome = await runAgentTurn(agent, "use user default");
-
-    expect(outcome.outcome.message).toBe("user default ran");
+    })).toThrow('Duplicate Phase name "default"');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

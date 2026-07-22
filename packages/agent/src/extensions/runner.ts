@@ -378,9 +378,7 @@ export class ExtensionRunner {
   // Tool management
   // ---------------------------------------------------------------------------
 
-  /**
-   * Get all registered tools from all extensions (first registration per name wins).
-   */
+  /** Get all registered tools from all extensions. */
   getAllRegisteredTools(): RegisteredTool[] {
     const toolsByName = new Map<string, RegisteredTool>();
     for (const ext of this.extensions) {
@@ -721,8 +719,11 @@ export class ExtensionRunner {
         const skill = runner.currentContext?.skills.find(s => s.name === skillName);
         return skill?.content ?? "";
       },
-      getAvailablePhases() { return [...runner.phases.keys()]; },
-      getPhaseContent(phaseId) { return runner.phases.get(phaseId)?.definition.description ?? ""; },
+      getAvailablePhases() { return [...(runner.currentContext?.phases?.phases.keys() ?? [])]; },
+      getPhaseContent(phaseId) {
+        const phase = runner.currentContext?.phases?.phases.get(phaseId);
+        return phase?.content || phase?.description || "";
+      },
     };
 
     return createExtensionAPI(this.hooks, extension.path, {
@@ -737,15 +738,19 @@ export class ExtensionRunner {
   }
 
   private registerTool(extension: Extension, tool: ToolDefinition): void {
+    if (extension.tools.has(tool.name)) {
+      throw new Error(`Duplicate Tool name "${tool.name}" in extension ${extension.path}.`);
+    }
     // Check for duplicate tool names across extensions
     for (const ext of this.extensions) {
       if (ext.tools.has(tool.name)) {
+        const message = `Duplicate Tool name "${tool.name}" from extensions ${ext.path} and ${extension.path}.`;
         this.emitError({
           extensionPath: extension.path,
           event: "register_tool",
-          error: `Tool "${tool.name}" is already registered by extension ${ext.path}`,
+          error: message,
         });
-        return;
+        throw new Error(message);
       }
     }
 
@@ -786,6 +791,10 @@ export class ExtensionRunner {
       name,
       description: description.description!,
       run: registration.run,
+      ...(registration.tools ? { tools: registration.tools.slice() } : {}),
+      ...(registration.skills ? { skills: registration.skills.slice() } : {}),
+      ...(registration.target ? { target: registration.target } : {}),
+      ...(registration.input ? { input: { ...registration.input } } : {}),
       ...(registration.model ? { model: registration.model } : {}),
     };
 

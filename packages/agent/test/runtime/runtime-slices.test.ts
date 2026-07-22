@@ -267,6 +267,67 @@ test("reconstructed suspended input resumes from the persisted phase", async () 
   }
 });
 
+test("reconstructed suspended input fails when current Context removes its Phase", async () => {
+  const stateStore = new InMemoryRuntimeStateStore();
+  const sessionManager = provider();
+  const plan = {
+    name: "plan",
+    description: "Plan",
+    filePath: "test",
+    baseDir: "test",
+    content: "",
+  };
+  const context = {
+    ...createTestContext(),
+    phases: {
+      phases: new Map([[plan.name, plan]]),
+      entryPhaseId: plan.name,
+    },
+  };
+  const firstRuntime = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  const agent = await firstRuntime.createAgent(options({
+    context,
+    stream: async function* () {
+      yield {
+        type: "text_delta",
+        text: "Which target?",
+        partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Which target?" }] },
+      };
+      yield { type: "done" };
+    },
+  }));
+  const first = await agent.send("need input");
+  await waitFor(async () => (await stateStore.getRun(first.id))?.state === "suspended");
+  await firstRuntime.stop();
+
+  let modelRequests = 0;
+  const restarted = await AgentRuntime.start({ stateStore, sessionProvider: sessionManager });
+  try {
+    const reconstructed = await restarted.reconstructAgent(agent.id, {
+      ...options({
+        context: {
+          ...context,
+          phases: { phases: new Map(), entryPhaseId: null },
+        },
+        stream: async function* () {
+          modelRequests++;
+          yield* yieldRouteToolCall("stop");
+          yield { type: "done" };
+        },
+      }),
+    });
+    const resumed = await reconstructed.send("continue");
+    const outcome = await resumed.result();
+
+    expect(resumed.id).toBe(first.id);
+    expect(await stateStore.getRun(first.id)).toMatchObject({ state: "failed" });
+    expect(outcome.message).toContain('Phase "plan" not found');
+    expect(modelRequests).toBe(0);
+  } finally {
+    await restarted.stop();
+  }
+});
+
 test("Tool Runtime keeps its durable Tool Call identity internal", async () => {
   const stateStore = new InMemoryRuntimeStateStore();
   const agent = await stateStore.createAgent({ sessionId: "session-tool-identity" });
