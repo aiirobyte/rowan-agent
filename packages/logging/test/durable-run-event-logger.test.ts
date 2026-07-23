@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { DurableRunEvent } from "@rowan-agent/agent";
@@ -47,6 +47,34 @@ test("debug durable event logs include redacted event payloads", async () => {
   expect(text).toContain('"event"');
   expect(text).not.toContain("secret-value");
   expect(text).toContain("[REDACTED]");
+});
+
+test("append mode repairs a partial JSONL tail and ignores duplicate complete events", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-log-"));
+  const path = join(root, "run.jsonl");
+  await writeFile(path, `${JSON.stringify({ eventId: "evt_existing", eventType: "run_transitioned" })}\n{"partial":`, "utf8");
+  const logger = pinoDurableRunEventLogger(path, { mode: "append" });
+  logger(event({ id: "evt_existing" }));
+  logger(event({ id: "evt_new" }));
+  await logger.flush();
+
+  const lines = (await readFile(path, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(lines).toHaveLength(2);
+  expect(lines.map((line) => line.eventId)).toEqual(["evt_existing", "evt_new"]);
+});
+
+test("separate append loggers write complete non-interleaved JSONL records", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-log-"));
+  const path = join(root, "run.jsonl");
+  const first = pinoDurableRunEventLogger(path, { mode: "append" });
+  const second = pinoDurableRunEventLogger(path, { mode: "append" });
+  first(event({ id: "evt_first" }));
+  second(event({ id: "evt_second" }));
+  await Promise.all([first.flush(), second.flush()]);
+
+  const lines = (await readFile(path, "utf8")).trimEnd().split("\n");
+  expect(lines).toHaveLength(2);
+  expect(lines.map((line) => (JSON.parse(line) as Record<string, unknown>).eventId).sort()).toEqual(["evt_first", "evt_second"]);
 });
 
 test("console durable event logger writes Pino-shaped records", async () => {

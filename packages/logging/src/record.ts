@@ -38,6 +38,7 @@ export function shouldWriteEvent(eventLevel: WritableDurableRunEventLogLevel, co
 
 export function createDurableRunEventLogFields(event: DurableRunEvent, includeEventPayload: boolean): Record<string, unknown> {
   return {
+    eventId: event.id,
     eventType: event.kind,
     eventTs: event.createdAt,
     agentId: event.agentId,

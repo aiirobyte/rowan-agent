@@ -31,7 +31,10 @@ containing token, secret, password, apiKey, and authorization, and also handles
 common API key text patterns.
 
 The file logger supports `mode: "replace" | "append"` and static paths. A
-resolver function can also derive the path from the first event.
+resolver function can also derive the path from the first event. Append mode
+repairs an incomplete trailing line, ignores already-recorded Event IDs, and
+writes each JSONL record as one append operation so callbacks from a replaced
+owner cannot interleave bytes.
 
 `runtime.consume()` already yields only Durable Run Events. Their types are
 `message_committed`, `run_transitioned`, and `tool_state_changed`.
