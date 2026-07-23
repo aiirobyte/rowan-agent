@@ -1,5 +1,6 @@
 export const publicValueExports = [
   "AgentRuntime",
+  "createCoreTools",
   "InMemoryConfigProvider",
   "InMemoryStore",
   "RuntimeError",
@@ -29,6 +30,7 @@ export const publicTypeExports = [
   "ConfigPutResult",
   "ConfigResolution",
   "ConfigToken",
+  "CoreToolContext",
   "DurableConsumer",
   "DurableRunEvent",
   "DurableStore",

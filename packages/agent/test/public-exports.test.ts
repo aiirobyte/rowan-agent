@@ -7,6 +7,7 @@ test("public value exports snapshot", () => {
 
   expect(exportNames).toEqual([...publicValueExports].sort());
   expect(typeof agentExports.AgentRuntime.init).toBe("function");
+  expect(typeof agentExports.createCoreTools).toBe("function");
   expect(typeof agentExports.loadSkills).toBe("function");
   expect(typeof agentExports.loadPhases).toBe("function");
   expect(typeof agentExports.loadExtensions).toBe("function");

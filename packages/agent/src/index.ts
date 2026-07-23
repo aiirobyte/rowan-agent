@@ -1,3 +1,6 @@
+import { createCoreTools as createLegacyCoreTools, type CoreToolContext } from "./harness/tools";
+import type { JsonValue, Tool as RuntimeTool, ToolInvocationContext } from "./runtime/contracts";
+
 export { AgentRuntime } from "./runtime/durable-runtime";
 export { InMemoryStore } from "./runtime/durable-store";
 export { SqliteStore } from "./runtime/sqlite-durable-store";
@@ -6,6 +9,20 @@ export { RuntimeError, isRuntimeError } from "./runtime/errors";
 export { loadSkills } from "./harness/skills";
 export { loadPhases } from "./harness/phases/loader";
 export { loadExtensionsFromPath as loadExtensions } from "./extensions/loader";
+
+export function createCoreTools(input: CoreToolContext = {}): RuntimeTool[] {
+  return createLegacyCoreTools(input).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    execute: async (args: JsonValue, context: ToolInvocationContext, signal: AbortSignal) => {
+      const result = await tool.execute(args, { skills: [], toolCallId: context.toolCallId }, signal);
+      return result.ok
+        ? { ok: true, content: result.content as JsonValue }
+        : { ok: false, content: result.content as JsonValue, error: result.error ?? "Tool failed." };
+    },
+  }));
+}
 
 export type {
   AgentConfig,
@@ -108,3 +125,4 @@ export type {
   PhaseRegistry,
   PhaseState,
 } from "./harness/phases/types";
+export type { CoreToolContext } from "./harness/tools";

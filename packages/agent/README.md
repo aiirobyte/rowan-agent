@@ -9,6 +9,7 @@ persistent identity, not a process-local Session object.
 ```ts
 import {
   AgentRuntime,
+  createCoreTools,
   InMemoryStore,
 } from "@rowan-agent/agent";
 
@@ -20,7 +21,11 @@ const agentId = await runtime.createAgent({
   identity: "example:v1", // Stable config snapshot identity, not the Agent ID
   model: { provider: "openai", id: "gpt-4o" },
   stream,
-  context: { systemPrompt: "You are helpful.", tools: [], skills: [] },
+  context: {
+    systemPrompt: "You are helpful.",
+    tools: createCoreTools({ root: process.cwd() }),
+    skills: [],
+  },
 });
 
 const run = await runtime.start(agentId, "Summarize the workspace.", {

@@ -12,6 +12,7 @@ import {
 import {
   AgentRuntime,
   SqliteStore,
+  createCoreTools,
   loadExtensions,
   loadPhases,
   loadSkills,
@@ -20,15 +21,11 @@ import {
   type AgentRun,
   type AgentSummary,
   type ConfigProvider,
+  type Skill,
   type RunBoundary,
   type RunSnapshot,
-  type Skill,
-  type Tool,
-  type ToolInvocationContext,
-  type JsonValue,
   type ModelRef,
 } from "../../agent/src";
-import { createCoreTools } from "../../agent/src/harness/tools";
 import {
   brandConfigToken,
 } from "../../agent/src/runtime/config-provider";
@@ -112,22 +109,6 @@ class CliConfigProvider implements ConfigProvider {
 
 function tokenFor(agentId: AgentId, identity: string): string {
   return brandConfigToken(`cfg_${encodeURIComponent(agentId)}_${encodeURIComponent(identity)}`);
-}
-
-type LegacyCoreTool = ReturnType<typeof createCoreTools>[number];
-
-function adaptCoreTools(tools: readonly LegacyCoreTool[], skills: readonly Skill[]): Tool[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-    execute: async (args: JsonValue, context: ToolInvocationContext, signal: AbortSignal) => {
-      const result = await tool.execute(args, { skills: [...skills], toolCallId: context.toolCallId }, signal);
-      return result.ok
-        ? { ok: true, content: result.content as JsonValue }
-        : { ok: false, content: result.content as JsonValue, error: result.error ?? "Tool failed." };
-    },
-  }));
 }
 
 function abortError(): Error {
@@ -560,7 +541,7 @@ async function createConfiguredAgent(
 ): Promise<ConfiguredAgent> {
   const resources = await loadAgentResources(args, workspace);
   const { skills } = resources;
-  const tools = adaptCoreTools(createCoreTools({ root: workspace.cwd }), skills);
+  const tools = createCoreTools({ root: workspace.cwd });
   // Load config file and register providers/models
   const configFile = await loadConfigFile(workspace);
 
