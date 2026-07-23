@@ -382,21 +382,25 @@ export class InMemoryStore implements DurableStore {
     this.assertExecution(run, input.execution, input.expectedRevision);
     this.assertState(run, ["running"]);
     this.assertNoOpenTools(run);
+    const prompt: AssistantMessage = {
+      ...clone(input.prompt),
+      sequenceWithinRun: this.nextMessageSequence(run.id),
+    };
     const request: { id: InputRequestId; messageId: MessageId; createdAt: string } = {
       id: requestId,
-      messageId: input.prompt.id,
+      messageId: prompt.id,
       createdAt: createTimestamp(),
     };
-    this.messages.set(input.prompt.id, clone(input.prompt));
+    this.messages.set(prompt.id, prompt);
     run.state = "input_required";
     run.checkpoint = clone(input.checkpoint);
     run.openInputRequest = request;
     delete run.execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
-    this.appendMessage(run, input.prompt);
-    this.appendTransition(run, "running", "input_required", request, input.prompt);
-    const result = { run: clone(run), prompt: clone(input.prompt), request: clone(request) };
+    this.appendMessage(run, prompt);
+    this.appendTransition(run, "running", "input_required", request, prompt);
+    const result = { run: clone(run), prompt: clone(prompt), request: clone(request) };
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
   }
@@ -617,9 +621,12 @@ export class InMemoryStore implements DurableStore {
     const nextState: Extract<RunState, "completed" | "failed"> = input.failure ? "failed" : "completed";
     if (nextState === "completed" && !input.outcome) throw new TypeError("completed Run requires an outcome");
     if (nextState === "failed" && !input.failure) throw new TypeError("failed Run requires a failure");
-    if (input.output) {
-      this.messages.set(input.output.id, clone(input.output));
-      this.appendMessage(run, input.output);
+    const output = input.output
+      ? { ...clone(input.output), sequenceWithinRun: this.nextMessageSequence(run.id) }
+      : undefined;
+    if (output) {
+      this.messages.set(output.id, output);
+      this.appendMessage(run, output);
     }
     run.state = nextState;
     if (input.outcome) run.outcome = clone(input.outcome);
@@ -627,7 +634,7 @@ export class InMemoryStore implements DurableStore {
     delete run.execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
-    this.appendTransition(run, "running", nextState, undefined, input.output, input.outcome, input.failure);
+    this.appendTransition(run, "running", nextState, undefined, output, input.outcome, input.failure);
     const result = clone(run);
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;

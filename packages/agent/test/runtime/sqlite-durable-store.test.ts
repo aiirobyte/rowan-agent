@@ -4,7 +4,7 @@ import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteStore } from "../../src/runtime";
-import type { ConfigToken, ExecutionId, OutcomeId } from "../../src/runtime-events";
+import type { ConfigToken, ExecutionId, MessageId, OutcomeId, ToolCallId } from "../../src/runtime-events";
 
 async function tableCatalog(filename: string): Promise<string[]> {
   const database = new Database(filename, { create: true, readwrite: true, strict: true });
@@ -113,6 +113,113 @@ test("SQLite DurableStore persists domain state and fences expired executions", 
     }
   } finally {
     firstStore.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore assigns terminal message sequence after durable Tool messages", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "tool-terminal.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-tool-terminal", leaseMs: 10_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent-tool-terminal" });
+    const run = await owner.createRun({ agentId: agent.id, input: "hello", idempotencyKey: "run-tool-terminal" });
+    const claim = await owner.claimRun({ runId: run.id, expectedRevision: run.revision, executionId: "exec-tool-terminal" as ExecutionId });
+    const reserved = await owner.reserveToolCall({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: claim.run.revision,
+      requestMessageId: "assistant-tool-request" as MessageId,
+      toolCallId: "tool-terminal" as ToolCallId,
+      name: "lookup",
+      args: {},
+    });
+    const started = await owner.startToolCall({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: reserved.run.revision,
+      toolCallId: reserved.toolCall.id,
+    });
+    const completed = await owner.commitToolResult({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: started.run.revision,
+      toolCallId: reserved.toolCall.id,
+      state: "completed",
+      result: { ok: true, content: "done" },
+    });
+
+    await owner.commitOutcome({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: completed.run.revision,
+      outcome: { id: "outcome-tool-terminal" as OutcomeId, message: "finished" },
+      output: {
+        id: "assistant-terminal" as MessageId,
+        agentId: agent.id,
+        runId: run.id,
+        role: "assistant",
+        content: "finished",
+        sequenceWithinRun: 1,
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    const inputRun = await owner.createRun({ agentId: agent.id, input: "ask", idempotencyKey: "run-tool-input" });
+    const inputClaim = await owner.claimRun({ runId: inputRun.id, expectedRevision: inputRun.revision, executionId: "exec-tool-input" as ExecutionId });
+    const inputReserved = await owner.reserveToolCall({
+      runId: inputRun.id,
+      execution: inputClaim.execution,
+      expectedRevision: inputClaim.run.revision,
+      requestMessageId: "assistant-input-tool-request" as MessageId,
+      toolCallId: "tool-input" as ToolCallId,
+      name: "lookup",
+      args: {},
+    });
+    const inputStarted = await owner.startToolCall({
+      runId: inputRun.id,
+      execution: inputClaim.execution,
+      expectedRevision: inputReserved.run.revision,
+      toolCallId: inputReserved.toolCall.id,
+    });
+    const inputCompleted = await owner.commitToolResult({
+      runId: inputRun.id,
+      execution: inputClaim.execution,
+      expectedRevision: inputStarted.run.revision,
+      toolCallId: inputReserved.toolCall.id,
+      state: "completed",
+      result: { ok: true, content: "done" },
+    });
+    const suspended = await owner.commitInputRequired({
+      runId: inputRun.id,
+      execution: inputClaim.execution,
+      expectedRevision: inputCompleted.run.revision,
+      prompt: {
+        id: "assistant-input-required" as MessageId,
+        agentId: agent.id,
+        runId: inputRun.id,
+        role: "assistant",
+        content: "Continue?",
+        sequenceWithinRun: 1,
+        createdAt: new Date().toISOString(),
+      },
+      checkpoint: { codec: "test", version: 1, data: {} },
+    });
+    expect(suspended.prompt.sequenceWithinRun).toBe(3);
+
+    const database = new Database(filename, { readwrite: true, strict: true });
+    try {
+      expect(database.query("SELECT sequence_within_run AS sequence FROM messages WHERE run_id = ? ORDER BY sequence").all(run.id))
+        .toEqual([{ sequence: 0 }, { sequence: 1 }, { sequence: 2 }, { sequence: 3 }]);
+      expect(database.query("SELECT sequence_within_run AS sequence FROM messages WHERE run_id = ? ORDER BY sequence").all(inputRun.id))
+        .toEqual([{ sequence: 0 }, { sequence: 1 }, { sequence: 2 }, { sequence: 3 }]);
+    } finally {
+      database.close();
+    }
+    await owner.sealAndReleaseOwner();
+  } finally {
+    store.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
