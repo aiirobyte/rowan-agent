@@ -45,7 +45,7 @@ cp examples/config.yaml .rowan/config.yaml
 
 ## What is Rowan Agent?
 
-The core idea is **Loop Engineering**: the agent loop is treated as reusable product code. Each run has a context, tools, `phases`, durable session, structured events, and a terminal outcome. As those pieces improve, the agent's process improves by building your own `phase`.
+The core idea is **Loop Engineering**: the agent loop is treated as reusable product code. Each Run has context, Tools, Phases, Durable Run Events, and a terminal outcome. As those pieces improve, the agent's process improves by building your own `phase`.
 
 ## Architecture
 
@@ -53,8 +53,8 @@ The core idea is **Loop Engineering**: the agent loop is treated as reusable pro
 rowan-agent/
 ├── packages/
 │   ├── models/    # Model registry, provider dispatch, SSE streaming, cost calculation
-│   ├── agent/     # Core runtime: phase loop, tools, skills, sessions, extensions
-│   ├── logging/   # AgentEvent loggers with secret redaction
+│   ├── agent/     # Durable Runtime: Runs, Tools, Skills, phases, extensions
+│   ├── logging/   # Durable Run Event loggers with secret redaction
 │   └── cli/       # Command-line interface
 ├── examples/      # Config, phase, and extension examples
 └── package.json
@@ -66,7 +66,8 @@ rowan-agent/
     │       └── @rowan-agent/models
     ├── @rowan-agent/models
     └── @rowan-agent/logging
-            └── @rowan-agent/models
+            └── @rowan-agent/agent
+                    └── @rowan-agent/models
 ```
 
 ## CLI & Configuration Examples
@@ -104,10 +105,10 @@ bun run release
 
 | Doc | Description |
 |-----|-------------|
-| [Agent package README](packages/agent) | Core runtime API, tools, events, sessions, phases, extensions, config |
+| [Agent package README](packages/agent) | Durable Runtime API, Runs, Tools, events, phases, extensions, config |
 | [Models package README](packages/models) | Model registry, providers, streaming, protocol types |
-| [Logging package README](packages/logging) | Console and Pino event loggers |
-| [CLI package README](packages/cli) | CLI usage, options, sessions, output behavior |
+| [Logging package README](packages/logging) | Console and Pino Durable Run Event loggers |
+| [CLI package README](packages/cli) | CLI usage, options, Runs, and output behavior |
 | [Examples](examples) | Config templates, extension examples, phase examples |
 | [Phases](packages/agent/docs/phases.md) | `PHASE.md` format, routing, execution modes, parallel phases |
 | [Extensions](packages/agent/docs/extensions.md) | Extension discovery, hooks, tools, phases, providers, event bus |

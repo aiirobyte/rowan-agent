@@ -3,7 +3,6 @@ import {
   formatResourceOutput,
   detectResourceType,
   buildPhaseDirectiveMessage,
-  type ResourceOutput,
 } from "../../../src/harness/context/resource-formatter";
 
 test("detectResourceType identifies skill files", () => {

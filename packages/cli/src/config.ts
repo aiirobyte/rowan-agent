@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { parseModelRef, registerModel } from "@rowan-agent/models";
+import { registerModel } from "@rowan-agent/models";
 import type { ModelRef, Model, ModelCost, Protocol } from "@rowan-agent/models";
 import type { WorkspacePaths } from "./workspace";
 

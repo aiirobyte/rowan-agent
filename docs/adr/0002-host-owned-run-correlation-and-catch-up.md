@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0004
 ---
 
 # Persist opaque Run metadata and expose durable Run listing and consumer handles

@@ -1,4 +1,5 @@
-import type { AgentMessage, ModelRef } from "@rowan-agent/models";
+import type { ModelRef } from "@rowan-agent/models";
+import type { AgentMessage } from "../../protocol";
 import type { Tool, Skill } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";

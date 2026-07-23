@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0004
 ---
 
 # Use an embedded durable Runtime as the sole Agent lifecycle owner

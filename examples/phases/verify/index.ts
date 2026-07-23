@@ -7,11 +7,10 @@
  * The PHASE.md still defines metadata; the run() function replaces the
  * LLM call with custom logic.
  */
-import type { PhaseContext, PhaseExecution, PhaseOutput } from "@rowan-agent/agent";
+import type { PhaseContext, PhaseOutput } from "@rowan-agent/agent";
 
 export async function run(
   context: PhaseContext,
-  execution: PhaseExecution,
 ): Promise<PhaseOutput> {
   const payload = context.state.payload as {
     steps?: Array<{ action: string; verified: boolean }>;

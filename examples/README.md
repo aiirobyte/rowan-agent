@@ -7,10 +7,10 @@ Template configurations and extension/phase examples for getting started.
 ```
 examples/
 ├── config.yaml                    # Multi-provider config template
-├── durable-runtime.ts             # Runtime-owned Agent and AgentRun lifecycle
+├── durable-runtime.ts             # Durable AgentRuntime and Run lifecycle
 ├── README.md
 ├── extensions/
-│   ├── logger.ts                  # Lifecycle event logging
+│   ├── logger.ts                  # Durable Run Event logging
 │   ├── custom-tool.ts             # Register an LLM-callable tool
 │   ├── phase-registration.ts      # Register a phase programmatically
 │   └── package-extension/         # Package-based extension (with manifest)
@@ -33,10 +33,9 @@ examples/
 
 ### Durable Runtime
 
-`durable-runtime.ts` shows the only public execution path:
-`AgentRuntime.start()` → `runtime.createAgent()` → `agent.send()` →
-`AgentRun.result()`. Its Run subscription also demonstrates how a later
-`send()` resumes suspended work.
+`durable-runtime.ts` shows the public execution path:
+`AgentRuntime.init()` → `runtime.createAgent()` → `runtime.start()` →
+`run.wait()`. An `input_required` boundary is resumed with `run.respond()`.
 
 ### Config
 

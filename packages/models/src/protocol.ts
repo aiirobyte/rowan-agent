@@ -79,7 +79,7 @@ export type ModelConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// Provider configuration (used by extension registerProvider)
+// Provider configuration (used by extension provider registration)
 // ---------------------------------------------------------------------------
 
 export type ProviderModelConfig = {
@@ -115,7 +115,7 @@ export type ProviderConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// Backward-compatible model reference
+// Model reference
 // ---------------------------------------------------------------------------
 
 export type ModelRef = {
@@ -320,90 +320,3 @@ export type ApiStreamFn = (
   request: LlmRequest,
   options: LlmStreamOptions,
 ) => AsyncIterable<LlmStreamEvent>;
-
-// ---------------------------------------------------------------------------
-// Agent runtime shared types
-// These live in @rowan-agent/models so that @rowan-agent/logging can import
-// them without depending on @rowan-agent/agent (which would be a reverse
-// dependency).  The agent package re-exports them for backward compat.
-// ---------------------------------------------------------------------------
-
-export type AgentMessage = {
-  id: string;
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | LlmContentPart[];
-  createdAt: string;
-  metadata?: Record<string, unknown> & {
-    phase?: string;
-  };
-};
-
-export type Skill = {
-  name: string;
-  description: string;
-  /** Absolute path to the SKILL.md file */
-  filePath: string;
-  /** Directory containing the SKILL.md file */
-  baseDir: string;
-  /** Full body content of the SKILL.md (after frontmatter) */
-  content: string;
-  disableModelInvocation: boolean;
-};
-
-export type Outcome = {
-  id: string;
-  message: string;
-  /** Publish this outcome's message as an assistant message before completing the run. */
-  display?: boolean;
-  payload?: unknown;
-  toolResults?: Array<{
-    toolCallId: string;
-    toolName: string;
-    ok: boolean;
-    content: unknown;
-    error?: string;
-  }>;
-};
-
-export type ToolCall = {
-  id: string;
-  name: string;
-  args: unknown;
-};
-
-export type ToolResult = {
-  toolCallId: string;
-  toolName: string;
-  ok: boolean;
-  content: unknown;
-  error?: string;
-};
-
-export type AgentEvent =
-  | { type: "agent_start"; sessionId: string; ts: string }
-  | { type: "agent_end"; sessionId: string; messages: AgentMessage[]; ts: string }
-  | {
-      type: "turn_start";
-      content: AgentMessage[];
-      ts: string;
-    }
-  | {
-      type: "turn_end";
-      content: AgentMessage[];
-      outcome?: Outcome;
-      ts: string;
-    }
-  | { type: "model_requested"; model: ModelRef; usage: LlmModelUsage; ts: string }
-  | { type: "phase_start"; phase: string; ts: string }
-  | { type: "phase_end"; phase: string; ts: string }
-  | { type: "user_prompt_requested"; phase: string; ts: string }
-  | { type: "message_start"; message: AgentMessage; ts: string }
-  | { type: "message_update"; message: AgentMessage; delta: string; ts: string }
-  | { type: "message_end"; message: AgentMessage; ts: string }
-  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown; ts: string }
-  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown; ts: string }
-  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean; ts: string };
-
-export type AgentEventListener = ((event: AgentEvent) => void | Promise<void>) & {
-  flush?: () => void | Promise<void>;
-};

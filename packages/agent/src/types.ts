@@ -1,17 +1,11 @@
 import Type from "typebox";
-import type { LoopMetrics } from "./loop/types";
 import type {
   AgentMessage,
   Skill,
-  LlmModelUsage,
-  LlmRequest,
-  LlmStreamEvent,
-  LlmStreamOptions,
-  Outcome,
   ToolResult,
 } from "./protocol";
 import type { PhaseRegistry } from "./harness/phases/types";
-import type { AgentEvent, AgentEventListener, ContentBlock, LlmContentPart } from "@rowan-agent/models";
+import type { ContentBlock, LlmContentPart } from "@rowan-agent/models";
 import { createId, createTimestamp } from "./utils";
 
 export type {
@@ -34,8 +28,6 @@ export type {
   ToolCall,
   ToolResult,
 } from "./protocol";
-
-export type { AgentEvent, AgentEventListener };
 
 export type ToolContext = Pick<AgentContext, "skills"> & { toolCallId: string };
 
@@ -77,15 +69,6 @@ export type AfterToolCall = (input: {
   tool: Tool;
   result: ToolResult;
 }) => Promise<ToolResult>;
-
-export type RunResult = {
-  sessionId: string;
-  messages: AgentMessage[];
-  outcome: Outcome;
-  metrics: LoopMetrics;
-};
-
-export type Unsubscribe = () => void;
 
 export function createMessage(
   role: AgentMessage["role"],

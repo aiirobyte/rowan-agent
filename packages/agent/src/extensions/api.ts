@@ -6,7 +6,6 @@ import type {
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
-import type { AgentContext } from "../types";
 import type { PhaseContext } from "../harness/phases/types";
 import type { ExtensionContext, ExtensionUtils } from "./context";
 
@@ -60,12 +59,6 @@ export interface ExtensionAPI {
   /** Shared event bus for inter-extension communication. */
   events: EventBus;
 
-  /** Session context — provides access to the session-level AgentContext. */
-  session: {
-    /** Get the current session AgentContext */
-    getContext(): AgentContext;
-  };
-
   /** Phase execution capabilities — rovides Phase In/Out, phase identity, and phase routing. */
   phase: {
     /** Phase In: get payload from previous phase */
@@ -106,7 +99,6 @@ export type ExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
  */
 export function createExtensionAPI(
   hooks?: HooksManager,
-  _extensionPath?: string,
   options?: {
     registerPhase?: (registration: PhaseRegistration) => void;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
@@ -115,7 +107,6 @@ export function createExtensionAPI(
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
-    session?: AgentContext;
   },
   runtime?: ExtensionRuntime,
   eventBus?: EventBus,
@@ -184,12 +175,6 @@ export function createExtensionAPI(
     },
     context: ctx,
     events: eventBus ?? { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
-    session: {
-      getContext: () => {
-        if (!options?.session) throw new Error("session.getContext() is not available in this context.");
-        return options.session;
-      },
-    },
     phase: {
       getPayload: () => outputPayload,
       setPayload: (p) => { outputPayload = p; },

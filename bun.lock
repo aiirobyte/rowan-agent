@@ -42,7 +42,7 @@
       "name": "@rowan-agent/logging",
       "version": "0.6.2",
       "dependencies": {
-        "@rowan-agent/models": "workspace:*",
+        "@rowan-agent/agent": "workspace:*",
         "pino": "^10.3.1",
       },
     },

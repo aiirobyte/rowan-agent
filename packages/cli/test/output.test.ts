@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatJsonOutput, formatToolArgsPreview, formatToolResultOutput } from "../src/output";
+import { formatToolArgsPreview, formatToolResultOutput } from "../src/output";
 
 test("formatToolResultOutput renders common tool results for humans", () => {
   expect(formatToolResultOutput({

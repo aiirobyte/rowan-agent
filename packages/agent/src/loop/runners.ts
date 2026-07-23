@@ -1,8 +1,6 @@
 import type {
-  AgentEvent,
   AgentMessage,
   AgentContext,
-  RunResult,
   Outcome,
   Tool,
   ToolCall,
@@ -10,7 +8,7 @@ import type {
 } from "../types";
 import { createMessage } from "../types";
 import { createId, createTimestamp } from "../utils";
-import type { SessionState, AgentConfig } from "./types";
+import type { ExecutionState, AgentConfig, InputRequestPrompt } from "./types";
 
 // Execution types (loop-level)
 import type {
@@ -36,11 +34,10 @@ import type { RouteToolArgs } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
 import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
-import { snapshotMessage, snapshotMessages } from "./state";
+import { snapshotMessages } from "./state";
 import { compactMessages, needsCompaction } from "../harness/context/compaction";
 import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
-import type { AgentInputRequest } from "../runtime/domain";
 
 // ============================================================================
 // Phase State Utilities
@@ -154,34 +151,21 @@ function buildInstanceIds(phases: string[]): string[] {
 }
 
 // ============================================================================
-// Event Emission
-// ============================================================================
-
-function emitTurn(
-  context: AgentContext,
-  emitFn: ((event: AgentEvent) => void) | undefined,
-  type: "turn_start" | "turn_end",
-  extra?: { outcome?: Outcome },
-): void {
-  emitFn?.({
-    type,
-    content: snapshotMessages(context.messages),
-    ...extra,
-    ts: createTimestamp(),
-  });
-}
-
-// ============================================================================
 // Result Creation
 // ============================================================================
 
+type LoopResult = {
+  messages: AgentMessage[];
+  outcome: Outcome;
+  metrics: import("./types").LoopMetrics;
+};
+
 function createRunResult(
   config: AgentConfig,
-  state: SessionState,
+  state: ExecutionState,
   outcome: Outcome,
-): RunResult {
+): LoopResult {
   return {
-    sessionId: config.sessionId!,
     messages: snapshotMessages(config.context.messages),
     outcome,
     metrics: state.metrics,
@@ -194,11 +178,11 @@ function createRunResult(
 
 async function completeRun(
   config: AgentConfig,
-  state: SessionState,
+  state: ExecutionState,
   outcome: Outcome,
-): Promise<RunResult> {
+): Promise<LoopResult> {
   if (outcome.display) {
-    const messages = createMessageManager(config.context, config.emit, config.onMessage);
+    const messages = createMessageManager(config.context, config.onMessage);
     const messageId = messages.start("assistant", outcome.message, { outcomeId: outcome.id });
     await messages.end(messageId);
   }
@@ -239,52 +223,62 @@ function buildToolsWithRouting(
 
 function createMessageManager(
   context: AgentContext,
-  emitFn: AgentConfig["emit"],
   onMessage?: (message: AgentMessage) => Promise<void>,
 ): PhaseMessageManager {
-  const activeMessages = new Map<string, AgentMessage>();
+  const activeMessages = new Map<string, { message: AgentMessage; emitted: boolean }>();
+  const emitStart = (active: { message: AgentMessage; emitted: boolean }) => {
+    if (active.emitted) return;
+    active.emitted = true;
+  };
   return {
     visible: () => [...context.messages],
-    start(role, content, metadata) {
-      const msg = createMessage(role, content, metadata);
-      activeMessages.set(msg.id, msg);
-      emitFn?.({ type: "message_start", message: snapshotMessage(msg), ts: createTimestamp() });
+    reserve(role, metadata) {
+      const msg = createMessage(role, role === "assistant" ? "" : [], metadata);
+      activeMessages.set(msg.id, { message: msg, emitted: false });
       return msg.id;
     },
+    start(role, content, metadata) {
+      const messageId = this.reserve(role, metadata);
+      const active = activeMessages.get(messageId)!;
+      active.message.content = content;
+      emitStart(active);
+      return messageId;
+    },
     async update(messageId, delta) {
-      const msg = activeMessages.get(messageId);
-      if (!msg) return;
-      msg.content = typeof msg.content === "string"
-        ? msg.content + delta
-        : [...msg.content, { type: "text", text: delta }];
-      emitFn?.({ type: "message_update", message: snapshotMessage(msg), delta, ts: createTimestamp() });
+      const active = activeMessages.get(messageId);
+      if (!active) return;
+      emitStart(active);
+      active.message.content = typeof active.message.content === "string"
+        ? active.message.content + delta
+        : [...active.message.content, { type: "text", text: delta }];
     },
     replaceContent(messageId, content) {
-      const msg = activeMessages.get(messageId);
-      if (!msg) return;
-      msg.content = content;
+      const active = activeMessages.get(messageId);
+      if (!active) return;
+      active.message.content = content;
     },
     async end(messageId) {
-      const msg = activeMessages.get(messageId);
-      if (!msg) return;
+      const active = activeMessages.get(messageId);
+      if (!active) return;
+      if (!active.emitted && (active.message.content === "" || active.message.content.length === 0)) {
+        activeMessages.delete(messageId);
+        return;
+      }
+      emitStart(active);
       activeMessages.delete(messageId);
-      context.messages.push(msg);
-      emitFn?.({ type: "message_end", message: snapshotMessage(msg), ts: createTimestamp() });
-      await onMessage?.(msg);
+      context.messages.push(active.message);
+      await onMessage?.(active.message);
+    },
+    discard(messageId) {
+      activeMessages.delete(messageId);
     },
   };
 }
 
-function createToolExecutionManager(
-  emitFn: AgentConfig["emit"],
-): PhaseToolExecutionManager {
+function createToolExecutionManager(): PhaseToolExecutionManager {
   return {
-    async start(toolCallId, toolName, args) {
-      emitFn?.({ type: "tool_execution_start", toolCallId, toolName, args, ts: createTimestamp() });
-    },
-    async end(toolCallId, toolName, result, isError) {
-      emitFn?.({ type: "tool_execution_end", toolCallId, toolName, result, isError, ts: createTimestamp() });
-    },
+    async start() {},
+    async end() {},
   };
 }
 
@@ -363,16 +357,9 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
 }
 
 async function runTurn<T>(
-  context: AgentContext,
-  emitFn: AgentConfig["emit"],
   fn: () => Promise<T>,
 ): Promise<T> {
-  emitTurn(context, emitFn, "turn_start");
-  try {
-    return await fn();
-  } finally {
-    emitTurn(context, emitFn, "turn_end");
-  }
+  return fn();
 }
 
 // ============================================================================
@@ -381,14 +368,14 @@ async function runTurn<T>(
 
 export async function startPhaseLoop(
   config: AgentConfig,
-  state: SessionState,
-): Promise<RunResult> {
+  state: ExecutionState,
+): Promise<LoopResult> {
   const registry = config.context.phases;
   if (!registry) {
-    throw new Error("AgentContext.phases is required. Construct Agent to apply the default phase.");
+    throw new Error("AgentContext.phases is required. Supply a phase registry to the execution context.");
   }
   if (!registry.entryPhaseId) {
-    throw new Error("AgentContext.phases.entryPhaseId is required. Construct Agent to apply the default phase.");
+    throw new Error("AgentContext.phases.entryPhaseId is required. Supply an entry phase to the execution context.");
   }
 
   return runPhaseLoop(config, state, registry);
@@ -400,9 +387,9 @@ export async function startPhaseLoop(
 
 async function runPhaseLoop(
   config: AgentConfig,
-  state: SessionState,
+  state: ExecutionState,
   registry: PhaseRegistry,
-): Promise<RunResult> {
+): Promise<LoopResult> {
   const resumingSuspendedRun = state.status === "suspended" && Boolean(state.currentPhase);
   let currentPhaseId = resumingSuspendedRun ? state.currentPhase : registry.entryPhaseId!;
   let isContinuing = resumingSuspendedRun
@@ -447,17 +434,6 @@ async function runPhaseLoop(
       if (compacted.compacted) {
         config.context.messages = compacted.messages;
         state.metrics.compactionCount++;
-        config.emit?.({
-          type: "message_start",
-          message: {
-            id: "compaction",
-            role: "assistant",
-            content: `[Compacted ${compacted.summarizedCount} older messages to stay within context limits]`,
-            createdAt: createTimestamp(),
-            metadata: { type: "compaction_notice" },
-          },
-          ts: createTimestamp(),
-        });
       }
     }
 
@@ -470,10 +446,10 @@ async function runPhaseLoop(
 
     const allTools = buildToolsWithRouting(config, availablePhases);
 
-    const messageManager = createMessageManager(config.context, config.emit, config.onMessage);
-    const toolExecutionManager = createToolExecutionManager(config.emit);
+    const messageManager = createMessageManager(config.context, config.onMessage);
+    const toolExecutionManager = createToolExecutionManager();
 
-    const execution = createPhaseExecution(config, state, allTools, phase, messageManager, toolExecutionManager, registry);
+    const execution = createPhaseExecution(config, state, phase, messageManager, toolExecutionManager, registry);
 
     // Build PhaseContext for this phase
     // phase-filtered tools/skills; route tool always included
@@ -501,18 +477,13 @@ async function runPhaseLoop(
       },
     };
 
-    // Emit phase_start only when entering a new phase (not on continue)
     const enteringNewPhase = !isContinuing;
-    if (enteringNewPhase) {
-      config.emit?.({ type: "phase_start", phase: currentPhaseId, ts: createTimestamp() });
-    }
     isContinuing = false;
 
     // beforePhase hook
     if (config.beforePhase) {
       const extBefore = await config.beforePhase(currentPhaseId, phaseContext);
       if (extBefore.abort) {
-        config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
         removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
@@ -520,7 +491,6 @@ async function runPhaseLoop(
         return completeRun(config, state, extBefore.abort);
       }
       if (extBefore.skip) {
-        config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
         removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
@@ -540,7 +510,7 @@ async function runPhaseLoop(
     }
 
     // Inject phase content as user context when entering a new phase. A
-    // suspended run reconstructed from durable state has no ephemeral Phase
+    // A Run resumed from durable state has no ephemeral Phase
     // message in its restored transcript, so it also needs one on its first
     // resumed iteration.
     const phaseMessageIsPresent = previousPhaseMsgId !== undefined
@@ -598,7 +568,6 @@ async function runPhaseLoop(
     if (config.afterPhase) {
       const extAfter = await config.afterPhase(currentPhaseId, output);
       if (extAfter.abort) {
-        config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
         removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
@@ -621,7 +590,6 @@ async function runPhaseLoop(
       if (config.waitForInput) {
         const preAbort = LoopGuard.checkAbort(config.signal);
         if (preAbort.stopReason !== "none") {
-          config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
           removePhaseMessage(config.context.messages, previousPhaseMsgId);
           removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
           previousPhaseMsgId = undefined;
@@ -629,16 +597,11 @@ async function runPhaseLoop(
           return completeRun(config, state, createOutcome.aborted());
         }
         const requestedAt = createTimestamp();
-        const inputRequest: AgentInputRequest = {
+        const inputRequest: InputRequestPrompt = {
           phase: currentPhaseId,
           prompt: output.message,
           requestedAt,
         };
-        config.emit?.({
-          type: "user_prompt_requested",
-          phase: currentPhaseId,
-          ts: requestedAt,
-        });
         state.status = "suspended";
         state.continuation = {
           isContinuing,
@@ -651,7 +614,6 @@ async function runPhaseLoop(
         state.status = "running";
         const abortResult = LoopGuard.checkAbort(config.signal);
         if (abortResult.stopReason !== "none") {
-          config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
           removePhaseMessage(config.context.messages, previousPhaseMsgId);
           removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
           previousPhaseMsgId = undefined;
@@ -664,7 +626,6 @@ async function runPhaseLoop(
         isContinuing = true;
         continue;
       }
-      config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
       removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
@@ -677,8 +638,6 @@ async function runPhaseLoop(
       isContinuing = true;
       continue;
     }
-
-    config.emit?.({ type: "phase_end", phase: currentPhaseId, ts: createTimestamp() });
 
     // Parallel dispatch: when route tool returns multiple targets, execute all concurrently.
     // Each target gets its own PhaseContext (isolated=true → fresh, otherwise fork of current).
@@ -869,7 +828,7 @@ async function withRetry<T>(
 interface PhaseRuntime {
   phase: Phase;
   config: AgentConfig;
-  state: SessionState;
+  state: ExecutionState;
   execution: PhaseExecution;
   messageManager: PhaseMessageManager;
   registry: PhaseRegistry;
@@ -881,7 +840,7 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
   const { phase, config, execution, registry, context } = ctx;
 
   if (phase.factory) {
-    const api = createExtensionAPI(undefined, undefined, {
+      const api = createExtensionAPI(undefined, {
       registerPhase: () => {},
       registerProvider: () => {},
       unregisterProvider: () => {},
@@ -902,7 +861,6 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
         getAvailablePhases: () => Array.from(registry.phases.keys()),
       },
       phase: context,
-      session: config.context,
     });
     await phase.factory(api);
     return {
@@ -967,8 +925,7 @@ async function executeToolCall(input: {
 
 function createPhaseExecution(
   config: AgentConfig,
-  state: SessionState,
-  allTools: Tool[],
+  state: ExecutionState,
   phase: Phase,
   messageManager: PhaseMessageManager,
   toolExecutionManager: PhaseToolExecutionManager,
@@ -1020,7 +977,7 @@ function createPhaseExecution(
         }
       }
 
-      const result = await runTurn(config.context, config.emit, () =>
+      const result = await runTurn(() =>
         withRetry(
           () => invokeModel({
             config,
@@ -1030,20 +987,8 @@ function createPhaseExecution(
           }),
           {
             signal: config.signal,
-            onRetry: (attempt, error, delayMs) => {
+            onRetry: () => {
               state.metrics.retryCount++;
-              const errMsg = error instanceof Error ? error.message : String(error);
-              config.emit?.({
-                type: "message_start",
-                message: {
-                  id: `retry_${attempt}`,
-                  role: "assistant",
-                  content: `[Retry ${attempt + 1}/${DEFAULT_MAX_RETRIES}] Transient error: ${errMsg}. Retrying in ${Math.round(delayMs)}ms...`,
-                  createdAt: createTimestamp(),
-                  metadata: { type: "retry_notice" },
-                },
-                ts: createTimestamp(),
-              });
             },
           },
         ),
@@ -1054,7 +999,7 @@ function createPhaseExecution(
     },
 
     async executeTool(phaseContext: AgentContext, toolCall: ToolCall): Promise<ToolResult> {
-      return runTurn(config.context, config.emit, async () => {
+      return runTurn(async () => {
         await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
         const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
         const result = await executeToolCall({
@@ -1089,7 +1034,7 @@ type ParallelResult = {
 
 async function executeParallelPhase(
   config: AgentConfig,
-  state: SessionState,
+  state: ExecutionState,
   registry: PhaseRegistry,
   phase: Phase,
   payload: unknown,
@@ -1136,7 +1081,7 @@ async function executeParallelPhase(
     },
   };
 
-  const messageManager = createMessageManager({ messages } as AgentContext, config.emit, config.onMessage);
+  const messageManager = createMessageManager({ messages } as AgentContext, config.onMessage);
 
   // Inject phase content for both isolated and forked phases using the same
   // user-context representation as the serial path.
@@ -1146,8 +1091,8 @@ async function executeParallelPhase(
     messages,
   );
 
-  const toolExecutionManager = createToolExecutionManager(config.emit);
-  const execution = createPhaseExecution(config, state, phaseTools, phase, messageManager, toolExecutionManager, registry);
+  const toolExecutionManager = createToolExecutionManager();
+  const execution = createPhaseExecution(config, state, phase, messageManager, toolExecutionManager, registry);
 
   const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry, context: phaseContext };
   const output = await executePhase(runtime);

@@ -117,18 +117,6 @@ export function streamByRef(
   return stream(model, { ...request, model: { provider: model.provider, id: model.id } }, options);
 }
 
-// ---------------------------------------------------------------------------
-// Legacy provider factory (backward compat with CLI)
-// ---------------------------------------------------------------------------
-
-export type ProviderFactory = (model: { provider: string; id: string }) => StreamFn;
-
-const legacyProviders = new Map<string, ProviderFactory>();
-
-export function registerProvider(name: string, factory: ProviderFactory): void {
-  legacyProviders.set(name, factory);
-}
-
 const ZERO_COST = {
   input: 0,
   output: 0,
@@ -157,11 +145,7 @@ function modelFromConfig(config: ModelConfig): Model {
 }
 
 export function createModelStream(config?: ModelConfig): StreamFn {
-  // A bound model always uses Rowan's built-in protocol providers. Legacy
-  // registry-backed streams retain the historical lazy registration behavior.
-  if (config || apiProviderRegistry.size === 0) {
-    registerBuiltInApiProviders();
-  }
+  if (config || apiProviderRegistry.size === 0) registerBuiltInApiProviders();
   const configuredModel = config ? modelFromConfig(config) : undefined;
 
   return async function* modelStream(request, options) {
@@ -175,7 +159,6 @@ export function createModelStream(config?: ModelConfig): StreamFn {
       );
     }
 
-    // A configured Model is Agent-local; registry lookup remains for legacy callers.
     const model = configuredModel
       ?? getModel(request.model.provider, request.model.id)
       ?? resolveModel(request.model.id);
@@ -185,17 +168,9 @@ export function createModelStream(config?: ModelConfig): StreamFn {
       return;
     }
 
-    // Fallback: try legacy provider factory
-    const factory = legacyProviders.get(request.model.provider);
-    if (factory) {
-      const streamFn = factory(request.model);
-      yield* streamFn(request, options);
-      return;
-    }
-
     throw new Error(
       `No provider for "${request.model.provider}/${request.model.id}". ` +
-      `Register a model with registerModel() or a provider with registerProvider().`,
+      "Register the Model before starting the Agent Runtime.",
     );
   };
 }

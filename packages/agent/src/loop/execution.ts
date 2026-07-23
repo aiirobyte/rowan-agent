@@ -39,6 +39,8 @@ export type PhaseExecution = {
 export type PhaseMessageManager = {
   /** Get all visible messages in the transcript */
   visible(): AgentMessage[];
+  /** Reserve the eventual message identity before stream deltas arrive. */
+  reserve(role: "assistant" | "tool", metadata?: Record<string, unknown>): string;
   /** Start a new message stream, returns message id */
   start(role: "assistant" | "tool", content: AgentMessage["content"], metadata?: Record<string, unknown>): string;
   /** Stream a text delta */
@@ -47,6 +49,8 @@ export type PhaseMessageManager = {
   replaceContent(messageId: string, content: string | LlmContentPart[]): void;
   /** End the message stream, appends to transcript */
   end(messageId: string): Promise<void>;
+  /** Drop an unstarted stream that produced no content. */
+  discard(messageId: string): void;
 };
 
 /** Tool execution lifecycle manager */

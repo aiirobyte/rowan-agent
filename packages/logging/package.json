@@ -1,6 +1,6 @@
 {
   "name": "@rowan-agent/logging",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -9,7 +9,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@rowan-agent/models": "workspace:*",
+    "@rowan-agent/agent": "workspace:*",
     "pino": "^10.3.1"
   }
 }

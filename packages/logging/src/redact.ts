@@ -6,15 +6,19 @@ const SECRET_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   },
 ];
 
-export function redactSecrets(value: unknown): unknown {
-  const json = JSON.stringify(value);
-  if (json === undefined) {
-    return value;
-  }
+const SECRET_KEYS = /(?:api[_-]?key|authorization|password|secret|token)/i;
 
-  const redacted = SECRET_PATTERNS.reduce(
+export function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+      key,
+      SECRET_KEYS.test(key) ? "[REDACTED]" : redactSecrets(entry),
+    ]));
+  }
+  if (typeof value !== "string") return value;
+  return SECRET_PATTERNS.reduce(
     (current, entry) => current.replace(entry.pattern, entry.replacement),
-    json,
+    value,
   );
-  return JSON.parse(redacted);
 }

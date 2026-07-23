@@ -1,4 +1,4 @@
-import type { Phase, PhaseRegistry } from "./types";
+import type { Phase } from "./types";
 
 export const DEFAULT_PHASE_ID = "default";
 

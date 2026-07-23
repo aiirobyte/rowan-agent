@@ -2,7 +2,7 @@
  * Context window compaction — summarizes older messages when the transcript
  * exceeds a configurable threshold, keeping recent messages intact.
  *
- * This prevents context window overflow in long-running sessions while
+ * This prevents context window overflow in long-running executions while
  * preserving the most relevant conversation history.
  */
 

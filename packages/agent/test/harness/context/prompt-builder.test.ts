@@ -4,10 +4,9 @@ import {
   buildModelRequest,
   latestUserInput,
 } from "../../../src/harness/context/prompt-builder";
-import type { AgentMessage } from "@rowan-agent/models";
-import { createMessage } from "@rowan-agent/agent";
-import { createId } from "../../../src/utils";
-import type { Skill, Tool } from "@rowan-agent/agent";
+import type { AgentMessage } from "../../../src/types";
+import { createMessage, type Tool } from "../../../src/types";
+import type { Skill } from "../../../src/protocol";
 
 type TestInput = {
   systemPrompt: string;

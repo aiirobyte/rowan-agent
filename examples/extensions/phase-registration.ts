@@ -9,8 +9,7 @@ import type { ExtensionAPI } from "@rowan-agent/agent";
 export default function reviewPhase(api: ExtensionAPI) {
   // ── Register a phase with a run function ───────────────────────────────
   api.registerPhase({
-    id: "quick-review",
-    name: "Quick Review",
+    name: "quick-review",
     description: "Fast code review focusing on obvious issues",
     tools: ["read_file", "list_files"],
 

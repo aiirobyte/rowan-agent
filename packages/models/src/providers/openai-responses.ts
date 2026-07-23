@@ -9,7 +9,6 @@ import type {
   StreamFn,
   ApiStreamFn,
   AssistantMessagePartial,
-  LlmContentPart,
 } from "../protocol";
 import { streamProviderRequest } from "./http";
 import {

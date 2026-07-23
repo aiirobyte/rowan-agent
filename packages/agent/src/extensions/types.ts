@@ -4,8 +4,6 @@
 
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
-import type { ProviderConfig } from "@rowan-agent/models";
-import type { Outcome } from "../types";
 import type { ExtensionFactory } from "./api";
 
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
@@ -176,72 +174,18 @@ export type ExecResult = {
 };
 
 // ---------------------------------------------------------------------------
-// Provider pending queue
-// ---------------------------------------------------------------------------
-
-export type PendingProviderRegistration = {
-  kind: "register";
-  config: ProviderConfig;
-};
-
-export type PendingProviderUnregistration = {
-  kind: "unregister";
-  name: string;
-};
-
-// ---------------------------------------------------------------------------
-// Hook results (for backward compatibility with runner.ts)
-// ---------------------------------------------------------------------------
-
-export type BeforePhaseHookResult = {
-  abort?: Outcome;
-  skip?: { route: string; message: string };
-  input?: PhaseContext;
-};
-
-export type AfterPhaseHookResult = {
-  abort?: Outcome;
-  retry?: PhaseContext;
-  output?: PhaseOutput;
-};
-
-// ---------------------------------------------------------------------------
 // Extension tracking object (per-extension state)
 // ---------------------------------------------------------------------------
 
-type HandlerFn = (...args: unknown[]) => Promise<unknown>;
-
 /**
  * Loaded extension with all registered items.
- * Tracks what each extension registered for attribution and cleanup.
+ * Tracks the tools registered by each extension for attribution and cleanup.
  */
 export interface Extension {
   /** Extension path (may be synthetic like `<inline>`) */
   path: string;
-  /** Source info for error messages */
-  sourceInfo: SourceInfo;
-  /** Event handlers registered by this extension */
-  handlers: Map<string, HandlerFn[]>;
   /** Tools registered by this extension */
   tools: Map<string, RegisteredTool>;
-  /** Phases registered by this extension */
-  phases: Map<string, RegisteredPhase>;
-}
-
-/**
- * Create an Extension object with empty collections.
- */
-export function createExtension(
-  extensionPath: string,
-  sourceInfo: SourceInfo,
-): Extension {
-  return {
-    path: extensionPath,
-    sourceInfo,
-    handlers: new Map(),
-    tools: new Map(),
-    phases: new Map(),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -252,36 +196,16 @@ export function createExtension(
  * Shared runtime state created by loader, used during registration and runtime.
  * All ExtensionAPI instances reference this shared state.
  *
- * Key features:
- * - `invalidate()` / `assertActive()` — prevents stale context usage
- * - Pending provider registration queue
- * - Shared action implementations replaceable post-bind
+ * It only owns the lifetime guard shared by captured Extension API objects.
  */
 export interface ExtensionRuntime {
   /** Throws when this extension instance is stale after runtime replacement. */
   assertActive: () => void;
   /** Marks this extension instance as stale after runtime replacement or reload. */
   invalidate: (message?: string) => void;
-  /** Provider registrations queued during extension loading, processed when runner binds */
-  pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
-  /**
-   * Register a provider.
-   * Before bind(): queues registrations.
-   * After bind(): calls provider registration directly.
-   */
-  registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
-  /**
-   * Unregister a provider.
-   * Before bind(): removes from queue.
-   * After bind(): calls provider unregistration directly.
-   */
-  unregisterProvider: (name: string, extensionPath?: string) => void;
 }
 
-/**
- * Create an ExtensionRuntime with throwing stubs.
- * Runner.bind() replaces these with real implementations.
- */
+/** Create the lifetime guard shared by captured Extension API objects. */
 export function createExtensionRuntime(): ExtensionRuntime {
   const state: { staleMessage?: string } = {};
   const assertActive = () => {
@@ -290,27 +214,14 @@ export function createExtensionRuntime(): ExtensionRuntime {
     }
   };
 
-  const runtime: ExtensionRuntime = {
+  return {
     assertActive,
     invalidate: (message) => {
       state.staleMessage ??=
         message ??
-        "This extension context is stale after session replacement or reload. Do not use a captured extension API after the runner has been replaced.";
-    },
-    pendingProviderRegistrations: [],
-    // Pre-bind: queue registrations so bind() can flush them once the
-    // model registry is available. bind() replaces both with direct calls.
-    registerProvider: (name, config, extensionPath = "<unknown>") => {
-      runtime.pendingProviderRegistrations.push({ name, config, extensionPath });
-    },
-    unregisterProvider: (name) => {
-      runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter(
-        (r) => r.name !== name,
-      );
+        "This extension context is stale after runtime replacement or reload. Do not use a captured extension API after the runner has been replaced.";
     },
   };
-
-  return runtime;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,35 +1,34 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import pino from "pino";
-import type { AgentEvent, AgentEventListener } from "@rowan-agent/models";
+import type { DurableRunEvent } from "@rowan-agent/agent";
 import { redactSecrets } from "./redact";
 import {
-  createAgentEventLogFields,
+  createDurableRunEventLogFields,
   eventLogLevel,
   formatLocalIso,
-  isMessageStreamUpdate,
   shouldWriteEvent,
-  type AgentEventLogLevel,
+  type DurableRunEventLogLevel,
 } from "./record";
 
-export type AgentEventLogPath = string | ((event: AgentEvent) => string | undefined);
+export type DurableRunEventLogPath = string | ((event: DurableRunEvent) => string | undefined);
 
-export type AgentEventLoggerOptions = {
+export type DurableRunEventLoggerOptions = {
   mode?: "replace" | "append";
-  level?: AgentEventLogLevel;
+  level?: DurableRunEventLogLevel;
 };
 
-export type AgentEventLogger = AgentEventListener & {
+export type DurableRunEventLogger = ((event: DurableRunEvent) => void) & {
   path(): string | undefined;
   flush(): Promise<void>;
 };
 
 type PinoDestination = ReturnType<typeof pino.destination>;
 
-export function pinoAgentEventLogger(
-  path: AgentEventLogPath,
-  options: AgentEventLoggerOptions = {},
-): AgentEventLogger {
+export function pinoDurableRunEventLogger(
+  path: DurableRunEventLogPath,
+  options: DurableRunEventLoggerOptions = {},
+): DurableRunEventLogger {
   const mode = options.mode ?? "replace";
   const level = options.level ?? "info";
   let resolvedPath = typeof path === "string" ? path : undefined;
@@ -38,15 +37,15 @@ export function pinoAgentEventLogger(
   let logger: pino.Logger | undefined;
   let failure: unknown;
 
-  const resolvePath = (event: AgentEvent): string => {
+  const resolvePath = (event: DurableRunEvent): string => {
     resolvedPath ??= typeof path === "string" ? path : path(event);
     if (!resolvedPath) {
-      throw new Error("Log path could not be resolved from the agent event.");
+      throw new Error("Log path could not be resolved from the Durable Run Event.");
     }
     return resolvedPath;
   };
 
-  const ensureLogger = (event: AgentEvent): pino.Logger => {
+  const ensureLogger = (event: DurableRunEvent): pino.Logger => {
     if (logger) {
       return logger;
     }
@@ -66,7 +65,7 @@ export function pinoAgentEventLogger(
     return logger;
   };
 
-  const listener: AgentEventLogger = ((event: AgentEvent) => {
+  const listener: DurableRunEventLogger = ((event: DurableRunEvent) => {
     if (level === "silent") {
       return;
     }
@@ -75,10 +74,7 @@ export function pinoAgentEventLogger(
     }
 
     try {
-      const snapshot = redactSecrets(event) as AgentEvent;
-      if (isMessageStreamUpdate(snapshot)) {
-        return;
-      }
+      const snapshot = redactSecrets(event) as DurableRunEvent;
       if (typeof path !== "string") {
         resolvedPath ??= path(snapshot);
       }
@@ -86,7 +82,7 @@ export function pinoAgentEventLogger(
       if (!shouldWriteEvent(eventLevel, level)) {
         return;
       }
-      const record = createAgentEventLogFields(snapshot, level === "debug");
+      const record = createDurableRunEventLogFields(snapshot, level === "debug");
       const eventLogger = ensureLogger(snapshot);
       if (eventLevel === "error") {
         eventLogger.error(record);
@@ -98,7 +94,7 @@ export function pinoAgentEventLogger(
     } catch (error) {
       failure ??= error;
     }
-  }) as AgentEventLogger;
+  }) as DurableRunEventLogger;
 
   listener.path = () => writtenPath;
 

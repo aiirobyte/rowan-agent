@@ -1,127 +1,140 @@
 # Rowan Agent Runtime
 
-Rowan Agent Runtime hosts durable, independently scheduled Agents inside one application process. It separates conversational continuity from runtime control so Agents can suspend, recover, and coordinate without sharing business models.
+Rowan Agent Runtime hosts durable, independently scheduled Agents inside one application process. It owns execution continuity and reliable observation without learning host Project, Task, Workflow, hierarchy, or routing models.
 
-## Agents
+## Identity and configuration
 
 **Agent**:
-A durable runtime identity that owns one Session and processes at most one Agent Run at a time. Multiple Agents may run concurrently under the same Runtime.
-_Avoid_: Worker, Bot, Agent process
+A durable runtime identity with ordered Agent Runs, canonical conversation history, immutable metadata, and one current Agent Configuration. An Agent is not a process-local object.
+_Avoid_: Worker, Bot, Agent process, Agent Binding
 
 **Agent ID**:
-The opaque identity Rowan assigns to an Agent for binding, scheduling, and result delivery. It is not a Session ID or a business identity.
-_Avoid_: Session address, Project Agent ID
+The opaque identity Rowan assigns to an Agent for input, scheduling, configuration lookup, and observation.
+_Avoid_: Session ID, Project Agent ID, business identity
 
-**Agent Binding**:
-The exclusive association that makes one Agent ID available to an active Runtime. Only the Runtime establishes it; reconstructing an Agent replaces the binding while preserving identity.
-_Avoid_: Agent registration, Session binding
+**Agent Metadata**:
+Opaque immutable host data stored with an Agent and made available to configuration adapters and read models. Rowan transports it without interpreting its schema.
+_Avoid_: Agent Configuration, business state
 
-**Agent Reconstruction**:
-Rebuilding an Agent Binding from an existing Agent ID and Session using current Agent Options supplied by the host.
-_Avoid_: Agent resume, Session resume, Legacy adoption
+**Agent Configuration**:
+The executable model, Context resources, hooks, and policies used by an Agent.
+It includes a host-defined stable identity because Rowan cannot compare
+closures. Hosts update it through the Runtime, while a configuration adapter
+preserves immutable snapshots that Rowan can resolve after restart.
+_Avoid_: Agent Options, Agent Binding, serialized Agent
 
-**Agent Options**:
-The host-supplied process-local configuration used to create or reconstruct an Agent Binding without becoming durable Runtime State.
-_Avoid_: Agent snapshot, serialized Agent, Runtime State
+**Configuration Snapshot**:
+An immutable, restart-resolvable version of one Agent Configuration. A Run waiting for input remains attached to the snapshot that created its Execution Checkpoint.
+_Avoid_: Caller revision, ConfigRef, mutable current config
 
 ## Conversation
 
-**Session**:
-The durable conversation belonging to one Agent. A reconstructed Agent continues the same Session; a Session does not own scheduling or business state.
-_Avoid_: Memory, Runtime State
+**Agent Input**:
+JSON-safe user content accepted to create an Agent Run or answer an Input Request. Queued input is durable but is not a Canonical Message until its Run first begins execution.
+_Avoid_: Command, Runtime Message, arbitrary Agent Message
 
-**Context**:
-The current model-facing instructions, messages, Tools, Skills, and Phases supplied to an Agent. Context may be rebuilt from current host state during Agent Reconstruction; Rowan-owned capabilities are assembled internally without a parallel host policy interface.
-_Avoid_: Runtime State, Agent Definition snapshot
+**Canonical Message**:
+An immutable Rowan-generated Message in an Agent's durable conversation history. Its identity, provenance, and ordering are Runtime-owned.
+_Avoid_: Pending input, Stream Event, mutable transcript entry
+
+**Model Context**:
+The execution-local projection built from Canonical Messages and the current Agent Configuration. Compaction and Phase-local prompts may change this projection without rewriting canonical history.
+_Avoid_: Runtime State, Session, canonical transcript
 
 ## Execution
 
-**Agent Input**:
-An input submitted to an Agent to start a new Agent Run or resume its single suspended Agent Run.
-_Avoid_: Command, Chat event
-
 **Agent Run**:
-A durable execution of Agent Input that may be queued, running, suspended, or terminal. An Agent Run has one eventual Outcome.
+A durable FIFO processing request created from Agent Input. It may be queued, running, waiting for input, or terminal, and it can have multiple Execution Attempts separated by Input Requests.
 _Avoid_: Job, Workflow Run, Turn Promise
 
-**Infrastructure Failure**:
-A Runtime-owned execution failure that leaves an Agent Run safe to attempt again. It is the only failure category eligible for automatic retry.
-_Avoid_: Agent failure, Tool failure, Business failure
+**Execution Attempt**:
+One fenced period in which the Scheduler claims an Agent Run and executes it until an input or terminal boundary.
+_Avoid_: Worker, Lease, Agent process
 
-**Recovery**:
-Reestablishing execution after process loss by reclaiming abandoned Leases and scheduling queued work when the host reconstructs its Agent Binding with current Agent Options.
-_Avoid_: Resume, Restart
+**Input Request**:
+A durable one-shot request for more Agent Input, linked to one prompt Message and one Execution Checkpoint. Its ID is the idempotency identity of its answer.
+_Avoid_: Suspension Promise, pending callback, resume token
 
-**Suspension**:
-A non-terminal but non-runnable Agent Run state that releases execution capacity while waiting for input. New Agent Input makes the same Agent Run runnable again.
-_Avoid_: Completion, Blocking wait
+**Execution Checkpoint**:
+Opaque durable state produced by the execution loop at an Input Request and consumed by a later Execution Attempt under the same Configuration Snapshot.
+_Avoid_: Session State, continuation object, Consumer Checkpoint
+
+**Run Boundary**:
+The stable observable result of reaching either an Input Request or a terminal Run state.
+_Avoid_: Stream Event, Promise rejection
 
 **Outcome**:
-The terminal result of an Agent Run, including completion, failure, or cancellation data returned to its caller.
-_Avoid_: Event, Stream result
+The successful terminal result of a completed Agent Run.
+_Avoid_: Run Failure, Runtime Error, Event
 
-## Coordination
+**Run Failure**:
+A durable machine-readable explanation for a failed Agent Run.
+_Avoid_: Runtime Error, thrown command error, Outcome
 
-**Runtime Message**:
-A durable mailbox item containing Agent Input for one Agent Run.
-_Avoid_: Runtime Event, Arbitrary Agent message
+**Run Cancellation**:
+A terminal decision that prevents further execution of one Agent Run. Cancelling input that has never begun execution does not add it to canonical conversation history.
+_Avoid_: Agent pause, business cancellation
 
-**Mailbox**:
-The ordered Runtime Message queue belonging to one Agent. Only a Runtime Message may make an idle or suspended Agent runnable.
-_Avoid_: Event Bus, Transcript
+## Runtime coordination
 
 **Scheduler**:
-The runtime policy that selects already-declared durable Mailbox work for execution under ordering, capacity, retry, and Lease constraints. It never chooses business work or treats process-local queues as authority.
-_Avoid_: Workflow orchestrator, Router
+The Runtime policy that selects durable, ready Agent Runs while preserving per-Agent FIFO and configured concurrency. It never chooses business work or communication targets.
+_Avoid_: Workflow orchestrator, Router, in-memory queue
 
-**Lease**:
-The temporary exclusive claim that permits one Runtime worker to execute an Agent Run. Losing a Lease makes unfinished infrastructure work eligible for recovery.
-_Avoid_: Lock, Agent ownership
+**Runtime Owner**:
+The single live Runtime permitted to mutate one Durable Store. Ownership is time-bounded so an expired owner can be fenced and replaced after process loss.
+_Avoid_: Run worker, Agent Binding, permanent lock
 
-**Runtime Command**:
-A preemptive control instruction such as pause, resume, or abort. Pause gates queued work, resume removes that gate, and abort targets one Agent Run. Runtime Commands do not enter the Mailbox or Session.
-_Avoid_: Agent Input, Business cancellation
+**Recovery**:
+Re-establishing Runtime ownership, sealing abandoned Execution Attempts, and continuing queued or input-waiting Runs from Durable Store state.
+_Avoid_: Agent Reconstruction, Session resume, continuation revival
 
-## State and Events
+## State and events
 
 **Runtime State**:
-The authoritative durable state used for Agent binding, scheduling, delivery, recovery, and Tool Call control. Model-facing Context never substitutes for Runtime State.
-_Avoid_: Memory, Session
+The authoritative durable state for Agent identity, Run scheduling, canonical history, execution checkpoints, Tool Calls, ownership, idempotency, and reliable event delivery.
+_Avoid_: Model Context, Session, Memory
 
-**Runtime Event**:
-A durable fact about a control-state transition that may be replayed for recovery or delivery.
-_Avoid_: Runtime Message, Stream Event
+**Durable Run Event**:
+An immutable replayable fact committed atomically with the Run aggregate change it describes.
+_Avoid_: Agent Input, Transient Run Event, command
 
-**Runtime Event Consumer**:
-A stable delivery identity that receives Runtime Events and owns an independent durable Checkpoint. Failed delivery leaves its Checkpoint unchanged so Events remain replayable.
-_Avoid_: Stream subscriber, Extension listener
+**Transient Run Event**:
+A lossy live observation such as a Message delta or Tool progress update. It is never authoritative for control flow or recovery.
+_Avoid_: Durable Run Event, Canonical Message
 
 **Run Metadata**:
-Opaque host-owned correlation data persisted with an Agent Run and echoed on its enqueue and terminal Runtime Events. Rowan stores and transports it without interpreting its fields.
-_Avoid_: Business state, Outcome payload
+Opaque immutable host correlation data stored with one Agent Run and echoed on its Durable Run Events.
+_Avoid_: Agent Metadata, business state, Outcome payload
 
-**Run Listing**:
-The Runtime view of Agent Runs, optionally filtered by Agent or lifecycle state, returned in stable `createdAt, runId` order. Hosts use active listings for reconstruction and all-state listings for read-only status views.
-_Avoid_: Workflow index, Business Run record
+**Event Consumer**:
+A stable delivery identity that receives Durable Run Events serially within one
+active delivery loop and owns an independent Consumer Checkpoint. Delivery is
+at-least-once; an uncooperative callback may overlap a new owner after
+takeover, so side effects use Event ID idempotency.
+_Avoid_: Stream subscriber, Extension listener
 
-**Checkpoint**:
-The last contiguous Runtime Event sequence durably acknowledged by one Runtime Event Consumer. Checkpoints belong to consumers, not to Runtime Events globally and cannot skip undelivered Events.
-_Avoid_: Global acknowledgement, In-memory cursor
+**Consumer Checkpoint**:
+The last contiguous Durable Run Event cursor successfully processed by one Event Consumer.
+_Avoid_: Execution Checkpoint, global acknowledgement
 
-**Stream Event**:
-A transient observation such as model output or tool progress intended for live consumers. Stream Events are not replayed and cannot control scheduling.
-_Avoid_: Runtime Event, State transition
+**Event Cursor**:
+An opaque Durable Store position used for snapshot-to-observation handoff and replay.
+_Avoid_: Array index, timestamp, caller-computed sequence
 
 ## Tools
 
 **Tool Capability**:
-A Tool available in an Agent's current Context. It may be narrowed by Phase configuration and Runtime policy but cannot be restored by model-facing state.
+A Tool available in an Agent's Configuration Snapshot and current Model Context. Phase and Runtime policy may narrow it but cannot invent it.
 _Avoid_: Prompt permission, Tool request
 
 **Tool Call**:
-A Runtime-controlled attempt to execute one Tool Capability for an Agent Run.
-_Avoid_: Shell command, Tool event
+A durable Runtime-controlled attempt to invoke one Tool Capability for one
+Execution Attempt. Its Rowan ID is canonical and fences persistence and
+external idempotency; a stored provider correlation maps both Tool-use and
+Tool-result blocks only at the Model Context boundary.
+_Avoid_: Shell command, Tool Event
 
 **Indeterminate Tool Call**:
-A Tool Call whose external effect may have happened but whose terminal result was not durably observed. It requires recovery or human resolution instead of blind retry.
-_Avoid_: Failed Tool Call, Retryable error
+A Tool Call whose external effect may have happened but whose determinate result was not durably committed. It terminates the Run and is never retried automatically.
+_Avoid_: Failed Tool Call, retryable error

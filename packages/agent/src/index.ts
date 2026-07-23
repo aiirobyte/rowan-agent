@@ -1,84 +1,110 @@
-export { Agent } from "./agent";
-export type { AgentOptions } from "./agent";
-export type { ModelConfig } from "@rowan-agent/models";
+export { AgentRuntime } from "./runtime/durable-runtime";
+export { InMemoryStore } from "./runtime/durable-store";
+export { SqliteStore } from "./runtime/sqlite-durable-store";
+export { InMemoryConfigProvider, brandConfigToken } from "./runtime/config-provider";
+export { RuntimeError, isRuntimeError } from "./runtime/errors";
+export { loadSkills } from "./harness/skills";
+export { loadPhases } from "./harness/phases/loader";
+export { loadExtensionsFromPath as loadExtensions } from "./extensions/loader";
 
-export { createMessage } from "./types";
 export type {
-  AgentMessage,
-  AgentContext,
-  Skill,
-  Tool,
-  ToolContext,
-  ToolExecutionMode,
-  ToolResult,
-  AgentEvent,
-  AgentEventListener,
-  StreamFn,
-  ModelRef,
-  BeforeToolCall,
+  AgentConfig,
+  AgentDefinitionContext,
+  AgentId,
+  AgentListCursor,
+  AgentRecord,
+  AgentRun,
+  AgentRuntimeOptions,
+  AgentSummary,
   AfterToolCall,
-  Unsubscribe,
-} from "./types";
+  AssistantContent,
+  AssistantMessage,
+  BeforeToolCall,
+  ConfigProvider,
+  ConfigPutResult,
+  ConfigResolution,
+  ConfigToken,
+  DurableConsumer,
+  DurableRunEvent,
+  DurableStore,
+  DurableToolResult,
+  EventCursor,
+  EventId,
+  ExecutionCheckpoint,
+  ExecutionId,
+  ExecutionToken,
+  InputRequest,
+  InputRequestId,
+  InputRequiredCommit,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+  Message,
+  MessageBase,
+  MessageCommitted,
+  MessageContent,
+  MessageId,
+  Metadata,
+  OpaqueId,
+  Outcome,
+  OwnerLease,
+  OwnerToken,
+  Page,
+  RunBoundary,
+  RunClaim,
+  RunFailure,
+  RunId,
+  RunListCursor,
+  RunRecord,
+  RunSnapshot,
+  RunState,
+  RunSummary,
+  RunTransitioned,
+  TextContent,
+  ThinkingContent,
+  Tool,
+  ToolCallId,
+  ToolCallSnapshot,
+  ToolCallState,
+  ToolExecutionResult,
+  ToolInvocationContext,
+  ToolMessage,
+  ToolMessageContent,
+  ToolResultContent,
+  ToolStateChanged,
+  ToolUseContent,
+  UserContent,
+  UserInput,
+  UserMessage,
+} from "./runtime/contracts";
 
-export { InMemorySessionStore, JsonlSessionStore } from "./harness/session/store";
-export type { SessionManagerProvider } from "./harness/session/session-manager";
+export type {
+  AnyRuntimeError,
+  RuntimeErrorCode,
+  RuntimeErrorDetails,
+} from "./runtime/errors";
 
-export { createCoreTools } from "./harness/tools";
-export type { CoreToolContext } from "./harness/tools";
+export type { ModelConfig, ModelRef, StreamFn } from "@rowan-agent/models";
+export type {
+  Skill,
+} from "./protocol";
 
 export type {
   ExtensionAPI,
   ExtensionFactory,
-  LoadedExtension,
   HookEvent,
   HookEventType,
   HookHandler,
-  PhaseRegistration,
-  ToolDefinition,
-  ToolExecutionResult,
   LoadExtensionsResult,
+  LoadedExtension,
+  ToolDefinition,
 } from "./extensions";
 
 export type {
-  PhaseRegistry,
   Phase,
   PhaseContext,
   PhaseInvocation,
-  PhaseState,
   PhaseOutput,
+  PhaseRegistry,
+  PhaseState,
 } from "./harness/phases/types";
-export type { PhaseExecution } from "./loop/execution";
-export type { LoopMetrics } from "./loop/types";
-
-export type { ExecutionTurn, Outcome, ModelTranscript } from "./protocol";
-
-export { AgentRuntime } from "./runtime/agent-runtime";
-export type {
-  AgentRuntimeOptions,
-  RuntimeEventConsumer,
-  RuntimeEventDisposition,
-  RuntimeEventListener,
-  RuntimeSessionSummary,
-} from "./runtime/agent-runtime";
-export { AgentRun } from "./runtime/agent-run";
-export type { AgentRunListener } from "./runtime/agent-run";
-export { InMemoryRuntimeStateStore } from "./runtime/memory-store";
-export { SqliteRuntimeStateStore } from "./runtime/sqlite-store";
-export type {
-  AgentId,
-  AgentInputRequest,
-  AgentRunExecutionState,
-  AgentRunMetadata,
-  AgentRunId,
-  AgentRunRecord,
-  AgentRunState,
-  RuntimeEvent,
-  RuntimeEventCursor,
-  RuntimeEventKind,
-  RuntimeMessage,
-  RuntimeMessageId,
-  RuntimeToolCall,
-  RuntimeToolCallId,
-  SessionLifecycleState,
-} from "./runtime/domain";
-export type { ToolRuntimePolicy } from "./runtime/tool-runtime";

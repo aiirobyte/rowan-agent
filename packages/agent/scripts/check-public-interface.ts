@@ -8,7 +8,7 @@ if (blocks.length === 0) throw new Error("Built declaration has no export block"
 
 const declarations = blocks.flatMap((block) => block[1]!
   .split(",")
-  .map((entry) => entry.trim().replace(/^type\s+/, ""))
+  .map((entry) => entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/).at(-1)!)
   .filter(Boolean));
 
 function assertExact(label: string, actual: string[], expected: readonly string[]) {

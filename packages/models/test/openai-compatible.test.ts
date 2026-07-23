@@ -125,12 +125,6 @@ function textDelta(events: LlmStreamEvent[]): string | undefined {
   return event?.type === "text_delta" ? event.text : undefined;
 }
 
-const echoToolDefinition = {
-  name: "echo",
-  description: "Echoes input.",
-  parameters: {},
-};
-
 // ---------------------------------------------------------------------------
 // Config resolution tests
 // ---------------------------------------------------------------------------

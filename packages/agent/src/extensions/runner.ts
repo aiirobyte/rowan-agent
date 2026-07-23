@@ -29,7 +29,7 @@ import type {
   RegisteredTool,
   ToolDefinition,
 } from "./types";
-import { createExtension, createExtensionRuntime } from "./types";
+import { createExtensionRuntime } from "./types";
 import { parseModelRef } from "@rowan-agent/models";
 import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
@@ -37,7 +37,6 @@ import {
   validateDescription,
   validatePhaseTarget,
   validateResourceId,
-  validateResourceName,
   validateSkillReferences,
   warnResourceDiagnostics,
 } from "../harness/resource-validation";
@@ -199,9 +198,6 @@ export class ExtensionRunner {
   // Error listeners
   private readonly errorListeners = new Set<ExtensionErrorListener>();
 
-  // Loaded extension metadata (pre-initialization form)
-  private readonly loadedExtensions: LoadedExtension[] = [];
-
   /** Current agent context — set by the agent before each phase */
   currentContext?: AgentContext;
 
@@ -265,7 +261,7 @@ export class ExtensionRunner {
   /**
    * Mark all extension contexts as stale.
    * After calling this, any captured ExtensionAPI or ExtensionContext will throw
-   * on use. Used during session replacement or reload.
+   * on use. Used during runtime replacement or reload.
    */
   invalidate(
     message?: string,
@@ -297,47 +293,6 @@ export class ExtensionRunner {
     return () => this.hooks.off(type, handler);
   }
 
-  /**
-   * Subscribe to all events (read-only).
-   * Returns an unsubscribe function.
-   *
-   * @example
-   * ```ts
-   * const unsub = runner.subscribe((event) => {
-   *   console.log(event.type);
-   * });
-   * ```
-   */
-  subscribe(
-    listener: (event: { type: HookEventType }) => void,
-  ): () => void {
-    const handlers = new Map<HookEventType, Function>();
-
-    for (const eventType of this.getAllEventTypes()) {
-      const handler = (event: any) => listener(event);
-      handlers.set(eventType, handler);
-      this.hooks.on(eventType, handler as any);
-    }
-
-    return () => {
-      for (const [eventType, handler] of handlers) {
-        this.hooks.off(eventType, handler as any);
-      }
-    };
-  }
-
-  private getAllEventTypes(): HookEventType[] {
-    return [
-      "before_phase", "after_phase", "before_prompt",
-      "before_tool_call", "after_tool_call",
-      "agent_start", "agent_end",
-      "turn_start", "turn_end",
-      "message_start", "message_update", "message_end",
-      "tool_execution_start", "tool_execution_update", "tool_execution_end",
-      "queue_update", "save_point", "abort", "settled",
-    ];
-  }
-
   // ---------------------------------------------------------------------------
   // Extension loading
   // ---------------------------------------------------------------------------
@@ -349,17 +304,12 @@ export class ExtensionRunner {
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
       try {
-        const sourceInfo = createSourceInfo(ext.path, {
-          source: "local",
-          baseDir: ext.path.startsWith("<") ? undefined : ext.path,
-        });
-        const extension = createExtension(ext.path, sourceInfo);
+        const extension: Extension = { path: ext.path, tools: new Map() };
 
         const api = this.createExtensionAPI(extension, ext.manifest);
         await ext.factory(api);
 
         this.extensions.push(extension);
-        this.loadedExtensions.push(ext);
         this._phaseCache = null;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -400,24 +350,6 @@ export class ExtensionRunner {
       if (tool) return tool.definition;
     }
     return undefined;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Handler queries
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Check if there are handlers registered for specified event type.
-   */
-  hasHandlers(eventType: HookEventType): boolean {
-    return this.hooks.has(eventType);
-  }
-
-  /**
-   * Get the number of handlers for specified event type.
-   */
-  handlerCount(eventType: HookEventType): number {
-    return this.hooks.count(eventType);
   }
 
   // ---------------------------------------------------------------------------
@@ -480,13 +412,6 @@ export class ExtensionRunner {
     this.bound = true;
     this.flushPendingProviders();
 
-    // Replace runtime provider registration with direct calls
-    this.runtime.registerProvider = (_name, config) => {
-      applyProviderRegistration(config);
-    };
-    this.runtime.unregisterProvider = (_name) => {
-      applyProviderUnregistration(_name);
-    };
   }
 
   // ---------------------------------------------------------------------------
@@ -578,118 +503,6 @@ export class ExtensionRunner {
   }
 
   // ---------------------------------------------------------------------------
-  // Agent event hooks (fire-and-forget)
-  // ---------------------------------------------------------------------------
-
-  async emitAgentStart(sessionId: string): Promise<void> {
-    await this.hooks.emit("agent_start", { type: "agent_start", sessionId });
-  }
-
-  async emitAgentEnd(sessionId: string, outcome: any, messages: any[]): Promise<void> {
-    await this.hooks.emit("agent_end", { type: "agent_end", sessionId, outcome, messages });
-  }
-
-  async emitTurnStart(messages: any[]): Promise<void> {
-    await this.hooks.emit("turn_start", { type: "turn_start", messages });
-  }
-
-  async emitTurnEnd(messages: any[], outcome?: any): Promise<void> {
-    await this.hooks.emit("turn_end", { type: "turn_end", messages, outcome });
-  }
-
-  async emitMessageStart(message: any): Promise<void> {
-    await this.hooks.emit("message_start", { type: "message_start", message });
-  }
-
-  async emitMessageUpdate(message: any, delta: string): Promise<void> {
-    await this.hooks.emit("message_update", { type: "message_update", message, delta });
-  }
-
-  async emitMessageEnd(message: any): Promise<void> {
-    await this.hooks.emit("message_end", { type: "message_end", message });
-  }
-
-  async emitToolExecutionStart(toolCallId: string, toolName: string, args: unknown): Promise<void> {
-    await this.hooks.emit("tool_execution_start", {
-      type: "tool_execution_start",
-      toolCallId,
-      toolName,
-      args,
-    });
-  }
-
-  async emitToolExecutionUpdate(toolCallId: string, toolName: string, _progress?: string): Promise<void> {
-    await this.hooks.emit("tool_execution_update", {
-      type: "tool_execution_update",
-      toolCallId,
-      toolName,
-    });
-  }
-
-  async emitToolExecutionEnd(toolCallId: string, toolName: string, result: ToolResult): Promise<void> {
-    await this.hooks.emit("tool_execution_end", {
-      type: "tool_execution_end",
-      toolCallId,
-      toolName,
-      result,
-    });
-  }
-
-  async emitSavePoint(hadPendingMutations: boolean): Promise<void> {
-    await this.hooks.emit("save_point", { type: "save_point", hadPendingMutations });
-  }
-
-  async emitAbort(reason?: string): Promise<void> {
-    await this.hooks.emit("abort", { type: "abort", reason });
-  }
-
-  async emitSettled(): Promise<void> {
-    await this.hooks.emit("settled", { type: "settled" });
-  }
-
-  // ---------------------------------------------------------------------------
-  // AgentEvent bridge (backward compatibility)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Emit an AgentEvent by routing to the appropriate typed hook.
-   */
-  async emitAgentEvent(event: any): Promise<void> {
-    switch (event.type) {
-      case "agent_start":
-        await this.emitAgentStart(event.sessionId);
-        break;
-      case "agent_end":
-        await this.emitAgentEnd(event.sessionId, event.outcome, event.messages);
-        break;
-      case "turn_start":
-        await this.emitTurnStart(event.messages);
-        break;
-      case "turn_end":
-        await this.emitTurnEnd(event.messages, event.outcome);
-        break;
-      case "message_start":
-        await this.emitMessageStart(event.message);
-        break;
-      case "message_update":
-        await this.emitMessageUpdate(event.message, event.delta);
-        break;
-      case "message_end":
-        await this.emitMessageEnd(event.message);
-        break;
-      case "tool_execution_start":
-        await this.emitToolExecutionStart(event.toolCallId, event.toolName, event.args);
-        break;
-      case "tool_execution_update":
-        await this.emitToolExecutionUpdate(event.toolCallId, event.toolName);
-        break;
-      case "tool_execution_end":
-        await this.emitToolExecutionEnd(event.toolCallId, event.toolName, event.result);
-        break;
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
 
@@ -726,7 +539,7 @@ export class ExtensionRunner {
       },
     };
 
-    return createExtensionAPI(this.hooks, extension.path, {
+    return createExtensionAPI(this.hooks, {
       registerPhase: (registration) =>
         this.registerPhase(extension, registration),
       registerProvider: (config) => this.registerProvider(config),
@@ -804,9 +617,6 @@ export class ExtensionRunner {
     };
 
     this.phases.set(name, registered);
-
-    // Track in extension object
-    extension.phases.set(name, registered);
 
     this._phaseCache = null;
   }

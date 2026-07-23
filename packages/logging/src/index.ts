@@ -1,4 +1,4 @@
 export * from "./console";
 export * from "./pino";
 export * from "./redact";
-export type { AgentEventLogLevel, WritableAgentEventLogLevel } from "./record";
+export type { DurableRunEventLogLevel, WritableDurableRunEventLogLevel } from "./record";

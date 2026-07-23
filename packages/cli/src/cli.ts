@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -10,26 +10,36 @@ import {
   registerModel,
 } from "@rowan-agent/models";
 import {
-  Agent,
   AgentRuntime,
-  SqliteRuntimeStateStore,
-  JsonlSessionStore,
-  createCoreTools,
-  type AgentEvent,
-  type AgentEventListener,
-  type AgentRun,
+  SqliteStore,
+  loadExtensions,
+  loadPhases,
+  loadSkills,
+  type AgentConfig,
   type AgentId,
-  type AgentContext,
-  type AgentInputRequest,
-  type LoadedExtension,
+  type AgentRun,
+  type AgentSummary,
+  type ConfigProvider,
+  type RunBoundary,
+  type RunSnapshot,
+  type Skill,
+  type Tool,
+  type ToolInvocationContext,
+  type JsonValue,
   type ModelRef,
-  type PhaseRegistry,
-  type AgentRunRecord,
-} from "@rowan-agent/agent";
+} from "../../agent/src";
+import { createCoreTools } from "../../agent/src/harness/tools";
 import {
-  pinoAgentEventLogger,
-  type AgentEventLogLevel,
+  brandConfigToken,
+} from "../../agent/src/runtime/config-provider";
+import type { ConfigPutResult, ConfigResolution } from "../../agent/src/runtime/contracts";
+import {
+  pinoDurableRunEventLogger,
+  type DurableRunEventLogLevel,
 } from "@rowan-agent/logging";
+import {
+  formatJsonOutput, formatMessageContent, formatToolArgsPreview,
+} from "./output";
 import {
   loadConfigFile,
   registerConfigModels,
@@ -37,14 +47,101 @@ import {
   type AgentConfigFile,
 } from "./config";
 import { resolveInWorkspace, resolveWorkspacePaths, type WorkspacePaths } from "./workspace";
-import { formatJsonOutput, formatMessageContent, formatToolArgsPreview } from "./output";
+
+/*
+ * The CLI owns the executable configuration adapter. The Durable Store keeps
+ * only an opaque token; this adapter binds the current workspace configuration
+ * to an Agent for the lifetime of the process.
+ */
+class CliConfigProvider implements ConfigProvider {
+  private readonly configs = new Map<string, AgentConfig>();
+  private readonly manifests = new Map<string, { agentId: AgentId; identity: string }>();
+
+  constructor(private readonly manifestPath: string) {}
+
+  async load(): Promise<void> {
+    try {
+      const value = JSON.parse(await readFile(this.manifestPath, "utf8")) as Record<string, { agentId?: string; identity?: string }>;
+      for (const [token, entry] of Object.entries(value)) {
+        if (typeof entry.agentId === "string" && typeof entry.identity === "string") {
+          this.manifests.set(token, { agentId: entry.agentId as AgentId, identity: entry.identity });
+        }
+      }
+    } catch {
+      // A missing manifest is normal on first use; malformed state is ignored and rebuilt.
+    }
+  }
+
+  bind(agentId: AgentId, config: AgentConfig): void {
+    const token = tokenFor(agentId, config.identity);
+    this.configs.set(token, config);
+    this.remember(token, agentId, config.identity);
+  }
+
+  async flush(): Promise<void> {
+    await this.persist();
+  }
+
+  async put(input: { agentId: AgentId; config: AgentConfig; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult> {
+    if (input.signal.aborted) throw abortError();
+    this.bind(input.agentId, input.config);
+    const token = tokenFor(input.agentId, input.config.identity);
+    this.remember(token, input.agentId, input.config.identity);
+    await this.persist();
+    return { kind: "stored", token };
+  }
+
+  async resolve(input: { agentId: AgentId; token: import("../../agent/src").ConfigToken; signal: AbortSignal }): Promise<ConfigResolution> {
+    if (input.signal.aborted) throw abortError();
+    const entry = this.manifests.get(String(input.token));
+    const config = this.configs.get(String(input.token));
+    if (!entry || entry.agentId !== input.agentId || !config || config.identity !== entry.identity) {
+      return { kind: "unavailable", reason: "The requested immutable workspace configuration is not loaded." };
+    }
+    return { kind: "available", config };
+  }
+
+  private remember(token: string, agentId: AgentId, identity: string): void {
+    this.manifests.set(token, { agentId, identity });
+  }
+
+  private async persist(): Promise<void> {
+    await writeFile(this.manifestPath, `${JSON.stringify(Object.fromEntries(this.manifests), null, 2)}\n`, "utf8");
+  }
+}
+
+function tokenFor(agentId: AgentId, identity: string): string {
+  return brandConfigToken(`cfg_${encodeURIComponent(agentId)}_${encodeURIComponent(identity)}`);
+}
+
+type LegacyCoreTool = ReturnType<typeof createCoreTools>[number];
+
+function adaptCoreTools(tools: readonly LegacyCoreTool[], skills: readonly Skill[]): Tool[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    execute: async (args: JsonValue, context: ToolInvocationContext, signal: AbortSignal) => {
+      const result = await tool.execute(args, { skills: [...skills], toolCallId: context.toolCallId }, signal);
+      return result.ok
+        ? { ok: true, content: result.content as JsonValue }
+        : { ok: false, content: result.content as JsonValue, error: result.error ?? "Tool failed." };
+    },
+  }));
+}
+
+function abortError(): Error {
+  const error = new Error("Operation aborted.");
+  error.name = "AbortError";
+  return error;
+}
 
 type CliCommand = "config" | "list";
 
 type CliArgs = {
   command?: CliCommand;
   log?: string;
-  logLevel?: AgentEventLogLevel;
+  logLevel?: DurableRunEventLogLevel;
   agentId?: AgentId;
   skills: string[];
   baseUrl?: string;
@@ -102,11 +199,11 @@ async function runRegisteredCommand(args: CliArgs): Promise<boolean> {
   return true;
 }
 
-function createDefaultLogPath(workspace: WorkspacePaths, sessionId: string): string {
+function createDefaultLogPath(workspace: WorkspacePaths, runId: string): string {
   const timestamp = process.platform === "win32"
     ? createTimestamp().replaceAll(":", "-")
     : createTimestamp();
-  return join(workspaceRunsDir(workspace), `${timestamp}-${sessionId}.jsonl`);
+  return join(workspaceRunsDir(workspace), `${timestamp}-${runId}.jsonl`);
 }
 
 function createTimestamp(date = new Date()): string {
@@ -139,10 +236,6 @@ function workspaceRunsDir(workspace: WorkspacePaths): string {
   return join(workspace.rowanDir, "runs");
 }
 
-function workspaceSessionsDir(workspace: WorkspacePaths): string {
-  return join(workspace.rowanDir, "sessions");
-}
-
 function printHelp(): void {
   console.log(`Rowan
 
@@ -165,18 +258,14 @@ ${formatCommandHelp()}
 
 Run logs:
   Rowan resources are stored in <cwd>/.rowan.
-  Session run logs are written automatically to <cwd>/.rowan/runs/<YYYY-MM-DDTHHMMSS-CC+HH:MM>-<session-id>.jsonl.
+  Durable Run logs are written automatically to <cwd>/.rowan/runs/<timestamp>-<run-id>.jsonl.
   --log-level controls run log detail: debug, info, warn, error, or silent. Default: info.
   Info logs write event summaries only; debug logs include redacted event payloads.
   Matching run log records are streamed live to stderr; stdout is reserved for command results.
-  Turns in one process append to the same run log; explicit Agent reconstruction starts a new run log.
   Relative --log paths are resolved from <cwd>/.rowan.
-  CLI output prints Agent and Session ids once, Message id before each turn result, and Log path last once per entry.
+  CLI output prints the durable Agent id and Run id before each boundary.
 
-Sessions:
-  Sessions are saved automatically to <cwd>/.rowan/sessions/<session-id>.jsonl.
-  Use --agent <id> to reconstruct an existing Agent and continue its Session.
-  Interactive controls: :session, :exit, :quit.
+Interactive controls: :exit, :quit.
 
 Skills:
   --skill <path> loads a SKILL.md file, a skill directory, or a directory containing skill folders.
@@ -233,21 +322,21 @@ function readOptionValue(args: string[], option: string): string {
   return value;
 }
 
-function parseLogLevel(value: string, source: string): AgentEventLogLevel {
+function parseLogLevel(value: string, source: string): DurableRunEventLogLevel {
   const normalized = value.trim().toLowerCase();
   if ((LOG_LEVELS as readonly string[]).includes(normalized)) {
-    return normalized as AgentEventLogLevel;
+    return normalized as DurableRunEventLogLevel;
   }
   throw new Error(`${source} must be one of: debug, info, warn, error, silent.`);
 }
 
-function parseOptionalLogLevel(value: string | undefined, source: string): AgentEventLogLevel | undefined {
+function parseOptionalLogLevel(value: string | undefined, source: string): DurableRunEventLogLevel | undefined {
   const normalized = value?.trim();
   return normalized ? parseLogLevel(normalized, source) : undefined;
 }
 
-function configuredLogLevel(args: CliArgs, config?: AgentConfigFile): AgentEventLogLevel {
-  return args.logLevel ?? (config?.logLevel as AgentEventLogLevel | undefined) ?? parseOptionalLogLevel(process.env.ROWAN_LOG_LEVEL, "ROWAN_LOG_LEVEL") ?? "info";
+function configuredLogLevel(args: CliArgs, config?: AgentConfigFile): DurableRunEventLogLevel {
+  return args.logLevel ?? (config?.logLevel as DurableRunEventLogLevel | undefined) ?? parseOptionalLogLevel(process.env.ROWAN_LOG_LEVEL, "ROWAN_LOG_LEVEL") ?? "info";
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -334,27 +423,28 @@ function parseArgs(argv: string[]): CliArgs {
 }
 type CliAgentListItem = {
   id: AgentId;
-  sessionId: string;
-  state: "active" | "paused";
-  title?: string;
+  metadata?: Record<string, unknown>;
   createdAt: string;
+  activatedAt: string;
   updatedAt: string;
-  messageCount: number;
   run?: {
     id: string;
-    state: AgentRunRecord["state"];
-    inputRequest?: AgentInputRequest;
+    state: RunSnapshot["state"];
+    request?: Extract<RunSnapshot, { state: "input_required" }>["request"];
   };
 };
 type AgentResources = {
-  skills: AgentContext["skills"];
-  phases: PhaseRegistry;
-  extensions: LoadedExtension[];
+  skills: Skill[];
+  phases: NonNullable<AgentConfig["context"]["phases"]>;
+  extensions: NonNullable<AgentConfig["extensions"]>;
 };
 type ConfiguredAgent = {
-  agent: Agent;
+  runtime: AgentRuntime;
+  store: SqliteStore;
+  agentId: AgentId;
+  pendingRun?: AgentRun;
+  pendingSnapshot?: Extract<RunSnapshot, { state: "input_required" }>;
   configFile?: AgentConfigFile;
-  pendingRun?: AgentRunRecord;
   close(): Promise<void>;
 };
 
@@ -435,40 +525,32 @@ async function runConfigCommand(args: CliArgs): Promise<void> {
 
 async function runListCommand(_args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
-  const sessionProvider = new JsonlSessionStore(workspaceSessionsDir(workspace));
-  const sessions = new Map(
-    (await sessionProvider.list())
-      .map((session) => [session.id, session]),
-  );
-  const stateStore = new SqliteRuntimeStateStore(join(workspace.rowanDir, "runtime.sqlite"));
+  const store = new SqliteStore(join(workspace.rowanDir, "runtime.sqlite"));
+  const runtime = await AgentRuntime.init({ store });
   try {
-    const runs = await stateStore.listRuns();
-    const agents = (await stateStore.listAgents()).map<CliAgentListItem>((agent) => {
-      const session = sessions.get(agent.sessionId);
+    const runs = (await runtime.listRuns()).items;
+    const agents = (await runtime.listAgents()).items.map<CliAgentListItem>((agent: AgentSummary) => {
       const run = runs
         .filter((candidate) => candidate.agentId === agent.id)
-        .filter((candidate) => candidate.state === "suspended")
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
       return {
         id: agent.id,
-        sessionId: agent.sessionId,
-        state: agent.state,
-        ...(session?.title ? { title: session.title } : {}),
+        ...(agent.metadata ? { metadata: agent.metadata } : {}),
         createdAt: agent.createdAt,
+        activatedAt: agent.activatedAt,
         updatedAt: agent.updatedAt,
-        messageCount: session?.messageCount ?? 0,
         ...(run ? {
           run: {
             id: run.id,
             state: run.state,
-            ...(run.inputRequest ? { inputRequest: run.inputRequest } : {}),
           },
         } : {}),
       };
     }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     console.log(formatJsonOutput(agents));
   } finally {
-    stateStore.close();
+    await runtime.close();
+    store.close();
   }
 }
 
@@ -478,7 +560,7 @@ async function createConfiguredAgent(
 ): Promise<ConfiguredAgent> {
   const resources = await loadAgentResources(args, workspace);
   const { skills } = resources;
-  const tools = createCoreTools({ root: workspace.cwd });
+  const tools = adaptCoreTools(createCoreTools({ root: workspace.cwd }), skills);
   // Load config file and register providers/models
   const configFile = await loadConfigFile(workspace);
 
@@ -542,68 +624,90 @@ async function createConfiguredAgent(
     });
   }
 
-  const context = {
+  const config: AgentConfig = {
+    identity: `cli-v2:${defaultModelRef.provider}/${defaultModelRef.id}`,
+    model: defaultModelRef,
+    stream: createModelStream(),
+    context: {
       systemPrompt: [
         "You are Rowan, a helpful assistant that can assist users with a wide variety of tasks.",
         "",
         "You operate as an agent — you can read and write files, execute commands, and use various tools to accomplish tasks on behalf of the user.",
       ].join("\n"),
-      messages: [],
       tools,
       skills,
-    };
+      phases: resources.phases,
+    },
+    extensions: resources.extensions,
+  };
 
   await mkdir(workspaceRunsDir(workspace), { recursive: true });
-  const stateStore = new SqliteRuntimeStateStore(join(workspace.rowanDir, "runtime.sqlite"));
-  const sessionProvider = new JsonlSessionStore(workspaceSessionsDir(workspace));
+  const store = new SqliteStore(join(workspace.rowanDir, "runtime.sqlite"));
+  const configs = new CliConfigProvider(join(workspace.rowanDir, "config-manifest.json"));
+  await configs.load();
+  if (args.agentId) configs.bind(args.agentId, config);
   let runtime: AgentRuntime | undefined;
   try {
-    runtime = await AgentRuntime.start({
-      stateStore,
-      sessionProvider,
-    });
-    const options = {
-      context: { ...context, phases: resources.phases },
-      model: defaultModelRef,
-      stream: createModelStream(),
-      extensions: resources.extensions,
-    };
-    const agent = args.agentId
-      ? await runtime.reconstructAgent(args.agentId, options)
-      : await runtime.createAgent(options);
-    const pendingRun = (await stateStore.listRuns({ agentId: agent.id, states: ["suspended"] }))[0];
+    runtime = await AgentRuntime.init({ store, configs });
+    const existing = args.agentId
+      ? (await runtime.listAgents()).items.find((agent) => agent.id === args.agentId)
+      : undefined;
+    const agentId = args.agentId ?? await runtime.createAgent(config);
+    configs.bind(agentId, config);
+    await configs.flush();
+    if (existing && existing.currentConfigIdentity !== config.identity) {
+      await runtime.updateAgentConfig(agentId, config, { idempotencyKey: `config:${config.identity}` });
+    }
+    const pendingSummary = (await runtime.listRuns({ agentId, states: ["input_required"] })).items[0];
+    const pendingRun = pendingSummary ? runtime.run(pendingSummary.id) : undefined;
+    const pendingSnapshot = pendingRun ? await pendingRun.snapshot() : undefined;
     return {
-      agent,
+      runtime,
+      store,
+      agentId,
       configFile,
       ...(pendingRun ? { pendingRun } : {}),
+      ...(pendingSnapshot?.state === "input_required" ? { pendingSnapshot } : {}),
       close: async () => {
         try {
-          await runtime!.stop();
+          await runtime!.close();
         } finally {
-          stateStore.close();
+          store.close();
         }
       },
     };
   } catch (error) {
-    await runtime?.stop();
-    stateStore.close();
+    await runtime?.close().catch(() => undefined);
+    store.close();
     throw error;
   }
 }
 
 async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Promise<AgentResources> {
   const defaultSkillsDir = join(workspace.rowanDir, "skills");
-  const discoveredSkills = existsSync(defaultSkillsDir) ? await Agent.loadSkills(defaultSkillsDir) : [];
+  const discoveredSkills = existsSync(defaultSkillsDir) ? await loadSkills(defaultSkillsDir) : [];
   const configuredSkills = (await Promise.all(
-    args.skills.map((skill) => Agent.loadSkills(resolveInWorkspace(skill, workspace.cwd))),
+    args.skills.map((skill) => loadSkills(resolveInWorkspace(skill, workspace.cwd))),
   )).flat();
   const phasesDir = join(workspace.rowanDir, "phases");
-  const phases = existsSync(phasesDir)
-    ? await Agent.loadPhases(phasesDir)
+  const loadedPhases = existsSync(phasesDir)
+    ? await loadPhases(phasesDir)
     : { phases: new Map(), entryPhaseId: null };
+  const workspaceDefault = loadedPhases.phases.get("default");
+  const phases = workspaceDefault
+    ? {
+        phases: new Map([
+          ...[...loadedPhases.phases.entries()].filter(([name]) => name !== "default"),
+          ["workspace-default", { ...workspaceDefault, name: "workspace-default" }],
+        ]),
+        entryPhaseId: loadedPhases.entryPhaseId === "default" || loadedPhases.entryPhaseId === null
+          ? "workspace-default"
+          : loadedPhases.entryPhaseId,
+      }
+    : loadedPhases;
   const extensionsDir = join(workspace.rowanDir, "extensions");
   const { extensions } = existsSync(extensionsDir)
-    ? await Agent.loadExtensions(extensionsDir)
+    ? await loadExtensions(extensionsDir)
     : { extensions: [] };
 
   return {
@@ -614,83 +718,50 @@ async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Pro
 }
 
 async function promptWithLog(input: {
-  agent: Agent;
-  prompt: string;
+  run: AgentRun;
   workspace: WorkspacePaths;
   logPath?: string;
   logMode?: "replace" | "append";
-  logLevel?: AgentEventLogLevel;
+  logLevel?: DurableRunEventLogLevel;
   onLogPath?: (path: string | undefined) => void;
-  onMessageId?: (messageId: string) => void;
-  onRun?: (run: AgentRun) => void;
   onInputWait?: () => void;
-}): Promise<{ run: AgentRun; outcome: import("@rowan-agent/agent").Outcome }> {
-  let unsubscribe: (() => void) | undefined;
-  let eventLogger: ReturnType<typeof pinoAgentEventLogger> | undefined;
+}): Promise<{ run: AgentRun; boundary: RunBoundary }> {
+  let eventLogger: ReturnType<typeof pinoDurableRunEventLogger> | undefined;
+  const observationController = new AbortController();
   try {
-    const sessionId = input.agent.sessionId;
-    const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, sessionId);
-    const runEventLogger = pinoAgentEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
+    const resolvedLogPath = input.logPath ?? createDefaultLogPath(input.workspace, input.run.id);
+    const runEventLogger = pinoDurableRunEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
     eventLogger = runEventLogger;
-    let currentStreamableMessage = false;
-    let currentAssistantWroteContent = false;
-    const listener: AgentEventListener = ((event: AgentEvent) => {
+    const observe = (async () => {
+      for await (const event of input.run.observe({ signal: observationController.signal })) {
       runEventLogger(event);
-
-      if (event.type === "user_prompt_requested") {
-        input.onInputWait?.();
-      }
-
-      if (event.type === "message_start" && event.message.role === "assistant") {
-        currentStreamableMessage = true;
-        currentAssistantWroteContent = false;
-        if (currentStreamableMessage && event.message.content) {
+        if (event.kind === "message_committed" && event.message.role === "assistant") {
           const content = formatMessageContent(event.message.content);
-          if (content) {
-            process.stdout.write(content);
-            currentAssistantWroteContent = true;
-          }
+          if (content) process.stdout.write(`${content}\n`);
+        }
+        if (event.kind === "tool_state_changed" && event.transition.to === "pending") {
+          process.stderr.write(`  ⚙ ${event.toolCall.name}(${formatToolArgsPreview(event.toolCall.name, event.toolCall.args)})\n`);
+        }
+        if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
+          process.stderr.write(`  ${event.transition.to === "completed" ? "✓" : "✗"} ${event.toolCall.name}\n`);
+        }
+        if (event.kind === "run_transitioned" && event.to === "input_required") {
+          input.onInputWait?.();
+        }
+        if (event.kind === "run_transitioned" && ["input_required", "completed", "failed", "cancelled"].includes(event.to)) {
+          return;
         }
       }
-
-      if (event.type === "message_update" && event.delta && currentStreamableMessage) {
-        process.stdout.write(event.delta);
-        currentAssistantWroteContent = true;
-      }
-
-      if (event.type === "message_end" && currentStreamableMessage) {
-        if (currentAssistantWroteContent) {
-          process.stdout.write("\n");
-        }
-        currentStreamableMessage = false;
-        currentAssistantWroteContent = false;
-      }
-
-      if (event.type === "tool_execution_start") {
-        const argsPreview = formatToolArgsPreview(event.toolName, event.args);
-        process.stderr.write(`  ⚙ ${event.toolName}(${argsPreview})\n`);
-      }
-      if (event.type === "tool_execution_end") {
-        const icon = event.isError ? "✗" : "✓";
-        process.stderr.write(`  ${icon} ${event.toolName}\n`);
-      }
-    }) as AgentEventListener;
-    listener.flush = async () => {
-      await runEventLogger.flush();
-    };
-
-    unsubscribe = input.agent.subscribe(listener);
-    const run = await input.agent.send(input.prompt);
-    input.onRun?.(run);
-    input.onMessageId?.(run.messageId);
-    const outcome = await run.result();
-    return { run, outcome };
+    })();
+    const boundary = await input.run.wait();
+    await observe;
+    return { run: input.run, boundary };
   } finally {
     try {
-      await input.agent.flushEvents();
+      observationController.abort();
+      await eventLogger?.flush();
     } finally {
       input.onLogPath?.(eventLogger?.path());
-      unsubscribe?.();
     }
   }
 }
@@ -698,27 +769,11 @@ async function promptWithLog(input: {
 async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const workspace = resolveWorkspacePaths();
   const configured = await createConfiguredAgent(args, workspace);
-  const { agent } = configured;
 
   const explicitLogPath = resolveOptionalWorkspacePath(args.log, workspace);
   const logLevel = configuredLogLevel(args, configured.configFile);
-  let activeLogPath: string | undefined = explicitLogPath;
-  let hasWrittenLog = false;
-  let hasPrintedSession = false;
-  let hasPrintedAgent = false;
+  let activeLogPath = explicitLogPath;
   let hasPrintedLog = false;
-
-  const printSessionOnce = () => {
-    if (!hasPrintedAgent) {
-      console.error(`Agent id: ${agent.id}`);
-      hasPrintedAgent = true;
-    }
-    const sessionId = agent.sessionId;
-    if (!hasPrintedSession && sessionId) {
-      console.error(`Session id: ${sessionId}`);
-      hasPrintedSession = true;
-    }
-  };
 
   const printLogOnce = (logPath: string | undefined) => {
     if (!hasPrintedLog && logPath) {
@@ -727,16 +782,16 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     }
   };
 
-  printSessionOnce();
+  console.error(`Agent id: ${configured.agentId}`);
 
-  if (configured.pendingRun?.inputRequest) {
-    const request = configured.pendingRun.inputRequest;
-    console.error(`Suspended Run id: ${configured.pendingRun.id}`);
-    console.error(`Input requested [${request.phase}]: ${request.prompt}`);
+  if (configured.pendingRun && configured.pendingSnapshot?.state === "input_required") {
+    const request = configured.pendingSnapshot.request;
+    console.error(`Input-required Run id: ${configured.pendingRun.id}`);
+    console.error(`Input requested: ${request.prompt.content}`);
   }
 
   let activeRun: Promise<void> | undefined;
-  let activeAgentRun: AgentRun | undefined;
+  let activeAgentRun: AgentRun | undefined = configured.pendingRun;
   let waitingForInput = false;
   let resolveActiveRunReady: (() => void) | undefined;
   let activeRunReady: Promise<void> | undefined;
@@ -759,46 +814,37 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     await activeRunReady;
   };
 
-  const runPrompt = async (prompt: string, options: { recoverable?: boolean; onInputWait?: () => void } = {}) => {
+  const runPrompt = async (run: AgentRun, options: { recoverable?: boolean; onInputWait?: () => void } = {}) => {
     let writtenLogPath: string | undefined;
-    let messageId: string | undefined;
     let printedRunHeader = false;
     const printRunHeader = () => {
       if (printedRunHeader) return;
       printedRunHeader = true;
-      printSessionOnce();
-      if (messageId) {
-        console.error(`Message id: ${messageId}`);
-      }
       printLogOnce(writtenLogPath);
     };
 
     try {
-      const run = await promptWithLog({
-        agent,
-        prompt,
+      const result = await promptWithLog({
+        run,
         workspace,
         logPath: activeLogPath,
-        logMode: hasWrittenLog ? "append" : "replace",
+        logMode: "replace",
         logLevel,
         onLogPath: (path) => {
           if (path) {
             activeLogPath = path;
-            hasWrittenLog = true;
             writtenLogPath = path;
           }
-        },
-        onMessageId: (id) => {
-          messageId = id;
-        },
-        onRun: (run) => {
-          activeAgentRun = run;
         },
         onInputWait: options.onInputWait,
       });
       printRunHeader();
-      if (run.run.status === "failed") {
-        throw new Error(run.outcome.message);
+      if (result.boundary.type === "failed") {
+        throw new Error(result.boundary.failure.message);
+      }
+      if (result.boundary.type === "input_required") {
+        waitingForInput = true;
+        configured.pendingSnapshot = await run.snapshot() as Extract<RunSnapshot, { state: "input_required" }>;
       }
     } catch (error) {
       printRunHeader();
@@ -813,31 +859,38 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   const startPrompt = async (prompt: string, options: { recoverable?: boolean } = {}) => {
     waitingForInput = false;
     resetActiveRunReady();
-    activeRun = runPrompt(prompt, {
+    activeAgentRun = await configured.runtime.start(configured.agentId, prompt, { idempotencyKey: `run:${crypto.randomUUID()}` });
+    activeRun = runPrompt(activeAgentRun, {
       ...options,
-      onInputWait: () => {
-        waitingForInput = true;
-        markActiveRunReady();
-      },
+      onInputWait: () => { waitingForInput = true; markActiveRunReady(); },
     }).finally(() => {
       activeRun = undefined;
-      activeAgentRun = undefined;
-      waitingForInput = false;
+      if (!waitingForInput) activeAgentRun = undefined;
       markActiveRunReady();
     });
     await waitForActiveRunReady();
   };
 
   const resumePrompt = async (prompt: string) => {
+    if (!activeAgentRun || !configured.pendingSnapshot || configured.pendingSnapshot.state !== "input_required") return;
     waitingForInput = false;
     resetActiveRunReady();
-    const run = await agent.send(prompt);
-    console.error(`Message id: ${run.messageId}`);
+    await activeAgentRun.respond({ requestId: configured.pendingSnapshot.request.id, input: prompt });
+    activeRun = runPrompt(activeAgentRun, {
+      onInputWait: () => { waitingForInput = true; markActiveRunReady(); },
+    }).finally(() => {
+      activeRun = undefined;
+      markActiveRunReady();
+    });
     await waitForActiveRunReady();
   };
 
   if (args.prompt) {
-    await startPrompt(args.prompt);
+    if (configured.pendingRun && configured.pendingSnapshot?.state === "input_required") {
+      await resumePrompt(args.prompt);
+    } else {
+      await startPrompt(args.prompt);
+    }
   }
 
   const rl = createInterface({
@@ -862,19 +915,13 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
       if (prompt === ":exit" || prompt === ":quit") {
         return;
       }
-      if (prompt === ":session") {
-        console.log(agent.sessionId);
-        if (process.stdin.isTTY) {
-          process.stdout.write("> ");
-        }
-        continue;
-      }
-
       if (activeRun && !waitingForInput) {
         await waitForActiveRunReady();
       }
 
       if (activeRun && waitingForInput) {
+        await resumePrompt(prompt);
+      } else if (activeAgentRun && configured.pendingSnapshot?.state === "input_required") {
         await resumePrompt(prompt);
       } else {
         await startPrompt(prompt, { recoverable: true });
@@ -887,7 +934,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   } finally {
     rl.close();
     if (activeRun) {
-      await activeAgentRun?.abort();
+      await activeAgentRun?.cancel("CLI closed before Run reached a boundary.").catch(() => undefined);
       await activeRun.catch(() => undefined);
     }
     await configured.close();

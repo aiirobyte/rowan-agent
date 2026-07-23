@@ -1,36 +1,35 @@
-import type { AgentEvent, AgentEventListener } from "@rowan-agent/models";
+import type { DurableRunEvent } from "@rowan-agent/agent";
 import {
-  AGENT_EVENT_LOG_LEVEL_VALUES,
-  createAgentEventLogFields,
+  DURABLE_RUN_EVENT_LOG_LEVEL_VALUES,
+  createDurableRunEventLogFields,
   eventLogLevel,
   formatLocalIso,
-  isMessageStreamUpdate,
   shouldWriteEvent,
-  type AgentEventLogLevel,
+  type DurableRunEventLogLevel,
 } from "./record";
 import { redactSecrets } from "./redact";
 
-export type ConsoleAgentEventLogStream = {
+export type ConsoleDurableRunEventLogStream = {
   write(chunk: string): unknown;
 };
 
-export type ConsoleAgentEventLoggerOptions = {
-  level?: AgentEventLogLevel;
-  stream?: ConsoleAgentEventLogStream;
+export type ConsoleDurableRunEventLoggerOptions = {
+  level?: DurableRunEventLogLevel;
+  stream?: ConsoleDurableRunEventLogStream;
 };
 
-export type ConsoleAgentEventLogger = AgentEventListener & {
+export type ConsoleDurableRunEventLogger = ((event: DurableRunEvent) => void) & {
   flush(): Promise<void>;
 };
 
-export function consoleAgentEventLogger(
-  options: ConsoleAgentEventLoggerOptions = {},
-): ConsoleAgentEventLogger {
+export function consoleDurableRunEventLogger(
+  options: ConsoleDurableRunEventLoggerOptions = {},
+): ConsoleDurableRunEventLogger {
   const level = options.level ?? "info";
   const stream = options.stream ?? process.stderr;
   let failure: unknown;
 
-  const listener: ConsoleAgentEventLogger = ((event: AgentEvent) => {
+  const listener: ConsoleDurableRunEventLogger = ((event: DurableRunEvent) => {
     if (level === "silent") {
       return;
     }
@@ -39,24 +38,21 @@ export function consoleAgentEventLogger(
     }
 
     try {
-      const snapshot = redactSecrets(event) as AgentEvent;
-      if (isMessageStreamUpdate(snapshot)) {
-        return;
-      }
+      const snapshot = redactSecrets(event) as DurableRunEvent;
       const eventLevel = eventLogLevel(snapshot);
       if (!shouldWriteEvent(eventLevel, level)) {
         return;
       }
       const record = {
-        level: AGENT_EVENT_LOG_LEVEL_VALUES[eventLevel],
+        level: DURABLE_RUN_EVENT_LOG_LEVEL_VALUES[eventLevel],
         time: formatLocalIso(),
-        ...createAgentEventLogFields(snapshot, level === "debug"),
+        ...createDurableRunEventLogFields(snapshot, level === "debug"),
       };
       stream.write(`${JSON.stringify(record)}\n`);
     } catch (error) {
       failure ??= error;
     }
-  }) as ConsoleAgentEventLogger;
+  }) as ConsoleDurableRunEventLogger;
 
   listener.flush = async () => {
     if (failure) {

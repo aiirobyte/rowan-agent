@@ -7,15 +7,18 @@ import type {
   StreamFn,
   ToolCall,
   ToolResult,
-  AgentEventListener,
 } from "../types";
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
-import type { BeforePhaseHookResult, AfterPhaseHookResult } from "../extensions";
-import type { AgentInputRequest } from "../runtime/domain";
+import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
+export type InputRequestPrompt = {
+  phase: string;
+  prompt: string;
+  requestedAt: string;
+};
 
-export type BeforePhaseHook = (phaseId: string, input: PhaseContext) => Promise<BeforePhaseHookResult>;
-export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseHookResult>;
+export type BeforePhaseHook = (phaseId: string, input: PhaseContext) => Promise<BeforePhaseResult>;
+export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseResult>;
 export type BeforePromptHook = (phaseId: string, input: PhaseContext) => Promise<PhaseContext>;
 
 export type LoopMetrics = {
@@ -37,15 +40,15 @@ export type LoopMetrics = {
   durationMs?: number;
 };
 
-export type SessionState = {
+export type ExecutionState = {
   currentPhase: string;
   attempt: number;
   metrics: LoopMetrics;
   status: "idle" | "running" | "suspended" | "completed" | "aborted" | "failed";
-  continuation?: SessionContinuationState;
+  continuation?: ExecutionContinuationState;
 };
 
-export type SessionContinuationState = {
+export type ExecutionContinuationState = {
   isContinuing: boolean;
   previousPayload?: unknown;
   previousResults: Array<{ name: string; output?: unknown }>;
@@ -57,11 +60,8 @@ export type AgentConfig = {
   model: ModelRef;
   stream: StreamFn;
   context: AgentContext;
-  sessionId?: string;
-  sessionState?: SessionState;
   maxAttempts?: number;
   runtime?: AgentRuntimePort;
-  emit?: AgentEventListener;
   signal?: AbortSignal;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
@@ -72,7 +72,7 @@ export type AgentConfig = {
   onMessage?: (message: AgentMessage) => Promise<void>;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */
-  waitForInput?: (state?: SessionState, inputRequest?: AgentInputRequest) => Promise<AgentMessage[]>;
+  waitForInput?: (state?: ExecutionState, inputRequest?: InputRequestPrompt) => Promise<AgentMessage[]>;
 };
 
 

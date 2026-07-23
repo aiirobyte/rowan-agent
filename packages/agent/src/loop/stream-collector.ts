@@ -5,7 +5,6 @@ import type {
 import { contentBlocksToMessageContent } from "../types";
 import type { AgentConfig } from "./types";
 import type {
-  ContentBlock,
   AssistantMessagePartial,
   TextBlock,
   ToolCallBlock,
@@ -14,7 +13,6 @@ import type {
 } from "@rowan-agent/models";
 import type { ModelInvokeOutput, PhaseMessageManager } from "./execution";
 import type { ModelTranscript } from "../protocol/turn";
-import { createTimestamp } from "../utils";
 import { LoopGuard, EmptyResponseError } from "./errors";
 
 export type ModelInvokerInput = {
@@ -96,21 +94,15 @@ async function collectStreamResult(input: {
       return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
     }
 
-    if (event.type === "model_requested") {
-      input.config.emit?.({
-        type: "model_requested",
-        model: event.model,
-        usage: event.usage,
-        ts: createTimestamp(),
-      });
-    }
-
     if (event.type === "error") {
       throw event.error;
     }
 
     if (event.type === "start") {
       lastPartial = event.partial;
+      activeMessageId ??= input.message.reserve("assistant", {
+        phase: input.metadataPhase,
+      });
     }
 
     if (event.type === "text_delta") {
@@ -125,6 +117,9 @@ async function collectStreamResult(input: {
     }
 
     if (event.type === "tool_call_start" || event.type === "tool_call_delta" || event.type === "tool_call_end") {
+      activeMessageId ??= input.message.reserve("assistant", {
+        phase: input.metadataPhase,
+      });
       lastPartial = event.partial;
     }
 
@@ -137,19 +132,16 @@ async function collectStreamResult(input: {
       stopReason = event.response?.stopReason;
 
       const contentBlocks = lastPartial?.contentBlocks ?? [];
-      if (!activeMessageId && contentBlocks.length > 0) {
-        activeMessageId = input.message.start("assistant", "", {
-          phase: input.metadataPhase,
-        });
-      }
+      const hasContent = contentBlocks.length > 0 || (event.response?.content?.length ?? 0) > 0;
 
       const shouldStoreContentParts = contentBlocks.some((block) => block.type !== "text");
-      if (activeMessageId && shouldStoreContentParts) {
+      if (activeMessageId && hasContent && shouldStoreContentParts) {
         input.message.replaceContent(activeMessageId, contentBlocksToMessageContent(contentBlocks));
       }
 
       if (activeMessageId) {
-        await input.message.end(activeMessageId);
+        if (hasContent) await input.message.end(activeMessageId);
+        else input.message.discard(activeMessageId);
         activeMessageId = undefined;
       }
     }

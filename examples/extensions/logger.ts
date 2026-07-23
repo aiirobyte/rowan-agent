@@ -1,7 +1,7 @@
 /**
  * Example: Logger Extension
  *
- * Minimal extension that logs lifecycle events.
+ * Minimal extension that logs Tool decisions.
  * Place in .rowan/extensions/ to activate.
  *
  * Discovery:
@@ -11,35 +11,15 @@
 import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default function logger(api: ExtensionAPI) {
-  // ── Listen-only hooks ──────────────────────────────────────────────────
-  api.on("agent_start", () => {
-    console.log("[logger] agent started");
-  });
-
-  api.on("agent_end", () => {
-    console.log("[logger] agent ended");
-  });
-
-  api.on("turn_start", () => {
-    console.log("[logger] turn started");
-  });
-
-  api.on("turn_end", () => {
-    console.log("[logger] turn ended");
-  });
-
-  // ── Modifiable hooks ───────────────────────────────────────────────────
-
-  // Log tool calls and optionally block them
   api.on("before_tool_call", (event) => {
-    console.log(`[logger] tool call: ${event.toolName}`);
+    console.log(`[logger] tool call: ${event.tool.name}`);
     // return { allow: false, reason: "blocked by logger" } to deny
     return { allow: true };
   });
 
   // Inspect tool results
   api.on("after_tool_call", (event) => {
-    console.log(`[logger] tool ${event.toolName} completed`);
+    console.log(`[logger] tool ${event.tool.name} completed`);
     // return modified result to transform output
   });
 

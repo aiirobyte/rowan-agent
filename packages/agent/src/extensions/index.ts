@@ -38,34 +38,18 @@ export type {
 } from "./context";
 
 // Hook-based API
-export { HooksManager, getGlobalHooks, resetGlobalHooks } from "./hooks";
+export { HooksManager } from "./hooks";
 export type {
   HookEvent,
   HookEventType,
   HookHandler,
   HookResultMap,
   HookError,
-  // Event types
   BeforePhaseEvent,
   AfterPhaseEvent,
   BeforePromptEvent,
   BeforeToolCallEvent,
   AfterToolCallEvent,
-  AgentStartEvent,
-  AgentEndEvent,
-  TurnStartEvent,
-  TurnEndEvent,
-  MessageStartEvent,
-  MessageUpdateEvent,
-  MessageEndEvent,
-  ToolExecutionStartEvent,
-  ToolExecutionUpdateEvent,
-  ToolExecutionEndEvent,
-  QueueUpdateEvent,
-  SavePointEvent,
-  AbortEvent,
-  SettledEvent,
-  // Result types
   BeforePhaseResult,
   AfterPhaseResult,
   BeforePromptResult,
@@ -101,8 +85,6 @@ export type {
   ExtensionErrorListener,
   Extension,
   ExtensionRuntime,
-  BeforePhaseHookResult,
-  AfterPhaseHookResult,
   LoadExtensionsResult,
 } from "./types";
-export { createExtension, createExtensionRuntime } from "./types";
+export { createExtensionRuntime } from "./types";

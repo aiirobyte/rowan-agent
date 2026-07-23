@@ -1,6 +1,6 @@
 # Durable Multi-Agent Runtime Issue Slices
 
-Status: Implemented
+Status: Superseded by issue slices 0003
 
 Source: [PRD-0001](../prd/0001-durable-agent-runtime.md)
 

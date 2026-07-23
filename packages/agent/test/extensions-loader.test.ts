@@ -10,7 +10,6 @@ import {
 } from "../src/extensions";
 import { loadExtensionsFromPath, loadExtensionFromFactory } from "../src/extensions/loader";
 import type { ExtensionAPI, LoadedExtension } from "../src/extensions";
-import { createMessage } from "../src/types";
 
 test("loadExtensionFromFactory creates a LoadedExtension object", () => {
   const extension = loadExtensionFromFactory((ctx) => {
@@ -84,7 +83,6 @@ test("loadExtensionsFromPath loads TypeScript extensions from a directory", asyn
       import type { ExtensionFactory } from "@rowan-agent/agent";
       const extension: ExtensionFactory = (ctx) => {
         ctx.registerPhase({
-          id: "echo",
           name: "echo",
           description: "Echo test phase.",
           async run() {
@@ -121,31 +119,6 @@ test("loadExtensionsFromPath reports invalid extension factories", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test("HooksManager supports typed event registration", async () => {
-  const runner = createExtensionRunner();
-  const events: string[] = [];
-
-  const ext: LoadedExtension = {
-    path: "<test>",
-    name: "test",
-    factory: (ctx) => {
-      ctx.on("agent_start", () => {
-        events.push("agent_start");
-      });
-      ctx.on("before_tool_call", (event) => {
-        events.push(`before_tool_call:${event.tool.name}`);
-        return { allow: true };
-      });
-    },
-  };
-
-  await runner.loadExtensions([ext]);
-  runner.bind();
-
-  await runner.emit("agent_start", { type: "agent_start", sessionId: "test" });
-  expect(events).toContain("agent_start");
 });
 
 test("before_tool_call hook can block tool execution", async () => {
@@ -190,7 +163,7 @@ test("ExtensionAPI registerTool registers LLM-callable tools", async () => {
         name: "search_docs",
         description: "Search documentation",
         parameters: { type: "object", properties: { query: { type: "string" } } },
-        execute: async (args) => {
+        execute: async () => {
           return { content: [{ type: "text", text: "result" }] };
         },
       });
@@ -322,64 +295,4 @@ test("ExtensionRunner.onError collects structured errors", async () => {
   expect(errors[0]!.extensionPath).toBe("<test>");
   expect(errors[0]!.event).toBe("test_event");
   expect(errors[0]!.error).toBe("Something went wrong");
-});
-
-test("ExtensionRunner.invalidate makes contexts stale", async () => {
-  const runner = createExtensionRunner();
-  let capturedApi: ExtensionAPI | null = null;
-
-  const ext: LoadedExtension = {
-    path: "<test>",
-    name: "test",
-    factory: (ctx) => {
-      capturedApi = ctx;
-    },
-  };
-
-  await runner.loadExtensions([ext]);
-
-  // Before invalidate, API works
-  expect(() => capturedApi!.on("agent_start", () => {})).not.toThrow();
-
-  // After invalidate, API calls throw
-  runner.invalidate("Test invalidation");
-  expect(() => capturedApi!.on("agent_start", () => {})).toThrow("Test invalidation");
-});
-
-test("ExtensionRunner hasHandlers queries handler registration", async () => {
-  const runner = createExtensionRunner();
-
-  expect(runner.hasHandlers("agent_start")).toBe(false);
-
-  const ext: LoadedExtension = {
-    path: "<test>",
-    name: "test",
-    factory: (ctx) => {
-      ctx.on("agent_start", () => {});
-    },
-  };
-
-  await runner.loadExtensions([ext]);
-
-  expect(runner.hasHandlers("agent_start")).toBe(true);
-  expect(runner.hasHandlers("agent_end")).toBe(false);
-  expect(runner.handlerCount("agent_start")).toBe(1);
-});
-
-test("ExtensionRunner direct on() API works without extensions", async () => {
-  const runner = createExtensionRunner();
-  const events: string[] = [];
-
-  const unsub = runner.on("agent_start", (event) => {
-    events.push(`direct:${event.sessionId}`);
-  });
-
-  await runner.emit("agent_start", { type: "agent_start", sessionId: "test" });
-  expect(events).toEqual(["direct:test"]);
-
-  unsub();
-  events.length = 0;
-
-  await runner.emit("agent_start", { type: "agent_start", sessionId: "test2" });
-  expect(events).toEqual([]);
 });

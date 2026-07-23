@@ -26,9 +26,6 @@ export class ProviderError extends Error {
   }
 }
 
-// Re-export under legacy alias for backward compatibility
-export { ProviderError as OpenAICompatibleError };
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Durable Multi-Agent Runtime
 
-Status: Implemented
+Status: Superseded by PRD-0003
 
 ## Problem Statement
 

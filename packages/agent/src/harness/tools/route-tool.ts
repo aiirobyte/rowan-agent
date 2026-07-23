@@ -76,7 +76,7 @@ export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'descripti
       instruction: Type.Optional(Type.String({ description: "Overall instruction, passed as context" })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution
-    execute: async (args, context) => ({
+    execute: async (_, context) => ({
       toolCallId: context.toolCallId,
       toolName: PhaseRouteTool,
       ok: true,

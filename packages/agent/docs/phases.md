@@ -476,9 +476,9 @@ interface PhaseState {
 
 ## Reloading File Phases
 
-The core `Agent` and phase loop do not read phase files automatically. File-based phases are loaded by the caller, such as the Rowan CLI, and then passed in on `AgentContext.phases`. Agent always merges that registry with its built-in `"default"` phase before running.
+The durable Runtime does not read phase files automatically. Load them with the standalone `loadPhases()` helper and include the resulting `PhaseRegistry` in `AgentConfig.context.phases`. The Runtime merges that registry with its built-in `"default"` phase for each execution; configured Extensions are assembled at the same seam.
 
-To pick up file edits, call `Agent.loadPhases` again and pass the fresh registry when creating the next Runtime-owned Agent Binding. Extension phases are loaded separately with that binding.
+To pick up file edits, call `loadPhases()` again and create a new immutable configuration snapshot with the refreshed registry. Existing Runs continue using their pinned configuration token.
 
 ---
 
@@ -568,17 +568,21 @@ interface PhaseRegistry {
 
 ```typescript
 // Load phases from a PHASE.md file or directory
-Agent.loadPhases(targetPath: string): Promise<PhaseRegistry>
+loadPhases(targetPath: string): Promise<PhaseRegistry>
 ```
 
-Pass the loaded `PhaseRegistry` into `AgentContext.phases` — Agent always merges it with the built-in `"default"` phase before running:
+Pass the loaded `PhaseRegistry` into `AgentConfig.context.phases`:
 
 ```typescript
-const phases = await Agent.loadPhases("./.rowan/phases");
-const agent = await runtime.createAgent({
+const phases = await loadPhases("./.rowan/phases");
+const agentId = await runtime.createAgent({
+  identity: "workspace-v1",
   context: { ...baseContext, phases },
   model,
   stream,
+});
+const run = await runtime.start(agentId, "Run the workflow", {
+  idempotencyKey: "start-run",
 });
 ```
 
