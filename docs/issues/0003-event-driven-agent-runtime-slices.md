@@ -9,7 +9,9 @@ provider correlation IDs for restart-safe Model Context projection. Slice 11
 now hardens JSONL append/recovery behavior, paginates CLI read models, and
 reports actionable old-database recovery guidance. Slice 12 now exposes the
 durable Agent/Run/Execution identity to Phase callbacks, and EverYield derives
-retry-stable Workflow Agent/Run idempotency keys from that identity.
+retry-stable Workflow Agent/Run idempotency keys from that identity. EverYield
+also persists a Team-scoped Workflow launch outbox and replays unfinished
+launches during Runtime startup.
 
 Remaining acceptance work includes the full cross-Store fault-injection and
 outbox coverage described by Slice 12.
