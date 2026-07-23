@@ -18,11 +18,13 @@ import {
   loadSkills,
   type AgentConfig,
   type AgentId,
+  type AgentListCursor,
   type AgentRun,
   type AgentSummary,
   type ConfigProvider,
   type Skill,
   type RunBoundary,
+  type RunListCursor,
   type RunSnapshot,
   type ModelRef,
 } from "../../agent/src";
@@ -37,6 +39,8 @@ import {
 import {
   formatJsonOutput, formatMessageContent, formatToolArgsPreview,
 } from "./output";
+import { formatCliError } from "./errors";
+import { collectPages } from "./pagination";
 import {
   loadConfigFile,
   registerConfigModels,
@@ -509,8 +513,8 @@ async function runListCommand(_args: CliArgs): Promise<void> {
   const store = new SqliteStore(join(workspace.rowanDir, "runtime.sqlite"));
   const runtime = await AgentRuntime.init({ store });
   try {
-    const runs = (await runtime.listRuns()).items;
-    const agents = (await runtime.listAgents()).items.map<CliAgentListItem>((agent: AgentSummary) => {
+    const runs = await collectPages((after: RunListCursor | undefined) => runtime.listRuns({ after, limit: 100 }));
+    const agents = (await collectPages((after: AgentListCursor | undefined) => runtime.listAgents({ after, limit: 100 }))).map<CliAgentListItem>((agent: AgentSummary) => {
       const run = runs
         .filter((candidate) => candidate.agentId === agent.id)
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
@@ -846,7 +850,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     } catch (error) {
       printRunHeader();
       if (options.recoverable) {
-        console.error(error instanceof Error ? error.message : error);
+        console.error(formatCliError(error));
         return;
       }
       throw error;
@@ -948,6 +952,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(formatCliError(error));
   process.exit(1);
 });
