@@ -7,7 +7,9 @@ EverYield consumer migration. Slice 9 now atomically reserves all Tool Calls
 from one model response in one Assistant Tool-use Message and preserves
 provider correlation IDs for restart-safe Model Context projection. Slice 11
 now hardens JSONL append/recovery behavior, paginates CLI read models, and
-reports actionable old-database recovery guidance.
+reports actionable old-database recovery guidance. Slice 12 now exposes the
+durable Agent/Run/Execution identity to Phase callbacks, and EverYield derives
+retry-stable Workflow Agent/Run idempotency keys from that identity.
 
 Remaining acceptance work includes the full cross-Store fault-injection and
 outbox coverage described by Slice 12.
