@@ -268,3 +268,41 @@ test("AgentRuntime retries the same Event before advancing live delivery", async
     await runtime.close();
   }
 });
+
+test("AgentRuntime consumer receives Run metadata on terminal durable events", async () => {
+  const stream: StreamFn = async function* () {
+    yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
+    yield { type: "done", response: { content: "done", stopReason: "stop" } };
+  };
+  const controller = new AbortController();
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
+  try {
+    let resolveTerminal!: (event: unknown) => void;
+    const terminal = new Promise<unknown>((resolve) => { resolveTerminal = resolve; });
+    const consumer = await runtime.consume({
+      consumerId: "metadata-consumer",
+      signal: controller.signal,
+      onEvent(event) {
+        if (event.kind === "run_transitioned" && event.to === "completed") resolveTerminal(event);
+      },
+    });
+    await consumer.caughtUp;
+    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "metadata-agent" });
+    const run = await runtime.start(agentId, "hello", {
+      idempotencyKey: "metadata-run",
+      metadata: { kind: "workflow", invocationId: "invocation-1" },
+    });
+    await run.wait();
+
+    await expect(terminal).resolves.toMatchObject({
+      kind: "run_transitioned",
+      to: "completed",
+      metadata: { kind: "workflow", invocationId: "invocation-1" },
+    });
+    consumer.stop();
+    await consumer.done;
+  } finally {
+    controller.abort();
+    await runtime.close();
+  }
+});

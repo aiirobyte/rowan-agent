@@ -928,6 +928,7 @@ export class InMemoryStore implements DurableStore {
       agentId: run.agentId,
       runId: run.id,
       runRevision: run.revision,
+      ...(run.metadata ? { metadata: clone(run.metadata) } : {}),
       createdAt: createTimestamp(),
       ...extra,
     };
