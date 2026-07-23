@@ -82,6 +82,7 @@ test("one-shot execution returns input_required without retaining a continuation
   const result = await executeOnce({
     canonicalMessages: canonical,
     context: context(phases),
+    execution: { agentId: "agt_test", runId: "run_test", executionId: "exec_test" },
     model: { provider: "test", id: "model" },
     stream,
   });

@@ -69,6 +69,7 @@ export const publicTypeExports = [
   "Page",
   "Phase",
   "PhaseContext",
+  "PhaseExecutionIdentity",
   "PhaseInvocation",
   "PhaseOutput",
   "PhaseRegistry",

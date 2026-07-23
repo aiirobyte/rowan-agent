@@ -271,6 +271,11 @@ export class AgentRuntime implements AgentRuntimeContract {
       const result = await executeOnce({
         canonicalMessages: executionContext.messages,
         context: executionContext,
+        execution: {
+          agentId: run.agentId,
+          runId: run.id,
+          executionId: claim.execution.executionId,
+        },
         model,
         stream,
         maxAttempts: executionConfig.maxAttempts,

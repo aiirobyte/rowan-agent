@@ -123,6 +123,7 @@ export type {
 export type {
   Phase,
   PhaseContext,
+  PhaseExecutionIdentity,
   PhaseInvocation,
   PhaseOutput,
   PhaseRegistry,

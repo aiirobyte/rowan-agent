@@ -482,6 +482,36 @@ test("AgentRuntime resumes an input-required Run from its durable checkpoint", a
   }
 });
 
+test("Phase callbacks receive the durable Run execution identity", async () => {
+  let observed: { agentId: string; runId: string; executionId: string } | undefined;
+  const phases = new Map<string, Phase>([["work", {
+    name: "work",
+    description: "Work",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Work",
+    isolated: false,
+    run: async (context) => {
+      observed = context.execution;
+      return { message: "done", route: "stop" };
+    },
+  }]]);
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
+  try {
+    const agentId = await runtime.createAgent({
+      ...simpleConfig(async function* () { yield { type: "done", response: { content: "unused", stopReason: "stop" } }; }),
+      identity: "phase-execution-identity",
+      context: { systemPrompt: "Test", tools: [], skills: [], phases: { phases, entryPhaseId: "work" } },
+    } as unknown as AgentConfig, { idempotencyKey: "phase-execution-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-execution-run" });
+    expect((await run.wait()).type).toBe("completed");
+    expect(observed).toMatchObject({ agentId, runId: run.id });
+    expect(observed?.executionId).toStartWith("exec_");
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("AgentRuntime retries the same Event before advancing live delivery", async () => {
   const stream: StreamFn = async function* () {
     yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };

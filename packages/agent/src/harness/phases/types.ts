@@ -39,7 +39,14 @@ export type PhaseInvocation =
       index: number;
       count: number;
       sourcePhaseId: string;
-    };
+  };
+
+/** Durable identity of the Run execution currently invoking a Phase. */
+export type PhaseExecutionIdentity = Readonly<{
+  agentId: string;
+  runId: string;
+  executionId: string;
+}>;
 
 /** Everything a phase needs to execute */
 export interface PhaseContext {
@@ -53,6 +60,8 @@ export interface PhaseContext {
   state: PhaseState;
   /** Identity and dispatch metadata for this phase execution */
   readonly invocation: PhaseInvocation;
+  /** Durable Run identity for cross-store integrations and idempotent commands. */
+  readonly execution: PhaseExecutionIdentity;
   /** Additional guideline bullets appended to the system prompt */
   promptGuidelines?: string[];
   /** Text to append after the system prompt */

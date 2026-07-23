@@ -17,7 +17,7 @@ import type {
   ExecutionState,
   MessageDeltaNotification,
 } from "../loop/types";
-import type { PhaseRegistry } from "../harness/phases/types";
+import type { PhaseExecutionIdentity, PhaseRegistry } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
 import { assertJsonValue, canonicalJson, isJsonValue } from "./json";
@@ -44,6 +44,8 @@ export type OneShotExecutionInput = Readonly<{
   canonicalMessages: readonly AgentMessage[];
   /** Execution-local capabilities and prompts; messages are supplied separately. */
   context: ExecutionModelContext;
+  /** Durable identity exposed to Phase callbacks. */
+  execution: PhaseExecutionIdentity;
   model: ModelRef;
   stream: StreamFn;
   checkpoint?: ExecutionCheckpoint;
@@ -217,6 +219,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
   };
   const config = {
     context,
+    execution: input.execution,
     model: input.model,
     stream: input.stream,
     maxAttempts: input.maxAttempts,

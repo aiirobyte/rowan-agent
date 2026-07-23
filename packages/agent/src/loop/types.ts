@@ -8,7 +8,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
+import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
 export type InputRequestPrompt = {
@@ -65,6 +65,8 @@ export type AgentConfig = {
   model: ModelRef;
   stream: StreamFn;
   context: AgentContext;
+  /** Durable Run identity passed to generated Phase callbacks. */
+  execution?: PhaseExecutionIdentity;
   maxAttempts?: number;
   runtime?: AgentRuntimePort;
   signal?: AbortSignal;
