@@ -88,7 +88,12 @@ export type ToolRunnerInput = {
 };
 
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
+export type ToolBatchRunner = (input: {
+  config: AgentConfig;
+  toolCalls: readonly ToolCall[];
+}) => Promise<readonly ToolResult[]>;
 
 export type AgentRuntimePort = {
   tools?: ToolRunner;
+  toolsBatch?: ToolBatchRunner;
 };

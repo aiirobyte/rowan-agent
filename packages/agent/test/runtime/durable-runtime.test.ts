@@ -198,6 +198,100 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
   }
 });
 
+test("AgentRuntime atomically commits one assistant Tool-use Message for a multi-tool response", async () => {
+  let modelCalls = 0;
+  const executions: string[] = [];
+  const tools = ["first", "second"].map((name) => ({
+    name,
+    description: `${name} tool`,
+    parameters: Type.Object({ value: Type.String() }),
+    async execute(_args: unknown, context: ToolInvocationContext) {
+      executions.push(`${name}:${context.toolCallId}`);
+      return { ok: true as const, content: { name } };
+    },
+  }));
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const calls = tools.map((tool, index) => ({
+        id: `provider-${index + 1}`,
+        name: tool.name,
+        args: JSON.stringify({ value: tool.name }),
+      }));
+      const partial = {
+        role: "assistant" as const,
+        contentBlocks: calls.map((call) => ({
+          type: "tool_call" as const,
+          id: call.id,
+          name: call.name,
+          args: call.args,
+        })),
+      };
+      for (const call of calls) {
+        yield { type: "tool_call_start", id: call.id, name: call.name, partial };
+        yield { type: "tool_call_end", id: call.id, name: call.name, arguments: call.args, partial };
+      }
+      yield {
+        type: "done",
+        response: {
+          content: "",
+          toolCalls: calls.map((call) => ({ id: call.id, name: call.name, arguments: call.args })),
+          stopReason: "tool_use",
+        },
+      };
+      return;
+    }
+
+    const assistantToolMessages = request.messages.filter((message) =>
+      message.role === "assistant"
+      && Array.isArray(message.content)
+      && message.content.filter((part) => part.type === "tool_use").length > 0,
+    );
+    expect(assistantToolMessages).toHaveLength(1);
+    const assistantToolContent = assistantToolMessages[0]!.content;
+    expect(Array.isArray(assistantToolContent)).toBe(true);
+    if (!Array.isArray(assistantToolContent)) return;
+    const toolUses = assistantToolContent.filter((part) => part.type === "tool_use");
+    expect(toolUses.map((part) => part.type === "tool_use" ? part.id : "")).toEqual(["provider-1", "provider-2"]);
+    const toolResults = request.messages.flatMap((message) =>
+      message.role === "tool" && Array.isArray(message.content)
+        ? message.content.filter((part) => part.type === "tool_result")
+        : [],
+    );
+    expect(toolResults.map((part) => part.type === "tool_result" ? part.toolUseId : "")).toEqual(["provider-1", "provider-2"]);
+    yield {
+      type: "text_delta",
+      text: "both complete",
+      partial: { role: "assistant", contentBlocks: [{ type: "text", text: "both complete" }] },
+    };
+    yield { type: "done", response: { content: "both complete", stopReason: "stop" } };
+  };
+
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent({
+      ...simpleConfig(stream),
+      context: { systemPrompt: "Test", tools, skills: [] },
+    } as unknown as AgentConfig, { idempotencyKey: "agent-multi-tool" });
+    const run = await runtime.start(agentId, "use both", { idempotencyKey: "run-multi-tool" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(modelCalls).toBe(2);
+    expect(executions).toHaveLength(2);
+    const observed: RunEvent[] = [];
+    for await (const event of run.observe()) observed.push(event);
+    const assistantToolMessages = observed.filter((event) =>
+      event.kind === "message_committed"
+      && event.message.role === "assistant"
+      && Array.isArray(event.message.content)
+      && event.message.content.some((part) => part.type === "tool_use"),
+    );
+    expect(assistantToolMessages).toHaveLength(1);
+    expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 2 });
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("AgentRun.observe streams best-effort Tool progress", async () => {
   let releaseModel!: () => void;
   const modelReady = new Promise<void>((resolve) => { releaseModel = resolve; });

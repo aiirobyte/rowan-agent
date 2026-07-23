@@ -354,8 +354,8 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       return output;
     }
 
-    for (const toolCall of executableToolCalls) {
-      const result = await ctx.execution.executeTool(roundContext, toolCall);
+    const results = await ctx.execution.executeTools(roundContext, executableToolCalls);
+    for (const result of results) {
       const messageId = ctx.messageManager.start("tool", createToolResultContent(result), {
         phase: ctx.phase.name,
       });
@@ -927,6 +927,30 @@ async function executeToolCall(input: {
   };
 }
 
+async function executeToolCalls(input: {
+  config: AgentConfig;
+  tools: Tool[];
+  toolCalls: readonly ToolCall[];
+}): Promise<readonly ToolResult[]> {
+  if (input.config.runtime?.toolsBatch) {
+    const results = await input.config.runtime.toolsBatch({
+      config: input.config,
+      toolCalls: input.toolCalls,
+    });
+    if (results.length !== input.toolCalls.length) throw new Error("Runtime returned an invalid Tool batch result");
+    return results.map((result, index) => ({
+      ...result,
+      toolCallId: input.toolCalls[index]!.id,
+      toolName: input.toolCalls[index]!.name,
+    }));
+  }
+  const results: ToolResult[] = [];
+  for (const toolCall of input.toolCalls) {
+    results.push(await executeToolCall({ ...input, toolCall }));
+  }
+  return results;
+}
+
 // ============================================================================
 // PhaseExecution Factory
 // ============================================================================
@@ -1024,6 +1048,31 @@ function createPhaseExecution(
         });
         await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
         return result;
+      });
+    },
+
+    async executeTools(phaseContext: AgentContext, toolCalls: readonly ToolCall[]): Promise<readonly ToolResult[]> {
+      return runTurn(async () => {
+        const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
+        for (const toolCall of toolCalls) {
+          await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
+        }
+        const results = await executeToolCalls({
+          config: {
+            ...config,
+            context: {
+              ...config.context,
+              tools,
+              skills: phaseContext.skills,
+            },
+          },
+          tools,
+          toolCalls,
+        });
+        for (const result of results) {
+          await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
+        }
+        return results;
       });
     },
   };

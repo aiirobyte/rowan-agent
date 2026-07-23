@@ -11,6 +11,7 @@ import { createId, createTimestamp } from "./utils";
 export type {
   AgentRuntimePort,
   LoopMetrics,
+  ToolBatchRunner,
   ToolRunner,
 } from "./loop/types";
 export type { PhaseContext, PhaseState, PhaseOutput, PhaseRegistry } from "./harness/phases/types";

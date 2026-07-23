@@ -300,16 +300,32 @@ export class AgentRuntime implements AgentRuntimeContract {
         runtime: {
           tools: ({ toolCall }: { config: import("../loop/types").AgentConfig; toolCall: ToolCall }) => {
             const task = toolQueue.then(async () => {
-              const execution = await this.executeTool({
+              const execution = await this.executeToolBatch({
                 run,
                 execution: claim!.execution,
                 expectedRevision: executionRevision,
                 config: executionConfig,
-                toolCall,
+                toolCalls: [toolCall],
                 signal: controller.signal,
               });
               executionRevision = execution.revision;
-              return execution.result;
+              return execution.results[0]!;
+            });
+            toolQueue = task.then(() => undefined, () => undefined);
+            return task;
+          },
+          toolsBatch: ({ toolCalls }: { config: import("../loop/types").AgentConfig; toolCalls: readonly ToolCall[] }) => {
+            const task = toolQueue.then(async () => {
+              const execution = await this.executeToolBatch({
+                run,
+                execution: claim!.execution,
+                expectedRevision: executionRevision,
+                config: executionConfig,
+                toolCalls,
+                signal: controller.signal,
+              });
+              executionRevision = execution.revision;
+              return execution.results;
             });
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
@@ -360,22 +376,61 @@ export class AgentRuntime implements AgentRuntimeContract {
     toolCall: ToolCall;
     signal: AbortSignal;
   }): Promise<{ result: ToolResult; revision: number }> {
-    const tool = input.config.context.tools.find((candidate) => candidate.name === input.toolCall.name) as DurableTool | undefined;
-    const providerToolCallId = input.toolCall.id;
-    const toolCallId = createId("tool") as ToolCallId;
-    const requestMessageId = createId("msg") as MessageId;
-    const reserved = await this.owned.reserveToolCall({
+    const batch = await this.executeToolBatch({ ...input, toolCalls: [input.toolCall] });
+    return { result: batch.results[0]!, revision: batch.revision };
+  }
+
+  private async executeToolBatch(input: {
+    run: RunRecord;
+    execution: import("./contracts").ExecutionToken;
+    expectedRevision: number;
+    config: AgentConfig;
+    toolCalls: readonly ToolCall[];
+    signal: AbortSignal;
+  }): Promise<{ results: readonly ToolResult[]; revision: number }> {
+    const reserved = await this.owned.reserveToolCalls({
       runId: input.run.id,
       execution: input.execution,
       expectedRevision: input.expectedRevision,
-      requestMessageId,
-      toolCallId,
-      name: input.toolCall.name,
-      args: toJsonValue(input.toolCall.args),
+      requestMessageId: createId("msg") as MessageId,
+      calls: input.toolCalls.map((toolCall) => ({
+        providerToolCallId: toolCall.id,
+        name: toolCall.name,
+        args: toJsonValue(toolCall.args),
+      })),
     });
     let revision = reserved.run.revision;
+    const results: ToolResult[] = [];
+    for (let index = 0; index < input.toolCalls.length; index += 1) {
+      const toolCall = input.toolCalls[index]!;
+      const tool = reserved.toolCalls[index]!;
+      const execution = await this.executeReservedTool({
+        ...input,
+        toolCall,
+        tool,
+        expectedRevision: revision,
+      });
+      revision = execution.revision;
+      results.push(execution.result);
+    }
+    return { results, revision };
+  }
+
+  private async executeReservedTool(input: {
+    run: RunRecord;
+    execution: import("./contracts").ExecutionToken;
+    expectedRevision: number;
+    config: AgentConfig;
+    toolCall: ToolCall;
+    tool: import("../runtime-events").ToolCallSnapshot;
+    signal: AbortSignal;
+  }): Promise<{ result: ToolResult; revision: number }> {
+    const durableTool = input.config.context.tools.find((candidate) => candidate.name === input.toolCall.name) as DurableTool | undefined;
+    const providerToolCallId = input.toolCall.id;
+    const toolCallId = input.tool.id;
+    let revision = input.expectedRevision;
     const protocolFailure = (error: string): ToolResult => ({ toolCallId: providerToolCallId, toolName: input.toolCall.name, ok: false, content: null, error });
-    if (!tool) {
+    if (!durableTool) {
       const failed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "failed", result: { ok: false, content: null, error: `Tool ${input.toolCall.name} is not available.` } });
       return { result: protocolFailure(`Tool ${input.toolCall.name} is not available.`), revision: failed.run.revision };
     }
@@ -413,7 +468,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     } as const;
     try {
       if (input.config.beforeToolCall) {
-        const decision = await input.config.beforeToolCall({ tool, args: toJsonValue(input.toolCall.args), context, signal: input.signal });
+        const decision = await input.config.beforeToolCall({ tool: durableTool, args: toJsonValue(input.toolCall.args), context, signal: input.signal });
         if (!decision.allow) {
           const failed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "failed", result: { ok: false, content: null, error: decision.reason } });
           return { result: protocolFailure(decision.reason), revision: failed.run.revision };
@@ -429,9 +484,9 @@ export class AgentRuntime implements AgentRuntimeContract {
     revision = started.run.revision;
     progressActive = true;
     try {
-      let result = await tool.execute(toJsonValue(input.toolCall.args), context, input.signal);
+      let result = await durableTool.execute(toJsonValue(input.toolCall.args), context, input.signal);
       assertToolExecutionResult(result);
-      if (input.config.afterToolCall) result = await input.config.afterToolCall({ tool, result, context, signal: input.signal });
+      if (input.config.afterToolCall) result = await input.config.afterToolCall({ tool: durableTool, result, context, signal: input.signal });
       assertToolExecutionResult(result);
       const committed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: result.ok ? "completed" : "failed", result });
       return {

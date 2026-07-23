@@ -28,6 +28,7 @@ import type {
   RunState,
   ToolCommit,
   RunTransitioned,
+  ToolBatchCommit,
   UserInput,
 } from "./contracts";
 import type { DurableStore, OwnedStore } from "./contracts";
@@ -53,6 +54,7 @@ type StoredRun = Mutable<RunRecord>;
 type StoredOwner = Mutable<OwnerLease>;
 type StoredToolCall = {
   id: ToolCallId;
+  providerToolCallId: string;
   agentId: AgentId;
   runId: RunId;
   executionId: ExecutionId;
@@ -449,55 +451,105 @@ export class InMemoryStore implements DurableStore {
     name: string;
     args: import("../runtime-events").JsonValue;
     toolCallId?: ToolCallId;
+    providerToolCallId?: string;
   }): ToolCommit {
+    const providerToolCallId = input.providerToolCallId ?? (input.toolCallId ? String(input.toolCallId) : createId("provider"));
+    const result = this.reserveToolCalls(lease, {
+      runId: input.runId,
+      execution: input.execution,
+      expectedRevision: input.expectedRevision,
+      requestMessageId: input.requestMessageId,
+      calls: [{
+        providerToolCallId,
+        name: input.name,
+        args: input.args,
+        ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
+      }],
+    });
+    return { run: result.run, toolCall: result.toolCalls[0]! };
+  }
+
+  reserveToolCalls(lease: OwnerLease, input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    requestMessageId: MessageId;
+    calls: readonly Readonly<{
+      providerToolCallId: string;
+      name: string;
+      args: import("../runtime-events").JsonValue;
+      toolCallId?: ToolCallId;
+    }>[];
+  }): ToolBatchCommit {
     this.assertOwner(lease);
-    assertToolValue(input.args, "tool.args");
-    const toolCallId = input.toolCallId ?? (createId("tool") as ToolCallId);
-    const operationKey = `tool_reserve:${toolCallId}`;
+    if (input.calls.length === 0) throw new TypeError("calls must be non-empty");
+    const providerIds = new Set<string>();
+    const durableIds = new Set<ToolCallId>();
+    for (const call of input.calls) {
+      if (call.providerToolCallId.trim().length === 0) throw new TypeError("providerToolCallId must be non-empty");
+      if (providerIds.has(call.providerToolCallId)) throw new TypeError("Tool provider IDs must be unique within one response");
+      providerIds.add(call.providerToolCallId);
+      assertToolValue(call.args, "tool.args");
+      if (call.toolCallId !== undefined) {
+        if (durableIds.has(call.toolCallId)) throw new TypeError("Tool Call IDs must be unique within one response");
+        durableIds.add(call.toolCallId);
+      }
+    }
+    const operationKey = `tool_reserve_batch:${input.requestMessageId}`;
     const operationPayload = canonicalJson([
       input.runId,
       input.expectedRevision,
       input.execution.executionId,
       input.requestMessageId,
-      input.name,
-      input.args,
+      input.calls,
     ] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
-    if (replay) return clone(replay as ToolCommit);
+    if (replay) return clone(replay as ToolBatchCommit);
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
-    const existing = this.toolCalls.get(toolCallId);
-    if (existing) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
+    if (this.messages.has(input.requestMessageId)) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     const timestamp = createTimestamp();
-    const toolCall: StoredToolCall = {
-      id: toolCallId,
+    const toolCalls: StoredToolCall[] = input.calls.map((call) => ({
+      id: call.toolCallId ?? (createId("tool") as ToolCallId),
+      providerToolCallId: call.providerToolCallId,
       agentId: run.agentId,
       runId: run.id,
       executionId: input.execution.executionId,
       requestMessageId: input.requestMessageId,
-      name: input.name,
-      args: clone(input.args),
+      name: call.name,
+      args: clone(call.args),
       state: "pending",
       createdAt: timestamp,
       updatedAt: timestamp,
-    };
+    }));
+    for (const toolCall of toolCalls) {
+      if (this.toolCalls.has(toolCall.id)) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
+    }
     const requestMessage: AssistantMessage = {
       id: input.requestMessageId,
       agentId: run.agentId,
       runId: run.id,
       role: "assistant",
-      content: [{ type: "tool_use", toolCallId, name: input.name, input: clone(input.args) }],
+      content: toolCalls.map((toolCall) => ({
+        type: "tool_use" as const,
+        toolCallId: toolCall.id,
+        providerToolCallId: toolCall.providerToolCallId,
+        name: toolCall.name,
+        input: clone(toolCall.args),
+      })),
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: timestamp,
     };
-    if (this.messages.has(requestMessage.id)) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
-    this.toolCalls.set(toolCall.id, toolCall);
+    for (const toolCall of toolCalls) this.toolCalls.set(toolCall.id, toolCall);
     this.messages.set(requestMessage.id, requestMessage);
     run.revision += 1;
     run.updatedAt = timestamp;
     this.appendMessage(run, requestMessage);
-    this.appendToolTransition(run, { from: null, to: "pending" }, toolCall);
-    const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
+    for (const toolCall of toolCalls) this.appendToolTransition(run, { from: null, to: "pending" }, toolCall);
+    const result: ToolBatchCommit = {
+      run: clone(run),
+      toolCalls: toolCalls.map((toolCall) => clone(toolCall) as unknown as ToolCallSnapshot),
+    };
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
   }
@@ -561,7 +613,7 @@ export class InMemoryStore implements DurableStore {
       agentId: run.agentId,
       runId: run.id,
       role: "tool",
-      content: [{ type: "tool_result", toolCallId: toolCall.id, result: clone(input.result) }],
+      content: [{ type: "tool_result", toolCallId: toolCall.id, providerToolCallId: toolCall.providerToolCallId, result: clone(input.result) }],
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: createTimestamp(),
     };
@@ -823,7 +875,7 @@ export class InMemoryStore implements DurableStore {
       agentId: run.agentId,
       runId: run.id,
       role: "tool",
-      content: [{ type: "tool_result", toolCallId: toolCall.id, result }],
+      content: [{ type: "tool_result", toolCallId: toolCall.id, providerToolCallId: toolCall.providerToolCallId, result }],
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: createTimestamp(),
     };
@@ -960,7 +1012,8 @@ class MemoryOwnedStore implements OwnedStore {
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
   async answerInput(input: { runId: RunId; requestId: InputRequestId; expectedRevision: number; input: UserInput; messageId?: MessageId }): Promise<RunRecord> { return this.store.answerInput(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
-  async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
+  async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
+  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
   async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   async commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }

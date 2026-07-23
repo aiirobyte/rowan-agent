@@ -82,14 +82,14 @@ function projectAssistantContent(content: AssistantContent): string | LlmContent
   return content.map((part) => {
     if (part.type === "text") return { ...part };
     if (part.type === "thinking") return { ...part };
-    return { type: "tool_use", id: part.toolCallId, name: part.name, input: part.input };
+    return { type: "tool_use", id: part.providerToolCallId ?? part.toolCallId, name: part.name, input: part.input };
   });
 }
 
 function projectToolContent(content: Extract<Message, { role: "tool" }>["content"]): LlmContentPart[] {
   return content.map((part) => ({
     type: "tool_result",
-    toolUseId: part.toolCallId,
+    toolUseId: part.providerToolCallId ?? part.toolCallId,
     content: jsonText(part.result.content),
     ...(part.result.ok ? {} : { isError: true }),
   }));

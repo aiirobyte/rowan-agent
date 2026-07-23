@@ -33,6 +33,7 @@ export type PhaseExecution = {
   restore(snapshot: PhaseContextSnapshot): void;
   invokeModel(context: PhaseContext): Promise<ModelInvokeOutput>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
+  executeTools(context: AgentContext, toolCalls: readonly ToolCall[]): Promise<readonly ToolResult[]>;
 };
 
 /** Message lifecycle manager for streaming updates */

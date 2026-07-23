@@ -136,7 +136,14 @@ export type InputRequest = Readonly<{ id: InputRequestId; messageId: MessageId; 
 export type OwnerLease = Readonly<{ ownerId: string; token: OwnerToken; epoch: number; expiresAt: string }>;
 export type RunClaim = Readonly<{ run: RunRecord; execution: ExecutionToken; history: readonly Message[] }>;
 export type InputRequiredCommit = Readonly<{ run: RunRecord; prompt: AssistantMessage; request: InputRequest }>;
+export type ToolCallReservation = Readonly<{
+  providerToolCallId: string;
+  name: string;
+  args: JsonValue;
+  toolCallId?: ToolCallId;
+}>;
 export type ToolCommit = Readonly<{ run: RunRecord; toolCall: ToolCallSnapshot }>;
+export type ToolBatchCommit = Readonly<{ run: RunRecord; toolCalls: readonly ToolCallSnapshot[] }>;
 export type RunRecord = Readonly<{
   id: RunId;
   agentId: AgentId;
@@ -234,7 +241,15 @@ export interface OwnedStore {
     name: string;
     args: JsonValue;
     toolCallId?: ToolCallId;
+    providerToolCallId?: string;
   }): Promise<ToolCommit>;
+  reserveToolCalls(input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    requestMessageId: MessageId;
+    calls: readonly ToolCallReservation[];
+  }): Promise<ToolBatchCommit>;
   startToolCall(input: {
     runId: RunId;
     execution: ExecutionToken;

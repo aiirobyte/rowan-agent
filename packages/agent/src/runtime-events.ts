@@ -34,6 +34,8 @@ export type ThinkingContent = Readonly<{ type: "thinking"; thinking: string; sig
 export type ToolUseContent = Readonly<{
   type: "tool_use";
   toolCallId: ToolCallId;
+  /** Provider/model correlation, retained only to reconstruct the next request. */
+  providerToolCallId?: string;
   name: string;
   input: JsonValue;
 }>;
@@ -50,6 +52,8 @@ export type DurableToolResult = Readonly<{
 export type ToolResultContent = Readonly<{
   type: "tool_result";
   toolCallId: ToolCallId;
+  /** Provider/model correlation, retained only to reconstruct the next request. */
+  providerToolCallId?: string;
   result: ToolExecutionResult;
 }>;
 
@@ -115,6 +119,7 @@ export type RunningRunFailure = Extract<
 export type ToolCallState = "pending" | "running" | "completed" | "failed" | "indeterminate";
 export type ToolCallSnapshotBase = Readonly<{
   id: ToolCallId;
+  providerToolCallId: string;
   agentId: AgentId;
   runId: RunId;
   executionId: ExecutionId;
