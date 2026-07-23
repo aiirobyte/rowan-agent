@@ -105,6 +105,7 @@ export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): 
         agentId,
         runId,
         toolCallId: context.toolCallId as never,
+        reportProgress: () => undefined,
       }, signal ?? new AbortController().signal);
       return { toolCallId: context.toolCallId, toolName: tool.name, ...result };
     },

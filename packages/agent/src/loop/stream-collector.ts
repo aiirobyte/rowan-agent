@@ -108,12 +108,11 @@ async function collectStreamResult(input: {
     if (event.type === "text_delta") {
       lastPartial = event.partial;
       if (!activeMessageId) {
-        activeMessageId = input.message.start("assistant", event.text, {
+        activeMessageId = input.message.reserve("assistant", {
           phase: input.metadataPhase,
         });
-      } else {
-        await input.message.update(activeMessageId, event.text);
       }
+      await input.message.update(activeMessageId, event.text);
     }
 
     if (event.type === "tool_call_start" || event.type === "tool_call_delta" || event.type === "tool_call_end") {

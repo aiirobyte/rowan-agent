@@ -353,6 +353,7 @@ type ToolInvocationContext = Readonly<{
   agentId: AgentId;
   runId: RunId;
   toolCallId: ToolCallId;
+  reportProgress(progress: JsonValue): void;
 }>;
 
 type Tool = Readonly<{
@@ -1280,6 +1281,8 @@ Transient rules:
 - bounded per-observer buffering;
 - Message deltas may be coalesced or dropped;
 - Tool progress may be dropped;
+- active Tools may report best-effort JSON progress through
+  `ToolInvocationContext.reportProgress(progress)`;
 - a completed `message_committed` event is authoritative for full content;
 - provisional content without a final Message is discarded at a Run boundary;
 - Runtime checks the current Execution Token before enqueueing local transient

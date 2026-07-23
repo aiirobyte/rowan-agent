@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, type AgentConfig, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
@@ -65,6 +65,86 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
   }
 });
 
+test("AgentRun.observe streams message deltas before the durable boundary", async () => {
+  let releaseFirstDelta!: () => void;
+  const firstDelta = new Promise<void>((resolve) => { releaseFirstDelta = resolve; });
+  let releaseCompletion!: () => void;
+  const completion = new Promise<void>((resolve) => { releaseCompletion = resolve; });
+  const stream: StreamFn = async function* () {
+    await firstDelta;
+    yield {
+      type: "text_delta",
+      text: "Hel",
+      partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Hel" }] },
+    };
+    await completion;
+    yield {
+      type: "text_delta",
+      text: "lo",
+      partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Hello" }] },
+    };
+    yield { type: "done", response: { content: "Hello", stopReason: "stop" } };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "agent-live-observe" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "run-live-observe" });
+    const observed: RunEvent[] = [];
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    const next = async () => {
+      const result = await iterator.next();
+      if (!result.done) observed.push(result.value);
+      return result;
+    };
+    while (true) {
+      const result = await next();
+      if (result.done || (result.value.kind === "run_transitioned" && result.value.to === "running")) break;
+    }
+    let boundarySettled = false;
+    const boundary = run.wait().then((value) => {
+      boundarySettled = true;
+      return value;
+    });
+
+    const firstDelta = next();
+    releaseFirstDelta();
+    await expect(firstDelta).resolves.toMatchObject({
+      done: false,
+      value: { kind: "message_delta", offset: 0, text: "Hel" },
+    });
+    const boundarySettledAtFirstDelta = boundarySettled;
+    const secondDelta = next();
+    releaseCompletion();
+    await expect(secondDelta).resolves.toMatchObject({
+      done: false,
+      value: { kind: "message_delta", offset: 3, text: "lo" },
+    });
+    await boundary;
+    while (!(await next()).done) {}
+
+    expect(boundarySettledAtFirstDelta).toBe(false);
+    const deltas = observed.filter((event) => event.kind === "message_delta");
+    expect(deltas.map((event) => ({ offset: event.offset, text: event.text }))).toEqual([
+      { offset: 0, text: "Hel" },
+      { offset: 3, text: "lo" },
+    ]);
+    expect(new Set(deltas.map((event) => event.messageId)).size).toBe(1);
+    const committed = observed.find(
+      (event): event is Extract<RunEvent, { kind: "message_committed" }> =>
+        event.kind === "message_committed" && event.message.role === "assistant",
+    );
+    expect(committed?.message.id).toBe(deltas[0]?.messageId);
+    expect(observed.at(-1)).toMatchObject({
+      kind: "run_transitioned",
+      to: "completed",
+    });
+  } finally {
+    releaseFirstDelta();
+    releaseCompletion();
+    await runtime.close();
+  }
+});
+
 test("AgentRuntime routes Tool execution through durable lifecycle", async () => {
   let modelCalls = 0;
   let toolContext: { runId: string; toolCallId: string } | undefined;
@@ -114,6 +194,81 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
     expect(toolEvents.map((event) => event.transition.to)).toEqual(["pending", "running", "completed"]);
     expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
   } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRun.observe streams best-effort Tool progress", async () => {
+  let releaseModel!: () => void;
+  const modelReady = new Promise<void>((resolve) => { releaseModel = resolve; });
+  let releaseTool!: () => void;
+  const toolReady = new Promise<void>((resolve) => { releaseTool = resolve; });
+  let modelCalls = 0;
+  const tool = {
+    name: "progress_lookup",
+    description: "Look up a value with progress.",
+    parameters: Type.Object({}),
+    async execute(_args: unknown, context: ToolInvocationContext) {
+      context.reportProgress({ stage: "halfway" });
+      await toolReady;
+      return { ok: true as const, content: { value: 42 } };
+    },
+  };
+  const stream: StreamFn = async function* () {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      await modelReady;
+      const id = "call_progress";
+      const partial = {
+        role: "assistant" as const,
+        contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args: "{}" }],
+      };
+      yield { type: "tool_call_start", id, name: tool.name, partial };
+      yield { type: "tool_call_end", id, name: tool.name, arguments: "{}", partial };
+      yield { type: "done" };
+      return;
+    }
+    yield {
+      type: "text_delta",
+      text: "done",
+      partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] },
+    };
+    yield { type: "done", response: { content: "done", stopReason: "stop" } };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent({
+      ...simpleConfig(stream),
+      context: { systemPrompt: "Test", tools: [tool], skills: [] },
+    } as unknown as AgentConfig, { idempotencyKey: "agent-tool-progress" });
+    const run = await runtime.start(agentId, "use lookup", { idempotencyKey: "run-tool-progress" });
+    const observed: RunEvent[] = [];
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    const next = async () => {
+      const result = await iterator.next();
+      if (!result.done) observed.push(result.value);
+      return result;
+    };
+    while (true) {
+      const result = await next();
+      if (result.done || (result.value.kind === "run_transitioned" && result.value.to === "running")) break;
+    }
+    const progress = next();
+    releaseModel();
+    let progressResult = await progress;
+    while (!progressResult.done && progressResult.value.kind !== "tool_progress") {
+      progressResult = await next();
+    }
+    releaseTool();
+    await run.wait();
+    while (!(await next()).done) {}
+
+    expect(observed.find((event) => event.kind === "tool_progress")).toMatchObject({
+      progress: { stage: "halfway" },
+    });
+  } finally {
+    releaseModel();
+    releaseTool();
     await runtime.close();
   }
 });

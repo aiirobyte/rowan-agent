@@ -17,14 +17,17 @@ export type {
   ExecutionCheckpoint,
   ExecutionToken,
   InputRequiredCommit,
+  MessageDelta,
   Page,
   OwnerLease,
   RunBoundary,
   RunClaim,
+  RunEvent,
   RunRecord,
   RunSnapshot,
   Tool as RuntimeTool,
   ToolInvocationContext,
+  ToolProgress,
   UserInput,
 } from "./contracts";
 export {

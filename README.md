@@ -45,7 +45,11 @@ cp examples/config.yaml .rowan/config.yaml
 
 ## What is Rowan Agent?
 
-The core idea is **Loop Engineering**: the agent loop is treated as reusable product code. Each Run has context, Tools, Phases, Durable Run Events, and a terminal outcome. As those pieces improve, the agent's process improves by building your own `phase`.
+The core idea is **Loop Engineering**: the agent loop is treated as reusable product code. Each Run has context, Tools, Phases, live and Durable Run Events, and a terminal outcome. As those pieces improve, the agent's process improves by building your own `phase`.
+
+For presentation, `run.observe()` follows `RunEvent` values, including live
+message deltas and Tool progress. For reliable processing,
+`runtime.consume()` delivers only replayable `DurableRunEvent` values.
 
 ## Architecture
 

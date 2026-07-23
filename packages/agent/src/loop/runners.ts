@@ -8,7 +8,7 @@ import type {
 } from "../types";
 import { createMessage } from "../types";
 import { createId, createTimestamp } from "../utils";
-import type { ExecutionState, AgentConfig, InputRequestPrompt } from "./types";
+import type { ExecutionState, AgentConfig, InputRequestPrompt, MessageDeltaNotification } from "./types";
 
 // Execution types (loop-level)
 import type {
@@ -182,7 +182,7 @@ async function completeRun(
   outcome: Outcome,
 ): Promise<LoopResult> {
   if (outcome.display) {
-    const messages = createMessageManager(config.context, config.onMessage);
+    const messages = createMessageManager(config.context, config.onMessage, config.onMessageDelta);
     const messageId = messages.start("assistant", outcome.message, { outcomeId: outcome.id });
     await messages.end(messageId);
   }
@@ -224,6 +224,7 @@ function buildToolsWithRouting(
 function createMessageManager(
   context: AgentContext,
   onMessage?: (message: AgentMessage) => Promise<void>,
+  onMessageDelta?: (event: MessageDeltaNotification) => void,
 ): PhaseMessageManager {
   const activeMessages = new Map<string, { message: AgentMessage; emitted: boolean }>();
   const emitStart = (active: { message: AgentMessage; emitted: boolean }) => {
@@ -248,9 +249,16 @@ function createMessageManager(
       const active = activeMessages.get(messageId);
       if (!active) return;
       emitStart(active);
+      const offset = typeof active.message.content === "string"
+        ? active.message.content.length
+        : active.message.content.reduce(
+          (length, part) => length + (part.type === "text" ? part.text.length : 0),
+          0,
+        );
       active.message.content = typeof active.message.content === "string"
         ? active.message.content + delta
         : [...active.message.content, { type: "text", text: delta }];
+      onMessageDelta?.({ messageId, offset, text: delta });
     },
     replaceContent(messageId, content) {
       const active = activeMessages.get(messageId);
@@ -446,7 +454,7 @@ async function runPhaseLoop(
 
     const allTools = buildToolsWithRouting(config, availablePhases);
 
-    const messageManager = createMessageManager(config.context, config.onMessage);
+    const messageManager = createMessageManager(config.context, config.onMessage, config.onMessageDelta);
     const toolExecutionManager = createToolExecutionManager();
 
     const execution = createPhaseExecution(config, state, phase, messageManager, toolExecutionManager, registry);
@@ -1081,7 +1089,7 @@ async function executeParallelPhase(
     },
   };
 
-  const messageManager = createMessageManager({ messages } as AgentContext, config.onMessage);
+  const messageManager = createMessageManager({ messages } as AgentContext, config.onMessage, config.onMessageDelta);
 
   // Inject phase content for both isolated and forked phases using the same
   // user-context representation as the serial path.

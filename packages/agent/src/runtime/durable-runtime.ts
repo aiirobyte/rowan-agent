@@ -16,6 +16,7 @@ import type {
   EventCursor,
   Page,
   RunBoundary,
+  RunEvent,
   RunRecord,
   RunSnapshot,
   RunState,
@@ -24,7 +25,7 @@ import type {
   UserInput,
 } from "./contracts";
 import { assertToolExecutionResult } from "./contracts";
-import type { AgentId, AssistantMessage, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId } from "../runtime-events";
+import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import { pageAgents, pageRuns } from "./read-models";
 import { projectAssistantMessage, projectModelContext } from "./model-context";
@@ -33,7 +34,8 @@ import { InMemoryConfigProvider } from "./config-provider";
 import { createDefaultPhase, DEFAULT_PHASE_ID } from "../harness/phases/default";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
-import { assertJsonValue } from "./json";
+import { assertJsonValue, isJsonValue } from "./json";
+import { TransientRunEventHub } from "./transient-run-events";
 
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_POLL_MS = 25;
@@ -58,14 +60,20 @@ type ConsumerSubscription = {
   done: Deferred;
 };
 
+type ActiveExecution = Readonly<{
+  controller: AbortController;
+  executionId: ExecutionId;
+}>;
+
 export class AgentRuntime implements AgentRuntimeContract {
   private readonly concurrency: number;
   private readonly owned: import("./contracts").OwnedStore;
   private readonly commands: ConfigCommandService;
   private readonly storeIncarnation: string;
   private readonly activeAgents = new Set<AgentId>();
-  private readonly executions = new Map<RunId, AbortController>();
+  private readonly executions = new Map<RunId, ActiveExecution>();
   private readonly consumers = new Map<string, ConsumerSubscription>();
+  private readonly transientEvents = new TransientRunEventHub();
   private heartbeat?: ReturnType<typeof setInterval>;
   private pumping = false;
   private closed = false;
@@ -150,8 +158,9 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (this.closed) return;
     this.closed = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
-    for (const controller of this.executions.values()) controller.abort();
+    for (const execution of this.executions.values()) execution.controller.abort();
     this.executions.clear();
+    this.transientEvents.close();
     for (const subscription of this.consumers.values()) subscription.controller.abort();
     await this.owned.sealAndReleaseOwner();
   }
@@ -174,8 +183,10 @@ export class AgentRuntime implements AgentRuntimeContract {
   async cancel(runId: RunId, reason?: string): Promise<RunBoundary> {
     this.assertOpen();
     const snapshot = await this.owned.snapshotRun(runId);
-      await this.owned.cancelRun({ runId, expectedRevision: snapshot.revision, ...(reason === undefined ? {} : { reason }) });
-    this.executions.get(runId)?.abort();
+    await this.owned.cancelRun({ runId, expectedRevision: snapshot.revision, ...(reason === undefined ? {} : { reason }) });
+    const active = this.executions.get(runId);
+    if (active) this.transientEvents.clear(runId, active.executionId);
+    active?.controller.abort();
     return boundaryFromSnapshot(await this.owned.snapshotRun(runId));
   }
 
@@ -189,6 +200,8 @@ export class AgentRuntime implements AgentRuntimeContract {
         if (!next) return;
         this.activeAgents.add(next.agentId);
         const task = this.execute(next).finally(() => {
+          const execution = this.executions.get(next.id);
+          if (execution) this.transientEvents.clear(next.id, execution.executionId);
           this.activeAgents.delete(next.agentId);
           this.executions.delete(next.id);
           void this.pump();
@@ -228,7 +241,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       const executionId = createId("exec") as import("../runtime-events").ExecutionId;
       claim = await this.owned.claimRun({ runId: run.id, expectedRevision: run.revision, executionId, configToken: token });
       const controller = new AbortController();
-      this.executions.set(run.id, controller);
+      this.executions.set(run.id, { controller, executionId });
       const config = resolution.config;
       const assembly = await assembleExtensions(config);
       const executionConfig: AgentConfig = {
@@ -266,6 +279,23 @@ export class AgentRuntime implements AgentRuntimeContract {
         beforePhase: assembly.beforePhase,
         afterPhase: assembly.afterPhase,
         beforePrompt: assembly.beforePrompt,
+        onMessageDelta: (event) => {
+          const active = this.executions.get(run.id);
+          if (
+            this.closed
+            || controller.signal.aborted
+            || active?.executionId !== claim!.execution.executionId
+          ) return;
+          this.transientEvents.publish({
+            kind: "message_delta",
+            durability: "transient",
+            runId: run.id,
+            executionId: claim!.execution.executionId,
+            messageId: event.messageId as MessageId,
+            offset: event.offset,
+            text: event.text,
+          });
+        },
         onContext: assembly.setContext,
         runtime: {
           tools: ({ toolCall }: { config: import("../loop/types").AgentConfig; toolCall: ToolCall }) => {
@@ -289,15 +319,18 @@ export class AgentRuntime implements AgentRuntimeContract {
       if (result.type === "input_required") {
         const prompt = promptMessage(run, result.request.prompt, result.messages.length);
         await this.owned.commitInputRequired({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, requestId: createId("input") as import("../runtime-events").InputRequestId, prompt, checkpoint: result.checkpoint });
+        this.transientEvents.clear(run.id, claim.execution.executionId);
         return;
       }
       if (result.type === "completed") {
         const output = latestAssistant(run, result.messages, claim.history.length);
         await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, outcome: durableOutcome(result.outcome), ...(output ? { output } : {}) });
+        this.transientEvents.clear(run.id, claim.execution.executionId);
         return;
       }
       const failure: RunFailure = { code: "execution_failed", message: result.error instanceof Error ? result.error.message : "Execution failed." };
       await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, failure });
+      this.transientEvents.clear(run.id, claim.execution.executionId);
     } catch (error) {
       if (!claim && error instanceof RuntimeError && ["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) return;
       if (claim) {
@@ -347,7 +380,37 @@ export class AgentRuntime implements AgentRuntimeContract {
       return { result: protocolFailure(`Tool ${input.toolCall.name} is not available.`), revision: failed.run.revision };
     }
 
-    const context = { agentId: input.run.agentId, runId: input.run.id, toolCallId } as const;
+    let progressActive = false;
+    const context = {
+      agentId: input.run.agentId,
+      runId: input.run.id,
+      toolCallId,
+      reportProgress: (progress: JsonValue) => {
+        const active = this.executions.get(input.run.id);
+        if (
+          !progressActive
+          || this.closed
+          || input.signal.aborted
+          || active?.executionId !== input.execution.executionId
+          || !isJsonValue(progress)
+        ) return;
+        let copy: JsonValue;
+        try {
+          if (JSON.stringify(progress).length > 64 * 1024) return;
+          copy = structuredClone(progress);
+        } catch {
+          return;
+        }
+        this.transientEvents.publish({
+          kind: "tool_progress",
+          durability: "transient",
+          runId: input.run.id,
+          executionId: input.execution.executionId,
+          toolCallId,
+          progress: copy,
+        });
+      },
+    } as const;
     try {
       if (input.config.beforeToolCall) {
         const decision = await input.config.beforeToolCall({ tool, args: toJsonValue(input.toolCall.args), context, signal: input.signal });
@@ -364,6 +427,7 @@ export class AgentRuntime implements AgentRuntimeContract {
 
     const started = await this.owned.startToolCall({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId });
     revision = started.run.revision;
+    progressActive = true;
     try {
       let result = await tool.execute(toJsonValue(input.toolCall.args), context, input.signal);
       assertToolExecutionResult(result);
@@ -378,6 +442,9 @@ export class AgentRuntime implements AgentRuntimeContract {
       const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
       const indeterminate = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "indeterminate", reason, result: { ok: false, content: null, error: reason } });
       return { result: protocolFailure(reason), revision: indeterminate.run.revision };
+    } finally {
+      progressActive = false;
+      this.transientEvents.clearTool(input.run.id, toolCallId);
     }
   }
 
@@ -422,25 +489,39 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (!caughtUp) subscription.caughtUp.resolve();
   }
 
-  async *observe(runId: RunId, options: { after?: EventCursor; signal?: AbortSignal } = {}): AsyncIterable<DurableRunEvent> {
+  async *observe(runId: RunId, options: { after?: EventCursor; signal?: AbortSignal } = {}): AsyncIterable<RunEvent> {
     let cursor = options.after;
-    while (true) {
-      if (options.signal?.aborted) throw abortError();
-      const snapshot = await this.owned.snapshotRun(runId);
-      if (["completed", "failed", "cancelled"].includes(snapshot.state)) {
-        const pending = await this.owned.listEvents(cursor ? { after: cursor } : {});
-        if (!pending.some((event) => event.runId === runId)) return;
+    const subscription = this.transientEvents.subscribe(runId);
+    try {
+      while (true) {
+        if (options.signal?.aborted) throw abortError();
+        const observationVersion = subscription.checkpoint();
+        const snapshot = await this.owned.snapshotRun(runId);
+        if (["completed", "failed", "cancelled"].includes(snapshot.state)) {
+          const pending = await this.owned.listEvents(cursor ? { after: cursor } : {});
+          if (!pending.some((event) => event.runId === runId)) return;
+        }
+        const events = await this.owned.listEvents(cursor ? { after: cursor } : {});
+        for (const event of events) {
+          cursor = event.cursor;
+          if (event.runId !== runId) continue;
+          if (event.kind === "message_committed") {
+            subscription.clearMessage(event.message.id);
+          } else if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
+            subscription.clearTool(event.toolCall.id);
+          }
+          yield event;
+          if (event.kind === "run_transitioned" && ["completed", "failed", "cancelled"].includes(event.to)) return;
+        }
+        const transient = subscription.shift();
+        if (transient) {
+          yield transient;
+          continue;
+        }
+        await Promise.race([subscription.changed(observationVersion), delay(DEFAULT_POLL_MS)]);
       }
-      const events = await this.owned.listEvents(cursor ? { after: cursor } : {});
-      let terminal = false;
-      for (const event of events) {
-        cursor = event.cursor;
-        if (event.runId !== runId) continue;
-        yield event;
-        if (event.kind === "run_transitioned" && ["completed", "failed", "cancelled"].includes(event.to)) terminal = true;
-      }
-      if (terminal) return;
-      await delay(DEFAULT_POLL_MS);
+    } finally {
+      this.transientEvents.unsubscribe(runId, subscription);
     }
   }
 
@@ -460,7 +541,7 @@ export class AgentRuntime implements AgentRuntimeContract {
   private startHeartbeat(): void {
     this.heartbeat = setInterval(() => {
       void this.owned.renewOwner(OWNER_LEASE_MS).catch(() => {
-        for (const controller of this.executions.values()) controller.abort();
+        for (const execution of this.executions.values()) execution.controller.abort();
       });
     }, OWNER_RENEWAL_MS);
     this.heartbeat.unref?.();
@@ -470,7 +551,7 @@ export class AgentRuntime implements AgentRuntimeContract {
 class DurableRun implements AgentRun {
   constructor(private readonly runtime: AgentRuntime, readonly id: RunId) {}
   snapshot(): Promise<RunSnapshot> { return this.runtime.snapshot(this.id); }
-  observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<DurableRunEvent> { return this.runtime.observe(this.id, options); }
+  observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<RunEvent> { return this.runtime.observe(this.id, options); }
   wait(options?: { signal?: AbortSignal }): Promise<RunBoundary> { return this.runtime.wait(this.id, options); }
   respond(input: { requestId: import("../runtime-events").InputRequestId; input: UserInput }): Promise<void> { return this.runtime.respond(this.id, input); }
   cancel(reason?: string): Promise<RunBoundary> { return this.runtime.cancel(this.id, reason); }

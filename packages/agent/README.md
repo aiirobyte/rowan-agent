@@ -1,8 +1,8 @@
 # @rowan-agent/agent
 
-Durable Agent Runtime. The public API consists of `AgentRuntime`, Durable
-Stores, Config Providers, Run handles, and Durable Run Events. An Agent is a
-persistent identity, not a process-local Session object.
+Durable Agent Runtime. The public interface consists of `AgentRuntime`, Durable
+Stores, Config Providers, Run handles, and Run Events. An Agent is a persistent
+identity, not a process-local Session object.
 
 ## Quick start
 
@@ -31,7 +31,13 @@ const agentId = await runtime.createAgent({
 const run = await runtime.start(agentId, "Summarize the workspace.", {
   idempotencyKey: "run-example", // One Agent can have multiple independent Runs
 });
+const observing = (async () => {
+  for await (const event of run.observe()) {
+    if (event.kind === "message_delta") process.stdout.write(event.text);
+  }
+})();
 const boundary = await run.wait();
+await observing;
 await runtime.close();
 ```
 
@@ -40,7 +46,7 @@ await runtime.close();
 1. `AgentRuntime.init({ store })` opens a Runtime Owner with an in-memory Config Provider by default. Pass `configs` when configuration must survive process boundaries.
 2. `createAgent()` creates a persistent Agent identity and binds a configuration snapshot.
 3. `start()` creates a queued Run; `run(runId)` returns a stateless Run handle.
-4. `observe()` reads replayable `DurableRunEvent` values; `wait()` waits for a boundary.
+4. `observe()` follows display-oriented `RunEvent` values; `wait()` waits for an authoritative boundary.
 5. `respond()` continues an `input_required` Run; `cancel()` terminates an unfinished Run.
 6. `close()` seals the Owner and releases the Store.
 
@@ -69,16 +75,29 @@ Tools are supplied through `AgentConfig.context.tools` and persist through:
 When an external side effect cannot be confirmed, the Tool must become
 `indeterminate`; the Run then fails and is never automatically retried.
 
+While running, a Tool may call `context.reportProgress(progress)` with a
+JSON-safe value. Progress is live-only and may be dropped.
+
 ## Events
 
-`run.observe()` and `runtime.consume()` deliver only Durable Run Events:
+`run.observe()` delivers `RunEvent` values for live presentation:
+
+- transient `message_delta` and `tool_progress` events are live-only and
+  best-effort;
+- durable `message_committed`, `run_transitioned`, and `tool_state_changed`
+  events are replayable;
+- a durable `message_committed` event is the authoritative full content if a
+  transient delta was coalesced or dropped.
+
+`runtime.consume()` delivers only `DurableRunEvent` values:
 
 - `message_committed`
 - `run_transitioned`
 - `tool_state_changed`
 
-Events and their corresponding Run aggregate changes commit in one Store
-transaction. Consumers persist their progress through cursors and checkpoints.
+Durable events and their corresponding Run aggregate changes commit in one
+Store transaction. Reliable consumers persist progress through cursors and
+checkpoints; transient events never enter the Durable Store.
 
 ## Resources
 

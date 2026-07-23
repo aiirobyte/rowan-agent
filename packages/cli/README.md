@@ -1,8 +1,8 @@
 # @rowan-agent/cli
 
 Command-line host for the Durable Rowan Agent Runtime. It supports one-shot
-input, interactive input, Run recovery, resource loading, and JSONL Durable Run
-Event logging.
+input, interactive input, live Run output, Run recovery, resource loading, and
+JSONL Durable Run Event logging.
 
 ## Usage
 
@@ -39,6 +39,14 @@ Runtime data is stored in `.rowan/runtime.sqlite`; Run logs are stored in
 The CLI manages lifecycle through `AgentRuntime.init()`, `createAgent()`,
 `start()`, and `run()`. It does not create Sessions or process-local Agent
 objects.
+
+## Output and events
+
+The CLI follows `run.observe()` and renders transient `message_delta` events as
+they arrive. Transient message and Tool progress events are live-only and are
+not written to the Durable Run log. JSONL logs contain only replayable
+`DurableRunEvent` values; the final `message_committed` event remains
+authoritative if a displayed delta was coalesced or dropped.
 
 ## Configuration
 

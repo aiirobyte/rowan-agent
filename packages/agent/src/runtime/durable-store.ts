@@ -739,6 +739,9 @@ export class InMemoryStore implements DurableStore {
   listEvents(lease: OwnerLease, input: { after?: EventCursor } = {}): readonly DurableRunEvent[] {
     this.assertOwner(lease);
     const after = input.after ? this.parseCursor(input.after) : 0;
+    if (after > this.eventSequence) {
+      throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "beyond_waterline" });
+    }
     return clone(this.events.filter((event) => this.parseCursor(event.cursor) > after));
   }
 

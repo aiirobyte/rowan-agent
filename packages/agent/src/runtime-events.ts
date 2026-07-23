@@ -224,3 +224,24 @@ export type ToolStateChanged = DurableEventBase & (
 );
 
 export type DurableRunEvent = MessageCommitted | RunTransitioned | ToolStateChanged;
+
+export type MessageDelta = Readonly<{
+  kind: "message_delta";
+  durability: "transient";
+  runId: RunId;
+  executionId: ExecutionId;
+  messageId: MessageId;
+  offset: number;
+  text: string;
+}>;
+
+export type ToolProgress = Readonly<{
+  kind: "tool_progress";
+  durability: "transient";
+  runId: RunId;
+  executionId: ExecutionId;
+  toolCallId: ToolCallId;
+  progress: JsonValue;
+}>;
+
+export type RunEvent = DurableRunEvent | MessageDelta | ToolProgress;

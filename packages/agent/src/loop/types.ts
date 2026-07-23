@@ -20,6 +20,11 @@ export type InputRequestPrompt = {
 export type BeforePhaseHook = (phaseId: string, input: PhaseContext) => Promise<BeforePhaseResult>;
 export type AfterPhaseHook = (phaseId: string, output: PhaseOutput) => Promise<AfterPhaseResult>;
 export type BeforePromptHook = (phaseId: string, input: PhaseContext) => Promise<PhaseContext>;
+export type MessageDeltaNotification = Readonly<{
+  messageId: string;
+  offset: number;
+  text: string;
+}>;
 
 export type LoopMetrics = {
   /** Number of phase iterations executed. */
@@ -70,6 +75,7 @@ export type AgentConfig = {
   beforePrompt?: BeforePromptHook;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
   onMessage?: (message: AgentMessage) => Promise<void>;
+  onMessageDelta?: (event: MessageDeltaNotification) => void;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */
   waitForInput?: (state?: ExecutionState, inputRequest?: InputRequestPrompt) => Promise<AgentMessage[]>;

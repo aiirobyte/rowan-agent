@@ -15,6 +15,7 @@ import type {
   BeforePhaseHook,
   BeforePromptHook,
   ExecutionState,
+  MessageDeltaNotification,
 } from "../loop/types";
 import type { PhaseRegistry } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
@@ -54,6 +55,7 @@ export type OneShotExecutionInput = Readonly<{
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
   onMessage?: (message: AgentMessage) => Promise<void>;
+  onMessageDelta?: (event: MessageDeltaNotification) => void;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
   runtime?: AgentRuntimePort;
@@ -225,6 +227,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     afterPhase: input.afterPhase,
     beforePrompt: input.beforePrompt,
     onMessage: input.onMessage,
+    onMessageDelta: input.onMessageDelta,
     onOutcome: input.onOutcome,
     onModelTranscript: input.onModelTranscript,
     runtime: input.runtime,

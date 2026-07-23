@@ -13,17 +13,20 @@ import type {
   JsonObject,
   JsonValue,
   Message,
+  MessageDelta,
   MessageId,
   Metadata,
   OwnerToken,
   Outcome,
   RunFailure,
   RunId,
+  RunEvent,
   RunListCursor,
   RunState,
   QueuedRunFailure,
   ToolCallId,
   ToolCallSnapshot,
+  ToolProgress,
   ToolExecutionResult,
   UserContent,
 } from "../runtime-events";
@@ -50,6 +53,7 @@ export type {
   JsonPrimitive,
   JsonValue,
   Message,
+  MessageDelta,
   MessageBase,
   MessageCommitted,
   MessageContent,
@@ -60,6 +64,7 @@ export type {
   Outcome,
   RunFailure,
   RunId,
+  RunEvent,
   RunListCursor,
   RunState,
   RunTransitioned,
@@ -67,6 +72,7 @@ export type {
   ThinkingContent,
   ToolCallId,
   ToolCallSnapshot,
+  ToolProgress,
   ToolCallState,
   ToolExecutionResult,
   ToolMessage,
@@ -79,7 +85,12 @@ export type {
 } from "../runtime-events";
 
 export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
-export type ToolInvocationContext = Readonly<{ agentId: AgentId; runId: RunId; toolCallId: ToolCallId }>;
+export type ToolInvocationContext = Readonly<{
+  agentId: AgentId;
+  runId: RunId;
+  toolCallId: ToolCallId;
+  reportProgress(progress: JsonValue): void;
+}>;
 export type Tool = Readonly<{
   name: string;
   description: string;
@@ -255,7 +266,7 @@ export type DurableConsumer = Readonly<{ caughtUp: Promise<void>; done: Promise<
 export interface AgentRun {
   readonly id: RunId;
   snapshot(): Promise<RunSnapshot>;
-  observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<DurableRunEvent>;
+  observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<RunEvent>;
   wait(options?: { signal?: AbortSignal }): Promise<RunBoundary>;
   respond(input: { requestId: InputRequestId; input: UserInput }): Promise<void>;
   cancel(reason?: string): Promise<RunBoundary>;

@@ -714,11 +714,27 @@ async function promptWithLog(input: {
     const runEventLogger = pinoDurableRunEventLogger(resolvedLogPath, { mode: input.logMode, level: input.logLevel });
     eventLogger = runEventLogger;
     const observe = (async () => {
+      const streamedMessages = new Map<string, string>();
       for await (const event of input.run.observe({ signal: observationController.signal })) {
-      runEventLogger(event);
+        if (event.kind === "message_delta") {
+          const streamed = streamedMessages.get(event.messageId) ?? "";
+          if (event.offset === streamed.length) {
+            process.stdout.write(event.text);
+            streamedMessages.set(event.messageId, streamed + event.text);
+          }
+          continue;
+        }
+        if (event.kind === "tool_progress") continue;
+        runEventLogger(event);
         if (event.kind === "message_committed" && event.message.role === "assistant") {
           const content = formatMessageContent(event.message.content);
-          if (content) process.stdout.write(`${content}\n`);
+          const streamed = streamedMessages.get(event.message.id);
+          if (content && streamed !== undefined) {
+            process.stdout.write(`${content.startsWith(streamed) ? content.slice(streamed.length) : `\n${content}`}\n`);
+          } else if (content) {
+            process.stdout.write(`${content}\n`);
+          }
+          streamedMessages.delete(event.message.id);
         }
         if (event.kind === "tool_state_changed" && event.transition.to === "pending") {
           process.stderr.write(`  ⚙ ${event.toolCall.name}(${formatToolArgsPreview(event.toolCall.name, event.toolCall.args)})\n`);
