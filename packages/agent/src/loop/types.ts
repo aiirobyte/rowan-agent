@@ -66,7 +66,7 @@ export type AgentConfig = {
   stream: StreamFn;
   context: AgentContext;
   /** Durable Run identity passed to generated Phase callbacks. */
-  execution?: PhaseExecutionIdentity;
+  execution: PhaseExecutionIdentity;
   maxAttempts?: number;
   runtime?: AgentRuntimePort;
   signal?: AbortSignal;

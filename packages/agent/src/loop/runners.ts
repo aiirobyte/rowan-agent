@@ -477,7 +477,7 @@ async function runPhaseLoop(
         mode: "serial",
         instanceId: currentPhaseId,
       },
-      execution: config.execution!,
+      execution: config.execution,
       state: {
         current: currentPhaseId,
         available: Array.from(registry.phases.keys()),
@@ -1131,7 +1131,7 @@ async function executeParallelPhase(
       count,
       sourcePhaseId,
     },
-    execution: config.execution!,
+    execution: config.execution,
     state: {
       current: phase.name,
       available: Array.from(registry.phases.keys()),
