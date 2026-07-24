@@ -22,16 +22,16 @@ test("Memory DurableStore keeps queued input out of canonical history until clai
 
   const run = await owner.createRun({ agentId: agent.id, input: "hello", idempotencyKey: "run-1" });
   expect(run.state).toBe("queued");
-  expect((await owner.listEvents()).map((event) => event.kind)).toEqual(["run_transitioned"]);
+  expect((await owner.listEvents()).map((event) => event.kind)).toEqual(["run_state_changed"]);
 
   const claimed = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
   expect(claimed.run.state).toBe("running");
   expect(claimed.history).toHaveLength(1);
   expect(claimed.history[0]?.role).toBe("user");
   expect((await owner.listEvents()).map((event) => event.kind)).toEqual([
-    "run_transitioned",
+    "run_state_changed",
     "message_committed",
-    "run_transitioned",
+    "run_state_changed",
   ]);
 });
 
@@ -81,14 +81,16 @@ test("Memory DurableStore commits input boundaries and terminal outcomes atomica
     createdAt: "2026-07-23T00:00:00.000Z",
   };
   const checkpoint: ExecutionCheckpoint = { codec: "rowan.agent.execution", version: 1, data: { phase: "plan" } };
-  const waiting = await owner.commitInputRequired({
+  const inputRequired = {
     runId: run.id,
     execution: claimed.execution,
     expectedRevision: claimed.run.revision,
     requestId: "request-1" as InputRequestId,
     prompt,
     checkpoint,
-  });
+  };
+  await expect(owner.commitInputRequired({ ...inputRequired, phase: "" })).rejects.toBeInstanceOf(TypeError);
+  const waiting = await owner.commitInputRequired({ ...inputRequired, phase: "plan" });
   expect(waiting.run.state).toBe("input_required");
   const snapshot = await owner.snapshotRun(run.id);
   expect(snapshot.state).toBe("input_required");

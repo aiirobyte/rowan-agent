@@ -52,7 +52,7 @@ One fenced period in which the Scheduler claims an Agent Run and executes it unt
 _Avoid_: Worker, Lease, Agent process
 
 **Input Request**:
-A durable one-shot request for more Agent Input, linked to one prompt Message and one Execution Checkpoint. Its ID is the idempotency identity of its answer.
+A durable one-shot request for more Agent Input, linked to the Phase that requested it, one prompt Message, and one Execution Checkpoint. Its ID is the idempotency identity of its answer.
 _Avoid_: Suspension Promise, pending callback, resume token
 
 **Execution Checkpoint**:

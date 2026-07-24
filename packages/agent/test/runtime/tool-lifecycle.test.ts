@@ -54,9 +54,9 @@ test("DurableStore persists Tool pending → running → terminal lifecycle", as
   expect(completed.toolCall).toMatchObject({ state: "completed", result: { ok: true, toolName: "lookup" } });
   expect((await owner.snapshotRun(run.id)).toolCallCount).toBe(1);
   expect((await owner.listEvents()).map((event) => event.kind)).toEqual([
-    "run_transitioned",
+    "run_state_changed",
     "message_committed",
-    "run_transitioned",
+    "run_state_changed",
     "message_committed",
     "tool_state_changed",
     "tool_state_changed",

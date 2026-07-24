@@ -168,27 +168,27 @@ export type MessageCommitted = DurableEventBase & Readonly<{
   message: Message;
 }>;
 
-export type RunTransitioned = DurableEventBase & (
-  | Readonly<{ kind: "run_transitioned"; from: null; to: "queued" }>
-  | Readonly<{ kind: "run_transitioned"; from: "input_required"; to: "queued" }>
-  | Readonly<{ kind: "run_transitioned"; from: "queued"; to: "running" }>
+export type RunStateChanged = DurableEventBase & (
+  | Readonly<{ kind: "run_state_changed"; from: null; to: "queued" }>
+  | Readonly<{ kind: "run_state_changed"; from: "input_required"; to: "queued" }>
+  | Readonly<{ kind: "run_state_changed"; from: "queued"; to: "running" }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "running";
       to: "input_required";
-      request: Readonly<{ id: InputRequestId; prompt: AssistantMessage }>;
+      request: Readonly<{ id: InputRequestId; phase: string; prompt: AssistantMessage }>;
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "running";
       to: "completed";
       outcome: Outcome;
       output?: AssistantMessage;
     }>
-  | Readonly<{ kind: "run_transitioned"; from: "queued"; to: "failed"; failure: QueuedRunFailure }>
-  | Readonly<{ kind: "run_transitioned"; from: "running"; to: "failed"; failure: RunningRunFailure }>
+  | Readonly<{ kind: "run_state_changed"; from: "queued"; to: "failed"; failure: QueuedRunFailure }>
+  | Readonly<{ kind: "run_state_changed"; from: "running"; to: "failed"; failure: RunningRunFailure }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "queued" | "running" | "input_required";
       to: "cancelled";
       reason?: string;
@@ -228,7 +228,7 @@ export type ToolStateChanged = DurableEventBase & (
     }>
 );
 
-export type DurableRunEvent = MessageCommitted | RunTransitioned | ToolStateChanged;
+export type DurableRunEvent = MessageCommitted | RunStateChanged | ToolStateChanged;
 
 export type MessageDelta = Readonly<{
   kind: "message_delta";

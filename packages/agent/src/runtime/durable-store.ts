@@ -11,6 +11,7 @@ import type {
   ExecutionId,
   ExecutionToken,
   EventCursor,
+  InputRequest,
   InputRequestId,
   InputRequiredCommit,
   Message,
@@ -27,7 +28,7 @@ import type {
   RunSnapshot,
   RunState,
   ToolCommit,
-  RunTransitioned,
+  RunStateChanged,
   ToolBatchCommit,
   UserInput,
 } from "./contracts";
@@ -371,13 +372,15 @@ export class InMemoryStore implements DurableStore {
     execution: ExecutionToken;
     expectedRevision: number;
     requestId?: InputRequestId;
+    phase: string;
     prompt: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
   }): InputRequiredCommit {
     this.assertOwner(lease);
+    if (typeof input.phase !== "string" || input.phase.length === 0) throw new TypeError("phase must be non-empty");
     const requestId = input.requestId ?? (createId("input") as InputRequestId);
     const operationKey = `input_required:${requestId}`;
-    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.prompt.id, input.checkpoint] as never);
+    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.phase, input.prompt.id, input.checkpoint] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as InputRequiredCommit);
     const run = this.requireRun(input.runId);
@@ -388,8 +391,9 @@ export class InMemoryStore implements DurableStore {
       ...clone(input.prompt),
       sequenceWithinRun: this.nextMessageSequence(run.id),
     };
-    const request: { id: InputRequestId; messageId: MessageId; createdAt: string } = {
+    const request: InputRequest = {
       id: requestId,
+      phase: input.phase,
       messageId: prompt.id,
       createdAt: createTimestamp(),
     };
@@ -764,7 +768,7 @@ export class InMemoryStore implements DurableStore {
         const request = run.openInputRequest;
         const prompt = request && this.messages.get(request.messageId);
         if (!prompt || prompt.role !== "assistant") throw new Error(`Run ${run.id} has an invalid input prompt.`);
-        return { ...base, state: "input_required", request: { id: request.id, prompt: clone(prompt) } };
+        return { ...base, state: "input_required", request: { id: request.id, phase: request.phase, prompt: clone(prompt) } };
       }
       case "completed": {
         const output = this.messagesForRun(run.id).filter((message): message is AssistantMessage => message.role === "assistant").at(-1);
@@ -946,22 +950,22 @@ export class InMemoryStore implements DurableStore {
     run: StoredRun,
     from: RunState | null,
     to: RunState,
-    request?: { id: InputRequestId; messageId: MessageId; createdAt: string },
+    request?: InputRequest,
     prompt?: AssistantMessage,
     outcome?: Outcome,
     failure?: RunFailure,
     reason?: string,
   ): void {
-    const transition: RunTransitioned = {
+    const transition: RunStateChanged = {
       ...this.baseEvent(run),
-      kind: "run_transitioned",
+      kind: "run_state_changed",
       from,
       to,
-      ...(to === "input_required" && request && prompt ? { request: { id: request.id, prompt } } : {}),
+      ...(to === "input_required" && request && prompt ? { request: { id: request.id, phase: request.phase, prompt } } : {}),
       ...(to === "completed" && outcome ? { outcome } : {}),
       ...(to === "failed" && failure ? { failure: failure as never } : {}),
       ...(to === "cancelled" && reason ? { reason } : {}),
-    } as RunTransitioned;
+    } as RunStateChanged;
     this.events.push(transition);
   }
 
@@ -1009,7 +1013,7 @@ class MemoryOwnedStore implements OwnedStore {
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
-  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
+  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
   async answerInput(input: { runId: RunId; requestId: InputRequestId; expectedRevision: number; input: UserInput; messageId?: MessageId }): Promise<RunRecord> { return this.store.answerInput(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }

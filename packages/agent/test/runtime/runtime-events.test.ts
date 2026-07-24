@@ -31,13 +31,13 @@ test("Runtime Events are readonly discriminated DTOs owned by agent", () => {
     runId,
     runRevision: 2,
     createdAt: "2026-07-23T00:00:00.000Z",
-    kind: "run_transitioned",
+    kind: "run_state_changed",
     from: "running",
     to: "completed",
     outcome: { id: "outcome-1" as never, message: "done" },
     output: assistant,
   } satisfies DurableRunEvent;
-  expect(event.kind).toBe("run_transitioned");
+  expect(event.kind).toBe("run_state_changed");
   expect(event.output?.role).toBe("assistant");
   const invalid: DurableRunEvent = {
     ...event,

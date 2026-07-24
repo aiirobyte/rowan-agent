@@ -292,6 +292,7 @@ Canonical history is append-only. Compaction, Phase-local prompts, and model-spe
 ```ts
 type InputRequest = Readonly<{
   id: InputRequestId;
+  phase: string;
   messageId: MessageId;
   createdAt: string;
 }>;
@@ -305,9 +306,12 @@ type ExecutionCheckpoint = Readonly<{
 
 The prompt exists once as an `AssistantMessage` in Canonical History.
 `InputRequest.messageId` must reference that Message from the same Agent and
-Run. Input Request history is retained with:
+Run. `InputRequest.phase` is the non-empty Phase ID that requested input; it is
+durable request provenance rather than prompt text or Message metadata. Input
+Request history is retained with:
 
 - open, answered, or cancelled state;
+- requesting Phase ID;
 - prompt Message ID;
 - optional answer Message ID;
 - canonical answer bytes for idempotent replay;
@@ -1004,6 +1008,7 @@ type RunSnapshot = RunSnapshotBase & (
       state: "input_required";
       request: Readonly<{
         id: InputRequestId;
+        phase: string;
         prompt: AssistantMessage;
       }>;
     }>
@@ -1034,6 +1039,7 @@ type RunBoundary =
   | Readonly<{
       type: "input_required";
       requestId: InputRequestId;
+      phase: string;
       prompt: AssistantMessage;
     }>
   | Readonly<{
@@ -1080,7 +1086,7 @@ type DurableEventBase = Readonly<{
 ```ts
 type DurableRunEvent =
   | MessageCommitted
-  | RunTransitioned
+  | RunStateChanged
   | ToolStateChanged;
 ```
 
@@ -1090,52 +1096,53 @@ type MessageCommitted = DurableEventBase & Readonly<{
   message: Message;
 }>;
 
-type RunTransitioned = DurableEventBase & (
+type RunStateChanged = DurableEventBase & (
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: null;
       to: "queued";
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "input_required";
       to: "queued";
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "queued";
       to: "running";
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "running";
       to: "input_required";
       request: Readonly<{
         id: InputRequestId;
+        phase: string;
         prompt: AssistantMessage;
       }>;
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "running";
       to: "completed";
       outcome: Outcome;
       output?: AssistantMessage;
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "queued";
       to: "failed";
       failure: QueuedRunFailure;
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "running";
       to: "failed";
       failure: RunningRunFailure;
     }>
   | Readonly<{
-      kind: "run_transitioned";
+      kind: "run_state_changed";
       from: "queued" | "running" | "input_required";
       to: "cancelled";
       reason?: string;
@@ -1189,31 +1196,31 @@ Fixed event order:
 - batched Tool events in one transaction follow model-request order; independent
   parallel result transactions follow Store commit order and correlate by
   `ToolCallId`;
-- `RunTransitioned`, when present, is the final event for that Run in the
+- `RunStateChanged`, when present, is the final event for that Run in the
   transaction.
 
 ```text
 start:
-  run_transitioned(null → queued)
+  run_state_changed(null → queued)
 
 first claim:
   message_committed(input)
-  → run_transitioned(queued → running)
+  → run_state_changed(queued → running)
 
 later claim:
-  run_transitioned(queued → running)
+  run_state_changed(queued → running)
 
 respond:
   message_committed(answer)
-  → run_transitioned(input_required → queued)
+  → run_state_changed(input_required → queued)
 
 input boundary:
   message_committed(prompt)
-  → run_transitioned(running → input_required)
+  → run_state_changed(running → input_required)
 
 completion:
   message_committed(output, when produced in this transaction)
-  → run_transitioned(running → completed)
+  → run_state_changed(running → completed)
 
 Tool request:
   message_committed(assistant tool use)
@@ -1227,17 +1234,17 @@ Tool determinate result:
   → message_committed(tool result)
 
 simple failure with no open Tools:
-  run_transitioned(current → failed)
+  run_state_changed(current → failed)
 
 clean cancellation:
   tool_state_changed(pending → failed, if any, in model request order)
   → message_committed(determinate result, in the same order)
-  → run_transitioned(current → cancelled)
+  → run_state_changed(current → cancelled)
 
 seal/indeterminate Tool with unresolved calls:
   tool_state_changed(failed or indeterminate, in model request order)
   → message_committed(explicit result, in the same order)
-  → run_transitioned(running → failed)
+  → run_state_changed(running → failed)
 ```
 
 When clean cancellation has no pending Tool, it emits only its Run transition.
@@ -1710,7 +1717,7 @@ Rowan does not add `context.agent()` or infer routing.
 
 Flow:
 
-1. source Run commits a terminal `run_transitioned` event;
+1. source Run commits a terminal `run_state_changed` event;
 2. reliable consumer receives it;
 3. host router filters for a completed Run with explicit output;
 4. router makes a deterministic target and input mapping;
@@ -1719,7 +1726,7 @@ Flow:
 
 ```ts
 if (
-  event.kind !== "run_transitioned"
+  event.kind !== "run_state_changed"
   || event.to !== "completed"
   || !event.output
 ) {

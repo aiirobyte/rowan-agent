@@ -84,7 +84,7 @@ export const publicTypeExports = [
   "RunSnapshot",
   "RunState",
   "RunSummary",
-  "RunTransitioned",
+  "RunStateChanged",
   "RuntimeErrorCode",
   "RuntimeErrorDetails",
   "Skill",

@@ -746,10 +746,10 @@ async function promptWithLog(input: {
         if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
           process.stderr.write(`  ${event.transition.to === "completed" ? "✓" : "✗"} ${event.toolCall.name}\n`);
         }
-        if (event.kind === "run_transitioned" && event.to === "input_required") {
+        if (event.kind === "run_state_changed" && event.to === "input_required") {
           input.onInputWait?.();
         }
-        if (event.kind === "run_transitioned" && ["input_required", "completed", "failed", "cancelled"].includes(event.to)) {
+        if (event.kind === "run_state_changed" && ["input_required", "completed", "failed", "cancelled"].includes(event.to)) {
           return;
         }
       }

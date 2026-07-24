@@ -84,7 +84,7 @@ JSON-safe value. Progress is live-only and may be dropped.
 
 - transient `message_delta` and `tool_progress` events are live-only and
   best-effort;
-- durable `message_committed`, `run_transitioned`, and `tool_state_changed`
+- durable `message_committed`, `run_state_changed`, and `tool_state_changed`
   events are replayable;
 - a durable `message_committed` event is the authoritative full content if a
   transient delta was coalesced or dropped.
@@ -92,7 +92,7 @@ JSON-safe value. Progress is live-only and may be dropped.
 `runtime.consume()` delivers only `DurableRunEvent` values:
 
 - `message_committed`
-- `run_transitioned`
+- `run_state_changed`
 - `tool_state_changed`
 
 Durable events and their corresponding Run aggregate changes commit in one

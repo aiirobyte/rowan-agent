@@ -105,10 +105,14 @@ test("input-required and terminal snapshots require valid committed Assistant me
   const waiting = {
     ...base,
     state: "input_required",
-    request: { id: "request-1" as never, prompt },
+    request: { id: "request-1" as never, phase: "plan", prompt },
   } satisfies RunSnapshot;
   assertValidRunSnapshot(waiting, { committedMessages: [prompt] });
   expect(() => assertValidRunSnapshot(waiting)).toThrow();
+  expect(() => assertValidRunSnapshot({
+    ...waiting,
+    request: { ...waiting.request, phase: "" },
+  }, { committedMessages: [prompt] })).toThrow();
   const invalid = { ...waiting, output: prompt };
   expect(() => assertValidRunSnapshot(invalid as never, { committedMessages: [prompt] })).toThrow();
 

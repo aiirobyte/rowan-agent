@@ -26,7 +26,7 @@ export function eventLogLevel(event: DurableRunEvent): WritableDurableRunEventLo
   if (event.kind === "message_committed") {
     return "debug";
   }
-  if (event.kind === "run_transitioned" && event.to === "failed") {
+  if (event.kind === "run_state_changed" && event.to === "failed") {
     return "warn";
   }
   return "info";

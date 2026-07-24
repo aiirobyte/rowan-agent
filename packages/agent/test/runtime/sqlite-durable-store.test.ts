@@ -195,6 +195,7 @@ test("SQLite DurableStore assigns terminal message sequence after durable Tool m
       runId: inputRun.id,
       execution: inputClaim.execution,
       expectedRevision: inputCompleted.run.revision,
+      phase: "plan",
       prompt: {
         id: "assistant-input-required" as MessageId,
         agentId: agent.id,

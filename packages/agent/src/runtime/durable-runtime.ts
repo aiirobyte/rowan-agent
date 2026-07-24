@@ -339,7 +339,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       });
       if (result.type === "input_required") {
         const prompt = promptMessage(run, result.request.prompt, result.messages.length);
-        await this.owned.commitInputRequired({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, requestId: createId("input") as import("../runtime-events").InputRequestId, prompt, checkpoint: result.checkpoint });
+        await this.owned.commitInputRequired({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, requestId: createId("input") as import("../runtime-events").InputRequestId, phase: result.request.phase, prompt, checkpoint: result.checkpoint });
         this.transientEvents.clear(run.id, claim.execution.executionId);
         return;
       }
@@ -571,7 +571,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             subscription.clearTool(event.toolCall.id);
           }
           yield event;
-          if (event.kind === "run_transitioned" && ["completed", "failed", "cancelled"].includes(event.to)) return;
+          if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) return;
         }
         const transient = subscription.shift();
         if (transient) {
@@ -638,7 +638,7 @@ function durableOutcome(outcome: import("../protocol").Outcome) {
 
 function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
   switch (snapshot.state) {
-    case "input_required": return { type: "input_required", requestId: snapshot.request.id, prompt: snapshot.request.prompt };
+    case "input_required": return { type: "input_required", requestId: snapshot.request.id, phase: snapshot.request.phase, prompt: snapshot.request.prompt };
     case "completed": return { type: "completed", outcome: snapshot.outcome, ...(snapshot.output ? { output: snapshot.output } : {}) };
     case "failed": return { type: "failed", failure: snapshot.failure };
     case "cancelled": return { type: "cancelled", ...(snapshot.reason ? { reason: snapshot.reason } : {}) };

@@ -67,7 +67,7 @@ export type {
   RunEvent,
   RunListCursor,
   RunState,
-  RunTransitioned,
+  RunStateChanged,
   TextContent,
   ThinkingContent,
   ToolCallId,
@@ -132,7 +132,7 @@ export type AgentRecord = Readonly<{
 }>;
 export type ExecutionToken = Readonly<{ runId: RunId; ownerEpoch: number; executionId: ExecutionId }>;
 export type ExecutionCheckpoint = Readonly<{ codec: string; version: number; data: JsonValue }>;
-export type InputRequest = Readonly<{ id: InputRequestId; messageId: MessageId; createdAt: string }>;
+export type InputRequest = Readonly<{ id: InputRequestId; phase: string; messageId: MessageId; createdAt: string }>;
 export type OwnerLease = Readonly<{ ownerId: string; token: OwnerToken; epoch: number; expiresAt: string }>;
 export type RunClaim = Readonly<{ run: RunRecord; execution: ExecutionToken; history: readonly Message[] }>;
 export type InputRequiredCommit = Readonly<{ run: RunRecord; prompt: AssistantMessage; request: InputRequest }>;
@@ -181,13 +181,13 @@ export type RunSnapshotBase = Readonly<{
 }>;
 export type RunSnapshot = RunSnapshotBase & (
   | Readonly<{ state: "queued" | "running" }>
-  | Readonly<{ state: "input_required"; request: Readonly<{ id: InputRequestId; prompt: AssistantMessage }> }>
+  | Readonly<{ state: "input_required"; request: Readonly<{ id: InputRequestId; phase: string; prompt: AssistantMessage }> }>
   | Readonly<{ state: "completed"; outcome: Outcome; output?: AssistantMessage }>
   | Readonly<{ state: "failed"; failure: RunFailure }>
   | Readonly<{ state: "cancelled"; reason?: string }>
 );
 export type RunBoundary =
-  | Readonly<{ type: "input_required"; requestId: InputRequestId; prompt: AssistantMessage }>
+  | Readonly<{ type: "input_required"; requestId: InputRequestId; phase: string; prompt: AssistantMessage }>
   | Readonly<{ type: "completed"; outcome: Outcome; output?: AssistantMessage }>
   | Readonly<{ type: "failed"; failure: RunFailure }>
   | Readonly<{ type: "cancelled"; reason?: string }>;
@@ -215,6 +215,7 @@ export interface OwnedStore {
     execution: ExecutionToken;
     expectedRevision: number;
     requestId?: InputRequestId;
+    phase: string;
     prompt: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
   }): Promise<InputRequiredCommit>;
@@ -393,7 +394,7 @@ export function assertValidRunSnapshot(value: unknown, options: { committedMessa
       if (["request", "outcome", "output", "failure", "reason"].some((key) => key in value)) throw new TypeError("Snapshot contains incompatible state data");
       return;
     case "input_required":
-      if (!isRecord(value.request) || !hasOnlyKeys(value.request, ["id", "prompt"]) || typeof value.request.id !== "string") throw new TypeError("Invalid Input Request snapshot");
+      if (!isRecord(value.request) || !hasOnlyKeys(value.request, ["id", "phase", "prompt"]) || typeof value.request.id !== "string" || typeof value.request.phase !== "string" || value.request.phase.length === 0) throw new TypeError("Invalid Input Request snapshot");
       assertAssistantReference(value.request.prompt, value.agentId, value.runId, options.committedMessages, "request.prompt");
       if (["outcome", "output", "failure", "reason"].some((key) => key in value)) throw new TypeError("Input-required snapshot contains terminal data");
       return;

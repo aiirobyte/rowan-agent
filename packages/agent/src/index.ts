@@ -78,7 +78,7 @@ export type {
   RunSnapshot,
   RunState,
   RunSummary,
-  RunTransitioned,
+  RunStateChanged,
   TextContent,
   ThinkingContent,
   Tool,

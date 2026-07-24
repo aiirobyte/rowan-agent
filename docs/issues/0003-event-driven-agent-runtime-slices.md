@@ -11,7 +11,9 @@ reports actionable old-database recovery guidance. Slice 12 now exposes the
 durable Agent/Run/Execution identity to Phase callbacks, and EverYield derives
 retry-stable Workflow Agent/Run idempotency keys from that identity. EverYield
 also persists a Team-scoped Workflow launch outbox and replays unfinished
-launches during Runtime startup.
+launches during Runtime startup. Input Request Phase provenance is now
+persisted and exposed consistently through snapshots, boundaries, and durable
+transition events.
 
 Remaining acceptance work includes the full cross-Store fault-injection and
 outbox coverage described by Slice 12.
@@ -196,6 +198,8 @@ Acceptance:
 
 - entering input-required leaves no live continuation or occupied execution slot;
 - prompt, request, checkpoint, pinned token, state, revision, and events are atomic;
+- the non-empty requesting Phase ID survives Runtime restart and is exposed by
+  the Input Request snapshot and boundary;
 - `start()` during input-required queues a later Run;
 - same request and answer replays successfully; a different answer conflicts;
 - unsupported checkpoint or unavailable pinned configuration leaves the request open;
@@ -216,6 +220,8 @@ Implement atomic snapshot/cursor reads, durable replay-to-live observation, boun
 Acceptance:
 
 - all durable Event payloads match the public discriminated union;
+- `running → input_required` events expose the same requesting Phase ID as the
+  corresponding snapshot and boundary;
 - snapshot plus cursor produces no replay gap;
 - terminal at or before `after` yields an empty completed iterator;
 - final Message commits reconcile dropped deltas;

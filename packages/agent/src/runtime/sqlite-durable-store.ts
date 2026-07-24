@@ -243,6 +243,7 @@ export class SqliteStore implements DurableStore {
     execution: ExecutionToken;
     expectedRevision: number;
     requestId?: InputRequestId;
+    phase: string;
     prompt: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
   }): Promise<InputRequiredCommit> {
@@ -514,7 +515,7 @@ class SqliteOwnedStore implements OwnedStore {
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
-  commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
+  commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
   answerInput(input: { runId: RunId; requestId: InputRequestId; expectedRevision: number; input: UserInput; messageId?: MessageId }): Promise<RunRecord> { return this.store.answerInput(this.lease, input); }
   commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }

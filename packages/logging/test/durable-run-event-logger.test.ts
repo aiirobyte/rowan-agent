@@ -18,7 +18,7 @@ const event = (overrides: Record<string, unknown> = {}): DurableRunEvent => ({
   runId: "run_1",
   runRevision: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
-  kind: "run_transitioned",
+  kind: "run_state_changed",
   from: "queued",
   to: "running",
   ...overrides,
@@ -31,7 +31,7 @@ test("pino durable event logger writes summary records", async () => {
   logger(event());
   await logger.flush();
   const record = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-  expect(record.eventType).toBe("run_transitioned");
+  expect(record.eventType).toBe("run_state_changed");
   expect(record.agentId).toBe("agt_1");
   expect(record.runId).toBe("run_1");
   expect(record.event).toBeUndefined();
@@ -52,7 +52,7 @@ test("debug durable event logs include redacted event payloads", async () => {
 test("append mode repairs a partial JSONL tail and ignores duplicate complete events", async () => {
   const root = await mkdtemp(join(tmpdir(), "rowan-log-"));
   const path = join(root, "run.jsonl");
-  await writeFile(path, `${JSON.stringify({ eventId: "evt_existing", eventType: "run_transitioned" })}\n{"partial":`, "utf8");
+  await writeFile(path, `${JSON.stringify({ eventId: "evt_existing", eventType: "run_state_changed" })}\n{"partial":`, "utf8");
   const logger = pinoDurableRunEventLogger(path, { mode: "append" });
   logger(event({ id: "evt_existing" }));
   logger(event({ id: "evt_new" }));
@@ -82,7 +82,7 @@ test("console durable event logger writes Pino-shaped records", async () => {
   const logger = consoleDurableRunEventLogger({ stream: { write: (chunk) => { output += chunk; } } });
   logger(event());
   await logger.flush();
-  expect(JSON.parse(output)).toMatchObject({ eventType: "run_transitioned", runId: "run_1" });
+  expect(JSON.parse(output)).toMatchObject({ eventType: "run_state_changed", runId: "run_1" });
 });
 
 test("redactSecrets handles nested credentials", () => {

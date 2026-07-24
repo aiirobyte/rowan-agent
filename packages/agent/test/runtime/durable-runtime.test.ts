@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { AgentRuntime, InMemoryStore, type AgentConfig, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfig, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
@@ -98,7 +101,7 @@ test("AgentRun.observe streams message deltas before the durable boundary", asyn
     };
     while (true) {
       const result = await next();
-      if (result.done || (result.value.kind === "run_transitioned" && result.value.to === "running")) break;
+      if (result.done || (result.value.kind === "run_state_changed" && result.value.to === "running")) break;
     }
     let boundarySettled = false;
     const boundary = run.wait().then((value) => {
@@ -135,7 +138,7 @@ test("AgentRun.observe streams message deltas before the durable boundary", asyn
     );
     expect(committed?.message.id).toBe(deltas[0]?.messageId);
     expect(observed.at(-1)).toMatchObject({
-      kind: "run_transitioned",
+      kind: "run_state_changed",
       to: "completed",
     });
   } finally {
@@ -345,7 +348,7 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
     };
     while (true) {
       const result = await next();
-      if (result.done || (result.value.kind === "run_transitioned" && result.value.to === "running")) break;
+      if (result.done || (result.value.kind === "run_state_changed" && result.value.to === "running")) break;
     }
     const progress = next();
     releaseModel();
@@ -482,6 +485,77 @@ test("AgentRuntime resumes an input-required Run from its durable checkpoint", a
   }
 });
 
+test("input-required Phase survives Runtime restart and remains visible at the public boundary", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-phase-boundary-"));
+  const filename = join(directory, "runtime.sqlite");
+  const phases = new Map<string, Phase>([["task-planning", {
+    name: "task-planning",
+    description: "Plan tasks",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Plan tasks",
+    isolated: false,
+  }], ["task-execution", {
+    name: "task-execution",
+    description: "Execute tasks",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Execute tasks",
+    isolated: false,
+  }]]);
+  const stream: StreamFn = async function* () {
+    const text = "What should we plan?";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: { content: text, stopReason: "stop" } };
+  };
+
+  try {
+    let runId!: RunId;
+    const firstStore = new SqliteStore(filename);
+    const firstRuntime = await AgentRuntime.init({ store: firstStore, concurrency: 1 });
+    try {
+      const agentId = await firstRuntime.createAgent({
+        ...simpleConfig(stream),
+        identity: "phase-boundary-v1",
+        context: {
+          systemPrompt: "Test",
+          tools: [],
+          skills: [],
+          phases: { phases, entryPhaseId: "task-planning" },
+        },
+      } as unknown as AgentConfig, { idempotencyKey: "phase-boundary-agent" });
+      const run = await firstRuntime.start(agentId, "hello", { idempotencyKey: "phase-boundary-run" });
+      runId = run.id;
+      const boundary = await run.wait();
+      expect(boundary.type).toBe("input_required");
+      if (boundary.type !== "input_required") return;
+      expect(boundary.phase).toBe("task-planning");
+    } finally {
+      await firstRuntime.close();
+      firstStore.close();
+    }
+
+    const secondStore = new SqliteStore(filename);
+    const secondRuntime = await AgentRuntime.init({ store: secondStore, concurrency: 1 });
+    try {
+      const recovered = secondRuntime.run(runId);
+      const snapshot = await recovered.snapshot();
+      expect(snapshot.state).toBe("input_required");
+      if (snapshot.state !== "input_required") return;
+      expect(snapshot.request.phase).toBe("task-planning");
+      const boundary = await recovered.wait();
+      expect(boundary.type).toBe("input_required");
+      if (boundary.type !== "input_required") return;
+      expect(boundary.phase).toBe("task-planning");
+    } finally {
+      await secondRuntime.close();
+      secondStore.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Phase callbacks receive the durable Run execution identity", async () => {
   let observed: { agentId: string; runId: string; executionId: string } | undefined;
   const phases = new Map<string, Phase>([["work", {
@@ -562,7 +636,7 @@ test("AgentRuntime consumer receives Run metadata on terminal durable events", a
       consumerId: "metadata-consumer",
       signal: controller.signal,
       onEvent(event) {
-        if (event.kind === "run_transitioned" && event.to === "completed") resolveTerminal(event);
+        if (event.kind === "run_state_changed" && event.to === "completed") resolveTerminal(event);
       },
     });
     await consumer.caughtUp;
@@ -574,7 +648,7 @@ test("AgentRuntime consumer receives Run metadata on terminal durable events", a
     await run.wait();
 
     await expect(terminal).resolves.toMatchObject({
-      kind: "run_transitioned",
+      kind: "run_state_changed",
       to: "completed",
       metadata: { kind: "workflow", invocationId: "invocation-1" },
     });

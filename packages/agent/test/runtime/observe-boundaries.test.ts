@@ -44,8 +44,8 @@ test("AgentRun.observe rejects an Event cursor beyond the Store waterline", asyn
     const observed: RunEvent[] = [];
     for await (const event of run.observe()) observed.push(event);
     const terminal = observed.find(
-      (event): event is Extract<RunEvent, { kind: "run_transitioned" }> =>
-        event.kind === "run_transitioned" && ["completed", "failed", "cancelled"].includes(event.to),
+      (event): event is Extract<RunEvent, { kind: "run_state_changed" }> =>
+        event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to),
     );
     expect(terminal).toBeDefined();
 
@@ -138,9 +138,9 @@ test("AgentRun.observe keeps the next Execution Attempt's deltas across input_re
 
     const firstRunning = await nextMatching(
       iterator,
-      (event) => event.kind === "run_transitioned" && event.to === "running",
+      (event) => event.kind === "run_state_changed" && event.to === "running",
     );
-    expect(firstRunning.kind).toBe("run_transitioned");
+    expect(firstRunning.kind).toBe("run_state_changed");
     releaseFirstAttempt();
     const boundary = await run.wait();
     expect(boundary.type).toBe("input_required");
@@ -157,7 +157,11 @@ test("AgentRun.observe keeps the next Execution Attempt's deltas across input_re
     await run.respond({ requestId: boundary.requestId, input: "production" });
     await earlyDeltaPublished;
     const inputRequired = await iterator.next();
-    expect(inputRequired.value).toMatchObject({ kind: "run_transitioned", to: "input_required" });
+    expect(inputRequired.value).toMatchObject({
+      kind: "run_state_changed",
+      to: "input_required",
+      request: { phase: "plan" },
+    });
 
     const nextEvent = iterator.next();
     releaseProbeDelta();
@@ -172,7 +176,7 @@ test("AgentRun.observe keeps the next Execution Attempt's deltas across input_re
     await run.wait();
     const remaining: RunEvent[] = [];
     for await (const event of { [Symbol.asyncIterator]: () => iterator }) remaining.push(event);
-    expect(remaining.at(-1)).toMatchObject({ kind: "run_transitioned", to: "completed" });
+    expect(remaining.at(-1)).toMatchObject({ kind: "run_state_changed", to: "completed" });
   } finally {
     releaseFirstAttempt();
     releaseProbeDelta();
@@ -234,7 +238,7 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
     const run = await runtime.start(agentId, "use lookup", { idempotencyKey: "reporter-run" });
     const iterator = run.observe()[Symbol.asyncIterator]();
 
-    await nextMatching(iterator, (event) => event.kind === "run_transitioned" && event.to === "running");
+    await nextMatching(iterator, (event) => event.kind === "run_state_changed" && event.to === "running");
     releaseToolRequest();
     const activeProgress = await nextMatching(iterator, (event) => event.kind === "tool_progress");
     expect(activeProgress).toMatchObject({ kind: "tool_progress", progress: { stage: "active" } });
@@ -258,7 +262,7 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
         && !Array.isArray(event.progress)
         && (event.progress as Readonly<Record<string, unknown>>).stage === "late",
     )).toBe(false);
-    expect(remaining.at(-1)).toMatchObject({ kind: "run_transitioned", to: "completed" });
+    expect(remaining.at(-1)).toMatchObject({ kind: "run_state_changed", to: "completed" });
   } finally {
     releaseToolRequest();
     releaseTool();
@@ -295,7 +299,7 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "slow-run" });
     const iterator = run.observe()[Symbol.asyncIterator]();
 
-    await nextMatching(iterator, (event) => event.kind === "run_transitioned" && event.to === "running");
+    await nextMatching(iterator, (event) => event.kind === "run_state_changed" && event.to === "running");
     const firstTransient = iterator.next();
     releaseDeltas();
     await expect(firstTransient).resolves.toMatchObject({
@@ -313,7 +317,7 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
 
     const remaining: RunEvent[] = [];
     for await (const event of { [Symbol.asyncIterator]: () => iterator }) remaining.push(event);
-    expect(remaining.at(-1)).toMatchObject({ kind: "run_transitioned", to: "completed" });
+    expect(remaining.at(-1)).toMatchObject({ kind: "run_state_changed", to: "completed" });
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   } finally {
     releaseDeltas();

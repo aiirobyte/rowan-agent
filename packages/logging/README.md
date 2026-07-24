@@ -37,4 +37,4 @@ writes each JSONL record as one append operation so callbacks from a replaced
 owner cannot interleave bytes.
 
 `runtime.consume()` already yields only Durable Run Events. Their types are
-`message_committed`, `run_transitioned`, and `tool_state_changed`.
+`message_committed`, `run_state_changed`, and `tool_state_changed`.
