@@ -208,6 +208,12 @@ export class AgentRuntime implements AgentRuntimeContract {
         });
         void task;
       }
+    } catch (error) {
+      if (error instanceof RuntimeError && error.code === "runtime_ownership_lost") {
+        for (const execution of this.executions.values()) execution.controller.abort();
+        return;
+      }
+      throw error;
     } finally {
       this.pumping = false;
     }

@@ -18,6 +18,27 @@ function simpleConfig(stream: StreamFn): AgentConfig {
   } as unknown as AgentConfig;
 }
 
+test("AgentRuntime contains expired ownership at the background pump boundary", async () => {
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
+  const inspectable = runtime as unknown as {
+    heartbeat?: ReturnType<typeof setInterval>;
+    pumping: boolean;
+    pump(): Promise<void>;
+  };
+  while (inspectable.pumping) await Bun.sleep(1);
+  if (inspectable.heartbeat) clearInterval(inspectable.heartbeat);
+
+  const realNow = Date.now;
+  const startedAt = realNow();
+  Date.now = () => startedAt + 30_001;
+  try {
+    await expect(inspectable.pump()).resolves.toBeUndefined();
+  } finally {
+    Date.now = realNow;
+    await runtime.close();
+  }
+});
+
 test("AgentRuntime generates a unique idempotency key for ordinary Agent creation", async () => {
   const stream: StreamFn = async function* () { yield { type: "done" }; };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
