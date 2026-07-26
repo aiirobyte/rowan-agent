@@ -32,6 +32,7 @@ import { projectAssistantMessage, projectModelContext } from "./model-context";
 import { assembleExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { createDefaultPhase, DEFAULT_PHASE_ID } from "../harness/phases/default";
+import type { PhaseRegistry } from "../harness/phases/types";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
 import { assertJsonValue, isJsonValue } from "./json";
@@ -265,10 +266,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       const executionContext = projectModelContext({
         context: {
           ...executionConfig.context,
-          phases: executionConfig.context.phases ?? {
-            phases: new Map([[DEFAULT_PHASE_ID, createDefaultPhase()]]),
-            entryPhaseId: DEFAULT_PHASE_ID,
-          },
+          phases: normalizePhaseRegistry(executionConfig.context.phases),
         },
         messages: claim.history,
         agentId: run.agentId,
@@ -653,6 +651,18 @@ function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
 }
 
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegistry {
+  if (registry?.phases.has(DEFAULT_PHASE_ID)) {
+    throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${DEFAULT_PHASE_ID}".`);
+  }
+  return {
+    phases: new Map([
+      [DEFAULT_PHASE_ID, createDefaultPhase()],
+      ...(registry?.phases ?? []),
+    ]),
+    entryPhaseId: registry?.entryPhaseId ?? DEFAULT_PHASE_ID,
+  };
+}
 function cursorSequence(cursor: EventCursor): number { return Number(String(cursor).split(":").at(-1) ?? 0); }
 function abortError(): Error { const error = new Error("Operation aborted."); error.name = "AbortError"; return error; }
 function toJsonValue(value: unknown): JsonValue {
