@@ -40,6 +40,7 @@ import { TransientRunEventHub } from "./transient-run-events";
 
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_POLL_MS = 25;
+const MAX_CONSUMER_IDLE_POLL_MS = 250;
 const OWNER_LEASE_MS = 30_000;
 const OWNER_RENEWAL_MS = 10_000;
 
@@ -523,6 +524,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     let cursor: EventCursor | undefined = registration.cursor;
     const waterline = cursorSequence(registration.waterline);
     let caughtUp = false;
+    let pollMs = DEFAULT_POLL_MS;
     while (!subscription.controller.signal.aborted && !this.closed) {
       const events = await this.owned.listEvents(cursor ? { after: cursor } : {});
       for (const event of events) {
@@ -548,7 +550,10 @@ export class AgentRuntime implements AgentRuntimeContract {
         caughtUp = true;
         subscription.caughtUp.resolve();
       }
-      await delay(DEFAULT_POLL_MS);
+      pollMs = events.length === 0
+        ? Math.min(MAX_CONSUMER_IDLE_POLL_MS, pollMs * 2)
+        : DEFAULT_POLL_MS;
+      await delay(pollMs);
     }
     if (!caughtUp) subscription.caughtUp.resolve();
   }

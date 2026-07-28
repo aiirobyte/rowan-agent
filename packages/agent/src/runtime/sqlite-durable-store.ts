@@ -146,6 +146,7 @@ type OwnerRow = {
 };
 
 type StateRow = { state_json: string };
+type EventRow = { payload_json: string };
 
 type SqliteOperation<T> = (store: InMemoryStore, lease: OwnerLease) => T;
 
@@ -298,7 +299,30 @@ export class SqliteStore implements DurableStore {
   }
 
   async listEvents(lease: OwnerLease, input: { after?: EventCursor } = {}): Promise<readonly DurableRunEvent[]> {
-    return this.invoke(lease, (store, current) => store.listEvents(current, input), false);
+    this.assertOpen();
+    return this.readTransaction(() => {
+      this.requireMatchingOwner(lease, true);
+      const after = input.after ? parseEventCursor(lease, input.after) : 0;
+      if (input.after) {
+        const latest = this.database.query(
+          "SELECT payload_json FROM run_events ORDER BY sequence DESC LIMIT 1",
+        ).get() as EventRow | null;
+        const waterline = latest
+          ? parseEventCursor(
+              lease,
+              (JSON.parse(latest.payload_json) as DurableRunEvent).cursor,
+            )
+          : 0;
+        if (after > waterline) {
+          throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "beyond_waterline" });
+        }
+        if (after === waterline) return [];
+      }
+      const rows = this.database.query(
+        "SELECT payload_json FROM run_events ORDER BY sequence LIMIT -1 OFFSET ?",
+      ).all(after) as EventRow[];
+      return rows.map((row) => JSON.parse(row.payload_json) as DurableRunEvent);
+    });
   }
 
   async openConsumer(lease: OwnerLease, consumerId: string): Promise<ConsumerRegistration> {
@@ -501,6 +525,18 @@ export class SqliteStore implements DurableStore {
     }
   }
 
+  private readTransaction<T>(operation: () => T): T {
+    this.database.run("BEGIN");
+    try {
+      const result = operation();
+      this.database.run("COMMIT");
+      return result;
+    } catch (error) {
+      try { this.database.run("ROLLBACK"); } catch { /* preserve the original error */ }
+      throw error;
+    }
+  }
+
   private assertOpen(): void {
     if (this.closed) throw new RuntimeError("runtime_closed", null);
   }
@@ -541,6 +577,22 @@ function ownerLease(row: OwnerRow): OwnerLease {
     epoch: row.epoch,
     expiresAt: new Date(row.expires_at).toISOString(),
   };
+}
+
+function parseEventCursor(lease: OwnerLease, cursor: EventCursor): number {
+  const value = String(cursor);
+  const separator = value.lastIndexOf(":");
+  const incarnation = separator < 0 ? "" : value.slice(0, separator);
+  const sequence = separator < 0 ? "" : value.slice(separator + 1);
+  const token = String(lease.token);
+  const ownerSuffix = `:${lease.epoch}:${lease.ownerId}`;
+  const expectedIncarnation = token.endsWith(ownerSuffix)
+    ? token.slice(0, -ownerSuffix.length)
+    : "";
+  if (incarnation !== expectedIncarnation || !/^\d+$/.test(sequence)) {
+    throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "wrong_store" });
+  }
+  return Number(sequence);
 }
 
 function ownershipLost(lease: OwnerLease, row: OwnerRow): RuntimeError<"runtime_ownership_lost"> {

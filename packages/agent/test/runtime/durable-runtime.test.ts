@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfig, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfig, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
@@ -637,6 +637,45 @@ test("AgentRuntime retries the same Event before advancing live delivery", async
     await consumer.done;
     expect(attempts.length).toBeGreaterThan(1);
     expect(attempts[0]).toBe(attempts[1]);
+  } finally {
+    controller.abort();
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime backs off an idle durable Consumer after catching up", async () => {
+  const backing = new InMemoryStore();
+  let polls = 0;
+  const store: DurableStore = {
+    async openOwner(input) {
+      const owned = await backing.openOwner(input);
+      return new Proxy(owned, {
+        get(target, property, receiver) {
+          if (property === "listEvents") {
+            return async (...args: Parameters<typeof target.listEvents>) => {
+              polls += 1;
+              return target.listEvents(...args);
+            };
+          }
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+  const controller = new AbortController();
+  const runtime = await AgentRuntime.init({ store });
+  try {
+    const consumer = await runtime.consume({
+      consumerId: "idle-consumer",
+      signal: controller.signal,
+      onEvent() {},
+    });
+    await consumer.caughtUp;
+    await Bun.sleep(250);
+    consumer.stop();
+    await consumer.done;
+    expect(polls).toBeLessThanOrEqual(5);
   } finally {
     controller.abort();
     await runtime.close();

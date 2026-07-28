@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -78,6 +78,41 @@ test("SQLite DurableStore allows one live owner and replays the same Owner ID", 
   } finally {
     firstStore.close();
     secondStore.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore lists materialized Events without hydrating aggregate state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "events.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-events", leaseMs: 10_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent-events" });
+    await owner.createRun({ agentId: agent.id, input: "hello", idempotencyKey: "run-events" });
+
+    const parse = spyOn(JSON, "parse");
+    try {
+      const events = await owner.listEvents();
+      expect(events.length).toBeGreaterThan(0);
+      expect(await owner.listEvents({ after: events[0]!.cursor })).toEqual(events.slice(1));
+      expect(parse.mock.calls.some(([value]) =>
+        typeof value === "string" && value.includes("\"incarnation\":")
+      )).toBeFalse();
+      await expect(owner.listEvents({ after: "another-store:0" as never })).rejects.toMatchObject({
+        code: "invalid_cursor",
+        details: { reason: "wrong_store" },
+      });
+      const incarnation = String(events[0]!.cursor).split(":")[0]!;
+      await expect(owner.listEvents({ after: `${incarnation}:999` as never })).rejects.toMatchObject({
+        code: "invalid_cursor",
+        details: { reason: "beyond_waterline" },
+      });
+    } finally {
+      parse.mockRestore();
+    }
+  } finally {
+    store.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
