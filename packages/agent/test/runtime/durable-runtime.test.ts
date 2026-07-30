@@ -459,7 +459,7 @@ test("AgentRuntime handles are stateless and report missing Runs on first I/O", 
   }
 });
 
-test("AgentRuntime resumes an input-required Run from its durable checkpoint", async () => {
+test("AgentRuntime resumes an input-required Run without replaying its original Agent Input", async () => {
   const phases = new Map<string, Phase>([
     ["plan", {
       name: "plan",
@@ -478,7 +478,9 @@ test("AgentRuntime resumes an input-required Run from its durable checkpoint", a
       isolated: false,
     }],
   ]);
-  const stream: StreamFn = async function* () {
+  const requests: Parameters<StreamFn>[0][] = [];
+  const stream: StreamFn = async function* (request) {
+    requests.push(request);
     const text = "Which target?";
     yield { type: "start", partial: { role: "assistant", contentBlocks: [] } };
     yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
@@ -500,6 +502,11 @@ test("AgentRuntime resumes an input-required Run from its durable checkpoint", a
     await run.respond({ requestId: first.requestId, input: "production" });
     const second = await run.wait();
     expect(second.type).toBe("input_required");
+    expect(requests[1]?.messages
+      .filter(({ role, content }) =>
+        role === "user" && (content === "hello" || content === "production"))
+      .map(({ content }) => content))
+      .toEqual(["hello", "production"]);
     expect((await run.snapshot()).revision).toBeGreaterThan(before.revision);
   } finally {
     await runtime.close();

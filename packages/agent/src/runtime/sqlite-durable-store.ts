@@ -337,7 +337,10 @@ export class SqliteStore implements DurableStore {
     this.assertOpen();
     assertOwnerInput(lease.ownerId, leaseMs);
     return this.immediateTransaction(() => {
-      const row = this.requireMatchingOwner(lease, true);
+      // This transaction races atomically with openOwner(). A delayed
+      // heartbeat may revive the same identity only while its epoch remains
+      // current; an owner that already advanced the epoch still fences it.
+      const row = this.requireMatchingOwner(lease, false);
       const expiresAt = Date.now() + leaseMs;
       this.writeOwner({ ...row, expires_at: expiresAt });
       return { ...lease, expiresAt: new Date(expiresAt).toISOString() };

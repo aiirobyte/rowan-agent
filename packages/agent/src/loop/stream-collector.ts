@@ -13,7 +13,9 @@ import type {
 } from "@rowan-agent/models";
 import type { ModelInvokeOutput, PhaseMessageManager } from "./execution";
 import type { ModelTranscript } from "../protocol/turn";
-import { LoopGuard, EmptyResponseError } from "./errors";
+import { LoopGuard, EmptyResponseError, ModelOutputLimitError } from "./errors";
+
+const MAX_STREAMED_OUTPUT_CHARACTERS = 1024 * 1024;
 
 export type ModelInvokerInput = {
   config: AgentConfig;
@@ -80,8 +82,24 @@ async function collectStreamResult(input: {
   let lastPartial: AssistantMessagePartial | undefined;
   let stopReason: string | undefined;
   let doneResponse: LlmResponse | undefined;
+  let streamedOutputCharacters = 0;
+  const toolCallsWithDeltas = new Set<string>();
 
   for await (const event of input.events) {
+    if (event.type === "text_delta") {
+      streamedOutputCharacters += event.text.length;
+    } else if (event.type === "thinking_delta") {
+      streamedOutputCharacters += event.thinking.length;
+    } else if (event.type === "tool_call_delta") {
+      streamedOutputCharacters += event.arguments.length;
+      toolCallsWithDeltas.add(event.id);
+    } else if (event.type === "tool_call_end" && !toolCallsWithDeltas.has(event.id)) {
+      streamedOutputCharacters += event.arguments.length;
+    }
+    if (streamedOutputCharacters > MAX_STREAMED_OUTPUT_CHARACTERS) {
+      throw new ModelOutputLimitError(MAX_STREAMED_OUTPUT_CHARACTERS);
+    }
+
     const abortResult = LoopGuard.checkAbort(input.config.signal);
     if (abortResult.stopReason !== "none") {
       // Flush the partial assistant reply so it lands in the transcript as a

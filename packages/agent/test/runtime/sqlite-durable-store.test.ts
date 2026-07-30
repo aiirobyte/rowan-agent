@@ -152,6 +152,28 @@ test("SQLite DurableStore persists domain state and fences expired executions", 
   }
 });
 
+test("SQLite DurableStore renews an expired lease until another owner claims it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "renew-expired.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 20 });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    const renewed = await owner.renewOwner(10_000);
+
+    expect(renewed).toMatchObject({
+      ownerId: "owner-1",
+      epoch: owner.lease.epoch,
+      token: owner.lease.token,
+    });
+    await expect(owner.listAgents()).resolves.toEqual([]);
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("SQLite DurableStore assigns terminal message sequence after durable Tool messages", async () => {
   const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
   const filename = join(directory, "tool-terminal.sqlite");

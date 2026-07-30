@@ -10,6 +10,15 @@ export class EmptyResponseError extends Error {
   }
 }
 
+/** Error thrown before an unbounded provider stream can exhaust process memory. */
+export class ModelOutputLimitError extends Error {
+  readonly code = "model_output_limit";
+  constructor(readonly limit: number) {
+    super(`Model output exceeded the ${limit}-character safety limit.`);
+    this.name = "ModelOutputLimitError";
+  }
+}
+
 /** Result with stop reason */
 export type LoopResult = {
   stopReason: "none";

@@ -200,18 +200,22 @@ export class InMemoryStore implements DurableStore {
     return new MemoryOwnedStore(this, clone(this.owner));
   }
 
-  assertOwner(lease: OwnerLease): void {
+  assertOwner(lease: OwnerLease, requireLive = true): void {
     const actual = this.owner;
     if (!actual || actual.token !== lease.token || actual.epoch !== lease.epoch || actual.ownerId !== lease.ownerId) {
       throw ownershipLost(lease, actual, "epoch_advanced");
     }
-    if (Date.parse(actual.expiresAt) <= Date.now()) {
+    if (requireLive && Date.parse(actual.expiresAt) <= Date.now()) {
       throw ownershipLost(lease, actual, "expired");
     }
   }
 
   renewOwner(lease: OwnerLease, leaseMs: number): OwnerLease {
-    this.assertOwner(lease);
+    // Renewal and owner acquisition are serialized by the Store. A late
+    // heartbeat may revive the same identity while its epoch is unchanged;
+    // once another owner advances the epoch, the identity check still fences
+    // this caller.
+    this.assertOwner(lease, false);
     assertLeaseDuration(leaseMs);
     this.owner!.expiresAt = expiry(leaseMs);
     return clone(this.owner!);
@@ -315,23 +319,25 @@ export class InMemoryStore implements DurableStore {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["queued"], actual: run.state });
     }
 
-    const messageId = input.messageId ?? (createId("msg") as MessageId);
     if (run.pinnedConfigToken && input.configToken && run.pinnedConfigToken !== input.configToken) {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["queued"], actual: run.state });
     }
     if (!run.pinnedConfigToken && input.configToken) run.pinnedConfigToken = input.configToken;
-    const userInput = normalizeUserInput(run.input);
-    const message: Message = {
-      id: messageId,
-      agentId: run.agentId,
-      runId: run.id,
-      role: "user",
-      content: userInputContent(userInput),
-      ...(userInputMetadata(userInput) ? { metadata: clone(userInputMetadata(userInput)!) } : {}),
-      sequenceWithinRun: this.nextMessageSequence(run.id),
-      createdAt: createTimestamp(),
-    };
-    this.messages.set(message.id, message);
+    let message: Message | undefined;
+    if (!run.checkpoint) {
+      const userInput = normalizeUserInput(run.input);
+      message = {
+        id: input.messageId ?? (createId("msg") as MessageId),
+        agentId: run.agentId,
+        runId: run.id,
+        role: "user",
+        content: userInputContent(userInput),
+        ...(userInputMetadata(userInput) ? { metadata: clone(userInputMetadata(userInput)!) } : {}),
+        sequenceWithinRun: this.nextMessageSequence(run.id),
+        createdAt: createTimestamp(),
+      };
+      this.messages.set(message.id, message);
+    }
     const execution: ExecutionToken = {
       runId: run.id,
       ownerEpoch: lease.epoch,
@@ -341,7 +347,7 @@ export class InMemoryStore implements DurableStore {
     run.execution = execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
-    this.appendMessage(run, message);
+    if (message) this.appendMessage(run, message);
     this.appendTransition(run, "queued", "running");
     const result = { run: clone(run), execution: clone(execution), history: this.history(run.agentId, run.agentSequence) };
     this.writeOperationReceipt(operationKey, operationPayload, result);

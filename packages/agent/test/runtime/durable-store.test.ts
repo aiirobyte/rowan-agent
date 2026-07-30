@@ -123,6 +123,21 @@ test("Memory DurableStore fences an owner after release", async () => {
   await expect(first.listAgents()).rejects.toBeInstanceOf(RuntimeError);
 });
 
+test("Memory DurableStore renews an expired lease until another owner claims it", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 20 });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const renewed = await owner.renewOwner(10_000);
+
+  expect(renewed).toMatchObject({
+    ownerId: "owner-1",
+    epoch: owner.lease.epoch,
+    token: owner.lease.token,
+  });
+  await expect(owner.listAgents()).resolves.toEqual([]);
+});
+
 test("Memory DurableStore resumes a Consumer from its durable checkpoint", async () => {
   const store = new InMemoryStore();
   const owner = await store.openOwner({ ownerId: "owner-consumer", leaseMs: 10_000 });
