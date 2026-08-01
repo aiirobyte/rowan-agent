@@ -21,8 +21,12 @@ const agentId = await runtime.createAgent({
   identity: "example:v1", // Stable config snapshot identity, not the Agent ID
   model: { provider: "openai", id: "gpt-4o" },
   stream,
-  context: {
-    systemPrompt: "You are helpful.",
+  definition: {
+    name: "workspace-assistant",
+    description: "Assist with the current workspace.",
+    content: "You are helpful.",
+  },
+  resources: {
     tools: createCoreTools({ root: process.cwd() }),
     skills: [],
   },
@@ -68,7 +72,8 @@ lifecycles, and Owner fencing.
 
 ## Tool lifecycle
 
-Tools are supplied through `AgentConfig.context.tools` and persist through:
+Tools are supplied as `AgentConfig.resources.tools`, selected by the
+Definition, and persist through:
 
 `pending → running → completed | failed | indeterminate`
 
@@ -101,5 +106,7 @@ checkpoints; transient events never enter the Durable Store.
 
 ## Resources
 
-`loadSkills()`, `loadPhases()`, and `loadExtensions()` load workspace resources.
-Pass the resulting resources through `AgentConfig.context` or `extensions`.
+`loadSkills()`, `loadPhases()`, and `loadExtensions()` load Resource Candidates.
+Pass them through `AgentConfig.resources`; the Definition's optional name lists
+select from them after Extension assembly. Omitted lists inherit all candidates,
+`[]` selects none, and missing names warn and are skipped.

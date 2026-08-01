@@ -46,8 +46,12 @@ test("Runtime falls back to its built-in default when a custom Phase registry ha
       identity: "phase-normalization-default-v1",
       model: { provider: "test", id: "model" },
       stream,
-      context: {
-        systemPrompt: "Test",
+      definition: {
+        name: "test",
+        description: "Test Agent.",
+        content: "Test",
+      },
+      resources: {
         tools: [],
         skills: [],
         phases,
@@ -93,8 +97,12 @@ test("Runtime preserves an explicit custom Phase entry", async () => {
       identity: "phase-normalization-custom-v1",
       model: { provider: "test", id: "model" },
       stream,
-      context: {
-        systemPrompt: "Test",
+      definition: {
+        name: "test",
+        description: "Test Agent.",
+        content: "Test",
+      },
+      resources: {
         tools: [],
         skills: [],
         phases: {
@@ -137,8 +145,12 @@ test("Runtime rejects a Context Phase that collides with its built-in default", 
       identity: "phase-normalization-collision-v1",
       model: { provider: "test", id: "model" },
       stream,
-      context: {
-        systemPrompt: "Test",
+      definition: {
+        name: "test",
+        description: "Test Agent.",
+        content: "Test",
+      },
+      resources: {
         tools: [],
         skills: [],
         phases: {

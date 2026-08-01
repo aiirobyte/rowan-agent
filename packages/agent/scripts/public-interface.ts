@@ -10,12 +10,15 @@ export const publicValueExports = [
   "loadExtensions",
   "loadPhases",
   "loadSkills",
+  "parseAgentDefinition",
+  "parseFrontmatter",
 ] as const;
 
 export const publicTypeExports = [
   "AfterToolCall",
   "AgentConfig",
-  "AgentDefinitionContext",
+  "AgentDefinition",
+  "AgentResources",
   "AgentId",
   "AgentListCursor",
   "AgentRecord",
@@ -42,6 +45,7 @@ export const publicTypeExports = [
   "ExecutionToken",
   "ExtensionAPI",
   "ExtensionFactory",
+  "FrontmatterResult",
   "HookEvent",
   "HookEventType",
   "HookHandler",

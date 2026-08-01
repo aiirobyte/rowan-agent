@@ -6,6 +6,8 @@ Source: [PRD-0002](../prd/0002-agent-context-capabilities.md)
 
 Decision: [ADR-0003](../adr/0003-assemble-agent-context-capabilities.md)
 
+The implemented Context supply shape is superseded by issue slices 0004.
+
 ## Slice 1: Preserve the public interface
 
 - Keep Tools, Skills, and Phases in Agent Configuration Context.

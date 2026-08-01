@@ -1,14 +1,16 @@
 import { createExtensionRunner } from "../extensions";
 import type { LoadedExtension, RegisteredTool } from "../extensions/types";
 import type { PhaseRegistry } from "../harness/phases/types";
-import type { AgentConfig, AgentDefinitionContext, AfterToolCall, BeforeToolCall, Tool, ToolInvocationContext, ToolExecutionResult } from "./contracts";
+import { DEFAULT_PHASE_ID } from "../harness/phases/default";
+import { selectNamedResources } from "../harness/resource-selection";
+import type { AgentConfig, ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolInvocationContext, ToolExecutionResult } from "./contracts";
 import type { JsonValue } from "../runtime-events";
 import { projectTool } from "./model-context";
 import type { BeforePhaseHook, AfterPhaseHook, BeforePromptHook } from "../loop/types";
 import type { AgentContext, ToolResult } from "../types";
 
 export type ExtensionAssembly = Readonly<{
-  context: AgentDefinitionContext;
+  context: ResolvedAgentContext;
   beforePhase?: BeforePhaseHook;
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
@@ -22,14 +24,22 @@ export type ExtensionAssembly = Readonly<{
 export async function assembleExtensions(
   config: AgentConfig,
 ): Promise<ExtensionAssembly> {
-  if (!config.extensions?.length) return { context: config.context };
+  const selectedExtensions = selectNamedResources(
+    config.resources.extensions ?? [],
+    config.definition.extensions,
+    "Extension",
+  );
+
+  if (selectedExtensions.length === 0) {
+    return { context: resolveDefinitionContext(config) };
+  }
 
   const runner = createExtensionRunner({ cwd: config.cwd });
-  await runner.loadExtensions([...config.extensions] as LoadedExtension[]);
+  await runner.loadExtensions(selectedExtensions as LoadedExtension[]);
   runner.bind();
 
   const extensionTools = runner.getAllRegisteredTools().map(adaptExtensionTool);
-  const tools = [...config.context.tools];
+  const tools = [...config.resources.tools];
   const names = new Set(tools.map((tool) => tool.name));
   for (const tool of extensionTools) {
     if (names.has(tool.name)) throw new TypeError(`Extension Tool collides with Context Tool "${tool.name}"`);
@@ -38,9 +48,10 @@ export async function assembleExtensions(
   }
 
   const extensionPhases = runner.createPhaseRegistry({ entryPhaseId: null });
-  const phases = mergePhases(config.context.phases, extensionPhases);
+  const phases = mergePhases(config.resources.phases, extensionPhases);
+  const context = resolveDefinitionContext(config, { tools, phases });
   return {
-    context: { ...config.context, tools, ...(phases ? { phases } : {}) },
+    context,
     beforePhase: (phaseId, input) => runner.emitBeforePhase(phaseId, input),
     afterPhase: (phaseId, output) => runner.emitAfterPhase(phaseId, output),
     beforePrompt: (phaseId, input) => runner.emitBeforePrompt(phaseId, input),
@@ -57,6 +68,44 @@ export async function assembleExtensions(
     setContext: (context) => {
       runner.currentContext = context;
     },
+  };
+}
+
+function resolveDefinitionContext(
+  config: AgentConfig,
+  assembled: Readonly<{ tools?: readonly Tool[]; phases?: PhaseRegistry }> = {},
+): ResolvedAgentContext {
+  const tools = selectNamedResources(
+    assembled.tools ?? config.resources.tools,
+    config.definition.tools,
+    "Tool",
+  );
+  const skills = selectNamedResources(
+    config.resources.skills,
+    config.definition.skills,
+    "Skill",
+  );
+  const candidateRegistry = assembled.phases ?? config.resources.phases;
+  const selectedPhases = selectNamedResources(
+    [...(candidateRegistry?.phases.values() ?? [])],
+    config.definition.phases,
+    "Phase",
+  );
+  const phases = new Map(selectedPhases.map((phase) => [phase.name, phase]));
+  const requestedEntry = config.definition.entryPhase ?? candidateRegistry?.entryPhaseId ?? null;
+  const entryPhaseId = requestedEntry === DEFAULT_PHASE_ID
+    ? DEFAULT_PHASE_ID
+    : requestedEntry && phases.has(requestedEntry)
+    ? requestedEntry
+    : null;
+  if (requestedEntry && requestedEntry !== DEFAULT_PHASE_ID && !phases.has(requestedEntry)) {
+    console.warn(`Phase entry "${requestedEntry}" is not available; Rowan will use "default".`);
+  }
+  return {
+    systemPrompt: config.definition.content,
+    tools,
+    skills,
+    phases: { phases, entryPhaseId },
   };
 }
 

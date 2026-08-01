@@ -28,6 +28,7 @@ import type {
   PhaseRegistry,
 } from "../harness/phases";
 import { readPhaseContent } from "../harness/phases";
+import { selectNamedResources } from "../harness/resource-selection";
 
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
 import type { RouteToolArgs } from "../harness/tools";
@@ -461,12 +462,8 @@ async function runPhaseLoop(
 
     // Build PhaseContext for this phase
     // phase-filtered tools/skills; route tool always included
-    const phaseTools = phase.tools
-      ? allTools.filter(t => t.name === PhaseRouteTool || phase.tools!.includes(t.name))
-      : allTools;
-    const phaseSkills = phase.skills
-      ? config.context.skills.filter(s => phase.skills!.includes(s.name))
-      : config.context.skills;
+    const phaseTools = selectPhaseTools(allTools, phase.tools);
+    const phaseSkills = selectNamedResources(config.context.skills, phase.skills, "Skill");
 
     let phaseContext: PhaseContext = {
       systemPrompt: config.context.systemPrompt,
@@ -1107,12 +1104,8 @@ async function executeParallelPhase(
   const messages = [...context];
 
   const allTools = buildToolsWithRouting(config, availablePhases);
-  const phaseTools = phase.tools
-    ? allTools.filter(t => t.name === PhaseRouteTool || phase.tools!.includes(t.name))
-    : allTools;
-  const phaseSkills = phase.skills
-    ? config.context.skills.filter(s => phase.skills!.includes(s.name))
-    : config.context.skills;
+  const phaseTools = selectPhaseTools(allTools, phase.tools);
+  const phaseSkills = selectNamedResources(config.context.skills, phase.skills, "Skill");
 
   // Both isolated and forked phases use the host system prompt. Phase content
   // is always injected as a user context message below.
@@ -1166,6 +1159,15 @@ async function executeParallelPhase(
     : output.payload);
 
   return { instanceId, phaseId: phase.name, payload: resultPayload, content: output.message };
+}
+
+function selectPhaseTools(
+  candidates: readonly Tool[],
+  names: readonly string[] | undefined,
+): Tool[] {
+  const routing = candidates.filter(({ name }) => name === PhaseRouteTool);
+  const ordinary = candidates.filter(({ name }) => name !== PhaseRouteTool);
+  return [...selectNamedResources(ordinary, names, "Tool"), ...routing];
 }
 
 async function waitForBackgroundTasks(

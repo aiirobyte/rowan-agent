@@ -33,6 +33,8 @@ import type {
 import type { Skill } from "../protocol";
 import type { PhaseRegistry } from "../harness/phases/types";
 import type { LoadedExtension } from "../extensions/types";
+import type { AgentDefinition } from "../harness/definitions";
+import { assertAgentDefinition } from "../harness/definitions";
 import { assertJsonValue, assertUtf8ByteLimit, canonicalJson, isJsonValue } from "./json";
 
 export type {
@@ -110,12 +112,23 @@ export type AfterToolCall = (input: Readonly<{
   context: ToolInvocationContext;
   signal: AbortSignal;
 }>) => ToolExecutionResult | Promise<ToolExecutionResult>;
-export type AgentDefinitionContext = Readonly<{ systemPrompt: string; tools: readonly Tool[]; skills: readonly Skill[]; phases?: PhaseRegistry }>;
+export type AgentResources = Readonly<{
+  tools: readonly Tool[];
+  skills: readonly Skill[];
+  phases?: PhaseRegistry;
+  extensions?: readonly LoadedExtension[];
+}>;
+export type ResolvedAgentContext = Readonly<{
+  systemPrompt: string;
+  tools: readonly Tool[];
+  skills: readonly Skill[];
+  phases?: PhaseRegistry;
+}>;
 export type AgentConfig = Readonly<{
   identity: string;
-  context: AgentDefinitionContext;
+  definition: AgentDefinition;
+  resources: AgentResources;
   cwd?: string;
-  extensions?: readonly LoadedExtension[];
   maxAttempts?: number;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
@@ -416,8 +429,11 @@ export function assertValidRunSnapshot(value: unknown, options: { committedMessa
 export function assertAgentConfig(config: AgentConfig): void {
   if (typeof config.identity !== "string" || config.identity.length === 0) throw new TypeError("config.identity must be non-empty");
   assertUtf8ByteLimit(config.identity, IDENTITY_LIMIT, "config.identity");
-  if (!config.context || typeof config.context.systemPrompt !== "string") throw new TypeError("config.context is invalid");
-  for (const tool of config.context.tools) projectToolDefinition(tool);
+  assertAgentDefinition(config.definition);
+  if (!config.resources || !Array.isArray(config.resources.tools) || !Array.isArray(config.resources.skills)) {
+    throw new TypeError("config.resources is invalid");
+  }
+  for (const tool of config.resources.tools) projectToolDefinition(tool);
 }
 export function assertToolExecutionResult(value: unknown): asserts value is ToolExecutionResult {
   if (!isToolResult(value)) throw new TypeError("Tool result must be JSON-safe and contain no Runtime identity");

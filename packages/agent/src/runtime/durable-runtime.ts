@@ -67,6 +67,12 @@ type ActiveExecution = Readonly<{
   executionId: ExecutionId;
 }>;
 
+type ExecutionToolConfig = Readonly<{
+  tools: readonly DurableTool[];
+  beforeToolCall?: AgentConfig["beforeToolCall"];
+  afterToolCall?: AgentConfig["afterToolCall"];
+}>;
+
 export class AgentRuntime implements AgentRuntimeContract {
   private readonly concurrency: number;
   private readonly owned: import("./contracts").OwnedStore;
@@ -248,17 +254,11 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
       const executionId = createId("exec") as import("../runtime-events").ExecutionId;
       claim = await this.owned.claimRun({ runId: run.id, expectedRevision: run.revision, executionId, configToken: token });
+      executionRevision = claim.run.revision;
       const controller = new AbortController();
       this.executions.set(run.id, { controller, executionId });
       const config = resolution.config;
       const assembly = await assembleExtensions(config);
-      const executionConfig: AgentConfig = {
-        ...config,
-        context: assembly.context,
-        ...(assembly.beforeToolCall ? { beforeToolCall: assembly.beforeToolCall } : {}),
-        ...(assembly.afterToolCall ? { afterToolCall: assembly.afterToolCall } : {}),
-      };
-      executionRevision = claim.run.revision;
       let toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream
         ? config.model as ModelRef
@@ -266,13 +266,18 @@ export class AgentRuntime implements AgentRuntimeContract {
       const stream = "stream" in config && config.stream ? config.stream as StreamFn : createModelStream(config.model as never);
       const executionContext = projectModelContext({
         context: {
-          ...executionConfig.context,
-          phases: normalizePhaseRegistry(executionConfig.context.phases),
+          ...assembly.context,
+          phases: normalizePhaseRegistry(assembly.context.phases),
         },
         messages: claim.history,
         agentId: run.agentId,
         runId: run.id,
       });
+      const executionTools: ExecutionToolConfig = {
+        tools: assembly.context.tools,
+        beforeToolCall: assembly.beforeToolCall ?? config.beforeToolCall,
+        afterToolCall: assembly.afterToolCall ?? config.afterToolCall,
+      };
       const result = await executeOnce({
         canonicalMessages: executionContext.messages,
         context: executionContext,
@@ -283,7 +288,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         },
         model,
         stream,
-        maxAttempts: executionConfig.maxAttempts,
+        maxAttempts: config.maxAttempts,
         checkpoint: claim.run.checkpoint,
         signal: controller.signal,
         beforePhase: assembly.beforePhase,
@@ -314,7 +319,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 run,
                 execution: claim!.execution,
                 expectedRevision: executionRevision,
-                config: executionConfig,
+                toolConfig: executionTools,
                 toolCalls: [toolCall],
                 signal: controller.signal,
               });
@@ -330,7 +335,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 run,
                 execution: claim!.execution,
                 expectedRevision: executionRevision,
-                config: executionConfig,
+                toolConfig: executionTools,
                 toolCalls,
                 signal: controller.signal,
               });
@@ -382,7 +387,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     run: RunRecord;
     execution: import("./contracts").ExecutionToken;
     expectedRevision: number;
-    config: AgentConfig;
+    toolConfig: ExecutionToolConfig;
     toolCall: ToolCall;
     signal: AbortSignal;
   }): Promise<{ result: ToolResult; revision: number }> {
@@ -394,7 +399,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     run: RunRecord;
     execution: import("./contracts").ExecutionToken;
     expectedRevision: number;
-    config: AgentConfig;
+    toolConfig: ExecutionToolConfig;
     toolCalls: readonly ToolCall[];
     signal: AbortSignal;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
@@ -430,12 +435,12 @@ export class AgentRuntime implements AgentRuntimeContract {
     run: RunRecord;
     execution: import("./contracts").ExecutionToken;
     expectedRevision: number;
-    config: AgentConfig;
+    toolConfig: ExecutionToolConfig;
     toolCall: ToolCall;
     tool: import("../runtime-events").ToolCallSnapshot;
     signal: AbortSignal;
   }): Promise<{ result: ToolResult; revision: number }> {
-    const durableTool = input.config.context.tools.find((candidate) => candidate.name === input.toolCall.name) as DurableTool | undefined;
+    const durableTool = input.toolConfig.tools.find((candidate) => candidate.name === input.toolCall.name);
     const providerToolCallId = input.toolCall.id;
     const toolCallId = input.tool.id;
     let revision = input.expectedRevision;
@@ -477,8 +482,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       },
     } as const;
     try {
-      if (input.config.beforeToolCall) {
-        const decision = await input.config.beforeToolCall({ tool: durableTool, args: toJsonValue(input.toolCall.args), context, signal: input.signal });
+      if (input.toolConfig.beforeToolCall) {
+        const decision = await input.toolConfig.beforeToolCall({ tool: durableTool, args: toJsonValue(input.toolCall.args), context, signal: input.signal });
         if (!decision.allow) {
           const failed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "failed", result: { ok: false, content: null, error: decision.reason } });
           return { result: protocolFailure(decision.reason), revision: failed.run.revision };
@@ -496,7 +501,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     try {
       let result = await durableTool.execute(toJsonValue(input.toolCall.args), context, input.signal);
       assertToolExecutionResult(result);
-      if (input.config.afterToolCall) result = await input.config.afterToolCall({ tool: durableTool, result, context, signal: input.signal });
+      if (input.toolConfig.afterToolCall) result = await input.toolConfig.afterToolCall({ tool: durableTool, result, context, signal: input.signal });
       assertToolExecutionResult(result);
       const committed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: result.ok ? "completed" : "failed", result });
       return {

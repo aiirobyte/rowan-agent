@@ -9,6 +9,8 @@ export { RuntimeError, isRuntimeError } from "./runtime/errors";
 export { loadSkills } from "./harness/skills";
 export { loadPhases } from "./harness/phases/loader";
 export { loadExtensionsFromPath as loadExtensions } from "./extensions/loader";
+export { parseAgentDefinition } from "./harness/definitions";
+export { parseFrontmatter } from "./harness/loader";
 
 export function createCoreTools(input: CoreToolContext = {}): RuntimeTool[] {
   return createLegacyCoreTools(input).map((tool) => ({
@@ -26,7 +28,7 @@ export function createCoreTools(input: CoreToolContext = {}): RuntimeTool[] {
 
 export type {
   AgentConfig,
-  AgentDefinitionContext,
+  AgentResources,
   AgentId,
   AgentListCursor,
   AgentRecord,
@@ -97,6 +99,9 @@ export type {
   UserInput,
   UserMessage,
 } from "./runtime/contracts";
+
+export type { AgentDefinition } from "./harness/definitions";
+export type { FrontmatterResult } from "./harness/loader";
 
 export type {
   AnyRuntimeError,

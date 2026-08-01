@@ -89,12 +89,20 @@ export function validateConfigResolution(
 }
 
 function snapshotConfig(config: AgentConfig): AgentConfig {
-  const context = Object.freeze({
-    ...config.context,
-    tools: Object.freeze([...config.context.tools]),
-    skills: Object.freeze([...config.context.skills]),
+  const definition = Object.freeze({
+    ...config.definition,
+    ...(config.definition.tools ? { tools: Object.freeze([...config.definition.tools]) } : {}),
+    ...(config.definition.skills ? { skills: Object.freeze([...config.definition.skills]) } : {}),
+    ...(config.definition.phases ? { phases: Object.freeze([...config.definition.phases]) } : {}),
+    ...(config.definition.extensions ? { extensions: Object.freeze([...config.definition.extensions]) } : {}),
   });
-  return Object.freeze({ ...config, context });
+  const resources = Object.freeze({
+    ...config.resources,
+    tools: Object.freeze([...config.resources.tools]),
+    skills: Object.freeze([...config.resources.skills]),
+    ...(config.resources.extensions ? { extensions: Object.freeze([...config.resources.extensions]) } : {}),
+  });
+  return Object.freeze({ ...config, definition, resources });
 }
 
 function assertConfigIdentity(identity: string): void {

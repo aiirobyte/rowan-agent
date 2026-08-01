@@ -133,8 +133,8 @@ test("Tool schemas retain TypeBox and project only JSON-safe provider data", () 
   const config = {
     identity: "config-1",
     model: { provider: "test", id: "model" },
-    context: {
-      systemPrompt: "system",
+    definition: { name: "test", description: "Test Agent.", content: "system" },
+    resources: {
       tools: [{
         name: "lookup",
         description: "Look something up",
@@ -145,12 +145,12 @@ test("Tool schemas retain TypeBox and project only JSON-safe provider data", () 
     },
     stream: async function* () {},
   } satisfies AgentConfig;
-  expect(projectToolDefinition(config.context.tools[0]!)).toEqual({
+  expect(projectToolDefinition(config.resources.tools[0]!)).toEqual({
     name: "lookup",
     description: "Look something up",
     parameters: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
   });
-  expect(() => projectToolDefinition({ ...config.context.tools[0]!, parameters: { execute: () => undefined } as never })).toThrow();
+  expect(() => projectToolDefinition({ ...config.resources.tools[0]!, parameters: { execute: () => undefined } as never })).toThrow();
   expect(() => assertToolExecutionResult({ ok: true, content: null, toolCallId: "provider-id" })).toThrow();
   expect(() => assertAgentConfig({ ...config, identity: "" })).toThrow();
   // @ts-expect-error Provider correlation IDs are not durable ToolCall IDs.

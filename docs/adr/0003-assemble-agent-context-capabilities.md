@@ -4,6 +4,10 @@ status: accepted, amended by ADR-0004
 
 # Assemble Agent Context capabilities internally
 
+> ADR-0005 supersedes the concrete `AgentConfig.context` supply interface and
+> the rejection of Agent-level name selections. Extension-first assembly,
+> collision safety, and Phase-local narrowing remain active.
+
 `AgentConfig.context.tools`, `skills`, and `phases` remain the only host-facing
 resource-supply interface. Rowan exposes no parallel `allowedTools`,
 `allowedSkills`, or `allowedPhases` fields on Agent Configuration.

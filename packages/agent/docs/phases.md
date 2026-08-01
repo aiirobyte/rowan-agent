@@ -476,7 +476,7 @@ interface PhaseState {
 
 ## Reloading File Phases
 
-The durable Runtime does not read phase files automatically. Load them with the standalone `loadPhases()` helper and include the resulting `PhaseRegistry` in `AgentConfig.context.phases`. The Runtime merges that registry with its built-in `"default"` phase for each execution; configured Extensions are assembled at the same seam.
+The durable Runtime does not read phase files automatically. Load them with the standalone `loadPhases()` helper and include the resulting `PhaseRegistry` in `AgentConfig.resources.phases`. The Runtime resolves the Agent Definition after configured Extensions, then merges the selected registry with its built-in `"default"` phase for each execution.
 
 To pick up file edits, call `loadPhases()` again and create a new immutable configuration snapshot with the refreshed registry. Existing Runs continue using their pinned configuration token.
 
@@ -571,13 +571,18 @@ interface PhaseRegistry {
 loadPhases(targetPath: string): Promise<PhaseRegistry>
 ```
 
-Pass the loaded `PhaseRegistry` into `AgentConfig.context.phases`:
+Pass the loaded `PhaseRegistry` into `AgentConfig.resources.phases`:
 
 ```typescript
 const phases = await loadPhases("./.rowan/phases");
 const agentId = await runtime.createAgent({
   identity: "workspace-v1",
-  context: { ...baseContext, phases },
+  definition: {
+    name: "workspace",
+    description: "Work in the current workspace.",
+    content: "Complete the requested workspace task.",
+  },
+  resources: { tools, skills, phases },
   model,
   stream,
 });

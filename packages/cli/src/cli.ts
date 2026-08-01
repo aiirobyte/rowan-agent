@@ -420,8 +420,8 @@ type CliAgentListItem = {
 };
 type AgentResources = {
   skills: Skill[];
-  phases: NonNullable<AgentConfig["context"]["phases"]>;
-  extensions: NonNullable<AgentConfig["extensions"]>;
+  phases: NonNullable<AgentConfig["resources"]["phases"]>;
+  extensions: NonNullable<AgentConfig["resources"]["extensions"]>;
 };
 type ConfiguredAgent = {
   runtime: AgentRuntime;
@@ -613,17 +613,21 @@ async function createConfiguredAgent(
     identity: `cli-v2:${defaultModelRef.provider}/${defaultModelRef.id}`,
     model: defaultModelRef,
     stream: createModelStream(),
-    context: {
-      systemPrompt: [
+    definition: {
+      name: "rowan-cli",
+      description: "General-purpose Rowan CLI Agent.",
+      content: [
         "You are Rowan, a helpful assistant that can assist users with a wide variety of tasks.",
         "",
         "You operate as an agent — you can read and write files, execute commands, and use various tools to accomplish tasks on behalf of the user.",
       ].join("\n"),
+    },
+    resources: {
       tools,
       skills,
       phases: resources.phases,
+      extensions: resources.extensions,
     },
-    extensions: resources.extensions,
   };
 
   await mkdir(workspaceRunsDir(workspace), { recursive: true });

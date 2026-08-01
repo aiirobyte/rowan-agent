@@ -11,4 +11,5 @@ test("public value exports snapshot", () => {
   expect(typeof agentExports.loadSkills).toBe("function");
   expect(typeof agentExports.loadPhases).toBe("function");
   expect(typeof agentExports.loadExtensions).toBe("function");
+  expect(typeof agentExports.parseFrontmatter).toBe("function");
 });

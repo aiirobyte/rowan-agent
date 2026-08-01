@@ -13,8 +13,12 @@ try {
     identity: "example:concise-assistant",
     model: { provider: "openai", id: "gpt-4.1-mini" },
     stream: createModelStream(),
-    context: {
-      systemPrompt: "You are a concise assistant.",
+    definition: {
+      name: "concise-assistant",
+      description: "Draft concise responses.",
+      content: "You are a concise assistant.",
+    },
+    resources: {
       tools: [],
       skills: [],
     },

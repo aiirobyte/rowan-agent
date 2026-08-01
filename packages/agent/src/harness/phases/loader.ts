@@ -11,7 +11,7 @@ import {
   loadMarkdown,
   inferResourceName,
 } from "../loader";
-import { parseModelRef } from "@rowan-agent/models";
+import { normalizeAgentDefinition } from "../definitions";
 import { formatResourceOutput } from "../context/resource-formatter";
 import {
   ResourceMetadataError,
@@ -52,8 +52,16 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   const { frontmatter, body } = loaded;
   const metadata = frontmatter as Record<string, unknown>;
   const frontmatterName = typeof metadata.name === "string" ? metadata.name : undefined;
-  const name = frontmatterName || directoryName;
-  const description = validateDescription(metadata.description);
+  let definition;
+  try {
+    definition = normalizeAgentDefinition(metadata, body, { fallbackName: directoryName });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    warnResourceDiagnostics("phase", resolved, [message]);
+    throw new ResourceMetadataError("invalid_metadata", message);
+  }
+  const name = definition.name;
+  const description = validateDescription(definition.description);
   const diagnostics = validateResourceId(directoryName);
   if (frontmatterName && frontmatterName !== directoryName) {
     diagnostics.push(...validateResourceName(frontmatterName, directoryName));
@@ -63,23 +71,19 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   diagnostics.push(...validatePhaseTarget(metadata.target));
   warnResourceDiagnostics("phase", resolved, diagnostics);
 
-  if (description.missing) {
-    throw new ResourceMetadataError("invalid_metadata", "description is required");
-  }
-
   const baseDir = dirname(resolved);
   const phase: Phase = {
     name,
     description: description.description!,
-    tools: metadata.tools as string[] | undefined,
-    skills: metadata.skills as string[] | undefined,
+    tools: definition.tools ? [...definition.tools] : undefined,
+    skills: definition.skills ? [...definition.skills] : undefined,
     target: metadata.target as string | undefined,
     input: metadata.input as Record<string, string> | undefined,
     isolated: metadata.isolated as boolean | undefined,
     filePath: resolved,
     baseDir,
-    content: body,
-    model: parseModelRef(metadata.model as string | undefined),
+    content: definition.content,
+    model: definition.model,
   };
 
   // Try to load execution code

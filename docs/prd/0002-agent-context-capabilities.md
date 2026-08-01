@@ -4,6 +4,11 @@ Status: Accepted, amended by PRD-0003
 
 Decision: [ADR-0003](../adr/0003-assemble-agent-context-capabilities.md)
 
+The concrete `AgentConfig.context` public shape and rejection of Agent-level
+name selections are superseded by
+[PRD-0004](./0004-declarative-agent-definitions.md). Extension assembly,
+collision safety, and execution narrowing remain active.
+
 ## Outcome
 
 Hosts supply concrete Tools, Skills, and Phases through `AgentContext`. Rowan internally adds built-in and Extension capabilities without exposing Agent-level resource allowlists.

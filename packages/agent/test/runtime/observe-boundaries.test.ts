@@ -16,7 +16,8 @@ function config(stream: StreamFn): AgentConfig {
     identity: "observe-boundaries-v1",
     model: { provider: "test", id: "model" },
     stream,
-    context: { systemPrompt: "Test", tools: [], skills: [] },
+    definition: { name: "test", description: "Test Agent.", content: "Test" },
+    resources: { tools: [], skills: [] },
   };
 }
 
@@ -126,8 +127,7 @@ test("AgentRun.observe keeps the next Execution Attempt's deltas across input_re
   try {
     const agentId = await runtime.createAgent({
       ...config(stream),
-      context: {
-        systemPrompt: "Test",
+      resources: {
         tools: [],
         skills: [],
         phases: { phases, entryPhaseId: "plan" },
@@ -233,7 +233,7 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
   try {
     const agentId = await runtime.createAgent({
       ...config(stream),
-      context: { systemPrompt: "Test", tools: [tool], skills: [] },
+      resources: { tools: [tool], skills: [] },
     }, { idempotencyKey: "reporter-agent" });
     const run = await runtime.start(agentId, "use lookup", { idempotencyKey: "reporter-run" });
     const iterator = run.observe()[Symbol.asyncIterator]();

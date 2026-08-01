@@ -6,7 +6,7 @@ export { pageAgents, pageRuns } from "./read-models";
 export { AgentRuntime } from "./durable-runtime";
 export type {
   AgentConfig,
-  AgentDefinitionContext,
+  AgentResources,
   AgentRecord,
   AgentRun,
   AgentRuntime as AgentRuntimeContract,

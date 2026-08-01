@@ -110,3 +110,26 @@ test("Phases with missing descriptions are skipped by batch loading", async () =
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Phase loading reuses declarative list and model normalization", async () => {
+  const root = await createResourceDir("rowan-phase-definition-", "PHASE.md", "review-phase");
+  try {
+    const phasePath = join(root, "review-phase", "PHASE.md");
+    await writeFile(phasePath, `---
+name: review-phase
+description: Review the current change.
+tools: [read, read, bash]
+skills: [testing, testing]
+model: openai/gpt-5
+---
+Review the change.
+`);
+
+    const phase = await loadPhase(phasePath);
+    expect(phase.tools).toEqual(["read", "bash"]);
+    expect(phase.skills).toEqual(["testing"]);
+    expect(phase.model).toEqual({ provider: "openai", id: "gpt-5" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

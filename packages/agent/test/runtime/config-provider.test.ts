@@ -16,7 +16,8 @@ function config(identity: string): AgentConfig {
     identity,
     model: { provider: "test", id: "model" },
     stream: async () => undefined,
-    context: { systemPrompt: "system", tools: [], skills: [] },
+    definition: { name: "test", description: "Test Agent.", content: "system" },
+    resources: { tools: [], skills: [] },
   } as unknown as AgentConfig;
 }
 

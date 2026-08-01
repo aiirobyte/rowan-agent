@@ -1,6 +1,6 @@
 import type { LlmContentPart } from "@rowan-agent/models";
 import type { AgentMessage, AgentContext, Tool as LoopTool, ToolResult } from "../types";
-import type { AgentDefinitionContext, Tool as DurableTool } from "./contracts";
+import type { ResolvedAgentContext, Tool as DurableTool } from "./contracts";
 import type {
   AgentId,
   AssistantContent,
@@ -14,7 +14,7 @@ import { isJsonValue } from "./json";
 
 /** Project durable Runtime messages and tools into the loop's provider-facing context. */
 export function projectModelContext(input: {
-  context: AgentDefinitionContext;
+  context: ResolvedAgentContext;
   messages: readonly Message[];
   agentId: AgentId;
   runId: RunId;
