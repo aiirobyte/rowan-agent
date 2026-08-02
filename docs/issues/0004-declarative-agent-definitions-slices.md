@@ -1,7 +1,7 @@
 # Declarative Agent Definitions issue slices
 
-Status: Implemented and locally verified; public package release remains. No
-GitHub Issues have been created.
+Status: Superseded by `0005-structured-context-agent-definitions-slices.md`.
+No GitHub Issues have been created.
 
 Source: [PRD-0004](../prd/0004-declarative-agent-definitions.md)
 

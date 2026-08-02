@@ -9,13 +9,14 @@ import {
   pageRuns,
 } from "../../src/runtime";
 import type { AgentConfig, AgentRecord, RunRecord } from "../../src/runtime/contracts";
+import type { ContextCandidate } from "../../src/runtime/contracts";
 import type { AgentId, RunId } from "../../src/runtime-events";
 
 function config(identity: string): AgentConfig {
   return {
     identity,
     model: { provider: "test", id: "model" },
-    stream: async () => undefined,
+    stream: async function* () {},
     definition: { name: "test", description: "Test Agent.", content: "system" },
     resources: { tools: [], skills: [] },
   } as unknown as AgentConfig;
@@ -31,6 +32,33 @@ test("InMemoryConfigProvider retains immutable Tokens and replays operation IDs"
   const token = brandConfigToken((first as { kind: "stored"; token: string }).token);
   expect(await provider.resolve({ agentId, token, signal: new AbortController().signal })).toMatchObject({ kind: "available", config: { identity: "v1" } });
   expect(() => brandConfigToken("")).toThrow();
+});
+
+test("InMemoryConfigProvider snapshots structured Context Candidates", async () => {
+  const provider = new InMemoryConfigProvider();
+  const agentId = "agent-context" as AgentId;
+  const value = { title: "before" };
+  const contexts: readonly ContextCandidate[] = [{ name: "project_context", value }];
+  const input: AgentConfig = {
+    identity: "context-v1",
+    model: { provider: "test", id: "model" },
+    stream: async function* () {},
+    definition: {
+      name: "test",
+      description: "Test Agent.",
+      content: "system",
+      context: ["project_context"],
+    },
+    resources: { tools: [], skills: [], contexts },
+  };
+  const stored = await provider.put({ agentId, config: input, operationId: "context-op", signal: new AbortController().signal });
+  value.title = "after";
+  const token = brandConfigToken((stored as { kind: "stored"; token: string }).token);
+  const resolution = await provider.resolve({ agentId, token, signal: new AbortController().signal });
+  expect(resolution).toMatchObject({
+    kind: "available",
+    config: { resources: { contexts: [{ name: "project_context", value: { title: "before" } }] } },
+  });
 });
 
 test("ConfigCommandService provisions and updates an Agent atomically", async () => {

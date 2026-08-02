@@ -1,7 +1,7 @@
 # Declarative Agent Definitions
 
-Status: Implemented and locally verified on 2026-08-01; public
-`@rowan-agent/agent@0.8.5` release remains.
+Status: Superseded by PRD-0005. This remains the historical record for the
+original declarative Resource selection contract.
 
 Decision: [ADR-0005](../adr/0005-resolve-agent-definitions-after-extension-assembly.md)
 

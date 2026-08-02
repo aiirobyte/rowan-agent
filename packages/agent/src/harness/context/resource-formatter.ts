@@ -51,6 +51,22 @@ export function buildSkillsDescription(
   return lines.join("\n");
 }
 
+/** Build one generic XML section from host-supplied structured Context. */
+export function buildContextDescription(
+  contexts: readonly { name: string; value: unknown }[],
+): string {
+  if (contexts.length === 0) return "";
+  const lines = ["<agent_context>"];
+  for (const context of contexts) {
+    lines.push(`  <context name="${escapeXml(context.name)}">`);
+    const value = jsonToXml(context.value, 2);
+    if (value) lines.push(value);
+    lines.push("  </context>");
+  }
+  lines.push("</agent_context>");
+  return lines.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Unified resource output formatting
 // ---------------------------------------------------------------------------

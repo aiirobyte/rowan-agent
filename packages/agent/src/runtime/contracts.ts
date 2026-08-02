@@ -99,6 +99,7 @@ export type Tool = Readonly<{
   parameters: Type.TSchema;
   execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
 }>;
+export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
 export type ProviderToolDefinition = Readonly<{ name: string; description: string; parameters: JsonObject }>;
 export type BeforeToolCall = (input: Readonly<{
   tool: Tool;
@@ -117,6 +118,7 @@ export type AgentResources = Readonly<{
   skills: readonly Skill[];
   phases?: PhaseRegistry;
   extensions?: readonly LoadedExtension[];
+  contexts?: readonly ContextCandidate[];
 }>;
 export type ResolvedAgentContext = Readonly<{
   systemPrompt: string;
@@ -434,6 +436,15 @@ export function assertAgentConfig(config: AgentConfig): void {
     throw new TypeError("config.resources is invalid");
   }
   for (const tool of config.resources.tools) projectToolDefinition(tool);
+  const names = new Set<string>();
+  for (const context of config.resources.contexts ?? []) {
+    if (typeof context.name !== "string" || context.name.trim() === "") {
+      throw new TypeError("Context candidate name must be non-empty");
+    }
+    if (names.has(context.name)) throw new TypeError(`Duplicate Context candidate "${context.name}".`);
+    names.add(context.name);
+    assertJsonValue(context.value, `Context candidate "${context.name}" value`);
+  }
 }
 export function assertToolExecutionResult(value: unknown): asserts value is ToolExecutionResult {
   if (!isToolResult(value)) throw new TypeError("Tool result must be JSON-safe and contain no Runtime identity");

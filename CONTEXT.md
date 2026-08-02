@@ -17,7 +17,8 @@ Opaque immutable host data stored with an Agent and made available to configurat
 _Avoid_: Agent Configuration, business state
 
 **Agent Configuration**:
-The executable model, Agent Definition, candidate resources, hooks, and
+The executable model, Agent Definition, candidate resources and Context
+Candidates, hooks, and
 policies used by an Agent. It includes a host-defined stable identity because
 Rowan cannot compare closures. Hosts update it through the Runtime, while a
 configuration adapter preserves immutable snapshots that Rowan can resolve
@@ -26,9 +27,9 @@ _Avoid_: Agent Options, Agent Binding, serialized Agent
 
 **Agent Definition**:
 A reusable declarative description containing an Agent's identity, authored
-content, optional model, and name-based Tool, Skill, Phase, and Extension
-selections. It contains no host business scope, lifecycle operation, or
-executable resource closure.
+content, optional model, and named Tool, Skill, PhaseRegistry, Extension, and
+Context Candidate selections. It contains no host business scope, lifecycle
+operation, or executable resource closure.
 _Avoid_: Agent Context, Capability Allowlist, Agent Configuration
 
 **Resource Candidate**:
@@ -36,6 +37,12 @@ A concrete Tool, Skill, Phase, or Extension supplied in an Agent Configuration
 that may be selected by its Agent Definition. Being a candidate does not make
 the resource visible unless Definition and Phase selection retain it.
 _Avoid_: Allowed Resource, Resource Reference, Registered Capability
+
+**Context Candidate**:
+One named JSON-safe value supplied by a host in an Agent Configuration. An
+Agent Definition may select it for structured System Prompt formatting without
+Rowan interpreting its business schema.
+_Avoid_: Agent Context, Prompt String, Memory Store
 
 **Configuration Snapshot**:
 An immutable, restart-resolvable version of one Agent Configuration. A Run waiting for input remains attached to the snapshot that created its Execution Checkpoint.

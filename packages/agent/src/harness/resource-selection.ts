@@ -4,7 +4,7 @@ export type NamedResource = Readonly<{ name: string }>;
 export function selectNamedResources<T extends NamedResource>(
   candidates: readonly T[],
   names: readonly string[] | undefined,
-  kind: "Tool" | "Skill" | "Phase" | "Extension",
+  kind: "Tool" | "Skill" | "Phase" | "Extension" | "Context",
 ): T[] {
   const byName = new Map<string, T>();
   for (const candidate of candidates) {

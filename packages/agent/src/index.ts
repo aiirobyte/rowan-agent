@@ -43,6 +43,7 @@ export type {
   ConfigPutResult,
   ConfigResolution,
   ConfigToken,
+  ContextCandidate,
   DurableConsumer,
   DurableRunEvent,
   DurableStore,
@@ -100,7 +101,7 @@ export type {
   UserMessage,
 } from "./runtime/contracts";
 
-export type { AgentDefinition } from "./harness/definitions";
+export type { AgentDefinition, PhaseRegistrySelection } from "./harness/definitions";
 export type { FrontmatterResult } from "./harness/loader";
 
 export type {

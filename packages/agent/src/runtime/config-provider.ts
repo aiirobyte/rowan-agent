@@ -2,7 +2,8 @@ import { createId } from "../utils";
 import type { AgentConfig, ConfigProvider, ConfigPutResult, ConfigResolution } from "./contracts";
 import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
 import { CONFIG_TOKEN_BYTES } from "./idempotency";
-import { assertUtf8ByteLimit } from "./json";
+import { assertUtf8ByteLimit, canonicalJson } from "./json";
+import type { JsonValue } from "../runtime-events";
 
 type ConfigEntry = Readonly<{
   agentId: AgentId;
@@ -93,16 +94,40 @@ function snapshotConfig(config: AgentConfig): AgentConfig {
     ...config.definition,
     ...(config.definition.tools ? { tools: Object.freeze([...config.definition.tools]) } : {}),
     ...(config.definition.skills ? { skills: Object.freeze([...config.definition.skills]) } : {}),
-    ...(config.definition.phases ? { phases: Object.freeze([...config.definition.phases]) } : {}),
+    ...(config.definition.phases ? {
+      phases: Object.freeze({
+        entryPhaseId: config.definition.phases.entryPhaseId,
+        phaseIds: Object.freeze([...config.definition.phases.phaseIds]),
+      }),
+    } : {}),
     ...(config.definition.extensions ? { extensions: Object.freeze([...config.definition.extensions]) } : {}),
+    ...(config.definition.context ? { context: Object.freeze([...config.definition.context]) } : {}),
   });
   const resources = Object.freeze({
     ...config.resources,
     tools: Object.freeze([...config.resources.tools]),
     skills: Object.freeze([...config.resources.skills]),
     ...(config.resources.extensions ? { extensions: Object.freeze([...config.resources.extensions]) } : {}),
+    ...(config.resources.contexts ? {
+      contexts: Object.freeze(config.resources.contexts.map((context) => Object.freeze({
+        name: context.name,
+        value: snapshotJsonValue(context.value),
+      }))),
+    } : {}),
   });
   return Object.freeze({ ...config, definition, resources });
+}
+
+function snapshotJsonValue(value: JsonValue): JsonValue {
+  return deepFreeze(JSON.parse(canonicalJson(value)) as JsonValue);
+}
+
+function deepFreeze<T extends JsonValue>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) deepFreeze(child as JsonValue);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function assertConfigIdentity(identity: string): void {

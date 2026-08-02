@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, type AgentConfig, type ContextCandidate } from "../../src/runtime";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 
@@ -118,6 +118,54 @@ test("Runtime resolves Definition resource names and warns for missing candidate
   }
 });
 
+test("Runtime selects structured Context Candidates for the System Prompt", async () => {
+  const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
+  const contexts: readonly ContextCandidate[] = [
+    { name: "project_context", value: { name: "Example <Project>", enabled: true } },
+    { name: "drop_context", value: { secret: "must not appear" } },
+  ];
+  const config = {
+    identity: "definition-context-selection-v1",
+    definition: {
+      name: "context-agent",
+      description: "Use selected structured Context.",
+      content: "Use the selected context only.",
+      context: ["project_context", "missing_context"],
+    },
+    resources: {
+      tools: [],
+      skills: [],
+      contexts,
+    },
+    model: { provider: "test", id: "model" },
+    stream: async function* (request) {
+      expect(request.system).toContain("Use the selected context only.");
+      expect(request.system).toContain("<agent_context>");
+      expect(request.system).toContain('<context name="project_context">');
+      expect(request.system).toContain("Example &lt;Project&gt;");
+      expect(request.system).not.toContain("drop_context");
+      expect(request.system).not.toContain("must not appear");
+      yield {
+        type: "text_delta" as const,
+        text: "done",
+        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
+      };
+      yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
+    },
+  } satisfies AgentConfig;
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-context-selection-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-context-selection-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(warnings.mock.calls.some(([message]) =>
+      String(message).includes('Context "missing_context"'))).toBe(true);
+  } finally {
+    warnings.mockRestore();
+    await runtime.close();
+  }
+});
+
 test("Phase restrictions use the shared warning-aware resolver", async () => {
   const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
   let visibleTools: string[] = [];
@@ -140,7 +188,7 @@ test("Phase restrictions use the shared warning-aware resolver", async () => {
       name: "reviewer",
       description: "Review the current change.",
       content: "Review.",
-      entryPhase: "review",
+      phases: { entryPhaseId: "review", phaseIds: ["review"] },
     },
     resources: {
       tools: [
@@ -183,7 +231,7 @@ test("Definition may explicitly select Rowan's built-in default Phase", async ()
       name: "default-agent",
       description: "Use Rowan's default Phase.",
       content: "Respond normally.",
-      entryPhase: "default",
+      phases: { entryPhaseId: "default", phaseIds: [] },
     },
     resources: { tools: [], skills: [] },
     model: { provider: "test", id: "model" },
@@ -219,7 +267,7 @@ test("Runtime warns and falls back when selected Extension and entry Phase names
       description: "Fall back after missing references.",
       content: "Use Rowan's default Phase.",
       extensions: ["missing-extension"],
-      entryPhase: "missing-entry",
+      phases: { entryPhaseId: "missing-entry", phaseIds: [] },
     },
     resources: { tools: [], skills: [], extensions: [] },
     model: { provider: "test", id: "model" },
@@ -372,11 +420,13 @@ test("an Input Request continuation remains pinned after the Agent Configuration
       name: "snapshot-agent",
       description: "Keep a Run on one snapshot.",
       content: `configuration-${revision}`,
-      entryPhase: "question",
+      context: ["revision_context"],
+      phases: { entryPhaseId: "question", phaseIds: ["question"] },
     },
     resources: {
       tools: [],
       skills: [],
+      contexts: [{ name: "revision_context", value: { revision } }],
       phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: null },
     },
     model: { provider: "test", id: "model" },
@@ -397,8 +447,8 @@ test("an Input Request continuation remains pinned after the Agent Configuration
     await run.wait();
 
     expect(observedSystems).toEqual([
-      expect.stringContaining("configuration-v1"),
-      expect.stringContaining("configuration-v1"),
+      expect.stringMatching(/configuration-v1[\s\S]*<revision>v1<\/revision>/),
+      expect.stringMatching(/configuration-v1[\s\S]*<revision>v1<\/revision>/),
     ]);
   } finally {
     await runtime.close();

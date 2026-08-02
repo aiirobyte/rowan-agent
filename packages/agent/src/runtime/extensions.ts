@@ -3,6 +3,7 @@ import type { LoadedExtension, RegisteredTool } from "../extensions/types";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { DEFAULT_PHASE_ID } from "../harness/phases/default";
 import { selectNamedResources } from "../harness/resource-selection";
+import { buildContextDescription } from "../harness/context/resource-formatter";
 import type { AgentConfig, ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolInvocationContext, ToolExecutionResult } from "./contracts";
 import type { JsonValue } from "../runtime-events";
 import { projectTool } from "./model-context";
@@ -85,14 +86,21 @@ function resolveDefinitionContext(
     config.definition.skills,
     "Skill",
   );
+  const contexts = selectNamedResources(
+    config.resources.contexts ?? [],
+    config.definition.context,
+    "Context",
+  );
   const candidateRegistry = assembled.phases ?? config.resources.phases;
   const selectedPhases = selectNamedResources(
     [...(candidateRegistry?.phases.values() ?? [])],
-    config.definition.phases,
+    config.definition.phases?.phaseIds,
     "Phase",
   );
   const phases = new Map(selectedPhases.map((phase) => [phase.name, phase]));
-  const requestedEntry = config.definition.entryPhase ?? candidateRegistry?.entryPhaseId ?? null;
+  const requestedEntry = config.definition.phases
+    ? config.definition.phases.entryPhaseId
+    : candidateRegistry?.entryPhaseId ?? null;
   const entryPhaseId = requestedEntry === DEFAULT_PHASE_ID
     ? DEFAULT_PHASE_ID
     : requestedEntry && phases.has(requestedEntry)
@@ -102,7 +110,9 @@ function resolveDefinitionContext(
     console.warn(`Phase entry "${requestedEntry}" is not available; Rowan will use "default".`);
   }
   return {
-    systemPrompt: config.definition.content,
+    systemPrompt: [config.definition.content, buildContextDescription(contexts)]
+      .filter((section) => section.length > 0)
+      .join("\n\n"),
     tools,
     skills,
     phases: { phases, entryPhaseId },

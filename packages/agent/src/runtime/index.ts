@@ -7,6 +7,7 @@ export { AgentRuntime } from "./durable-runtime";
 export type {
   AgentConfig,
   AgentResources,
+  ContextCandidate,
   AgentRecord,
   AgentRun,
   AgentRuntime as AgentRuntimeContract,

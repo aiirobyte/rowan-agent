@@ -1,15 +1,20 @@
 import { parseModelRef, type ModelRef } from "@rowan-agent/models";
 import { parseFrontmatter } from "./loader";
 
+export type PhaseRegistrySelection = Readonly<{
+  entryPhaseId: string | null;
+  phaseIds: readonly string[];
+}>;
+
 export type AgentDefinition = Readonly<{
   name: string;
   description: string;
   content: string;
   tools?: readonly string[];
   skills?: readonly string[];
-  phases?: readonly string[];
+  phases?: PhaseRegistrySelection;
   extensions?: readonly string[];
-  entryPhase?: string;
+  context?: readonly string[];
   model?: ModelRef;
 }>;
 
@@ -20,9 +25,10 @@ export function assertAgentDefinition(value: unknown): asserts value is AgentDef
   requiredString(value.content, "definition.content");
   optionalStringList(value.tools, "definition.tools");
   optionalStringList(value.skills, "definition.skills");
-  optionalStringList(value.phases, "definition.phases");
+  optionalPhaseRegistrySelection(value.phases, "definition.phases");
   optionalStringList(value.extensions, "definition.extensions");
-  optionalString(value.entryPhase, "definition.entryPhase");
+  optionalStringList(value.context, "definition.context");
+  if ("entryPhase" in value) throw new TypeError("definition.entryPhase is not supported; use definition.phases.entryPhaseId");
   if (value.model !== undefined) {
     if (!isRecord(value.model)
       || typeof value.model.provider !== "string"
@@ -52,9 +58,12 @@ export function normalizeAgentDefinition(
   const normalizedContent = requiredString(content, "content");
   const tools = optionalStringList(frontmatter.tools, "tools");
   const skills = optionalStringList(frontmatter.skills, "skills");
-  const phases = optionalStringList(frontmatter.phases, "phases");
+  const phases = optionalPhaseRegistrySelection(frontmatter.phases, "phases");
   const extensions = optionalStringList(frontmatter.extensions, "extensions");
-  const entryPhase = optionalString(frontmatter.entryPhase, "entryPhase");
+  const context = optionalStringList(frontmatter.context, "context");
+  if (frontmatter.entryPhase !== undefined) {
+    throw new TypeError("entryPhase is not supported; use phases.entryPhaseId");
+  }
   const model = optionalModel(frontmatter.model);
 
   return {
@@ -65,7 +74,7 @@ export function normalizeAgentDefinition(
     ...(skills ? { skills } : {}),
     ...(phases ? { phases } : {}),
     ...(extensions ? { extensions } : {}),
-    ...(entryPhase ? { entryPhase } : {}),
+    ...(context ? { context } : {}),
     ...(model ? { model } : {}),
   };
 }
@@ -100,6 +109,26 @@ function optionalStringList(value: unknown, field: string): readonly string[] | 
     names.push(name);
   }
   return names;
+}
+
+function optionalPhaseRegistrySelection(
+  value: unknown,
+  field: string,
+): PhaseRegistrySelection | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  if (!("entryPhaseId" in value)) throw new TypeError(`${field}.entryPhaseId is required`);
+  if (!("phaseIds" in value)) throw new TypeError(`${field}.phaseIds is required`);
+  const entryPhaseId = value.entryPhaseId;
+  if (entryPhaseId !== null && (typeof entryPhaseId !== "string" || entryPhaseId.trim() === "")) {
+    throw new TypeError(`${field}.entryPhaseId must be a non-empty string or null`);
+  }
+  const phaseIds = optionalStringList(value.phaseIds, `${field}.phaseIds`);
+  if (!phaseIds) throw new TypeError(`${field}.phaseIds is required`);
+  return {
+    entryPhaseId: entryPhaseId === null ? null : entryPhaseId.trim(),
+    phaseIds,
+  };
 }
 
 function optionalModel(value: unknown): ModelRef | undefined {

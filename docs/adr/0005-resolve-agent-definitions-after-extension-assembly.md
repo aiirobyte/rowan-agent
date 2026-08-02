@@ -4,6 +4,10 @@ status: accepted
 
 # Resolve Agent Definitions after Extension assembly
 
+> ADR-0006 amends this decision with generic Context Candidate selection and
+> the PhaseRegistry-shaped Definition field. Extension-first Resource assembly,
+> collision safety, and immutable configuration snapshots remain active.
+
 Rowan will make `AgentDefinition` the declarative resource-selection contract for an Agent Configuration. A Definition contains required `name`, `description`, and authored `content`; optional `model`; optional Tool, Skill, Phase, and Extension name lists; and an optional entry Phase. Phase frontmatter reuses the same parser, model-reference parser, and name-list normalization before applying Phase-specific fields. Rowan does not interpret host business scope, working-directory policy, or resource authorization.
 
 `AgentConfig` supplies the Definition and concrete Resource Candidates instead of a preselected `context`. At execution, Rowan resolves selected Extensions first, assembles their Tools and Phases with ordinary candidates, then applies the same name resolver to Agent and Phase selections. An omitted list inherits all candidates, `[]` selects none, and a present list selects matching names with set semantics. Missing names warn and are skipped. A missing entry Phase warns and falls back to Rowan `default`; ambiguous duplicate executable names and structurally invalid definitions remain fatal.

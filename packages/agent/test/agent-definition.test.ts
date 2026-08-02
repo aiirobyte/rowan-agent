@@ -7,9 +7,11 @@ name: reviewer
 description: Review the current change.
 tools: [read, read, bash]
 skills: [testing]
-phases: [verify]
+phases:
+  entryPhaseId: verify
+  phaseIds: [verify, verify]
 extensions: [quality]
-entryPhase: verify
+context: [project_context]
 model: openai/gpt-5
 ---
 Review the change and report concrete findings.
@@ -21,9 +23,9 @@ Review the change and report concrete findings.
     content: "Review the change and report concrete findings.",
     tools: ["read", "bash"],
     skills: ["testing"],
-    phases: ["verify"],
+    phases: { entryPhaseId: "verify", phaseIds: ["verify"] },
     extensions: ["quality"],
-    entryPhase: "verify",
+    context: ["project_context"],
     model: { provider: "openai", id: "gpt-5" },
   });
 });
@@ -45,8 +47,11 @@ name: empty
 description: Select no candidates.
 tools: []
 skills: []
-phases: []
+phases:
+  entryPhaseId: null
+  phaseIds: []
 extensions: []
+context: []
 ---
 Use no candidates.
 `)).toEqual({
@@ -55,8 +60,9 @@ Use no candidates.
     content: "Use no candidates.",
     tools: [],
     skills: [],
-    phases: [],
+    phases: { entryPhaseId: null, phaseIds: [] },
     extensions: [],
+    context: [],
   });
 });
 
@@ -75,6 +81,20 @@ model: /
 ---
 Content.
 `)).toThrow(/valid model reference/i);
+  expect(() => parseAgentDefinition(`---
+name: legacy-entry
+description: Legacy entry fields are rejected.
+entryPhase: verify
+---
+Content.
+`)).toThrow(/entryPhase/i);
+  expect(() => parseAgentDefinition(`---
+name: legacy-phases
+description: Legacy phase lists are rejected.
+phases: [verify]
+---
+Content.
+`)).toThrow(/phases/i);
   expect(() => parseAgentDefinition(`---
 description: Missing name.
 ---
