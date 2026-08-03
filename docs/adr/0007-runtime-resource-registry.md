@@ -2,107 +2,117 @@
 status: accepted
 ---
 
-# Put executable resource registration behind the Rowan Runtime Resource Registry
+# Put scoped Configuration Snapshot resolution behind the Runtime Resource Registry
 
 Rowan will expose one Runtime Resource Registry as the public seam for
-registering Agent Definitions, Tools, Skills, Phases, and Extensions. The
-Registry is a deep Module: hosts provide explicit resource inputs, while Rowan
-owns normalization, name validation, collision handling, selection, execution
-dispatch, per-Run snapshots, and recovery behavior.
+registering Agent Definitions, Tools, Skills, and Phases. A registration creates
+an atomically replaceable Resource Source; it does not create one Runtime-global
+candidate set. Hosts explicitly select opaque Source IDs in each Agent
+Configuration's Resource View, so unrelated host scopes may reuse the same
+resource name without teaching Rowan their business model.
 
-The host calls `loadAgents`, `loadTools`, `loadSkills`, `loadPhases`, and
-`loadExtensions` explicitly after starting Rowan. The host does not construct
-an `AgentConfig.resources` candidate bag, independently resolve an Agent
-Definition, or invoke a registered Tool itself. `load*` commits its own source
-immediately and returns a structured result. `unload({ kind, sourceId })`
-removes one source's complete contribution set.
+Each `load*` input has a stable `sourceId` and may include the supported
+resource-type directory, inline values, or both. A private Registry Source
+Transaction normalizes both forms, validates shared path-safe names, diagnoses
+invalid individual files, and atomically replaces the source's complete prior
+revision. A duplicate inside the merged source, or a collision with an implicit
+core resource, rejects the whole transaction and preserves the previous
+revision. Cross-source duplicates may be registered because they might never be
+visible together.
 
-Each load input has a stable `sourceId` and may include a resource-type
-directory, inline values, or both. Rowan owns the file parsing and normalizes
-both forms to one internal registration representation. Tool code is the
-exception: `loadTools` accepts only inline values, so a configuration directory
-cannot dynamically introduce an arbitrary executable Tool. A repeated
-`load*` for the same kind and `sourceId` replaces that source's contribution
-set; different sources may not contribute the same name in the same kind.
+The Runtime Configuration interface accepts a registered Definition name, an
+explicit Resource View, Context Candidates, and normal execution options. It
+may also accept one declarative Definition Layer that replaces authored content
+or model and narrows Tool, Skill, and Phase selections. The layer cannot add a
+source, Context Candidate, executable value, or host Scope. This gives hosts a
+generic input for Workflow-like configuration without adding Workflow to
+Rowan's domain.
 
-Tools and Phases are executable resources with a shared invocation shape but
-different declared outputs. A Tool value carries `manifest + execute`; a Phase
-value carries `manifest + run`. Their functions remain host-defined code,
-while Rowan validates input/output schemas, creates the durable invocation,
-passes Rowan-native invocation data, controls cancellation and retries, and
-persists the outcome. The handlers receive no host Scope or host business
-types. A retry is opt-in in the Manifest; the default is no automatic retry.
+Before every new Run, one Configuration Snapshot Resolver serializes against
+Registry updates, rereads every directory in the Resource View, and resolves a
+coherent snapshot. A duplicate across sources in that view is a hard resolution
+failure; a source outside the view is irrelevant. Definition, optional layer,
+and Phase selections are monotonic: omission preserves the parent set, `[]`
+selects none, and a present list intersects by name. The snapshot records source
+revisions, declarative/file values, selected Context, and executable references
+as `(kind, sourceId, name)`.
 
-Agent Definitions, Workflows, and Phases may select Tools, Skills, and Phases.
-An omitted selection inherits the current candidates, `[]` selects none, and a
-present list narrows by name. Every lower configuration layer can only narrow
-the set it received. Missing names remain warning-and-skip diagnostics. The
-`extensions` field is removed from these documents: Extensions are global
-Runtime modules, not Agent/Workflow/Phase capabilities.
+An active or input-waiting Run remains pinned to its Configuration Snapshot.
+After process restart the host registers sources and functions again. Rowan
+rebinds a persisted executable reference only to the current handler with the
+same kind, Source ID, and name; it never silently binds a same-name handler from
+another source or falls back to a stale directory revision.
 
-Extensions are loaded and activated before any Agent or Run exists. They may
-alter supported Runtime behavior and may explicitly contribute Tools and
-Phases through a constrained, versioned Extension API. Rowan attributes those
-contributions to the activating Extension and rolls them back if activation
-fails. An Extension failure is recorded and skipped; other Extensions may
-continue. A successful Extension stays active for the whole Runtime lifetime,
-is disposed in reverse activation order on close, and cannot be loaded,
-unloaded, or replaced after the first Agent or Run. Such changes require a
-Runtime restart.
+Tools and Phases are registered executable contributions but do not share a
+synthetic durable invocation model. A Tool contribution enters Rowan's existing
+durable Tool Call reservation/result/cancellation/indeterminate-effect path. A
+Phase contribution enters the existing Phase Context, Phase Execution,
+routing, input boundary, and Run checkpoint path. Their registration can share
+private source normalization and handler lookup, but their public callbacks,
+outcomes, retry semantics, and persisted state remain distinct.
 
-Rowan's own core Tools and the `default` Phase are registered as reserved
-Runtime contributions. Any same-kind collision, including one with a core
-resource or `default`, is a hard error: the attempted `load*` call makes no
-new commit and its previous successful source contribution remains intact.
-Malformed individual file resources are skipped with diagnostics; a collision
-is not a malformed-item diagnostic and never silently skips or overrides a
-name.
+Both callback paths receive Rowan-native identity plus immutable generic Agent
+and Run Metadata. A host may interpret that Metadata in its own Adapter and
+reload current business facts; Rowan does not accept or persist host Scope,
+Project, Task, Workflow, path bindings, or arbitrary dependency closures.
 
-At every new Run, Rowan rereads registered non-Extension directory sources,
-resolves the Definition and all selected resources into one consistent
-Configuration Snapshot, and persists that snapshot in its Durable Store. An
-active or input-waiting Run stays pinned. If a new reread finds a hard name
-collision, that new Run fails rather than falling back to stale resources. On
-process restart the host registers sources again; Rowan does not persist paths
-or host functions. A resumed Run uses the currently registered same-name host
-function while retaining its persisted declarative/file snapshot for audit.
+Extensions use a separate bootstrap-only interface. `AgentRuntime.init()`
+opens Runtime ownership but does not start the Scheduler, recover queued work,
+or return a usable Runtime until its bootstrap callback has registered required
+sources/handlers, loaded Extensions, and completed. The callback's
+`loadExtensions` capability is invalidated afterward. Non-Extension sources may
+still be atomically replaced or unloaded on the ready Runtime.
 
-Context Candidates remain per-Agent/Run JSON-safe inputs, rather than global
-Registry resources. Hosts pass them with Agent configuration; Rowan selects and
-snapshots them using the Definition's existing generic Context selection.
+Extensions are global Runtime modules and implicit in every Resource View. They
+may register constrained hooks, providers, Tools, and Phases through a
+versioned API. Rowan attributes every contribution to its Extension, rolls all
+of them back if activation fails, and reports a diagnostic so other Extensions
+may continue. Successful Extensions are frozen for the Runtime lifetime and
+disposed in reverse activation order. If bootstrap itself throws, Rowan rolls
+back activated Extensions and releases ownership without starting the
+Scheduler.
 
-This supersedes ADR-0005's per-Agent Extension assembly and Agent/Phase
-`extensions` selection. It amends ADR-0006 only by removing Extension from the
-Definition resource vocabulary; Context and PhaseRegistry selection remain
-active.
+Rowan core Tools and the `default` Phase are implicit reserved contributions.
+The Runtime exposes no general Catalog query interface: `LoadResult` reports
+each source transaction, while Configuration resolution reports view-specific
+diagnostics.
+
+This supersedes ADR-0005's concrete per-Agent resource/Extension assembly and
+Agent/Phase `extensions` selection. It amends ADR-0006 only by removing
+Extension from Definition resource vocabulary; Context and PhaseRegistry
+selection remain active.
 
 ## Consequences
 
-- `AgentRuntime` gains a small, explicit registration Interface and becomes
-  the only caller-visible Resource resolution seam.
-- Hosts retain ownership of their domain implementation code and runtime
-  parameters, but no longer duplicate Rowan resource loading, selection,
-  collision, snapshot, or dispatch logic.
-- The Runtime does not expose a general Catalog/diagnostics query API. Each
-  `load*` result is the inspection surface for that registration attempt.
-- Existing hosts must replace direct `AgentConfig.resources` construction and
-  per-Agent Extension loading with explicit Registry calls and a Definition
-  reference.
-- There is no compatibility parser or migration behavior for the removed
-  `extensions` field. Hosts clean existing authored files as part of their
-  coordinated upgrade.
+- `AgentRuntime` gains explicit non-Extension source transactions, a
+  bootstrap-only Extension interface, and Definition-reference Agent
+  configurations with Resource Views.
+- Same names can coexist across isolated views; collisions are checked at the
+  smallest truthful locality: source transaction or resolved view.
+- Configuration snapshotting, reread consistency, selection, persistence, and
+  restart handler rebinding have one owner.
+- Hosts retain domain implementations and visibility decisions without passing
+  concrete candidates or business bindings.
+- Scheduler readiness now guarantees restored Runs cannot execute before
+  startup handlers and Extensions exist.
+- Tool Call durability and Phase checkpoint/routing semantics remain separate.
 
 ## Rejected options
 
-- A public `ResourceSource` abstraction: rejected because callers need only
-  explicit `load*` inputs; directory and inline normalization are Rowan
-  implementation details.
-- Separate Tool and Phase registration subsystems: rejected because their
-  registration, validation, invocation, snapshot, and recovery concerns are
-  the same despite their different outputs.
-- Passing host Scope or opaque host bindings through Rowan: rejected because
-  it teaches Rowan host business concepts and duplicates host ownership.
-- Per-Agent Extension activation: rejected because an Extension API can alter
-  whole-Runtime behavior and cannot be safely isolated to one Run.
-- Host-side Catalog polling: rejected because it would recreate a second
-  resource authority and is not currently needed by callers.
+- One Runtime-global name namespace: rejected because a shared Runtime may host
+  mutually isolated source views with legitimate same-name resources.
+- A callback-based or generic public `ResourceSource` object: rejected because
+  explicit typed `load*` inputs and opaque Source IDs are sufficient.
+- A Workflow resource kind: rejected because a generic Definition Layer closes
+  the narrowing seam without teaching Rowan a host orchestration concept.
+- Starting the Scheduler in `init()` and loading Extensions afterward: rejected
+  because recovered queued Runs can execute before Extension activation.
+- One shared durable `InvocationContext/Outcome` for Tools and Phases: rejected
+  because Tool Calls and Phase Executions have different persistence, retry,
+  input, routing, and indeterminate-effect semantics.
+- Passing host Scope or executable closures through Agent Configuration:
+  rejected because it duplicates host authority and prevents durable rebinding.
+- Per-Agent or per-view Extension activation: rejected because an Extension can
+  alter the whole Runtime and cannot be isolated truthfully.
+- Host-side Catalog polling: rejected because it recreates a second executable
+  authority.

@@ -215,7 +215,11 @@ function buildToolsWithRouting(
   config: AgentConfig,
   availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
 ) {
-  const tools = [...config.context.tools];
+  // The Runtime Resource Registry keeps Rowan's reserved route Tool in the
+  // implicit core source. Routing, however, is phase-registry-specific: build
+  // a fresh schema for the visible phases and avoid exposing the empty core
+  // placeholder or registering two Tools with the same name.
+  const tools = config.context.tools.filter((tool) => tool.name !== PhaseRouteTool);
   if (availablePhases.length > 0) {
     tools.push(createRouteTool(availablePhases));
   }

@@ -6,6 +6,7 @@ import { executeOnce } from "./execution";
 import { ConfigCommandService } from "./config-commands";
 import type {
   AgentConfig,
+  AgentConfigRequest,
   AgentRecord,
   AgentRun,
   AgentRuntime as AgentRuntimeContract,
@@ -29,7 +30,7 @@ import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, Outc
 import { RuntimeError } from "./errors";
 import { pageAgents, pageRuns } from "./read-models";
 import { projectAssistantMessage, projectModelContext } from "./model-context";
-import { assembleExtensions } from "./extensions";
+import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { createDefaultPhase, DEFAULT_PHASE_ID } from "../harness/phases/default";
 import type { PhaseRegistry } from "../harness/phases/types";
@@ -37,6 +38,16 @@ import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
 import { assertJsonValue, isJsonValue } from "./json";
 import { TransientRunEventHub } from "./transient-run-events";
+import {
+  type LoadInput,
+  type LoadResult,
+  type ResourceKind,
+} from "./resource-registry";
+import { RuntimeBootstrapRegistry } from "./extension-lifetime";
+import type { AgentDefinition } from "../harness/definitions";
+import type { Phase } from "../harness/phases/types";
+import type { Skill } from "../protocol";
+import { materializeConfigurationSnapshot, resolveConfigurationSnapshot } from "./configuration-snapshot";
 
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_POLL_MS = 25;
@@ -82,15 +93,21 @@ export class AgentRuntime implements AgentRuntimeContract {
   private readonly executions = new Map<RunId, ActiveExecution>();
   private readonly consumers = new Map<string, ConsumerSubscription>();
   private readonly transientEvents = new TransientRunEventHub();
+  private readonly resources: RuntimeBootstrapRegistry;
   private heartbeat?: ReturnType<typeof setInterval>;
   private pumping = false;
   private closed = false;
 
-  private constructor(options: AgentRuntimeOptions & { configs: import("./contracts").ConfigProvider }, owned: import("./contracts").OwnedStore) {
+  private constructor(
+    options: AgentRuntimeOptions & { configs: import("./contracts").ConfigProvider },
+    owned: import("./contracts").OwnedStore,
+    resources: RuntimeBootstrapRegistry,
+  ) {
     this.owned = owned;
     this.commands = new ConfigCommandService(owned, options.configs, String(owned.lease.token).split(":")[0]!);
     this.storeIncarnation = String(owned.lease.token).split(":")[0]!;
     this.concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
+    this.resources = resources;
   }
 
   static async init(options: AgentRuntimeOptions): Promise<AgentRuntime> {
@@ -99,13 +116,46 @@ export class AgentRuntime implements AgentRuntimeContract {
     const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
     if (!Number.isInteger(concurrency) || concurrency <= 0) throw new TypeError("concurrency must be a positive integer");
     const owned = await options.store.openOwner({ ownerId: createId("owner"), leaseMs: OWNER_LEASE_MS });
-    const runtime = new AgentRuntime({ ...options, configs, concurrency }, owned);
-    runtime.startHeartbeat();
-    void runtime.pump();
-    return runtime;
+    const runtime = new AgentRuntime({ ...options, configs, concurrency }, owned, new RuntimeBootstrapRegistry());
+    try {
+      await runtime.resources.ensureCoreResources();
+      await options.bootstrap?.(runtime.resources);
+      runtime.startHeartbeat();
+      void runtime.pump();
+      return runtime;
+    } catch (error) {
+      await runtime.resources.closeExtensions().catch(() => undefined);
+      await owned.sealAndReleaseOwner().catch(() => undefined);
+      throw error;
+    }
   }
 
-  async createAgent(config: AgentConfig, options: { idempotencyKey?: string; metadata?: import("../runtime-events").Metadata } = {}): Promise<AgentId> {
+  async loadAgents(input: LoadInput<AgentDefinition>): Promise<LoadResult> {
+    this.assertOpen();
+    return this.resources.loadAgents(input);
+  }
+
+  async loadSkills(input: LoadInput<Skill>): Promise<LoadResult> {
+    this.assertOpen();
+    return this.resources.loadSkills(input);
+  }
+
+  async loadPhases(input: LoadInput<Phase>): Promise<LoadResult> {
+    this.assertOpen();
+    return this.resources.loadPhases(input);
+  }
+
+  async loadTools(input: Readonly<{ sourceId: string; values: readonly DurableTool[] }>): Promise<LoadResult> {
+    this.assertOpen();
+    return this.resources.loadTools(input);
+  }
+
+  async unload(input: Readonly<{ kind: ResourceKind; sourceId: string }>): Promise<LoadResult> {
+    this.assertOpen();
+    return this.resources.unload(input);
+  }
+
+  async createAgent(config: AgentConfigRequest, options: { idempotencyKey?: string; metadata?: import("../runtime-events").Metadata } = {}): Promise<AgentId> {
     this.assertOpen();
     return this.commands.createAgent({
       config,
@@ -114,7 +164,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     });
   }
 
-  async updateAgentConfig(agentId: AgentId, config: AgentConfig, options: { idempotencyKey: string }): Promise<void> {
+  async updateAgentConfig(agentId: AgentId, config: AgentConfigRequest, options: { idempotencyKey: string }): Promise<void> {
     this.assertOpen();
     await this.commands.updateAgentConfig({ agentId, config, idempotencyKey: options.idempotencyKey });
   }
@@ -170,6 +220,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     this.executions.clear();
     this.transientEvents.close();
     for (const subscription of this.consumers.values()) subscription.controller.abort();
+    await this.resources.closeExtensions();
     await this.owned.sealAndReleaseOwner();
   }
 
@@ -232,7 +283,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     let executionRevision = run.revision;
     try {
       const agent = await this.requireAgent(run.agentId);
-      const token = run.pinnedConfigToken ?? agent.currentConfigToken;
+      let token = run.pinnedConfigToken ?? agent.currentConfigToken;
       if (!token) {
         await this.failQueued(run, "Agent has no Config Token.");
         return;
@@ -252,13 +303,28 @@ export class AgentRuntime implements AgentRuntimeContract {
         await this.failQueued(run, resolution.reason);
         return;
       }
+      let resolvedConfig = resolution.config;
+      if (!("resources" in resolvedConfig)) {
+        try {
+          const snapshot = this.materializeConfig(resolvedConfig);
+          token = await this.commands.storeSnapshot({
+            agent,
+            config: snapshot,
+            operationId: `run-snapshot:${run.id}`,
+          });
+          resolvedConfig = snapshot;
+        } catch (error) {
+          await this.failQueued(run, error instanceof Error ? error.message : "Configuration Snapshot failed.");
+          return;
+        }
+      }
       const executionId = createId("exec") as import("../runtime-events").ExecutionId;
       claim = await this.owned.claimRun({ runId: run.id, expectedRevision: run.revision, executionId, configToken: token });
       executionRevision = claim.run.revision;
       const controller = new AbortController();
       this.executions.set(run.id, { controller, executionId });
-      const config = resolution.config;
-      const assembly = await assembleExtensions(config);
+      const config = resolvedConfig as AgentConfig;
+      const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner);
       let toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream
         ? config.model as ModelRef
@@ -285,6 +351,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           agentId: run.agentId,
           runId: run.id,
           executionId: claim.execution.executionId,
+          ...(agent.metadata === undefined ? {} : { agentMetadata: agent.metadata }),
+          ...(run.metadata === undefined ? {} : { runMetadata: run.metadata }),
         },
         model,
         stream,
@@ -317,6 +385,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
+                agentMetadata: agent.metadata,
                 execution: claim!.execution,
                 expectedRevision: executionRevision,
                 toolConfig: executionTools,
@@ -333,6 +402,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
+                agentMetadata: agent.metadata,
                 execution: claim!.execution,
                 expectedRevision: executionRevision,
                 toolConfig: executionTools,
@@ -385,6 +455,7 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   private async executeTool(input: {
     run: RunRecord;
+    agentMetadata?: import("../runtime-events").Metadata;
     execution: import("./contracts").ExecutionToken;
     expectedRevision: number;
     toolConfig: ExecutionToolConfig;
@@ -397,6 +468,7 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   private async executeToolBatch(input: {
     run: RunRecord;
+    agentMetadata?: import("../runtime-events").Metadata;
     execution: import("./contracts").ExecutionToken;
     expectedRevision: number;
     toolConfig: ExecutionToolConfig;
@@ -433,6 +505,7 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   private async executeReservedTool(input: {
     run: RunRecord;
+    agentMetadata?: import("../runtime-events").Metadata;
     execution: import("./contracts").ExecutionToken;
     expectedRevision: number;
     toolConfig: ExecutionToolConfig;
@@ -454,6 +527,8 @@ export class AgentRuntime implements AgentRuntimeContract {
     const context = {
       agentId: input.run.agentId,
       runId: input.run.id,
+      ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
+      ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
       toolCallId,
       reportProgress: (progress: JsonValue) => {
         const active = this.executions.get(input.run.id);
@@ -612,6 +687,11 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (this.closed) throw new RuntimeError("runtime_closed", null);
   }
 
+  private materializeConfig(config: AgentConfigRequest): AgentConfig {
+    if ("resources" in config) return config;
+    return materializeConfigurationSnapshot(resolveConfigurationSnapshot(this.resources, config));
+  }
+
   private startHeartbeat(): void {
     this.heartbeat = setInterval(() => {
       void this.owned.renewOwner(OWNER_LEASE_MS).catch(() => {
@@ -662,7 +742,7 @@ function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
 
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegistry {
-  if (registry?.phases.has(DEFAULT_PHASE_ID)) {
+  if (registry?.phases.has(DEFAULT_PHASE_ID) && registry.phases.get(DEFAULT_PHASE_ID)?.filePath !== "") {
     throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${DEFAULT_PHASE_ID}".`);
   }
   return {

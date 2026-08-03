@@ -421,7 +421,6 @@ type CliAgentListItem = {
 type AgentResources = {
   skills: Skill[];
   phases: NonNullable<AgentConfig["resources"]["phases"]>;
-  extensions: NonNullable<AgentConfig["resources"]["extensions"]>;
 };
 type ConfiguredAgent = {
   runtime: AgentRuntime;
@@ -626,7 +625,6 @@ async function createConfiguredAgent(
       tools,
       skills,
       phases: resources.phases,
-      extensions: resources.extensions,
     },
   };
 
@@ -637,7 +635,17 @@ async function createConfiguredAgent(
   if (args.agentId) configs.bind(args.agentId, config);
   let runtime: AgentRuntime | undefined;
   try {
-    runtime = await AgentRuntime.init({ store, configs });
+    const extensionsDir = join(workspace.rowanDir, "extensions");
+    const { extensions } = existsSync(extensionsDir)
+      ? await loadExtensions(extensionsDir)
+      : { extensions: [] };
+    runtime = await AgentRuntime.init({
+      store,
+      configs,
+      bootstrap: async (registry) => {
+        await registry.loadExtensions(extensions);
+      },
+    });
     const existing = args.agentId
       ? (await runtime.listAgents()).items.find((agent) => agent.id === args.agentId)
       : undefined;
@@ -694,15 +702,9 @@ async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Pro
           : loadedPhases.entryPhaseId,
       }
     : loadedPhases;
-  const extensionsDir = join(workspace.rowanDir, "extensions");
-  const { extensions } = existsSync(extensionsDir)
-    ? await loadExtensions(extensionsDir)
-    : { extensions: [] };
-
   return {
     skills: [...discoveredSkills, ...configuredSkills],
     phases,
-    extensions,
   };
 }
 

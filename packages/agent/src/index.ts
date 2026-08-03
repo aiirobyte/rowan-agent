@@ -2,6 +2,21 @@ import { createCoreTools as createLegacyCoreTools, type CoreToolContext } from "
 import type { JsonValue, Tool as RuntimeTool, ToolInvocationContext } from "./runtime/contracts";
 
 export { AgentRuntime } from "./runtime/durable-runtime";
+export { ResourceRegistry, ResourceRegistryError } from "./runtime/resource-registry";
+export { resolveConfigurationSnapshot } from "./runtime/configuration-snapshot";
+export { materializeConfigurationSnapshot } from "./runtime/configuration-snapshot";
+export {
+  ExtensionLifetimeError,
+  RuntimeBootstrapRegistry,
+  RuntimeExtensionLifetime,
+} from "./runtime/extension-lifetime";
+export type {
+  ExtensionActivationError,
+  ExtensionActivationResult,
+  ExtensionContribution,
+  ExtensionLoadInput,
+  ExtensionLifetimeErrorCode,
+} from "./runtime/extension-lifetime";
 export { InMemoryStore } from "./runtime/durable-store";
 export { SqliteStore } from "./runtime/sqlite-durable-store";
 export { InMemoryConfigProvider, brandConfigToken } from "./runtime/config-provider";
@@ -28,6 +43,7 @@ export function createCoreTools(input: CoreToolContext = {}): RuntimeTool[] {
 
 export type {
   AgentConfig,
+  AgentConfigRequest,
   AgentResources,
   AgentId,
   AgentListCursor,
@@ -100,6 +116,24 @@ export type {
   UserInput,
   UserMessage,
 } from "./runtime/contracts";
+export type {
+  LoadInput,
+  LoadResult,
+  PhaseContribution,
+  ResourceDiagnostic,
+  ResourceKind,
+  ResourceRef,
+  ResourceRegistryErrorCode,
+  ResourceSourceId,
+  ResourceView,
+  ResolvedResourceView,
+  ToolContribution,
+} from "./runtime/resource-registry";
+export type {
+  AgentConfiguration,
+  ConfigurationSnapshot,
+  DefinitionLayer,
+} from "./runtime/configuration-snapshot";
 
 export type { AgentDefinition, PhaseRegistrySelection } from "./harness/definitions";
 export type { FrontmatterResult } from "./harness/loader";
@@ -117,7 +151,9 @@ export type {
 
 export type {
   ExtensionAPI,
+  ExtensionDisposer,
   ExtensionFactory,
+  ExtensionFactoryResult,
   HookEvent,
   HookEventType,
   HookHandler,

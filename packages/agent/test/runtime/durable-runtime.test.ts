@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfig, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfig, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
@@ -85,6 +85,28 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "run-1" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     await expect(run.snapshot()).resolves.toMatchObject({ state: "completed", outcome: { message: expect.any(String) } });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a failed Definition Snapshot fails the queued Run instead of leaving it stuck", async () => {
+  const stream: StreamFn = async function* () {
+    yield { type: "done", response: { content: "unused", stopReason: "stop" } };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const config: AgentConfiguration = {
+      identity: "missing-definition-v1",
+      definition: { name: "missing" },
+      resourceView: { agents: ["missing-source"], tools: [], skills: [], phases: [] },
+      model: { provider: "test", id: "model" },
+      stream,
+    };
+    const agentId = await runtime.createAgent(config, { idempotencyKey: "agent-missing-definition" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "run-missing-definition" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "failed", failure: { code: "configuration_unavailable" } });
+    expect((await run.snapshot()).state).toBe("failed");
   } finally {
     await runtime.close();
   }
@@ -433,12 +455,16 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
     yield { type: "text_delta", text: "extension complete", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "extension complete" }] } };
     yield { type: "done" };
   };
-  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
   try {
     const agentId = await runtime.createAgent({
       ...simpleConfig(stream),
-      resources: { tools: [], skills: [], extensions: [extension] },
-    } as unknown as AgentConfig, { idempotencyKey: "agent-extension-assembly" });
+      resources: { tools: [], skills: [] },
+    }, { idempotencyKey: "agent-extension-assembly" });
     const run = await runtime.start(agentId, "use extension", { idempotencyKey: "run-extension-assembly" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(beforeCalls).toBe(1);

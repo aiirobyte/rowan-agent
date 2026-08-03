@@ -17,26 +17,43 @@ Opaque immutable host data stored with an Agent and made available to configurat
 _Avoid_: Agent Configuration, business state
 
 **Agent Configuration**:
-The executable model, Agent Definition, candidate resources and Context
-Candidates, hooks, and
-policies used by an Agent. It includes a host-defined stable identity because
-Rowan cannot compare closures. Hosts update it through the Runtime, while a
-configuration adapter preserves immutable snapshots that Rowan can resolve
-after restart.
+A host request containing a stable identity, registered Agent Definition
+reference, Resource View, Context Candidates, and Rowan-native execution
+options. It contains no concrete executable resource or host business Scope.
+Hosts update it through the Runtime; Rowan resolves it into an immutable
+Configuration Snapshot for each new Run.
 _Avoid_: Agent Options, Agent Binding, serialized Agent
 
 **Agent Definition**:
 A reusable declarative description containing an Agent's identity, authored
-content, optional model, and named Tool, Skill, PhaseRegistry, Extension, and
-Context Candidate selections. It contains no host business scope, lifecycle
+content, optional model, and named Tool, Skill, PhaseRegistry, and Context
+Candidate selections. It contains no host business scope, lifecycle
 operation, or executable resource closure.
 _Avoid_: Agent Context, Capability Allowlist, Agent Configuration
 
+**Resource Source**:
+One host-registered, atomically replaceable set of same-kind Agent Definitions,
+Tools, Skills, or Phases identified by an opaque Source ID. Registration does
+not make the source visible to an Agent.
+_Avoid_: Catalog, Project Source, Resource Scope
+
+**Resource View**:
+The explicit Source IDs from which Rowan may resolve non-Extension resources
+for one Agent Configuration. Rowan interprets only source visibility; it does
+not know why the host selected those sources.
+_Avoid_: Host Scope, Candidate Bag, Global Catalog
+
 **Resource Candidate**:
-A concrete Tool, Skill, Phase, or Extension supplied in an Agent Configuration
-that may be selected by its Agent Definition. Being a candidate does not make
-the resource visible unless Definition and Phase selection retain it.
+A Tool, Skill, or Phase resolved from one Resource View before declarative
+Definition and Phase narrowing. Candidates are never supplied as concrete
+values in an Agent Configuration.
 _Avoid_: Allowed Resource, Resource Reference, Registered Capability
+
+**Definition Layer**:
+An optional declarative layer supplied with a Definition reference that may
+replace authored content or model and narrow Tool, Skill, and Phase selections.
+It cannot add a Resource Source, Context Candidate, or executable handler.
+_Avoid_: Workflow, Child Definition, Capability Grant
 
 **Context Candidate**:
 One named JSON-safe value supplied by a host in an Agent Configuration. An
@@ -45,8 +62,17 @@ Rowan interpreting its business schema.
 _Avoid_: Agent Context, Prompt String, Memory Store
 
 **Configuration Snapshot**:
-An immutable, restart-resolvable version of one Agent Configuration. A Run waiting for input remains attached to the snapshot that created its Execution Checkpoint.
+An immutable, restart-resolvable result of resolving one Agent Configuration.
+It records source revisions, selected declarations, Context values, and
+source-qualified executable references. A Run waiting for input remains
+attached to the snapshot that created its Execution Checkpoint.
 _Avoid_: Caller revision, ConfigRef, mutable current config
+
+**Extension**:
+A Runtime-global executable module activated during bootstrap before the
+Scheduler becomes ready. It is implicit in every Resource View, remains active
+for the Runtime lifetime, and is never selected by a Definition or Phase.
+_Avoid_: Resource Candidate, Agent Extension, Scoped Extension
 
 ## Conversation
 
@@ -59,7 +85,7 @@ An immutable Rowan-generated Message in an Agent's durable conversation history.
 _Avoid_: Pending input, Stream Event, mutable transcript entry
 
 **Model Context**:
-The execution-local projection built from Canonical Messages and the current Agent Configuration. Compaction and Phase-local prompts may change this projection without rewriting canonical history.
+The execution-local projection built from Canonical Messages and the Run's Configuration Snapshot. Compaction and Phase-local prompts may change this projection without rewriting canonical history.
 _Avoid_: Runtime State, Session, canonical transcript
 
 ## Execution
@@ -71,6 +97,12 @@ _Avoid_: Job, Workflow Run, Turn Promise
 **Execution Attempt**:
 One fenced period in which the Scheduler claims an Agent Run and executes it until an input or terminal boundary.
 _Avoid_: Worker, Lease, Agent process
+
+**Phase Execution**:
+One invocation of a selected Phase inside an Execution Attempt, governed by the
+Run's Phase state, routing, and Execution Checkpoint. It is not an independent
+durable Tool Call and has no Tool-style automatic retry contract.
+_Avoid_: Tool Call, Phase Job, Generic Invocation
 
 **Input Request**:
 A durable one-shot request for more Agent Input, linked to the Phase that requested it, one prompt Message, and one Execution Checkpoint. Its ID is the idempotency identity of its answer.
@@ -101,6 +133,12 @@ _Avoid_: Agent pause, business cancellation
 **Scheduler**:
 The Runtime policy that selects durable, ready Agent Runs while preserving per-Agent FIFO and configured concurrency. It never chooses business work or communication targets.
 _Avoid_: Workflow orchestrator, Router, in-memory queue
+
+**Runtime Readiness**:
+The boundary reached after startup Resource Sources and executable handlers are
+registered, global Extensions are activated and frozen, and recovery bindings
+are available. The Scheduler cannot claim a Run before this boundary.
+_Avoid_: Runtime Ownership, Extension Loaded Event, Host Reconciliation
 
 **Runtime Owner**:
 The single live Runtime permitted to mutate one Durable Store. Ownership is time-bounded so an expired owner can be fenced and replaced after process loss.

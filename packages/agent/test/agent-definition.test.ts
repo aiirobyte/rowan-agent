@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { parseAgentDefinition } from "../src/index";
+import { assertAgentDefinition } from "../src/harness/definitions";
 
 test("parseAgentDefinition parses the shared declarative fields", () => {
-  const definition = parseAgentDefinition(`---
+  expect(() => parseAgentDefinition(`---
 name: reviewer
 description: Review the current change.
 tools: [read, read, bash]
@@ -15,8 +16,27 @@ context: [project_context]
 model: openai/gpt-5
 ---
 Review the change and report concrete findings.
-`);
+`)).toThrow(/extensions.*Runtime-global/i);
+  expect(() => assertAgentDefinition({
+    name: "programmatic-legacy",
+    description: "Legacy selector.",
+    content: "Rejected.",
+    extensions: ["quality"],
+  } as never)).toThrow(/extensions.*Runtime-global/i);
 
+  const definition = parseAgentDefinition(`---
+name: reviewer
+description: Review the current change.
+tools: [read, read, bash]
+skills: [testing]
+phases:
+  entryPhaseId: verify
+  phaseIds: [verify, verify]
+context: [project_context]
+model: openai/gpt-5
+---
+Review the change and report concrete findings.
+`);
   expect(definition).toEqual({
     name: "reviewer",
     description: "Review the current change.",
@@ -24,7 +44,6 @@ Review the change and report concrete findings.
     tools: ["read", "bash"],
     skills: ["testing"],
     phases: { entryPhaseId: "verify", phaseIds: ["verify"] },
-    extensions: ["quality"],
     context: ["project_context"],
     model: { provider: "openai", id: "gpt-5" },
   });
@@ -50,7 +69,6 @@ skills: []
 phases:
   entryPhaseId: null
   phaseIds: []
-extensions: []
 context: []
 ---
 Use no candidates.
@@ -61,7 +79,6 @@ Use no candidates.
     tools: [],
     skills: [],
     phases: { entryPhaseId: null, phaseIds: [] },
-    extensions: [],
     context: [],
   });
 });

@@ -1,14 +1,16 @@
 import { createId } from "../utils";
-import type { AgentConfig, ConfigProvider, ConfigPutResult, ConfigResolution } from "./contracts";
+import type { AgentConfigRequest, ConfigProvider, ConfigPutResult, ConfigResolution } from "./contracts";
+import type { AgentConfiguration } from "./configuration-snapshot";
 import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
 import { CONFIG_TOKEN_BYTES } from "./idempotency";
 import { assertUtf8ByteLimit, canonicalJson } from "./json";
 import type { JsonValue } from "../runtime-events";
+import type { ResourceKind } from "./resource-registry";
 
 type ConfigEntry = Readonly<{
   agentId: AgentId;
   identity: string;
-  config: AgentConfig;
+  config: AgentConfigRequest;
 }>;
 
 type ConfigOperation = Readonly<{
@@ -25,7 +27,7 @@ export class InMemoryConfigProvider implements ConfigProvider {
   async put(input: {
     agentId: AgentId;
     agentMetadata?: Metadata;
-    config: AgentConfig;
+    config: AgentConfigRequest;
     operationId: string;
     signal: AbortSignal;
   }): Promise<ConfigPutResult> {
@@ -84,12 +86,13 @@ export function validateConfigResolution(
   }
   if (value.kind === "unavailable" && typeof value.reason === "string") return { kind: "unavailable", reason: value.reason };
   if (value.kind === "available" && isRecord(value.config) && typeof value.config.identity === "string") {
-    return { kind: "available", config: value.config as AgentConfig };
+    return { kind: "available", config: value.config as AgentConfigRequest };
   }
   throw new Error(`Config Provider returned an invalid resolution for Agent ${agentId}.`);
 }
 
-function snapshotConfig(config: AgentConfig): AgentConfig {
+function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
+  if (!("resources" in config)) return snapshotConfiguration(config);
   const definition = Object.freeze({
     ...config.definition,
     ...(config.definition.tools ? { tools: Object.freeze([...config.definition.tools]) } : {}),
@@ -100,14 +103,26 @@ function snapshotConfig(config: AgentConfig): AgentConfig {
         phaseIds: Object.freeze([...config.definition.phases.phaseIds]),
       }),
     } : {}),
-    ...(config.definition.extensions ? { extensions: Object.freeze([...config.definition.extensions]) } : {}),
     ...(config.definition.context ? { context: Object.freeze([...config.definition.context]) } : {}),
   });
   const resources = Object.freeze({
     ...config.resources,
     tools: Object.freeze([...config.resources.tools]),
     skills: Object.freeze([...config.resources.skills]),
-    ...(config.resources.extensions ? { extensions: Object.freeze([...config.resources.extensions]) } : {}),
+    ...(config.resources.resourceView ? {
+      resourceView: Object.freeze({
+        agents: Object.freeze([...config.resources.resourceView.agents]),
+        tools: Object.freeze([...config.resources.resourceView.tools]),
+        skills: Object.freeze([...config.resources.resourceView.skills]),
+        phases: Object.freeze([...config.resources.resourceView.phases]),
+      }),
+    } : {}),
+    ...(config.resources.resourceRefs ? { resourceRefs: Object.freeze(config.resources.resourceRefs.map((ref) => Object.freeze({ ...ref }))) } : {}),
+    ...(config.resources.resourceRevisions ? {
+      resourceRevisions: Object.freeze(Object.fromEntries(
+        Object.entries(config.resources.resourceRevisions).map(([kind, revisions]) => [kind, Object.freeze([...(revisions as readonly string[])])]),
+      )) as Readonly<Record<ResourceKind, readonly string[]>>,
+    } : {}),
     ...(config.resources.contexts ? {
       contexts: Object.freeze(config.resources.contexts.map((context) => Object.freeze({
         name: context.name,
@@ -116,6 +131,43 @@ function snapshotConfig(config: AgentConfig): AgentConfig {
     } : {}),
   });
   return Object.freeze({ ...config, definition, resources });
+}
+
+function snapshotConfiguration(config: AgentConfiguration): AgentConfiguration {
+  const layer = config.definition.layer;
+  const definition = Object.freeze({
+    name: config.definition.name,
+    ...(layer === undefined ? {} : {
+      layer: Object.freeze({
+        ...layer,
+        ...(layer.tools ? { tools: Object.freeze([...layer.tools]) } : {}),
+        ...(layer.skills ? { skills: Object.freeze([...layer.skills]) } : {}),
+        ...(layer.phases ? {
+          phases: Object.freeze({
+            entryPhaseId: layer.phases.entryPhaseId,
+            phaseIds: Object.freeze([...layer.phases.phaseIds]),
+          }),
+        } : {}),
+      }),
+    }),
+  });
+  const resourceView = Object.freeze({
+    agents: Object.freeze([...config.resourceView.agents]),
+    tools: Object.freeze([...config.resourceView.tools]),
+    skills: Object.freeze([...config.resourceView.skills]),
+    phases: Object.freeze([...config.resourceView.phases]),
+  });
+  return Object.freeze({
+    ...config,
+    definition,
+    resourceView,
+    ...(config.contexts ? {
+      contexts: Object.freeze(config.contexts.map((context) => Object.freeze({
+        name: context.name,
+        value: snapshotJsonValue(context.value),
+      }))),
+    } : {}),
+  });
 }
 
 function snapshotJsonValue(value: JsonValue): JsonValue {

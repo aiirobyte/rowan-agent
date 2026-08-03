@@ -267,6 +267,7 @@ export class ExtensionRunner {
     message?: string,
   ): void {
     this.runtime.invalidate(message);
+    for (const extension of this.extensions) extension.runtime.invalidate(message);
   }
 
   // ---------------------------------------------------------------------------
@@ -303,15 +304,22 @@ export class ExtensionRunner {
    */
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
+      const extension: Extension = {
+        path: ext.path,
+        tools: new Map(),
+        phases: new Set(),
+        cleanup: [],
+        runtime: createExtensionRuntime(),
+      };
       try {
-        const extension: Extension = { path: ext.path, tools: new Map() };
-
         const api = this.createExtensionAPI(extension, ext.manifest);
-        await ext.factory(api);
+        const disposer = await ext.factory(api);
+        if (typeof disposer === "function") extension.disposer = disposer;
 
         this.extensions.push(extension);
         this._phaseCache = null;
       } catch (error) {
+        await this.rollbackExtension(extension);
         const message = error instanceof Error ? error.message : String(error);
         this.emitError({
           extensionPath: ext.path,
@@ -322,6 +330,18 @@ export class ExtensionRunner {
         throw error;
       }
     }
+  }
+
+  /** Dispose all active Extensions in reverse activation order. */
+  async close(): Promise<void> {
+    this.abortController.abort();
+    for (const extension of [...this.extensions].reverse()) {
+      await this.disposeExtension(extension, "This Extension Runtime has been closed.");
+    }
+    this.extensions.length = 0;
+    this.phases.clear();
+    this._phaseCache = null;
+    this.runtime.invalidate("This Extension Runtime has been closed.");
   }
 
   // ---------------------------------------------------------------------------
@@ -547,7 +567,8 @@ export class ExtensionRunner {
       registerTool: (tool) => this.registerTool(extension, tool),
       context: extContext,
       manifest,
-    }, this.runtime, this.events);
+      trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
+    }, extension.runtime, this.events);
   }
 
   private registerTool(extension: Extension, tool: ToolDefinition): void {
@@ -617,6 +638,7 @@ export class ExtensionRunner {
     };
 
     this.phases.set(name, registered);
+    extension.phases.add(name);
 
     this._phaseCache = null;
   }
@@ -656,6 +678,22 @@ export class ExtensionRunner {
     if (this._phaseCache) return this._phaseCache;
     this._phaseCache = new Map(this.phases);
     return this._phaseCache;
+  }
+
+  private async rollbackExtension(extension: Extension): Promise<void> {
+    await this.disposeExtension(extension, "This Extension activation was rolled back.");
+  }
+
+  private async disposeExtension(extension: Extension, message: string): Promise<void> {
+    extension.runtime.invalidate(message);
+    for (const name of extension.phases) this.phases.delete(name);
+    for (const cleanup of [...extension.cleanup].reverse()) {
+      await Promise.resolve().then(() => cleanup()).catch(() => undefined);
+    }
+    if (extension.disposer) {
+      await Promise.resolve().then(() => extension.disposer!()).catch(() => undefined);
+    }
+    this._phaseCache = null;
   }
 }
 

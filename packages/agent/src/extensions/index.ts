@@ -27,7 +27,9 @@
 // Unified API for extension
 export type {
   ExtensionAPI,
+  ExtensionDisposer,
   ExtensionFactory,
+  ExtensionFactoryResult,
 } from "./api";
 export { createExtensionAPI } from "./api";
 export type {

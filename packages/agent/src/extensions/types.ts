@@ -4,7 +4,7 @@
 
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
-import type { ExtensionFactory } from "./api";
+import type { ExtensionDisposer, ExtensionFactory } from "./api";
 
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
 
@@ -186,6 +186,10 @@ export interface Extension {
   path: string;
   /** Tools registered by this extension */
   tools: Map<string, RegisteredTool>;
+  phases: Set<string>;
+  cleanup: Array<() => void | Promise<void>>;
+  disposer?: ExtensionDisposer;
+  runtime: ExtensionRuntime;
 }
 
 // ---------------------------------------------------------------------------

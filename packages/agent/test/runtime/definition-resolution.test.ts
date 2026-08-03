@@ -23,10 +23,9 @@ test("Runtime resolves Definition names after selected Extension assembly", asyn
       name: "extension-agent",
       description: "Use one selected Extension Tool.",
       content: "Use the extension.",
-      extensions: ["quality"],
       tools: ["extension_lookup"],
     },
-    resources: { tools: [], skills: [], extensions: [extension] },
+    resources: { tools: [], skills: [] },
     model: { provider: "test", id: "model" },
     stream: async function* (request) {
       expect(request.tools?.map(({ name }) => name).filter((name) => name !== "route"))
@@ -46,7 +45,11 @@ test("Runtime resolves Definition names after selected Extension assembly", asyn
     },
   } satisfies AgentConfig;
 
-  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
   try {
     const agentId = await runtime.createAgent(config, {
       idempotencyKey: "definition-extension-selection-agent",
@@ -257,7 +260,7 @@ test("Definition may explicitly select Rowan's built-in default Phase", async ()
   }
 });
 
-test("Runtime warns and falls back when selected Extension and entry Phase names are missing", async () => {
+test("Runtime warns and falls back when selected resources and entry Phase names are missing", async () => {
   const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
   let modelCalls = 0;
   const config = {
@@ -266,10 +269,10 @@ test("Runtime warns and falls back when selected Extension and entry Phase names
       name: "fallback-agent",
       description: "Fall back after missing references.",
       content: "Use Rowan's default Phase.",
-      extensions: ["missing-extension"],
+      tools: ["missing-tool"],
       phases: { entryPhaseId: "missing-entry", phaseIds: [] },
     },
-    resources: { tools: [], skills: [], extensions: [] },
+    resources: { tools: [], skills: [] },
     model: { provider: "test", id: "model" },
     stream: async function* () {
       modelCalls += 1;
@@ -288,7 +291,7 @@ test("Runtime warns and falls back when selected Extension and entry Phase names
     await run.wait();
     expect(modelCalls).toBe(1);
     expect(warnings.mock.calls.some(([message]) =>
-      String(message).includes('Extension "missing-extension"'))).toBe(true);
+      String(message).includes('Tool "missing-tool"'))).toBe(true);
     expect(warnings.mock.calls.some(([message]) =>
       String(message).includes('Phase entry "missing-entry"'))).toBe(true);
   } finally {
@@ -364,13 +367,11 @@ test("Runtime rejects a Phase name contributed by both the host and an Extension
       name: "duplicate-phase-agent",
       description: "Reject ambiguous Phases.",
       content: "Do not invoke the model.",
-      extensions: ["duplicate-phase"],
     },
     resources: {
       tools: [],
       skills: [],
       phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: null },
-      extensions: [extension],
     },
     model: { provider: "test", id: "model" },
     stream: async function* () {
@@ -378,7 +379,11 @@ test("Runtime rejects a Phase name contributed by both the host and an Extension
       yield { type: "done" as const };
     },
   } satisfies AgentConfig;
-  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
   try {
     const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-duplicate-phase-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-duplicate-phase-run" });

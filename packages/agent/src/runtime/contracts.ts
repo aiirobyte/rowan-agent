@@ -32,9 +32,14 @@ import type {
 } from "../runtime-events";
 import type { Skill } from "../protocol";
 import type { PhaseRegistry } from "../harness/phases/types";
-import type { LoadedExtension } from "../extensions/types";
 import type { AgentDefinition } from "../harness/definitions";
 import { assertAgentDefinition } from "../harness/definitions";
+import type {
+  LoadInput,
+  LoadResult,
+} from "./resource-registry";
+import type { RuntimeBootstrapRegistry } from "./extension-lifetime";
+import type { AgentConfiguration } from "./configuration-snapshot";
 import { assertJsonValue, assertUtf8ByteLimit, canonicalJson, isJsonValue } from "./json";
 
 export type {
@@ -90,6 +95,10 @@ export type UserInput = string | Readonly<{ content: UserContent; metadata?: Met
 export type ToolInvocationContext = Readonly<{
   agentId: AgentId;
   runId: RunId;
+  /** Opaque JSON metadata captured from the Agent and Run records. Rowan does
+   * not interpret host/domain fields. */
+  agentMetadata?: Metadata;
+  runMetadata?: Metadata;
   toolCallId: ToolCallId;
   reportProgress(progress: JsonValue): void;
 }>;
@@ -117,8 +126,11 @@ export type AgentResources = Readonly<{
   tools: readonly Tool[];
   skills: readonly Skill[];
   phases?: PhaseRegistry;
-  extensions?: readonly LoadedExtension[];
   contexts?: readonly ContextCandidate[];
+  /** Source-qualified snapshot metadata retained for restart/recovery checks. */
+  resourceView?: import("./resource-registry").ResourceView;
+  resourceRefs?: readonly import("./resource-registry").ResourceRef[];
+  resourceRevisions?: Readonly<Record<import("./resource-registry").ResourceKind, readonly string[]>>;
 }>;
 export type ResolvedAgentContext = Readonly<{
   systemPrompt: string;
@@ -135,6 +147,8 @@ export type AgentConfig = Readonly<{
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
 } & ({ model: ModelConfig; stream?: never } | { model: ModelRef; stream: StreamFn })>;
+/** Definition-reference request accepted at the public Runtime seam. */
+export type AgentConfigRequest = AgentConfig | AgentConfiguration;
 
 export type AgentRecord = Readonly<{
   id: AgentId;
@@ -208,13 +222,13 @@ export type RunBoundary =
   | Readonly<{ type: "cancelled"; reason?: string }>;
 
 export type ConfigResolution = Readonly<
-  | { kind: "available"; config: AgentConfig }
+  | { kind: "available"; config: AgentConfigRequest }
   | { kind: "deferred"; retryAfterMs?: number }
   | { kind: "unavailable"; reason: string }
 >;
 export type ConfigPutResult = Readonly<{ kind: "stored"; token: string } | { kind: "identity_conflict" }>;
 export interface ConfigProvider {
-  put(input: { agentId: AgentId; agentMetadata?: Metadata; config: AgentConfig; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult>;
+  put(input: { agentId: AgentId; agentMetadata?: Metadata; config: AgentConfigRequest; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult>;
   resolve(input: { agentId: AgentId; agentMetadata?: Metadata; token: ConfigToken; signal: AbortSignal }): Promise<ConfigResolution>;
 }
 export interface OwnedStore {
@@ -292,7 +306,12 @@ export interface OwnedStore {
   sealAndReleaseOwner(): Promise<void>;
 }
 export interface DurableStore { openOwner(input: { ownerId: string; leaseMs: number }): Promise<OwnedStore> }
-export type AgentRuntimeOptions = Readonly<{ store: DurableStore; configs?: ConfigProvider; concurrency?: number }>;
+export type AgentRuntimeOptions = Readonly<{
+  store: DurableStore;
+  configs?: ConfigProvider;
+  concurrency?: number;
+  bootstrap?: (registry: RuntimeBootstrapRegistry) => void | Promise<void>;
+}>;
 export type DurableConsumer = Readonly<{ caughtUp: Promise<void>; done: Promise<void>; stop(): void }>;
 export interface AgentRun {
   readonly id: RunId;
@@ -303,8 +322,13 @@ export interface AgentRun {
   cancel(reason?: string): Promise<RunBoundary>;
 }
 export interface AgentRuntime {
-  createAgent(config: AgentConfig, options?: { idempotencyKey?: string; metadata?: Metadata }): Promise<AgentId>;
-  updateAgentConfig(agentId: AgentId, config: AgentConfig, options: { idempotencyKey: string }): Promise<void>;
+  loadAgents(input: LoadInput<AgentDefinition>): Promise<LoadResult>;
+  loadSkills(input: LoadInput<Skill>): Promise<LoadResult>;
+  loadPhases(input: LoadInput<import("../harness/phases/types").Phase>): Promise<LoadResult>;
+  loadTools(input: Readonly<{ sourceId: string; values: readonly Tool[] }>): Promise<LoadResult>;
+  unload(input: Readonly<{ kind: import("./resource-registry").ResourceKind; sourceId: string }>): Promise<LoadResult>;
+  createAgent(config: AgentConfigRequest, options?: { idempotencyKey?: string; metadata?: Metadata }): Promise<AgentId>;
+  updateAgentConfig(agentId: AgentId, config: AgentConfigRequest, options: { idempotencyKey: string }): Promise<void>;
   start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
@@ -443,6 +467,30 @@ export function assertAgentConfig(config: AgentConfig): void {
     }
     if (names.has(context.name)) throw new TypeError(`Duplicate Context candidate "${context.name}".`);
     names.add(context.name);
+    assertJsonValue(context.value, `Context candidate "${context.name}" value`);
+  }
+}
+export function assertAgentConfigRequest(config: AgentConfigRequest): void {
+  if ("resources" in config) {
+    assertAgentConfig(config);
+    return;
+  }
+  if (typeof config.identity !== "string" || config.identity.length === 0) throw new TypeError("config.identity must be non-empty");
+  assertUtf8ByteLimit(config.identity, IDENTITY_LIMIT, "config.identity");
+  if (!config.definition || typeof config.definition.name !== "string" || config.definition.name.trim() === "") {
+    throw new TypeError("config.definition.name must be non-empty");
+  }
+  const view = config.resourceView;
+  if (!view || !Array.isArray(view.agents) || !Array.isArray(view.tools) || !Array.isArray(view.skills) || !Array.isArray(view.phases)) {
+    throw new TypeError("config.resourceView is invalid");
+  }
+  for (const [kind, ids] of Object.entries(view)) {
+    for (const sourceId of ids as readonly unknown[]) {
+      if (typeof sourceId !== "string" || sourceId.trim() === "") throw new TypeError(`config.resourceView.${kind} contains an invalid Source ID`);
+    }
+  }
+  for (const context of config.contexts ?? []) {
+    if (typeof context.name !== "string" || context.name.trim() === "") throw new TypeError("Context candidate name must be non-empty");
     assertJsonValue(context.value, `Context candidate "${context.name}" value`);
   }
 }

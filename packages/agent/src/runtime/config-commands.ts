@@ -1,6 +1,6 @@
-import type { AgentConfig, AgentRecord, ConfigProvider, ConfigResolution, OwnedStore } from "./contracts";
+import type { AgentConfig, AgentConfigRequest, AgentRecord, ConfigProvider, ConfigResolution, OwnedStore } from "./contracts";
 import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
-import { assertAgentConfig } from "./contracts";
+import { assertAgentConfigRequest } from "./contracts";
 import { brandConfigToken, validateConfigResolution } from "./config-provider";
 import { CONFIG_IDENTITY_BYTES } from "./idempotency";
 import { assertUtf8ByteLimit } from "./json";
@@ -15,8 +15,8 @@ export class ConfigCommandService {
     private readonly storeIncarnation: string,
   ) {}
 
-  async createAgent(input: { config: AgentConfig; metadata?: Metadata; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
-    assertAgentConfig(input.config);
+  async createAgent(input: { config: AgentConfigRequest; metadata?: Metadata; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
+    assertAgentConfigRequest(input.config);
     assertIdentity(input.config.identity);
     const reserved = await this.store.reserveAgent({
       idempotencyKey: input.idempotencyKey,
@@ -39,8 +39,8 @@ export class ConfigCommandService {
     return reserved.id;
   }
 
-  async updateAgentConfig(input: { agentId: AgentId; config: AgentConfig; idempotencyKey: string; signal?: AbortSignal }): Promise<void> {
-    assertAgentConfig(input.config);
+  async updateAgentConfig(input: { agentId: AgentId; config: AgentConfigRequest; idempotencyKey: string; signal?: AbortSignal }): Promise<void> {
+    assertAgentConfigRequest(input.config);
     assertIdentity(input.config.identity);
     const agent = await this.findAgent(input.agentId);
     const operationId = this.operationId("update_agent_config", input.agentId, input.idempotencyKey);
@@ -69,6 +69,29 @@ export class ConfigCommandService {
     return resolution;
   }
 
+  /** Persist one resolved Configuration Snapshot under a Run-specific token.
+   * The durable Run pins this token at claim time, so later Source replacement
+   * cannot mutate an active or input-waiting Run. */
+  async storeSnapshot(input: {
+    agent: AgentRecord;
+    config: AgentConfig;
+    operationId: string;
+    signal?: AbortSignal;
+  }): Promise<ConfigToken> {
+    assertAgentConfigRequest(input.config);
+    const result = await this.put({
+      agentId: input.agent.id,
+      agentMetadata: input.agent.metadata,
+      config: input.config,
+      operationId: input.operationId,
+      signal: input.signal,
+    });
+    if (result.kind === "identity_conflict") {
+      throw idempotencyConflict("update_agent_config", input.operationId);
+    }
+    return brandConfigToken(result.token);
+  }
+
   private async findAgent(agentId: AgentId): Promise<AgentRecord> {
     const agent = (await this.store.listAgents()).find((candidate) => candidate.id === agentId);
     if (!agent) throw new RuntimeError("agent_not_found", { agentId });
@@ -78,7 +101,7 @@ export class ConfigCommandService {
   private async put(input: {
     agentId: AgentId;
     agentMetadata?: Metadata;
-    config: AgentConfig;
+    config: AgentConfigRequest;
     operationId: string;
     signal?: AbortSignal;
   }) {

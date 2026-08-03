@@ -1,5 +1,4 @@
-import { createExtensionRunner } from "../extensions";
-import type { LoadedExtension, RegisteredTool } from "../extensions/types";
+import type { RegisteredTool } from "../extensions/types";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { DEFAULT_PHASE_ID } from "../harness/phases/default";
 import { selectNamedResources } from "../harness/resource-selection";
@@ -21,23 +20,12 @@ export type ExtensionAssembly = Readonly<{
   setContext?: (context: AgentContext) => void;
 }>;
 
-/** Load extensions once and assemble their tools, phases, and hooks behind the Runtime seam. */
-export async function assembleExtensions(
+/** Assemble already-activated Runtime-global Extensions for one immutable
+ * configuration. No Extension factory is executed here. */
+export function assembleRegisteredExtensions(
   config: AgentConfig,
-): Promise<ExtensionAssembly> {
-  const selectedExtensions = selectNamedResources(
-    config.resources.extensions ?? [],
-    config.definition.extensions,
-    "Extension",
-  );
-
-  if (selectedExtensions.length === 0) {
-    return { context: resolveDefinitionContext(config) };
-  }
-
-  const runner = createExtensionRunner({ cwd: config.cwd });
-  await runner.loadExtensions(selectedExtensions as LoadedExtension[]);
-  runner.bind();
+  runner: import("../extensions").ExtensionRunner,
+): ExtensionAssembly {
 
   const extensionTools = runner.getAllRegisteredTools().map(adaptExtensionTool);
   const tools = [...config.resources.tools];

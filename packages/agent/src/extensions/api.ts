@@ -86,7 +86,9 @@ export interface ExtensionAPI {
  * Extension factory function.
  * Receives ExtensionAPI for registering hooks, phases, and providers.
  */
-export type ExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
+export type ExtensionDisposer = () => void | Promise<void>;
+export type ExtensionFactoryResult = void | ExtensionDisposer;
+export type ExtensionFactory = (api: ExtensionAPI) => ExtensionFactoryResult | Promise<ExtensionFactoryResult>;
 
 // ---------------------------------------------------------------------------
 // createExtensionAPI
@@ -107,6 +109,7 @@ export function createExtensionAPI(
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
+    trackCleanup?: (cleanup: () => void | Promise<void>) => void;
   },
   runtime?: ExtensionRuntime,
   eventBus?: EventBus,
@@ -137,6 +140,7 @@ export function createExtensionAPI(
 
   const ctx = options?.context ?? noopContext;
   const phaseIn = options?.phase;
+  const trackCleanup = options?.trackCleanup;
 
   // Phase state — API holds it, runner reads after execution
   let outputPayload: unknown = phaseIn?.state?.payload;
@@ -147,6 +151,7 @@ export function createExtensionAPI(
     on: (eventType, handler) => {
       assertActive();
       hooks?.on(eventType, handler);
+      trackCleanup?.(() => hooks?.off(eventType, handler));
     },
     off: (eventType, handler) => {
       assertActive();
@@ -163,6 +168,7 @@ export function createExtensionAPI(
     registerProvider: (config) => {
       assertActive();
       options?.registerProvider?.(config);
+      trackCleanup?.(() => options?.unregisterProvider?.(config.id));
     },
     unregisterProvider: (name) => {
       assertActive();
@@ -174,7 +180,19 @@ export function createExtensionAPI(
       formatJson,
     },
     context: ctx,
-    events: eventBus ?? { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
+    events: eventBus
+      ? {
+        on: (event, listener) => {
+          const unsubscribe = eventBus.on(event, listener);
+          trackCleanup?.(unsubscribe);
+          return unsubscribe;
+        },
+        off: (event) => eventBus.off(event),
+        emit: (event, ...args) => eventBus.emit(event, ...args),
+        has: (event) => eventBus.has(event),
+        count: (event) => eventBus.count(event),
+      }
+      : { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
     phase: {
       getPayload: () => outputPayload,
       setPayload: (p) => { outputPayload = p; },

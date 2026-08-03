@@ -4,8 +4,23 @@ export { InMemoryConfigProvider, brandConfigToken, validateConfigResolution } fr
 export { ConfigCommandService, CONFIG_PROVIDER_DEADLINE_MS } from "./config-commands";
 export { pageAgents, pageRuns } from "./read-models";
 export { AgentRuntime } from "./durable-runtime";
+export { ResourceRegistry, ResourceRegistryError } from "./resource-registry";
+export { resolveConfigurationSnapshot } from "./configuration-snapshot";
+export {
+  ExtensionLifetimeError,
+  RuntimeBootstrapRegistry,
+  RuntimeExtensionLifetime,
+} from "./extension-lifetime";
+export type {
+  ExtensionActivationError,
+  ExtensionActivationResult,
+  ExtensionContribution,
+  ExtensionLoadInput,
+  ExtensionLifetimeErrorCode,
+} from "./extension-lifetime";
 export type {
   AgentConfig,
+  AgentConfigRequest,
   AgentResources,
   ContextCandidate,
   AgentRecord,
@@ -31,6 +46,26 @@ export type {
   ToolProgress,
   UserInput,
 } from "./contracts";
+export type {
+  AgentDefinition,
+  LoadInput,
+  LoadResult,
+  PhaseContribution,
+  ResourceDiagnostic,
+  ResourceKind,
+  ResourceRef,
+  ResourceRegistryErrorCode,
+  ResourceSourceId,
+  ResourceView,
+  ResolvedResourceView,
+  ToolContribution,
+} from "./resource-registry";
+export type {
+  AgentConfiguration,
+  ConfigurationSnapshot,
+  DefinitionLayer,
+} from "./configuration-snapshot";
+export { materializeConfigurationSnapshot } from "./configuration-snapshot";
 export {
   assertAgentConfig,
   assertToolExecutionResult,

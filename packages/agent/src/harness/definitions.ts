@@ -13,7 +13,6 @@ export type AgentDefinition = Readonly<{
   tools?: readonly string[];
   skills?: readonly string[];
   phases?: PhaseRegistrySelection;
-  extensions?: readonly string[];
   context?: readonly string[];
   model?: ModelRef;
 }>;
@@ -26,8 +25,8 @@ export function assertAgentDefinition(value: unknown): asserts value is AgentDef
   optionalStringList(value.tools, "definition.tools");
   optionalStringList(value.skills, "definition.skills");
   optionalPhaseRegistrySelection(value.phases, "definition.phases");
-  optionalStringList(value.extensions, "definition.extensions");
   optionalStringList(value.context, "definition.context");
+  if ("extensions" in value) throw new TypeError("definition.extensions is not supported; Extensions are Runtime-global");
   if ("entryPhase" in value) throw new TypeError("definition.entryPhase is not supported; use definition.phases.entryPhaseId");
   if (value.model !== undefined) {
     if (!isRecord(value.model)
@@ -59,7 +58,9 @@ export function normalizeAgentDefinition(
   const tools = optionalStringList(frontmatter.tools, "tools");
   const skills = optionalStringList(frontmatter.skills, "skills");
   const phases = optionalPhaseRegistrySelection(frontmatter.phases, "phases");
-  const extensions = optionalStringList(frontmatter.extensions, "extensions");
+  if (frontmatter.extensions !== undefined) {
+    throw new TypeError("extensions is not supported; Extensions are Runtime-global");
+  }
   const context = optionalStringList(frontmatter.context, "context");
   if (frontmatter.entryPhase !== undefined) {
     throw new TypeError("entryPhase is not supported; use phases.entryPhaseId");
@@ -73,7 +74,6 @@ export function normalizeAgentDefinition(
     ...(tools ? { tools } : {}),
     ...(skills ? { skills } : {}),
     ...(phases ? { phases } : {}),
-    ...(extensions ? { extensions } : {}),
     ...(context ? { context } : {}),
     ...(model ? { model } : {}),
   };
