@@ -106,7 +106,54 @@ checkpoints; transient events never enter the Durable Store.
 
 ## Resources
 
-`loadSkills()`, `loadPhases()`, and `loadExtensions()` load Resource Candidates.
-Pass them through `AgentConfig.resources`; the Definition's optional name lists
-select from them after Extension assembly. Omitted lists inherit all candidates,
-`[]` selects none, and missing names warn and are skipped.
+`AgentRuntime` owns a Resource Registry. Register Agent Definitions, Tools,
+Skills, and Phases under stable `sourceId` values, then select the sources for
+an Agent through `resourceView`:
+
+```ts
+const runtime = await AgentRuntime.init({
+  store: new InMemoryStore(),
+  bootstrap: async (registry) => {
+    await registry.loadExtensions({
+      sourceId: "workspace.extensions",
+      directory: "./extensions",
+    });
+  },
+});
+
+await runtime.loadAgents({
+  sourceId: "workspace",
+  values: [{
+    name: "workspace-assistant",
+    description: "Assist with the current workspace.",
+    content: "You are helpful.",
+  }],
+});
+await runtime.loadTools({
+  sourceId: "workspace",
+  values: createCoreTools({ root: process.cwd() }),
+});
+
+const agentId = await runtime.createAgent({
+  identity: "workspace:v1",
+  definition: { name: "workspace-assistant" },
+  resourceView: {
+    agents: ["workspace"],
+    tools: ["workspace"],
+    skills: [],
+    phases: [],
+  },
+  model: { provider: "openai", id: "gpt-4o" },
+  stream,
+});
+```
+
+Each `load*()` call replaces one source atomically; use `directory` or inline
+`values`. `resourceView` controls visibility, so same-name resources can live
+in isolated sources but collide when selected together. The built-in `route`
+Tool and `default` Phase are always available and cannot be overridden.
+
+Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
+`bootstrap`; after initialization they are frozen until the Runtime closes.
+Definition name lists narrow the selected Tools, Skills, and Phases: omission
+inherits all candidates, `[]` selects none, and missing names are skipped.
