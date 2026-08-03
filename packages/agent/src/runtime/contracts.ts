@@ -150,6 +150,12 @@ export type AgentConfig = Readonly<{
 /** Definition-reference request accepted at the public Runtime seam. */
 export type AgentConfigRequest = AgentConfig | AgentConfiguration;
 
+export function isAgentConfiguration(
+  config: AgentConfigRequest,
+): config is AgentConfiguration {
+  return !("resources" in config);
+}
+
 export type AgentRecord = Readonly<{
   id: AgentId;
   metadata?: Metadata;
@@ -471,7 +477,7 @@ export function assertAgentConfig(config: AgentConfig): void {
   }
 }
 export function assertAgentConfigRequest(config: AgentConfigRequest): void {
-  if ("resources" in config) {
+  if (!isAgentConfiguration(config)) {
     assertAgentConfig(config);
     return;
   }

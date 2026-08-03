@@ -283,21 +283,9 @@ export class ResourceRegistry {
   }
 
   private resolveKind(kind: ResourceKind, sourceIds: readonly ResourceSourceId[]): RegistryValue[] {
-    const bySource = this.sources.get(kind);
-    const seenSources = new Set<ResourceSourceId>();
     const names = new Set<string>();
     const values: RegistryValue[] = [];
-    for (const sourceId of sourceIds) {
-      assertSourceId(sourceId);
-      if (seenSources.has(sourceId)) continue;
-      seenSources.add(sourceId);
-      const source = bySource?.get(sourceId);
-      if (!source) {
-        throw new ResourceRegistryError(
-          "unknown_resource_source",
-          `Unknown resource source "${sourceId}" for ${kind}.`,
-        );
-      }
+    for (const source of this.sourcesFor(kind, sourceIds)) {
       for (const value of source.values) {
         if (names.has(value.name)) {
           throw new ResourceRegistryError(
@@ -313,36 +301,40 @@ export class ResourceRegistry {
   }
 
   private resolveRevisions(kind: ResourceKind, sourceIds: readonly ResourceSourceId[]): readonly string[] {
-    const bySource = this.sources.get(kind);
-    const seen = new Set<string>();
-    const revisions: string[] = [];
-    for (const sourceId of sourceIds) {
-      if (seen.has(sourceId)) continue;
-      seen.add(sourceId);
-      const source = bySource?.get(sourceId);
-      if (!source) throw new ResourceRegistryError("unknown_resource_source", `Unknown resource source "${sourceId}" for ${kind}.`);
-      revisions.push(source.revision);
-    }
-    return revisions;
+    return this.sourcesFor(kind, sourceIds).map(({ revision }) => revision);
   }
 
   private resolveRefs(kind: ResourceKind, sourceIds: readonly ResourceSourceId[]): readonly ResourceRef[] {
-    const bySource = this.sources.get(kind);
-    const seenSources = new Set<string>();
     const seenNames = new Set<string>();
     const refs: ResourceRef[] = [];
-    for (const sourceId of sourceIds) {
-      if (seenSources.has(sourceId)) continue;
-      seenSources.add(sourceId);
-      const source = bySource?.get(sourceId);
-      if (!source) throw new ResourceRegistryError("unknown_resource_source", `Unknown resource source "${sourceId}" for ${kind}.`);
+    for (const source of this.sourcesFor(kind, sourceIds)) {
       for (const value of source.values) {
         if (seenNames.has(value.name)) throw new ResourceRegistryError("resource_collision", `Duplicate ${capitalize(kind)} resource "${value.name}" in Resource View.`);
         seenNames.add(value.name);
-        refs.push({ kind, sourceId, name: value.name });
+        refs.push({ kind, sourceId: source.sourceId, name: value.name });
       }
     }
     return refs;
+  }
+
+  private sourcesFor(kind: ResourceKind, sourceIds: readonly ResourceSourceId[]): SourceRecord[] {
+    const bySource = this.sources.get(kind);
+    const seen = new Set<ResourceSourceId>();
+    const sources: SourceRecord[] = [];
+    for (const sourceId of sourceIds) {
+      assertSourceId(sourceId);
+      if (seen.has(sourceId)) continue;
+      seen.add(sourceId);
+      const source = bySource?.get(sourceId);
+      if (!source) {
+        throw new ResourceRegistryError(
+          "unknown_resource_source",
+          `Unknown resource source "${sourceId}" for ${kind}.`,
+        );
+      }
+      sources.push(source);
+    }
+    return sources;
   }
 
   private nextRevision(kind: ResourceKind, sourceId: ResourceSourceId): string {

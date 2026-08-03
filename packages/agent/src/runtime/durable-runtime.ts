@@ -25,7 +25,7 @@ import type {
   Tool as DurableTool,
   UserInput,
 } from "./contracts";
-import { assertToolExecutionResult } from "./contracts";
+import { assertToolExecutionResult, isAgentConfiguration } from "./contracts";
 import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import { pageAgents, pageRuns } from "./read-models";
@@ -304,7 +304,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       let resolvedConfig = resolution.config;
-      if (!("resources" in resolvedConfig)) {
+      if (isAgentConfiguration(resolvedConfig)) {
         try {
           const snapshot = this.materializeConfig(resolvedConfig);
           token = await this.commands.storeSnapshot({
@@ -688,7 +688,7 @@ export class AgentRuntime implements AgentRuntimeContract {
   }
 
   private materializeConfig(config: AgentConfigRequest): AgentConfig {
-    if ("resources" in config) return config;
+    if (!isAgentConfiguration(config)) return config;
     return materializeConfigurationSnapshot(resolveConfigurationSnapshot(this.resources, config));
   }
 

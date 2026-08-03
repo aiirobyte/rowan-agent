@@ -1,5 +1,5 @@
 import { createId } from "../utils";
-import type { AgentConfigRequest, ConfigProvider, ConfigPutResult, ConfigResolution } from "./contracts";
+import { isAgentConfiguration, type AgentConfigRequest, type ConfigProvider, type ConfigPutResult, type ConfigResolution } from "./contracts";
 import type { AgentConfiguration } from "./configuration-snapshot";
 import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
 import { CONFIG_TOKEN_BYTES } from "./idempotency";
@@ -92,7 +92,7 @@ export function validateConfigResolution(
 }
 
 function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
-  if (!("resources" in config)) return snapshotConfiguration(config);
+  if (isAgentConfiguration(config)) return snapshotConfiguration(config);
   const definition = Object.freeze({
     ...config.definition,
     ...(config.definition.tools ? { tools: Object.freeze([...config.definition.tools]) } : {}),
