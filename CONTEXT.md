@@ -26,7 +26,7 @@ _Avoid_: Agent Options, Agent Binding, serialized Agent
 
 **Agent Definition**:
 A reusable declarative description containing an Agent's identity, authored
-content, optional model, and named Tool, Skill, PhaseRegistry, and Context
+prompt, optional model, and named Tool, Skill, PhaseRegistry, and Context
 Candidate selections. It contains no host business scope, lifecycle
 operation, or executable resource closure.
 _Avoid_: Agent Context, Capability Allowlist, Agent Configuration
@@ -51,7 +51,7 @@ _Avoid_: Allowed Resource, Resource Reference, Registered Capability
 
 **Definition Layer**:
 An optional declarative layer supplied with a Definition reference that may
-replace authored content or model and narrow Tool, Skill, and Phase selections.
+replace the authored prompt or model and narrow Tool, Skill, and Phase selections.
 It cannot add a Resource Source, Context Candidate, or executable handler.
 _Avoid_: Workflow, Child Definition, Capability Grant
 

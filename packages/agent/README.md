@@ -11,24 +11,39 @@ import {
   AgentRuntime,
   createCoreTools,
   InMemoryStore,
+  loadPhases,
+  loadSkills,
 } from "@rowan-agent/agent";
 
+const skills = await loadSkills("./.rowan/skills");
+const phases = await loadPhases("./.rowan/phases");
 const runtime = await AgentRuntime.init({
   store: new InMemoryStore(),
 });
 
 const agentId = await runtime.createAgent({
   identity: "example:v1", // Stable config snapshot identity, not the Agent ID
-  model: { provider: "openai", id: "gpt-4o" },
-  stream,
+  model: {
+    provider: "openai",
+    id: "gpt-4o",
+    protocol: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: process.env.OPENAI_API_KEY!,
+  },
   definition: {
     name: "workspace-assistant",
     description: "Assist with the current workspace.",
-    content: "You are helpful.",
+    prompt: "You are helpful.",
+    contexts: ["workspace"],
   },
   resources: {
     tools: createCoreTools({ root: process.cwd() }),
-    skills: [],
+    skills,
+    contexts: [{
+      name: "workspace",
+      value: { root: process.cwd() },
+    }],
+    phases,
   },
 });
 
@@ -126,7 +141,7 @@ await runtime.loadAgents({
   values: [{
     name: "workspace-assistant",
     description: "Assist with the current workspace.",
-    content: "You are helpful.",
+    prompt: "You are helpful.",
   }],
 });
 await runtime.loadTools({
@@ -143,8 +158,13 @@ const agentId = await runtime.createAgent({
     skills: [],
     phases: [],
   },
-  model: { provider: "openai", id: "gpt-4o" },
-  stream,
+  model: {
+    provider: "openai",
+    id: "gpt-4o",
+    protocol: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: process.env.OPENAI_API_KEY!,
+  },
 });
 ```
 
@@ -156,4 +176,53 @@ Tool and `default` Phase are always available and cannot be overridden.
 Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
 `bootstrap`; after initialization they are frozen until the Runtime closes.
 Definition name lists narrow the selected Tools, Skills, and Phases: omission
-inherits all candidates, `[]` selects none, and missing names are skipped.
+inherits all candidates, `[]` selects none, and missing names are skipped. The
+same rule applies to `definition.contexts`.
+
+### Resources and Definition
+
+`resources` and `definition` have different jobs:
+
+- `resources` supplies the concrete candidates available to one Agent. Its
+  Tools contain executable `execute()` functions; Skills and Phases contain
+  their loaded content; Contexts contain JSON-safe values.
+- `definition` declares which candidates this Agent uses. `tools`, `skills`,
+  `contexts`, and `phases` are name-based selectors; they cannot create a
+  resource that is absent from `resources`.
+
+For a single-process embedding, provide concrete resources directly and omit
+the selectors when the Agent should use everything:
+
+```ts
+const agentId = await runtime.createAgent({
+  identity: "workspace:v1",
+  definition: {
+    name: "workspace-assistant",
+    description: "Assist with the current workspace.",
+    prompt: "You are helpful.",
+  },
+  resources: { tools, skills, contexts, phases },
+  model,
+});
+```
+
+Use selectors when several Agents share a candidate pool:
+
+```ts
+definition: {
+  name: "read-only-assistant",
+  description: "Inspect the workspace without changing it.",
+  prompt: "You are helpful.",
+  tools: ["read"],
+  contexts: ["workspace"],
+  phases: { entryPhaseId: "review", phaseIds: ["review"] },
+}
+```
+
+For process-boundary persistence, use the Resource Registry form shown above:
+`resourceView` stores stable source IDs instead of executable resource
+closures, and the Runtime resolves those sources into an immutable
+Configuration Snapshot. This lets a restarted Runtime resolve the same
+resource revisions while keeping each Run pinned to the snapshot that created
+it. Direct `resources` are simpler for embedding; `resourceView` is the
+declarative form for shared, reloadable, and restart-resolvable resources.

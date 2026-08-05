@@ -49,7 +49,7 @@ test("Runtime falls back to its built-in default when a custom Phase registry ha
       definition: {
         name: "test",
         description: "Test Agent.",
-        content: "Test",
+        prompt: "Test",
       },
       resources: {
         tools: [],
@@ -100,7 +100,7 @@ test("Runtime preserves an explicit custom Phase entry", async () => {
       definition: {
         name: "test",
         description: "Test Agent.",
-        content: "Test",
+        prompt: "Test",
       },
       resources: {
         tools: [],
@@ -148,7 +148,7 @@ test("Runtime rejects a Context Phase that collides with its built-in default", 
       definition: {
         name: "test",
         description: "Test Agent.",
-        content: "Test",
+        prompt: "Test",
       },
       resources: {
         tools: [],

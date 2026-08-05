@@ -28,7 +28,7 @@ semantics.
 
 ### R1: Common definition and parser
 
-- Export `AgentDefinition` with required `name`, `description`, and `content`,
+- Export `AgentDefinition` with required `name`, `description`, and `prompt`,
   plus optional `tools`, `skills`, `phases`, `extensions`, `entryPhase`, and
   `model`.
 - Resource selections accept string lists only. Omitted inherits all

@@ -4,7 +4,7 @@ status: accepted
 
 # Select structured Context through Agent Definitions
 
-Rowan will extend its generic `AgentDefinition` with named structured Context
+Rowan will extend its generic `AgentDefinition` with named structured Contexts
 selection and replace the separate top-level `entryPhase`/Phase-name list with
 a JSON-serializable PhaseRegistry selection. A host supplies named JSON-safe
 Context Candidates in `AgentConfig.resources`; Rowan selects them with the

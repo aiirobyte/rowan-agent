@@ -16,7 +16,7 @@ function config(stream: StreamFn): AgentConfig {
     identity: "observe-boundaries-v1",
     model: { provider: "test", id: "model" },
     stream,
-    definition: { name: "test", description: "Test Agent.", content: "Test" },
+    definition: { name: "test", description: "Test Agent.", prompt: "Test" },
     resources: { tools: [], skills: [] },
   };
 }

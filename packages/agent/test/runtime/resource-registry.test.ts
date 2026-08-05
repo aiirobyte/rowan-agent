@@ -34,6 +34,26 @@ test("source transaction rejects duplicates without changing the previous revisi
   expect(resolved.tools.map(({ name }) => name)).toEqual(["keep"]);
 });
 
+test("Agent source transactions reject legacy Definition fields before replacement", async () => {
+  const registry = new ResourceRegistry();
+  await registry.loadAgents({
+    sourceId: "project-a",
+    values: [{ name: "keep", description: "Keep", prompt: "Keep" }],
+  });
+
+  await expect(registry.loadAgents({
+    sourceId: "project-a",
+    values: [{ name: "legacy", description: "Legacy", content: "Old" } as never],
+  })).rejects.toThrow(/content.*prompt/i);
+  await expect(registry.loadAgents({
+    sourceId: "project-a",
+    values: [{ name: "legacy", description: "Legacy", prompt: "Old", context: [] } as never],
+  })).rejects.toThrow(/context.*contexts/i);
+
+  expect(registry.resolveView({ agents: ["project-a"], tools: [], skills: [], phases: [] }).agents)
+    .toEqual([{ name: "keep", description: "Keep", prompt: "Keep" }]);
+});
+
 test("replacing one source atomically removes stale resources", async () => {
   const registry = new ResourceRegistry();
   await registry.loadTools({ sourceId: "project-a", values: [tool("old"), tool("keep")] });

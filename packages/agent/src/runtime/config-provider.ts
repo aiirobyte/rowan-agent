@@ -103,7 +103,7 @@ function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
         phaseIds: Object.freeze([...config.definition.phases.phaseIds]),
       }),
     } : {}),
-    ...(config.definition.context ? { context: Object.freeze([...config.definition.context]) } : {}),
+    ...(config.definition.contexts ? { contexts: Object.freeze([...config.definition.contexts]) } : {}),
   });
   const resources = Object.freeze({
     ...config.resources,

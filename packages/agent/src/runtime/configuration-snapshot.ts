@@ -16,7 +16,7 @@ import {
 
 export type DefinitionLayer = Readonly<{
   description?: string;
-  content?: string;
+  prompt?: string;
   model?: ModelRef;
   tools?: readonly string[];
   skills?: readonly string[];
@@ -67,7 +67,7 @@ export function resolveConfigurationSnapshot(
   const tools = selectNamedResources(resolved.tools, definition.tools, "Tool");
   const skills = selectNamedResources(resolved.skills, definition.skills, "Skill");
   const phases = resolvePhases(resolved.phases, definition.phases);
-  const contexts = selectNamedResources(input.contexts ?? [], base.context, "Context");
+  const contexts = selectNamedResources(input.contexts ?? [], base.contexts, "Context");
   return {
     identity: input.identity,
     definition,
@@ -127,7 +127,7 @@ function applyDefinitionLayer(base: AgentDefinition, layer: DefinitionLayer | un
   return {
     ...base,
     ...(layer.description === undefined ? {} : { description: layer.description }),
-    ...(layer.content === undefined ? {} : { content: layer.content }),
+    ...(layer.prompt === undefined ? {} : { prompt: layer.prompt }),
     ...(layer.model === undefined ? {} : { model: layer.model }),
     ...(layer.tools === undefined ? {} : { tools: intersectNames(base.tools, layer.tools, "Tool") }),
     ...(layer.skills === undefined ? {} : { skills: intersectNames(base.skills, layer.skills, "Skill") }),

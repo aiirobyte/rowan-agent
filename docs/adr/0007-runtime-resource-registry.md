@@ -22,7 +22,7 @@ visible together.
 
 The Runtime Configuration interface accepts a registered Definition name, an
 explicit Resource View, Context Candidates, and normal execution options. It
-may also accept one declarative Definition Layer that replaces authored content
+may also accept one declarative Definition Layer that replaces the authored prompt
 or model and narrows Tool, Skill, and Phase selections. The layer cannot add a
 source, Context Candidate, executable value, or host Scope. This gives hosts a
 generic input for Workflow-like configuration without adding Workflow to

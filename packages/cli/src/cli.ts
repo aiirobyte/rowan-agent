@@ -615,7 +615,7 @@ async function createConfiguredAgent(
     definition: {
       name: "rowan-cli",
       description: "General-purpose Rowan CLI Agent.",
-      content: [
+      prompt: [
         "You are Rowan, a helpful assistant that can assist users with a wide variety of tasks.",
         "",
         "You operate as an agent — you can read and write files, execute commands, and use various tools to accomplish tasks on behalf of the user.",

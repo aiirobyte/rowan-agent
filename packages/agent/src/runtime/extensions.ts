@@ -76,7 +76,7 @@ function resolveDefinitionContext(
   );
   const contexts = selectNamedResources(
     config.resources.contexts ?? [],
-    config.definition.context,
+    config.definition.contexts,
     "Context",
   );
   const candidateRegistry = assembled.phases ?? config.resources.phases;
@@ -98,7 +98,7 @@ function resolveDefinitionContext(
     console.warn(`Phase entry "${requestedEntry}" is not available; Rowan will use "default".`);
   }
   return {
-    systemPrompt: [config.definition.content, buildContextDescription(contexts)]
+    systemPrompt: [config.definition.prompt, buildContextDescription(contexts)]
       .filter((section) => section.length > 0)
       .join("\n\n"),
     tools,

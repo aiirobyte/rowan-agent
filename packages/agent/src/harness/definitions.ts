@@ -9,23 +9,25 @@ export type PhaseRegistrySelection = Readonly<{
 export type AgentDefinition = Readonly<{
   name: string;
   description: string;
-  content: string;
+  prompt: string;
   tools?: readonly string[];
   skills?: readonly string[];
   phases?: PhaseRegistrySelection;
-  context?: readonly string[];
+  contexts?: readonly string[];
   model?: ModelRef;
 }>;
 
 export function assertAgentDefinition(value: unknown): asserts value is AgentDefinition {
   if (!isRecord(value)) throw new TypeError("config.definition is invalid");
+  if ("content" in value) throw new TypeError("definition.content is not supported; use definition.prompt");
+  if ("context" in value) throw new TypeError("definition.context is not supported; use definition.contexts");
   requiredString(value.name, "definition.name");
   requiredString(value.description, "definition.description");
-  requiredString(value.content, "definition.content");
+  requiredString(value.prompt, "definition.prompt");
   optionalStringList(value.tools, "definition.tools");
   optionalStringList(value.skills, "definition.skills");
   optionalPhaseRegistrySelection(value.phases, "definition.phases");
-  optionalStringList(value.context, "definition.context");
+  optionalStringList(value.contexts, "definition.contexts");
   if ("extensions" in value) throw new TypeError("definition.extensions is not supported; Extensions are Runtime-global");
   if ("entryPhase" in value) throw new TypeError("definition.entryPhase is not supported; use definition.phases.entryPhaseId");
   if (value.model !== undefined) {
@@ -47,21 +49,23 @@ export function parseAgentDefinition(raw: string): AgentDefinition {
 
 export function normalizeAgentDefinition(
   frontmatter: Record<string, unknown>,
-  content: string,
+  prompt: string,
   options: Readonly<{ fallbackName?: string }> = {},
 ): AgentDefinition {
+  if (frontmatter.content !== undefined) throw new TypeError("content is not supported; use prompt and the document body");
+  if (frontmatter.context !== undefined) throw new TypeError("context is not supported; use contexts");
   const name = frontmatter.name === undefined && options.fallbackName
     ? options.fallbackName
     : requiredString(frontmatter.name, "name");
   const description = requiredString(frontmatter.description, "description");
-  const normalizedContent = requiredString(content, "content");
+  const normalizedPrompt = requiredString(prompt, "prompt");
   const tools = optionalStringList(frontmatter.tools, "tools");
   const skills = optionalStringList(frontmatter.skills, "skills");
   const phases = optionalPhaseRegistrySelection(frontmatter.phases, "phases");
   if (frontmatter.extensions !== undefined) {
     throw new TypeError("extensions is not supported; Extensions are Runtime-global");
   }
-  const context = optionalStringList(frontmatter.context, "context");
+  const contexts = optionalStringList(frontmatter.contexts, "contexts");
   if (frontmatter.entryPhase !== undefined) {
     throw new TypeError("entryPhase is not supported; use phases.entryPhaseId");
   }
@@ -70,11 +74,11 @@ export function normalizeAgentDefinition(
   return {
     name,
     description,
-    content: normalizedContent,
+    prompt: normalizedPrompt,
     ...(tools ? { tools } : {}),
     ...(skills ? { skills } : {}),
     ...(phases ? { phases } : {}),
-    ...(context ? { context } : {}),
+    ...(contexts ? { contexts } : {}),
     ...(model ? { model } : {}),
   };
 }

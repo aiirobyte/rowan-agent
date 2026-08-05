@@ -82,7 +82,7 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
     isolated: metadata.isolated as boolean | undefined,
     filePath: resolved,
     baseDir,
-    content: definition.content,
+    content: definition.prompt,
     model: definition.model,
   };
 

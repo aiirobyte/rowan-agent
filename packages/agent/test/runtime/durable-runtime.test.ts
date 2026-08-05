@@ -14,7 +14,7 @@ function simpleConfig(stream: StreamFn): AgentConfig {
     identity: "runtime-test-v1",
     model: { provider: "test", id: "model" },
     stream,
-    definition: { name: "test", description: "Test Agent.", content: "Test" },
+    definition: { name: "test", description: "Test Agent.", prompt: "Test" },
     resources: { tools: [], skills: [] },
   } as AgentConfig;
 }

@@ -580,7 +580,7 @@ const agentId = await runtime.createAgent({
   definition: {
     name: "workspace",
     description: "Work in the current workspace.",
-    content: "Complete the requested workspace task.",
+    prompt: "Complete the requested workspace task.",
   },
   resources: { tools, skills, phases },
   model,

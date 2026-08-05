@@ -16,7 +16,7 @@ do not match the entry-plus-membership semantics of a PhaseRegistry.
 ## Outcome
 
 Add generic named JSON Context Candidates to the Agent Configuration resource
-boundary, add `context` selection to Agent Definitions, and model Definition
+boundary, add `contexts` selection to Agent Definitions, and model Definition
 phase selection as a JSON-serializable PhaseRegistry selection. Rowan formats
 selected Context with its existing XML utilities as part of System Prompt
 assembly.
@@ -25,7 +25,7 @@ assembly.
 
 ### R1: Definition schema
 
-- `AgentDefinition` has optional `context?: readonly string[]` with the same
+- `AgentDefinition` has optional `contexts?: readonly string[]` with the same
   validation and selection behavior as Tools, Skills, and Extensions.
 - Its optional `phases` field is a PhaseRegistry selection object:
 
@@ -49,7 +49,7 @@ assembly.
   JsonValue }[]`.
 - Context Candidate names follow the existing named-resource validation;
   duplicate names are rejected before execution.
-- Omitted `definition.context` selects all offered Context Candidates, `[]`
+- Omitted `definition.contexts` selects all offered Context Candidates, `[]`
   selects none, and a named list selects matching candidates. Missing names
   emit the same warning-and-skip behavior as named Resources.
 - Rowan has no special Context names and does not inspect or alter a value's
@@ -57,11 +57,11 @@ assembly.
 
 ### R3: System Prompt and Run snapshots
 
-- Build the System Prompt from the Definition content, resolved Tools/Skills,
+- Build the System Prompt from the Definition prompt, resolved Tools/Skills,
   and selected Context. Serialize Context using the existing JSON-to-XML and
   XML escaping utilities, under stable generic Context markup.
 - Hosts pass only `JsonValue`; no host preformats XML or concatenates Context
-  into Definition content.
+  into the Definition prompt.
 - The resolved Context is part of the executable Agent Configuration. Config
   provider reconstruction and input-request continuation keep the original
   selected Context snapshot.

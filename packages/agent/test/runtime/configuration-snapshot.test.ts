@@ -32,11 +32,11 @@ test("snapshot resolution applies Definition, Layer, and Phase narrowing monoton
       values: [{
         name: "base",
         description: "Base",
-        content: "Base body.",
+        prompt: "Base body.",
         tools: ["keep", "drop"],
         skills: ["review", "drop-skill"],
         phases: { entryPhaseId: "review", phaseIds: ["review", "build"] },
-        context: ["project"],
+        contexts: ["project"],
       }],
     });
     await registry.loadTools({ sourceId: "project-tools", values: [tool("keep"), tool("drop"), tool("phase-only")] });
@@ -60,7 +60,7 @@ test("snapshot resolution applies Definition, Layer, and Phase narrowing monoton
       definition: {
         name: "base",
         layer: {
-          content: "Workflow body.",
+          prompt: "Workflow body.",
           tools: ["keep", "phase-only"],
           skills: ["review"],
           phases: { entryPhaseId: "review", phaseIds: ["review"] },
@@ -76,7 +76,7 @@ test("snapshot resolution applies Definition, Layer, and Phase narrowing monoton
 
     const snapshot = resolveConfigurationSnapshot(registry, input);
 
-    expect(snapshot.definition.content).toBe("Workflow body.");
+    expect(snapshot.definition.prompt).toBe("Workflow body.");
     expect(snapshot.resources.tools.map(({ name }) => name)).toEqual(["keep"]);
     expect(snapshot.resources.skills.map(({ name }) => name)).toEqual(["review"]);
     expect([...snapshot.resources.phases!.phases.values()].map(({ name }) => name)).toEqual(["review"]);
@@ -93,7 +93,7 @@ test("a Definition Layer cannot widen a parent selection", async () => {
   try {
     const registry = new ResourceRegistry();
     await registry.loadAgents({ sourceId: "definitions", values: [{
-      name: "base", description: "Base", content: "Base", tools: ["keep"], skills: [],
+      name: "base", description: "Base", prompt: "Base", tools: ["keep"], skills: [],
     }] });
     await registry.loadTools({ sourceId: "project-tools", values: [tool("keep"), tool("hidden")] });
     const snapshot = resolveConfigurationSnapshot(registry, {

@@ -17,7 +17,7 @@ function config(identity: string): AgentConfig {
     identity,
     model: { provider: "test", id: "model" },
     stream: async function* () {},
-    definition: { name: "test", description: "Test Agent.", content: "system" },
+    definition: { name: "test", description: "Test Agent.", prompt: "system" },
     resources: { tools: [], skills: [] },
   } as unknown as AgentConfig;
 }
@@ -46,8 +46,8 @@ test("InMemoryConfigProvider snapshots structured Context Candidates", async () 
     definition: {
       name: "test",
       description: "Test Agent.",
-      content: "system",
-      context: ["project_context"],
+      prompt: "system",
+      contexts: ["project_context"],
     },
     resources: { tools: [], skills: [], contexts },
   };

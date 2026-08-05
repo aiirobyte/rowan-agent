@@ -486,6 +486,9 @@ export function assertAgentConfigRequest(config: AgentConfigRequest): void {
   if (!config.definition || typeof config.definition.name !== "string" || config.definition.name.trim() === "") {
     throw new TypeError("config.definition.name must be non-empty");
   }
+  if (config.definition.layer && "content" in config.definition.layer) {
+    throw new TypeError("definition.layer.content is not supported; use definition.layer.prompt");
+  }
   const view = config.resourceView;
   if (!view || !Array.isArray(view.agents) || !Array.isArray(view.tools) || !Array.isArray(view.skills) || !Array.isArray(view.phases)) {
     throw new TypeError("config.resourceView is invalid");

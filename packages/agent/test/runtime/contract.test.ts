@@ -133,7 +133,7 @@ test("Tool schemas retain TypeBox and project only JSON-safe provider data", () 
   const config = {
     identity: "config-1",
     model: { provider: "test", id: "model" },
-    definition: { name: "test", description: "Test Agent.", content: "system" },
+    definition: { name: "test", description: "Test Agent.", prompt: "system" },
     resources: {
       tools: [{
         name: "lookup",

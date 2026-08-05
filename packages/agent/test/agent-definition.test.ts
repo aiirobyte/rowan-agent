@@ -12,7 +12,7 @@ phases:
   entryPhaseId: verify
   phaseIds: [verify, verify]
 extensions: [quality]
-context: [project_context]
+contexts: [project_context]
 model: openai/gpt-5
 ---
 Review the change and report concrete findings.
@@ -20,7 +20,7 @@ Review the change and report concrete findings.
   expect(() => assertAgentDefinition({
     name: "programmatic-legacy",
     description: "Legacy selector.",
-    content: "Rejected.",
+    prompt: "Rejected.",
     extensions: ["quality"],
   } as never)).toThrow(/extensions.*Runtime-global/i);
 
@@ -32,7 +32,7 @@ skills: [testing]
 phases:
   entryPhaseId: verify
   phaseIds: [verify, verify]
-context: [project_context]
+contexts: [project_context]
 model: openai/gpt-5
 ---
 Review the change and report concrete findings.
@@ -40,11 +40,11 @@ Review the change and report concrete findings.
   expect(definition).toEqual({
     name: "reviewer",
     description: "Review the current change.",
-    content: "Review the change and report concrete findings.",
+    prompt: "Review the change and report concrete findings.",
     tools: ["read", "bash"],
     skills: ["testing"],
     phases: { entryPhaseId: "verify", phaseIds: ["verify"] },
-    context: ["project_context"],
+    contexts: ["project_context"],
     model: { provider: "openai", id: "gpt-5" },
   });
 });
@@ -58,7 +58,7 @@ Use inherited candidates.
 `)).toEqual({
     name: "inherited",
     description: "Inherit candidates.",
-    content: "Use inherited candidates.",
+    prompt: "Use inherited candidates.",
   });
 
   expect(parseAgentDefinition(`---
@@ -69,21 +69,35 @@ skills: []
 phases:
   entryPhaseId: null
   phaseIds: []
-context: []
+contexts: []
 ---
 Use no candidates.
 `)).toEqual({
     name: "empty",
     description: "Select no candidates.",
-    content: "Use no candidates.",
+    prompt: "Use no candidates.",
     tools: [],
     skills: [],
     phases: { entryPhaseId: null, phaseIds: [] },
-    context: [],
+    contexts: [],
   });
 });
 
 test("parseAgentDefinition rejects malformed common fields", () => {
+  expect(() => parseAgentDefinition(`---
+name: legacy-content
+description: Legacy prompt field.
+content: Legacy
+---
+Prompt.
+`)).toThrow(/content.*prompt/i);
+  expect(() => parseAgentDefinition(`---
+name: legacy-context
+description: Legacy context field.
+context: [workspace]
+---
+Prompt.
+`)).toThrow(/context.*contexts/i);
   expect(() => parseAgentDefinition(`---
 name: invalid-list
 description: Invalid list.
@@ -121,7 +135,7 @@ Content.
 name: missing-content
 description: Missing content.
 ---
-`)).toThrow(/content is required/i);
+  `)).toThrow(/prompt is required/i);
   expect(() => parseAgentDefinition(`---
 name: invalid-yaml
 description: [

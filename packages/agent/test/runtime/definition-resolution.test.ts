@@ -22,7 +22,7 @@ test("Runtime resolves Definition names after selected Extension assembly", asyn
     definition: {
       name: "extension-agent",
       description: "Use one selected Extension Tool.",
-      content: "Use the extension.",
+      prompt: "Use the extension.",
       tools: ["extension_lookup"],
     },
     resources: { tools: [], skills: [] },
@@ -83,7 +83,7 @@ test("Runtime resolves Definition resource names and warns for missing candidate
     definition: {
       name: "reviewer",
       description: "Review the current change.",
-      content: "Review only the selected resources.",
+      prompt: "Review only the selected resources.",
       tools: ["keep", "missing"],
       skills: [],
     },
@@ -132,8 +132,8 @@ test("Runtime selects structured Context Candidates for the System Prompt", asyn
     definition: {
       name: "context-agent",
       description: "Use selected structured Context.",
-      content: "Use the selected context only.",
-      context: ["project_context", "missing_context"],
+      prompt: "Use the selected context only.",
+      contexts: ["project_context", "missing_context"],
     },
     resources: {
       tools: [],
@@ -190,7 +190,7 @@ test("Phase restrictions use the shared warning-aware resolver", async () => {
     definition: {
       name: "reviewer",
       description: "Review the current change.",
-      content: "Review.",
+      prompt: "Review.",
       phases: { entryPhaseId: "review", phaseIds: ["review"] },
     },
     resources: {
@@ -233,7 +233,7 @@ test("Definition may explicitly select Rowan's built-in default Phase", async ()
     definition: {
       name: "default-agent",
       description: "Use Rowan's default Phase.",
-      content: "Respond normally.",
+      prompt: "Respond normally.",
       phases: { entryPhaseId: "default", phaseIds: [] },
     },
     resources: { tools: [], skills: [] },
@@ -268,7 +268,7 @@ test("Runtime warns and falls back when selected resources and entry Phase names
     definition: {
       name: "fallback-agent",
       description: "Fall back after missing references.",
-      content: "Use Rowan's default Phase.",
+      prompt: "Use Rowan's default Phase.",
       tools: ["missing-tool"],
       phases: { entryPhaseId: "missing-entry", phaseIds: [] },
     },
@@ -313,7 +313,7 @@ test("Runtime rejects duplicate executable Tool candidates before model work", a
     definition: {
       name: "duplicate-tool-agent",
       description: "Reject ambiguous Tools.",
-      content: "Do not invoke the model.",
+      prompt: "Do not invoke the model.",
     },
     resources: {
       tools: [duplicate("First"), duplicate("Second")],
@@ -366,7 +366,7 @@ test("Runtime rejects a Phase name contributed by both the host and an Extension
     definition: {
       name: "duplicate-phase-agent",
       description: "Reject ambiguous Phases.",
-      content: "Do not invoke the model.",
+      prompt: "Do not invoke the model.",
     },
     resources: {
       tools: [],
@@ -424,8 +424,8 @@ test("an Input Request continuation remains pinned after the Agent Configuration
     definition: {
       name: "snapshot-agent",
       description: "Keep a Run on one snapshot.",
-      content: `configuration-${revision}`,
-      context: ["revision_context"],
+      prompt: `configuration-${revision}`,
+      contexts: ["revision_context"],
       phases: { entryPhaseId: "question", phaseIds: ["question"] },
     },
     resources: {

@@ -1,7 +1,7 @@
 import { stat, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { AgentDefinition } from "../harness/definitions";
-import { normalizeAgentDefinition } from "../harness/definitions";
+import { assertAgentDefinition, normalizeAgentDefinition } from "../harness/definitions";
 import { FrontmatterParseError, inferResourceName, loadMarkdown } from "../harness/loader";
 import { loadPhase } from "../harness/phases/loader";
 import type { Phase } from "../harness/phases/types";
@@ -246,6 +246,7 @@ export class ResourceRegistry {
     assertSourceId(sourceId);
     const names = new Set<string>();
     for (const value of values) {
+      if (kind === "agent") assertAgentDefinition(value);
       assertNamedResource(value, kind, sourceId);
       if (isImplicitCoreName(kind, value.name) && sourceId !== "rowan.core") {
         throw new ResourceRegistryError(

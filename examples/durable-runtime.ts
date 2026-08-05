@@ -16,7 +16,7 @@ try {
     definition: {
       name: "concise-assistant",
       description: "Draft concise responses.",
-      content: "You are a concise assistant.",
+      prompt: "You are a concise assistant.",
     },
     resources: {
       tools: [],

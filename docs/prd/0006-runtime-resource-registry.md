@@ -53,7 +53,7 @@ type ResourceView = Readonly<{
 
 type DefinitionLayer = Readonly<{
   description?: string;
-  content?: string;
+  prompt?: string;
   model?: ModelRef;
   tools?: readonly string[];
   skills?: readonly string[];
@@ -208,7 +208,7 @@ does not interpret it.
 - Resolve base Definition selections first, then an optional Definition Layer,
   then the active Phase. Omission preserves its parent, `[]` selects none, and a
   present list intersects with its parent by name.
-- A Definition Layer may replace description/content/model and narrow
+- A Definition Layer may replace description/prompt/model and narrow
   Tool/Skill/Phase selections. It cannot select Context, change the registered
   Definition name, or widen the Resource View.
 - Explicitly selected missing names produce snapshot diagnostics and are
