@@ -11,15 +11,11 @@ import {
 import { loadExtensionsFromPath, loadExtensionFromFactory } from "../src/extensions/loader";
 import type { ExtensionAPI, LoadedExtension } from "../src/extensions";
 
+const phaseFixture = (name: string): string => `${process.cwd()}/packages/agent/test/fixtures/phases/${name}`;
+
 test("loadExtensionFromFactory creates a LoadedExtension object", () => {
-  const extension = loadExtensionFromFactory((ctx) => {
-    ctx.registerPhase({
-      name: "factory",
-      description: "Factory registered phase.",
-      async run() {
-        return { message: "Factory loaded.", route: "stop" };
-      },
-    });
+  const extension = loadExtensionFromFactory(async (ctx) => {
+    await ctx.registerPhase(phaseFixture("custom"));
   }, process.cwd(), "<test:factory>");
 
   expect(extension.path).toBe("<test:factory>");
@@ -32,14 +28,8 @@ test("ExtensionRunner loads extensions and registers phases", async () => {
   const ext: LoadedExtension = {
     path: "<test>",
     name: "test",
-    factory: (ctx) => {
-      ctx.registerPhase({
-        name: "test-phase",
-        description: "A test phase.",
-        async run() {
-          return { message: "Test loaded.", route: "stop" };
-        },
-      });
+    factory: async (ctx) => {
+      await ctx.registerPhase(phaseFixture("test-phase"));
     },
   };
 
@@ -81,16 +71,22 @@ test("loadExtensionsFromPath loads TypeScript extensions from a directory", asyn
     }));
     await writeFile(join(extDir, "index.ts"), `
       import type { ExtensionFactory } from "@rowan-agent/agent";
-      const extension: ExtensionFactory = (ctx) => {
-        ctx.registerPhase({
-          name: "echo",
-          description: "Echo test phase.",
-          async run() {
-            return { message: "Loaded extension", route: "stop" };
-          },
-        });
+      const extension: ExtensionFactory = async (ctx) => {
+        await ctx.registerPhase("./phase");
       };
       export default extension;
+    `);
+    await mkdir(join(extDir, "phase"), { recursive: true });
+    await writeFile(join(extDir, "phase", "PHASE.md"), `---
+name: echo
+description: Echo test phase.
+---
+Echo.
+`);
+    await writeFile(join(extDir, "phase", "index.ts"), `
+      export async function run() {
+        return { message: "Loaded extension", route: "stop" };
+      }
     `);
 
     const result = await loadExtensionsFromPath(join(root, ".rowan", "extensions"));

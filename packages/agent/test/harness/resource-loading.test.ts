@@ -119,7 +119,7 @@ test("Phase loading reuses declarative list and model normalization", async () =
 name: review-phase
 description: Review the current change.
 tools: [read, read, bash]
-skills: [testing, testing]
+skills: this legacy selector is ignored
 model: openai/gpt-5
 ---
 Review the change.
@@ -127,8 +127,61 @@ Review the change.
 
     const phase = await loadPhase(phasePath);
     expect(phase.tools).toEqual(["read", "bash"]);
-    expect(phase.skills).toEqual(["testing"]);
+    expect(phase.skills).toEqual([]);
     expect(phase.model).toEqual({ provider: "openai", id: "gpt-5" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Phase loading bundles direct child Skills", async () => {
+  const root = await createResourceDir("rowan-phase-skills-", "PHASE.md", "review-phase");
+  try {
+    const phaseDir = join(root, "review-phase");
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: review-phase
+description: Review the current change.
+---
+Review the change.
+`);
+    await mkdir(join(phaseDir, "code-review"), { recursive: true });
+    await writeFile(join(phaseDir, "code-review", "SKILL.md"), `---
+name: code-review
+description: Review code for correctness.
+---
+Review code.
+`);
+
+    const phase = await loadPhase(phaseDir);
+    expect((phase.skills ?? []).map((skill) => skill.name)).toEqual(["code-review"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Malformed or wrongly nested child resources invalidate the Phase bundle", async () => {
+  const root = await createResourceDir("rowan-phase-invalid-bundle-", "PHASE.md", "review-phase");
+  try {
+    const phaseDir = join(root, "review-phase");
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: review-phase
+description: Review the current change.
+---
+Review the change.
+`);
+    await mkdir(join(phaseDir, "broken"), { recursive: true });
+    await writeFile(join(phaseDir, "broken", "SKILL.md"), "---\nname: broken\n---\nNo description.\n");
+    await expect(loadPhase(phaseDir)).rejects.toThrow("description is required");
+
+    await rm(join(phaseDir, "broken"), { recursive: true, force: true });
+    await mkdir(join(phaseDir, "attachment", "nested"), { recursive: true });
+    await writeFile(join(phaseDir, "attachment", "nested", "SKILL.md"), `---
+name: nested
+description: Nested Skill.
+---
+Nested.
+`);
+    await expect(loadPhase(phaseDir)).rejects.toThrow("not a direct child Skill");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

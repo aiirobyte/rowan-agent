@@ -38,8 +38,8 @@ export interface ExtensionAPI {
   /** Register a custom LLM-callable tool. */
   registerTool(tool: ToolDefinition): void;
 
-  /** Register a custom phase. */
-  registerPhase(registration: PhaseRegistration): void;
+  /** Register a Phase directory bundle. */
+  registerPhase(path: string): Promise<void>;
 
   /** Register a model provider. */
   registerProvider(config: import("@rowan-agent/models").ProviderConfig): void;
@@ -102,7 +102,7 @@ export type ExtensionFactory = (api: ExtensionAPI) => ExtensionFactoryResult | P
 export function createExtensionAPI(
   hooks?: HooksManager,
   options?: {
-    registerPhase?: (registration: PhaseRegistration) => void;
+    registerPhase?: (registration: PhaseRegistration) => Promise<void>;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
     unregisterProvider?: (name: string) => void;
     registerTool?: (tool: ToolDefinition) => void;
@@ -161,9 +161,9 @@ export function createExtensionAPI(
       assertActive();
       options?.registerTool?.(tool);
     },
-    registerPhase: (registration) => {
+    registerPhase: async (registration) => {
       assertActive();
-      options?.registerPhase?.(registration);
+      await options?.registerPhase?.(registration);
     },
     registerProvider: (config) => {
       assertActive();

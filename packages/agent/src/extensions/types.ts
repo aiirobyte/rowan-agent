@@ -2,7 +2,7 @@
  * Extension types — simplified for the new hook-based system.
  */
 
-import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
+import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
 
@@ -41,22 +41,11 @@ export function createSourceInfo(
 /** Phase run function type for extensions */
 export type PhaseRun = (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 
-/** Phase definition shape used by extensions */
-export type PhaseDefinition = {
-  name: string;
-  description: string;
-  run?: PhaseRun;
-  tools?: string[];
-  skills?: string[];
-  target?: string;
-  input?: Record<string, string>;
-  model?: string;
-};
+/** A loaded directory Bundle used by an extension. */
+export type PhaseDefinition = Phase;
 
-export type PhaseRegistration = Omit<PhaseDefinition, 'run'> & {
-  /** Optional execution override — takes over model invocation */
-  run?: PhaseRun;
-};
+/** Register a Phase by directory; PHASE.md and direct child Skills are loaded atomically. */
+export type PhaseRegistration = string;
 
 export type RegisteredPhase = {
   definition: PhaseDefinition;
@@ -72,12 +61,6 @@ export type RegisteredPhase = {
 export type ExtensionPackageManifest = {
   rowan?: {
     extensions?: string[];
-    phase?: {
-      name?: string;
-      description?: string;
-      tools?: string[];
-      skills?: string[];
-    };
   };
 };
 
@@ -256,10 +239,4 @@ export interface LoadedExtension {
 export interface ExtensionManifest {
   entry?: string;
   name?: string;
-  phase?: {
-    name?: string;
-    description?: string;
-    tools?: string[];
-    skills?: string[];
-  };
 }

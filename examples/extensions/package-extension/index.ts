@@ -3,9 +3,6 @@
  *
  * Discovered via package.json "rowan" manifest field.
  * Can bundle multiple extensions in a single directory.
- *
- * The manifest's phase field auto-registers a phase when
- * the extension is loaded — no explicit registerPhase() needed.
  */
 import type { ExtensionAPI } from "@rowan-agent/agent";
 

@@ -352,12 +352,8 @@ test("Runtime rejects a Phase name contributed by both the host and an Extension
     baseDir: "<test>",
   };
   const extension = {
-    ...loadExtensionFromFactory((api) => {
-      api.registerPhase({
-        name: "review",
-        description: "Extension review Phase.",
-        run: async () => ({ message: "done", route: "stop" }),
-      });
+    ...loadExtensionFromFactory(async (api) => {
+      await api.registerPhase(`${process.cwd()}/packages/agent/test/fixtures/phases/review`);
     }, process.cwd()),
     name: "duplicate-phase",
   };

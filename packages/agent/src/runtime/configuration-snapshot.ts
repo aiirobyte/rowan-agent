@@ -5,6 +5,7 @@ import type {
 } from "../harness/definitions";
 import { selectNamedResources } from "../harness/resource-selection";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
+import { DEFAULT_PHASE_ID } from "../harness/phases/default";
 import type { ContextCandidate } from "./contracts";
 import {
   ResourceRegistry,
@@ -164,9 +165,13 @@ function resolvePhases(
   selection: PhaseRegistrySelection | undefined,
 ): PhaseRegistry | undefined {
   const selected = selectNamedResources(candidates, selection?.phaseIds, "Phase");
-  if (selected.length === 0 && selection === undefined) return undefined;
   const entryPhaseId = selection?.entryPhaseId ?? null;
-  if (entryPhaseId !== null && !selected.some(({ name }) => name === entryPhaseId)) {
+  // The built-in default Phase is materialized by Runtime execution rather
+  // than selected from a host source. It is therefore valid even when an
+  // explicit phase selector intentionally contains no authored Phases.
+  if (entryPhaseId !== null
+    && entryPhaseId !== DEFAULT_PHASE_ID
+    && !selected.some(({ name }) => name === entryPhaseId)) {
     console.warn(`Phase entry "${entryPhaseId}" is not available and will be skipped.`);
     return { phases: new Map(selected.map((phase) => [phase.name, phase])), entryPhaseId: null };
   }

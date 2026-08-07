@@ -6,6 +6,7 @@ import type { PhaseOutput } from "./types";
 import type { PhaseContext } from "./types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
+import type { Skill } from "../../protocol";
 import {
   FrontmatterParseError,
   loadMarkdown,
@@ -19,11 +20,13 @@ import {
   validatePhaseTarget,
   validateResourceId,
   validateResourceName,
-  validateSkillReferences,
   warnResourceDiagnostics,
 } from "../resource-validation";
+import { loadSkill } from "../skills";
 
 const PHASE_MARKER = "PHASE.md";
+const SKILL_MARKER = "SKILL.md";
+const RESOURCE_MARKERS = new Set([PHASE_MARKER, SKILL_MARKER]);
 
 function resolvePhasePath(input: string): string {
   const resolved = resolve(input);
@@ -54,7 +57,12 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   const frontmatterName = typeof metadata.name === "string" ? metadata.name : undefined;
   let definition;
   try {
-    definition = normalizeAgentDefinition(metadata, body, { fallbackName: directoryName });
+    // A Phase's Skill set is defined by its directory Bundle. Ignore the old
+    // frontmatter selector before shared Definition parsing so malformed legacy
+    // values remain a silent no-op.
+    const phaseMetadata = { ...metadata };
+    delete phaseMetadata.skills;
+    definition = normalizeAgentDefinition(phaseMetadata, body, { fallbackName: directoryName });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     warnResourceDiagnostics("phase", resolved, [message]);
@@ -67,16 +75,16 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
     diagnostics.push(...validateResourceName(frontmatterName, directoryName));
   }
   diagnostics.push(...description.warnings);
-  diagnostics.push(...validateSkillReferences(metadata.skills));
   diagnostics.push(...validatePhaseTarget(metadata.target));
   warnResourceDiagnostics("phase", resolved, diagnostics);
 
   const baseDir = dirname(resolved);
+  const skills = await loadPhaseSkills(baseDir);
   const phase: Phase = {
     name,
     description: description.description!,
     tools: definition.tools ? [...definition.tools] : undefined,
-    skills: definition.skills ? [...definition.skills] : undefined,
+    skills,
     target: metadata.target as string | undefined,
     input: metadata.input as Record<string, string> | undefined,
     isolated: metadata.isolated as boolean | undefined,
@@ -98,6 +106,71 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   }
 
   return phase;
+}
+
+/**
+ * Load the Skills owned by a Phase bundle.
+ *
+ * A Phase may contain direct child directories with SKILL.md. Marker files at
+ * any other depth or of another resource kind make the whole bundle invalid.
+ * Direct child attachments without markers remain legal.
+ */
+async function loadPhaseSkills(baseDir: string): Promise<Skill[]> {
+  const entries = await readdir(baseDir, { withFileTypes: true });
+  const skills: Skill[] = [];
+
+  for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+    const entryPath = join(baseDir, entry.name);
+    if (!entry.isDirectory()) {
+      if (RESOURCE_MARKERS.has(entry.name) && entry.name !== PHASE_MARKER) {
+        throw invalidPhaseBundle(`resource marker ${entry.name} is not valid at the phase root`);
+      }
+      continue;
+    }
+
+    const markers = await findResourceMarkers(entryPath);
+    const directSkillPath = join(entryPath, SKILL_MARKER);
+    const hasDirectSkill = markers.includes(directSkillPath);
+
+    if (!hasDirectSkill) {
+      if (markers.length > 0) {
+        throw invalidPhaseBundle(`resource marker ${markers[0]} is not a direct child Skill`);
+      }
+      continue;
+    }
+
+    const nestedMarkers = markers.filter((marker) => marker !== directSkillPath);
+    if (nestedMarkers.length > 0) {
+      throw invalidPhaseBundle(`resource marker ${nestedMarkers[0]} is nested below a Skill bundle`);
+    }
+
+    // A malformed direct child invalidates its containing Phase bundle.
+    const skill = await loadSkill(directSkillPath);
+    if (skills.some((candidate) => candidate.name === skill.name)) {
+      throw invalidPhaseBundle(`duplicate bundled Skill name "${skill.name}"`);
+    }
+    skills.push(skill);
+  }
+
+  return skills;
+}
+
+async function findResourceMarkers(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const markers: string[] = [];
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      markers.push(...await findResourceMarkers(entryPath));
+    } else if (RESOURCE_MARKERS.has(entry.name)) {
+      markers.push(entryPath);
+    }
+  }
+  return markers;
+}
+
+function invalidPhaseBundle(message: string): ResourceMetadataError {
+  return new ResourceMetadataError("invalid_metadata", message);
 }
 
 /** Format phase content for LLM consumption using unified XML format. */

@@ -4,9 +4,8 @@ description: >
   Gather information and context before implementation. Reads relevant files,
   explores the codebase, and produces a structured summary.
 tools:
-  - read_file
-  - list_files
-  - run_command
+  - read
+  - bash
 ---
 
 # Research Phase

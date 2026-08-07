@@ -14,12 +14,7 @@
  *     return { allow: true };
  *   });
  *
- *   api.registerPhase({
- *     name: "review",
- *     run: async (context, input) => {
- *       return { message: "Done", route: "stop" };
- *     },
- *   });
+ *   await api.registerPhase("./phase");
  * }
  * ```
  */

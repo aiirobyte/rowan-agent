@@ -108,3 +108,31 @@ test("a Definition Layer cannot widen a parent selection", async () => {
     warnings.mockRestore();
   }
 });
+
+test("the built-in default entry is valid with an empty authored Phase selection", async () => {
+  const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    const registry = new ResourceRegistry();
+    await registry.loadAgents({ sourceId: "definitions", values: [{
+      name: "base",
+      description: "Base",
+      prompt: "Base",
+      phases: { entryPhaseId: "default", phaseIds: [] },
+    }] });
+    await registry.loadTools({ sourceId: "project-tools", values: [] });
+    await registry.loadSkills({ sourceId: "project-skills", values: [] });
+    await registry.loadPhases({ sourceId: "project-phases", values: [] });
+
+    const snapshot = resolveConfigurationSnapshot(registry, {
+      identity: "default-entry-v1",
+      definition: { name: "base" },
+      resourceView: view,
+      model: { provider: "test", id: "model" },
+    });
+
+    expect(snapshot.resources.phases).toEqual({ phases: new Map(), entryPhaseId: "default" });
+    expect(warnings).not.toHaveBeenCalled();
+  } finally {
+    warnings.mockRestore();
+  }
+});

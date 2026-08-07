@@ -15,9 +15,6 @@ function buildPhaseEntry(p: Pick<Phase, 'name' | 'description' | 'tools' | 'skil
   if (p.tools && p.tools.length > 0) {
     entry.available_tools = p.tools.join(", ");
   }
-  if (p.skills && p.skills.length > 0) {
-    entry.available_skills = p.skills.join(", ");
-  }
   if (p.input && Object.keys(p.input).length > 0) {
     entry.required_input = Object.entries(p.input)
       .map(([key, desc]) => `- ${key}: ${desc}`)

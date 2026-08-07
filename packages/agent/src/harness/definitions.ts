@@ -121,9 +121,8 @@ function optionalPhaseRegistrySelection(
 ): PhaseRegistrySelection | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  if (!("entryPhaseId" in value)) throw new TypeError(`${field}.entryPhaseId is required`);
   if (!("phaseIds" in value)) throw new TypeError(`${field}.phaseIds is required`);
-  const entryPhaseId = value.entryPhaseId;
+  const entryPhaseId = value.entryPhaseId ?? null;
   if (entryPhaseId !== null && (typeof entryPhaseId !== "string" || entryPhaseId.trim() === "")) {
     throw new TypeError(`${field}.entryPhaseId must be a non-empty string or null`);
   }

@@ -12,7 +12,10 @@ examples/
 ├── extensions/
 │   ├── logger.ts                  # Durable Run Event logging
 │   ├── custom-tool.ts             # Register an LLM-callable tool
-│   ├── phase-registration.ts      # Register a phase programmatically
+│   ├── phase-registration.ts      # Register a Phase directory Bundle
+│   ├── quick-review/               # Bundle registered by phase-registration.ts
+│   │   ├── PHASE.md
+│   │   └── index.ts
 │   └── package-extension/         # Package-based extension (with manifest)
 │       ├── package.json           # rowan manifest → auto-discovery
 │       └── index.ts               # Extension entry point

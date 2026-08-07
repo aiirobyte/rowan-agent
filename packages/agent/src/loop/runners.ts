@@ -27,7 +27,7 @@ import type {
   Phase,
   PhaseRegistry,
 } from "../harness/phases";
-import { readPhaseContent } from "../harness/phases";
+import { DEFAULT_PHASE_ID, readPhaseContent } from "../harness/phases";
 import { selectNamedResources } from "../harness/resource-selection";
 
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
@@ -467,7 +467,7 @@ async function runPhaseLoop(
     // Build PhaseContext for this phase
     // phase-filtered tools/skills; route tool always included
     const phaseTools = selectPhaseTools(allTools, phase.tools);
-    const phaseSkills = selectNamedResources(config.context.skills, phase.skills, "Skill");
+    const phaseSkills = phase.name === DEFAULT_PHASE_ID ? config.context.skills : (phase.skills ?? []);
 
     let phaseContext: PhaseContext = {
       systemPrompt: config.context.systemPrompt,
@@ -851,7 +851,7 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
 
   if (phase.factory) {
       const api = createExtensionAPI(undefined, {
-      registerPhase: () => {},
+      registerPhase: async () => {},
       registerProvider: () => {},
       unregisterProvider: () => {},
       registerTool: () => {},
@@ -866,7 +866,7 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
         getMessages: () => context.messages as Array<{ role: string; content: string }>,
         addMessage: (role, content) => { config.context.messages.push(createMessage(role, content)); },
         getAvailableTools: () => config.context.tools.map(t => ({ name: t.name, description: t.description })),
-        getAvailableSkills: () => config.context.skills.map(s => ({ name: s.name, description: s.description })),
+        getAvailableSkills: () => context.skills.map(s => ({ name: s.name, description: s.description })),
         getPhaseContent: (id) => registry.phases.get(id)?.content ?? "",
         getAvailablePhases: () => Array.from(registry.phases.keys()),
       },
@@ -1109,7 +1109,7 @@ async function executeParallelPhase(
 
   const allTools = buildToolsWithRouting(config, availablePhases);
   const phaseTools = selectPhaseTools(allTools, phase.tools);
-  const phaseSkills = selectNamedResources(config.context.skills, phase.skills, "Skill");
+  const phaseSkills = phase.name === DEFAULT_PHASE_ID ? config.context.skills : (phase.skills ?? []);
 
   // Both isolated and forked phases use the host system prompt. Phase content
   // is always injected as a user context message below.

@@ -1,6 +1,6 @@
 import type { ModelRef } from "@rowan-agent/models";
-import type { AgentMessage } from "../../protocol";
-import type { Tool, Skill } from "../../types";
+import type { AgentMessage, Skill } from "../../protocol";
+import type { Tool } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
 
@@ -81,8 +81,6 @@ export interface PhaseFrontmatter {
   description?: string;
   /** Restrict available tools */
   tools?: string[];
-  /** Restrict available skills */
-  skills?: string[];
   /** Forced next phase name */
   target?: string;
   /** Expected input fields (key → description) */
@@ -100,7 +98,6 @@ export interface PhaseConfig {
   name: string;
   description: string;
   tools?: string[];
-  skills?: string[];
   target?: string;
   filePath?: string;
   baseDir?: string;
@@ -118,8 +115,8 @@ export interface Phase {
   description: string;
   /** Restricted tools (undefined = all tools available) */
   tools?: string[];
-  /** Restricted skills (undefined = all skills available) */
-  skills?: string[];
+  /** Skills bundled directly inside this phase directory. Inline phases may omit this (equivalent to []). */
+  skills?: Skill[];
   /** Forced next phase */
   target?: string;
   /** Expected input fields (key → description) */

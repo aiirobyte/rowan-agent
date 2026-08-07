@@ -8,6 +8,7 @@ export function createDefaultPhase(): Phase {
     description: "Executes concrete task operations and produces artifacts.",
     filePath: "",
     baseDir: "",
+    skills: [],
     content: "Execute tasks using current context.\nNo planning. No evaluation.\nRoute to next phase or stop when done.",
   };
 }

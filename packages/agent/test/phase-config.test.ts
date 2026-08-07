@@ -3,6 +3,8 @@ import type { PhaseRegistry } from "../src/harness/phases/types";
 import { createExtensionRunner } from "../src/extensions";
 import type { LoadedExtension } from "../src/extensions";
 
+const phaseFixture = (name: string): string => `${process.cwd()}/packages/agent/test/fixtures/phases/${name}`;
+
 test("PhaseRegistry is Map-based with entryPhaseId", () => {
   const phases = new Map();
   phases.set("a", { name: "a", description: "a phase", filePath: "", baseDir: "", content: "" });
@@ -27,12 +29,8 @@ test("ExtensionRunner loads phases from extensions", async () => {
   const ext: LoadedExtension = {
     path: "<test>",
     name: "test",
-    factory: (ctx) => {
-      ctx.registerPhase({
-        name: "custom",
-        description: "Custom phase",
-        run: async () => ({ message: "done", route: "stop" }),
-      });
+    factory: async (ctx) => {
+      await ctx.registerPhase(phaseFixture("custom"));
     },
   };
 
@@ -55,24 +53,16 @@ test("ExtensionRunner rejects duplicate phase names", async () => {
   const ext1: LoadedExtension = {
     path: "<test1>",
     name: "test1",
-    factory: (ctx) => {
-      ctx.registerPhase({
-        name: "dup",
-        description: "Duplicate",
-        run: async () => ({ message: "", route: "stop" }),
-      });
+    factory: async (ctx) => {
+      await ctx.registerPhase(phaseFixture("dup"));
     },
   };
 
   const ext2: LoadedExtension = {
     path: "<test2>",
     name: "test2",
-    factory: (ctx) => {
-      ctx.registerPhase({
-        name: "dup",
-        description: "Duplicate",
-        run: async () => ({ message: "", route: "stop" }),
-      });
+    factory: async (ctx) => {
+      await ctx.registerPhase(phaseFixture("dup"));
     },
   };
 
@@ -85,35 +75,28 @@ test("ExtensionRunner rejects duplicate phase names", async () => {
   }
 });
 
-test("ExtensionRunner rejects invalid phase metadata", async () => {
+test("ExtensionRunner rejects a missing phase bundle", async () => {
   const runner = createExtensionRunner();
   const extension: LoadedExtension = {
     path: "<invalid>",
     name: "invalid",
-    factory: (ctx) => {
-      ctx.registerPhase({
-        name: "Bad_ID",
-        description: "Invalid phase",
-        run: async () => ({ message: "", route: "stop" }),
-      });
+    factory: async (ctx) => {
+      await ctx.registerPhase(phaseFixture("missing"));
     },
   };
 
-  await expect(runner.loadExtensions([extension])).rejects.toThrow("invalid characters");
+  await expect(runner.loadExtensions([extension])).rejects.toThrow();
 });
 
-test("ExtensionRunner requires an explicit phase name", async () => {
+test("ExtensionRunner requires a phase directory path", async () => {
   const runner = createExtensionRunner();
   const extension: LoadedExtension = {
     path: "<default-name>",
     name: "default-name",
-    factory: (ctx) => {
-      ctx.registerPhase({
-        description: "Phase with an implicit name",
-        run: async () => ({ message: "", route: "stop" }),
-      } as any);
+    factory: async (ctx) => {
+      await ctx.registerPhase("");
     },
   };
 
-  await expect(runner.loadExtensions([extension])).rejects.toThrow('requires a "name" field');
+  await expect(runner.loadExtensions([extension])).rejects.toThrow("directory path");
 });

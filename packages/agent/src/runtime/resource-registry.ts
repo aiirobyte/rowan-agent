@@ -264,11 +264,12 @@ export class ResourceRegistry {
     }
 
     const revision = this.nextRevision(kind, sourceId);
+    const snapshottedValues = values.map((value) => snapshotResourceValue(kind, value));
     const record: SourceRecord<T> = {
       kind,
       sourceId,
       revision,
-      values: Object.freeze([...values]),
+      values: Object.freeze(snapshottedValues),
     };
     let bySource = this.sources.get(kind);
     if (!bySource) {
@@ -342,6 +343,19 @@ export class ResourceRegistry {
     this.revisionSequence += 1;
     return `${kind}:${sourceId}:${this.revisionSequence}`;
   }
+}
+
+function snapshotResourceValue<T extends RegistryValue>(kind: ResourceKind, value: T): T {
+  if (kind !== "phase") return value;
+  const phase = value as Phase;
+  const snapshot: Phase = {
+    ...phase,
+    ...(phase.tools ? { tools: Object.freeze([...phase.tools]) as unknown as Phase["tools"] } : {}),
+    skills: Object.freeze((phase.skills ?? []).map((skill) => Object.freeze({ ...skill }))) as unknown as Phase["skills"],
+    ...(phase.input ? { input: Object.freeze({ ...phase.input }) as unknown as Phase["input"] } : {}),
+    ...(phase.model ? { model: Object.freeze({ ...phase.model }) as unknown as Phase["model"] } : {}),
+  };
+  return Object.freeze(snapshot) as unknown as T;
 }
 
 function assertSourceId(sourceId: string): void {

@@ -36,7 +36,6 @@ function readManifestSync(dir: string): ExtensionManifest | undefined {
     if (!rowan) return undefined;
     return {
       entry: rowan.extensions?.[0],
-      phase: rowan.phase,
     };
   } catch {
     return undefined;

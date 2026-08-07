@@ -2,7 +2,7 @@
 
 Phases are the core unit of work in Rowan's agent loop. Each phase defines a bounded task — what tools and skills are available, what instructions the LLM follows, and where execution routes next. Phases compose into workflows through routing.
 
-> **Related:** [Extensions](extensions.md) can register custom phases programmatically, intercept phase execution via hooks, and modify phase behavior at runtime.
+> **Related:** [Extensions](extensions.md) can register Phase directory Bundles, intercept phase execution via hooks, and modify phase behavior at runtime.
 
 ## Table of Contents
 
@@ -134,7 +134,7 @@ When the loop resolves the next phase:
 
 ### Built-in "Default" Phase
 
-If no phases are defined, Rowan runs a single LLM-driven phase named `default` that processes the user prompt with all available tools. User-defined phases in `.rowan/phases/` can override it by defining a phase whose `name` is `default`.
+If no phases are selected, Rowan runs its implicit LLM-driven phase named `default` that processes the user prompt with all available Scope Skills and Tools. The built-in `default` identity is reserved; authored file Phases must use another name.
 
 ---
 
@@ -145,6 +145,8 @@ Each phase lives in its own directory under `.rowan/phases/`:
 ```
 .rowan/phases/<phase-name>/
 ├── PHASE.md     # Required — instructions and configuration
+├── <skill-name>/
+│   └── SKILL.md  # Optional — direct child Skill Bundle
 └── index.ts     # Optional — execution code
 ```
 
@@ -155,7 +157,6 @@ Each phase lives in its own directory under `.rowan/phases/`:
 name: my-phase              # Should match the directory name; omitted = directory name
 description: What it does   # Required, max 1024 characters
 tools: [read, write, bash]  # Restrict available tools (omit = all tools)
-skills: [my-skill]           # Restrict available skills (omit = all skills)
 target: next-phase           # Force next phase name (overrides route tool)
 input:                       # Expected input fields (shown to LLM in route tool)
   task: "The task to perform"
@@ -169,7 +170,7 @@ isolated: true               # Fresh context when executed in parallel
 | `name` | string | No | Should match the directory name; mismatch warns but still loads; omitted = directory name |
 | `description` | string | Yes | Non-empty, at most 1024 characters; shown in route tool |
 | `tools` | string[] | No | Tool names allowed in this phase. `undefined` = all tools |
-| `skills` | string[] | No | Skill names available. `undefined` = all skills |
+| direct child Skill directories | `SKILL.md` Bundles | No | Skills available after entering this Phase; nested markers are invalid |
 | `target` | string | No | Forced next phase name. Overrides route tool |
 | `input` | Record<string, string> | No | Expected payload fields with descriptions |
 | `isolated` | boolean | No | Fresh message context in parallel execution |
@@ -493,7 +494,7 @@ interface Phase {
   name: string;                        // unique identity and display name
   description: string;                 // shown in route tool
   tools?: string[];                    // restricted tools (undefined = all)
-  skills?: string[];                   // restricted skills (undefined = all)
+  skills?: Skill[];                    // direct child Skill Bundle values
   target?: string;                     // forced next phase
   input?: Record<string, string>;      // expected input fields
   isolated?: boolean;                  // fresh context in parallel

@@ -6,6 +6,7 @@ import { CONFIG_TOKEN_BYTES } from "./idempotency";
 import { assertUtf8ByteLimit, canonicalJson } from "./json";
 import type { JsonValue } from "../runtime-events";
 import type { ResourceKind } from "./resource-registry";
+import type { Phase, PhaseRegistry } from "../harness/phases/types";
 
 type ConfigEntry = Readonly<{
   agentId: AgentId;
@@ -109,6 +110,7 @@ function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
     ...config.resources,
     tools: Object.freeze([...config.resources.tools]),
     skills: Object.freeze([...config.resources.skills]),
+    ...(config.resources.phases ? { phases: snapshotPhaseRegistry(config.resources.phases) } : {}),
     ...(config.resources.resourceView ? {
       resourceView: Object.freeze({
         agents: Object.freeze([...config.resources.resourceView.agents]),
@@ -131,6 +133,22 @@ function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
     } : {}),
   });
   return Object.freeze({ ...config, definition, resources });
+}
+
+function snapshotPhaseRegistry(registry: PhaseRegistry): PhaseRegistry {
+  const phases = new Map<string, Phase>();
+  for (const [name, phase] of registry.phases) phases.set(name, snapshotPhase(phase));
+  return { phases, entryPhaseId: registry.entryPhaseId };
+}
+
+function snapshotPhase(phase: Phase): Phase {
+  return Object.freeze({
+    ...phase,
+    ...(phase.tools ? { tools: Object.freeze([...phase.tools]) as unknown as Phase["tools"] } : {}),
+    skills: Object.freeze((phase.skills ?? []).map((skill) => Object.freeze({ ...skill }))),
+    ...(phase.input ? { input: Object.freeze({ ...phase.input }) as unknown as Phase["input"] } : {}),
+    ...(phase.model ? { model: Object.freeze({ ...phase.model }) as unknown as Phase["model"] } : {}),
+  }) as unknown as Phase;
 }
 
 function snapshotConfiguration(config: AgentConfiguration): AgentConfiguration {

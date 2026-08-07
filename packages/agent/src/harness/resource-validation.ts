@@ -70,21 +70,6 @@ export function validateDescription(value: unknown): DescriptionValidation {
   return { description: value, warnings: [], missing: false };
 }
 
-export function validateSkillReferences(value: unknown): string[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) return ["skills must be an array"];
-
-  const errors: string[] = [];
-  for (const [index, skillId] of value.entries()) {
-    if (typeof skillId !== "string") {
-      errors.push(`skills[${index}] must be a string`);
-      continue;
-    }
-    errors.push(...validateResourceId(skillId, `skills[${index}]`));
-  }
-  return errors;
-}
-
 export function validatePhaseTarget(value: unknown): string[] {
   if (value === undefined) return [];
   if (typeof value !== "string") return ["target must be a string"];

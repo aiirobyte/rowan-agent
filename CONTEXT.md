@@ -49,6 +49,12 @@ Definition and Phase narrowing. Candidates are never supplied as concrete
 values in an Agent Configuration.
 _Avoid_: Allowed Resource, Resource Reference, Registered Capability
 
+**Phase Bundle**:
+One file Phase plus its direct child Skill values, loaded and snapshotted as a
+single Phase contribution. Nested Skills have no independent Rowan Source ID or
+revision, and Rowan does not interpret the host concept that owns the directory.
+_Avoid_: Nested Resource Registry, Workflow Bundle, Phase Dependency Graph
+
 **Definition Layer**:
 An optional declarative layer supplied with a Definition reference that may
 replace the authored prompt or model and narrow Tool, Skill, and Phase selections.

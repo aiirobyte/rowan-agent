@@ -10,6 +10,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { dirname, resolve } from "node:path";
 import type { ProviderConfig } from "@rowan-agent/models";
 import {
   registerModel,
@@ -24,22 +25,13 @@ import type {
   ExtensionErrorListener,
   ExtensionRuntime,
   PhaseRegistration,
-  PhaseDefinition,
   RegisteredPhase,
   RegisteredTool,
   ToolDefinition,
 } from "./types";
 import { createExtensionRuntime } from "./types";
-import { parseModelRef } from "@rowan-agent/models";
 import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
-import {
-  validateDescription,
-  validatePhaseTarget,
-  validateResourceId,
-  validateSkillReferences,
-  warnResourceDiagnostics,
-} from "../harness/resource-validation";
 import { HooksManager } from "./hooks";
 import type {
   HookEventType,
@@ -54,6 +46,7 @@ import type { ExtensionContext } from "./context";
 import type { LoadedExtension, ExtensionManifest } from "./types";
 import { createSourceInfo } from "./types";
 import { createEventBus, type EventBus } from "./context";
+import { loadPhase } from "../harness/phases/loader";
 
 // ---------------------------------------------------------------------------
 // Command execution
@@ -405,17 +398,10 @@ export class ExtensionRunner {
   private adaptToPhase(reg: RegisteredPhase): Phase {
     const def = reg.definition;
     return {
-      name: def.name,
-      description: def.description,
-      tools: def.tools,
-      skills: def.skills,
-      target: def.target,
-      input: def.input,
-      run: def.run as Phase["run"],
-      filePath: "",
-      baseDir: "",
-      content: "",
-      ...(def.model ? { model: parseModelRef(def.model) } : {}),
+      ...def,
+      ...(def.tools ? { tools: [...def.tools] } : {}),
+      skills: def.skills ? [...def.skills] : [],
+      ...(def.input ? { input: { ...def.input } } : {}),
     };
   }
 
@@ -598,48 +584,29 @@ export class ExtensionRunner {
   private registerPhase(
     extension: Extension,
     registration: PhaseRegistration,
-  ): void {
-    if (typeof registration.name !== "string" || registration.name.length === 0) {
-      throw new Error(`Phase registration requires a "name" field.`);
+  ): Promise<void> {
+    if (typeof registration !== "string" || registration.length === 0) {
+      throw new Error(`Phase registration requires a directory path.`);
     }
 
-    const name = registration.name;
-    const description = validateDescription(registration.description);
-    const errors = validateResourceId(name, "name");
-    if (description.missing) errors.push(...description.warnings);
-    errors.push(...validateSkillReferences(registration.skills));
-    errors.push(...validatePhaseTarget(registration.target));
+    return this.loadRegisteredPhase(extension, registration);
+  }
 
-    if (errors.length > 0) {
-      throw new Error(`Invalid phase registration "${name}": ${errors.join("; ")}`);
-    }
-    if (description.warnings.length > 0) {
-      warnResourceDiagnostics("phase", `extension ${extension.path}`, description.warnings);
-    }
-
+  private async loadRegisteredPhase(extension: Extension, registration: string): Promise<void> {
+    const extensionBase = extension.path.startsWith("<") ? this.cwd : dirname(extension.path);
+    const phase = await loadPhase(resolve(extensionBase, registration));
+    const name = phase.name;
     if (this.phases.has(name)) {
       throw new Error(`Duplicate phase name: ${name}`);
     }
 
-    const definition: PhaseDefinition = {
-      name,
-      description: description.description!,
-      run: registration.run,
-      ...(registration.tools ? { tools: registration.tools.slice() } : {}),
-      ...(registration.skills ? { skills: registration.skills.slice() } : {}),
-      ...(registration.target ? { target: registration.target } : {}),
-      ...(registration.input ? { input: { ...registration.input } } : {}),
-      ...(registration.model ? { model: registration.model } : {}),
-    };
-
     const registered: RegisteredPhase = {
-      definition,
+      definition: phase,
       source: { extensionPath: extension.path },
     };
 
     this.phases.set(name, registered);
     extension.phases.add(name);
-
     this._phaseCache = null;
   }
 
