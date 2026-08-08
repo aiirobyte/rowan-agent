@@ -67,6 +67,7 @@ test("buildModelRequest includes skills in system prompt when present", () => {
 
   expect(req.system).toContain("<available_skills>");
   expect(req.system).toContain("writer");
+  expect(req.system).toContain("Use the read tool to load a skill's file");
 });
 
 test("buildModelRequest hides skills with disable-model-invocation", () => {

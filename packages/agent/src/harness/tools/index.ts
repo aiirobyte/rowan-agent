@@ -1,5 +1,5 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
 import Type from "typebox";
 import Schema from "typebox/schema";
 import type { ToolCall, ToolResult } from "../../protocol";
@@ -16,6 +16,10 @@ const DEFAULT_MAX_READ_BYTES = 64_000;
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BASH_OUTPUT_BYTES = 64_000;
 
+/**
+ * `root` anchors relative paths and the Bash working directory. It is not a
+ * filesystem sandbox: core Tools use the permissions of the host process.
+ */
 export type CoreToolContext = {
   root?: string;
   maxReadBytes?: number;
@@ -137,10 +141,6 @@ function resolveCoreToolPath(context: Pick<NormalizedCoreToolContext, "root">, p
   const inputPath = normalizeCoreToolInputPath(path);
   const absolutePath = resolve(root, inputPath);
   const relativePath = relative(root, absolutePath);
-
-  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
-    throw new Error(`Path escapes workspace root: ${path}`);
-  }
 
   return {
     root,
@@ -321,7 +321,7 @@ async function captureStream(stream: ReadableStream<Uint8Array>, maxBytes: numbe
 export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArgs> {
   return {
     name: "read",
-    description: "Read a file in the workspace.",
+    description: "Read a file using the host process filesystem permissions.",
     parameters: ReadArgsSchema,
     promptSnippet: "Read file contents.",
     promptGuidelines: ["Read files before editing them."],
@@ -402,7 +402,7 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
 export function createWriteTool(context: NormalizedCoreToolContext): Tool<WriteArgs> {
   return {
     name: "write",
-    description: "Create or overwrite a file in the workspace.",
+    description: "Create or overwrite a file using the host process filesystem permissions.",
     parameters: WriteArgsSchema,
     promptSnippet: "Create or overwrite files.",
     promptGuidelines: ["Use edit for partial changes."],
@@ -465,7 +465,7 @@ function applyEditReplacements(
 export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArgs> {
   return {
     name: "edit",
-    description: "Apply exact text replacements to a workspace file.",
+    description: "Apply exact text replacements using the host process filesystem permissions.",
     parameters: EditArgsSchema,
     promptSnippet: "Apply exact text replacements.",
     promptGuidelines: ["Read the file first; each oldText must match exactly once."],
@@ -503,7 +503,7 @@ export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArg
 export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArgs> {
   return {
     name: "bash",
-    description: "Run a bash command in the workspace.",
+    description: "Run a bash command with the host process filesystem permissions; root is the working directory.",
     parameters: BashArgsSchema,
     promptSnippet: "Run shell commands.",
     promptGuidelines: ["Use read/write/edit for file operations."],
