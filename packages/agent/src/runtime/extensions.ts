@@ -1,7 +1,7 @@
 import type { RegisteredTool } from "../extensions/types";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { DEFAULT_PHASE_ID } from "../harness/phases/default";
-import { selectNamedResources } from "../harness/resource-selection";
+import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import { buildContextDescription } from "../harness/context/resource-formatter";
 import type { AgentConfig, ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolInvocationContext, ToolExecutionResult } from "./contracts";
 import type { JsonValue } from "../runtime-events";
@@ -69,10 +69,9 @@ function resolveDefinitionContext(
     config.definition.tools,
     "Tool",
   );
-  const skills = selectNamedResources(
-    config.resources.skills,
-    config.definition.skills,
-    "Skill",
+  const skills = mergeSkills(
+    selectNamedResources(config.resources.skills, config.definition.skills, "Skill"),
+    config.definition.bundledSkills,
   );
   const contexts = selectNamedResources(
     config.resources.contexts ?? [],

@@ -346,6 +346,15 @@ export class ResourceRegistry {
 }
 
 function snapshotResourceValue<T extends RegistryValue>(kind: ResourceKind, value: T): T {
+  if (kind === "agent") {
+    const agent = value as AgentDefinition;
+    return Object.freeze({
+      ...agent,
+      ...(agent.bundledSkills
+        ? { bundledSkills: Object.freeze(agent.bundledSkills.map((skill) => Object.freeze({ ...skill }))) }
+        : {}),
+    }) as unknown as T;
+  }
   if (kind !== "phase") return value;
   const phase = value as Phase;
   const snapshot: Phase = {

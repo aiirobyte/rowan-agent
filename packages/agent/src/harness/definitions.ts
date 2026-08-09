@@ -1,5 +1,6 @@
 import { parseModelRef, type ModelRef } from "@rowan-agent/models";
 import { parseFrontmatter } from "./loader";
+import type { Skill } from "../protocol";
 
 export type PhaseRegistrySelection = Readonly<{
   entryPhaseId: string | null;
@@ -12,6 +13,8 @@ export type AgentDefinition = Readonly<{
   prompt: string;
   tools?: readonly string[];
   skills?: readonly string[];
+  /** Host-supplied Skills private to this Agent Definition/Bundle. */
+  bundledSkills?: readonly Skill[];
   phases?: PhaseRegistrySelection;
   contexts?: readonly string[];
   model?: ModelRef;
@@ -26,6 +29,7 @@ export function assertAgentDefinition(value: unknown): asserts value is AgentDef
   requiredString(value.prompt, "definition.prompt");
   optionalStringList(value.tools, "definition.tools");
   optionalStringList(value.skills, "definition.skills");
+  optionalBundledSkills(value.bundledSkills, "definition.bundledSkills");
   optionalPhaseRegistrySelection(value.phases, "definition.phases");
   optionalStringList(value.contexts, "definition.contexts");
   if ("extensions" in value) throw new TypeError("definition.extensions is not supported; Extensions are Runtime-global");
@@ -113,6 +117,27 @@ function optionalStringList(value: unknown, field: string): readonly string[] | 
     names.push(name);
   }
   return names;
+}
+
+function optionalBundledSkills(value: unknown, field: string): readonly Skill[] | undefined {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array of Skills`);
+  const names = new Set<string>();
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)
+      || typeof item.name !== "string"
+      || item.name.trim() === ""
+      || typeof item.description !== "string"
+      || typeof item.filePath !== "string"
+      || typeof item.baseDir !== "string"
+      || typeof item.content !== "string"
+      || typeof item.disableModelInvocation !== "boolean") {
+      throw new TypeError(`${field}[${index}] is invalid`);
+    }
+    if (names.has(item.name)) throw new TypeError(`Duplicate bundled Skill "${item.name}".`);
+    names.add(item.name);
+  }
+  return value as readonly Skill[];
 }
 
 function optionalPhaseRegistrySelection(

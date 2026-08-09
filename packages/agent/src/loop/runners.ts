@@ -27,8 +27,8 @@ import type {
   Phase,
   PhaseRegistry,
 } from "../harness/phases";
-import { DEFAULT_PHASE_ID, readPhaseContent } from "../harness/phases";
-import { selectNamedResources } from "../harness/resource-selection";
+import { readPhaseContent } from "../harness/phases";
+import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
 import type { RouteToolArgs } from "../harness/tools";
@@ -467,7 +467,7 @@ async function runPhaseLoop(
     // Build PhaseContext for this phase
     // phase-filtered tools/skills; route tool always included
     const phaseTools = selectPhaseTools(allTools, phase.tools);
-    const phaseSkills = phase.name === DEFAULT_PHASE_ID ? config.context.skills : (phase.skills ?? []);
+    const phaseSkills = mergeSkills(config.context.skills, phase.skills);
 
     let phaseContext: PhaseContext = {
       systemPrompt: config.context.systemPrompt,
@@ -1109,7 +1109,7 @@ async function executeParallelPhase(
 
   const allTools = buildToolsWithRouting(config, availablePhases);
   const phaseTools = selectPhaseTools(allTools, phase.tools);
-  const phaseSkills = phase.name === DEFAULT_PHASE_ID ? config.context.skills : (phase.skills ?? []);
+  const phaseSkills = mergeSkills(config.context.skills, phase.skills);
 
   // Both isolated and forked phases use the host system prompt. Phase content
   // is always injected as a user context message below.

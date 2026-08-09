@@ -121,6 +121,75 @@ test("Runtime resolves Definition resource names and warns for missing candidate
   }
 });
 
+test("Definition Bundle Skills override same-name Scope Skills", async () => {
+  const config = {
+    identity: "definition-bundle-skills-v1",
+    definition: {
+      name: "bundle-agent",
+      description: "Use Scope and parent Bundle guidance.",
+      prompt: "Use the available guidance.",
+      skills: ["root-skill", "shared-skill"],
+      bundledSkills: [{
+        name: "parent-skill",
+        description: "Parent Skill",
+        filePath: "<parent>",
+        baseDir: "<parent>",
+        content: "Parent guidance",
+        disableModelInvocation: false,
+      }, {
+        name: "shared-skill",
+        description: "Parent replacement Skill",
+        filePath: "<parent-shared>",
+        baseDir: "<parent-shared>",
+        content: "Parent replacement guidance",
+        disableModelInvocation: false,
+      }],
+    },
+    resources: {
+      tools: [],
+      skills: [{
+        name: "root-skill",
+        description: "Root Skill",
+        filePath: "<root>",
+        baseDir: "<root>",
+        content: "Root guidance",
+        disableModelInvocation: false,
+      }, {
+        name: "shared-skill",
+        description: "Scope Skill",
+        filePath: "<scope-shared>",
+        baseDir: "<scope-shared>",
+        content: "Scope guidance that must be replaced",
+        disableModelInvocation: false,
+      }, {
+        name: "unused-skill",
+        description: "Unused Skill",
+        filePath: "<unused>",
+        baseDir: "<unused>",
+        content: "Unused guidance",
+        disableModelInvocation: false,
+      }],
+    },
+    model: { provider: "test", id: "model" },
+    stream: async function* (request) {
+      expect(request.system).toContain('<name>root-skill</name>');
+      expect(request.system).toContain('<name>parent-skill</name>');
+      expect(request.system).toContain("Parent replacement Skill");
+      expect(request.system).not.toContain("Scope Skill");
+      expect(request.system).not.toContain('<name>unused-skill</name>');
+      yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
+    },
+  } as unknown as AgentConfig;
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-bundle-skills-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-bundle-skills-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("Runtime selects structured Context Candidates for the System Prompt", async () => {
   const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
   const contexts: readonly ContextCandidate[] = [

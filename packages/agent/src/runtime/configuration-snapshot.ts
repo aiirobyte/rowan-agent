@@ -3,7 +3,7 @@ import type {
   AgentDefinition,
   PhaseRegistrySelection,
 } from "../harness/definitions";
-import { selectNamedResources } from "../harness/resource-selection";
+import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
 import { DEFAULT_PHASE_ID } from "../harness/phases/default";
 import type { ContextCandidate } from "./contracts";
@@ -66,7 +66,10 @@ export function resolveConfigurationSnapshot(
   const layer = input.definition.layer;
   const definition = applyDefinitionLayer(base, layer);
   const tools = selectNamedResources(resolved.tools, definition.tools, "Tool");
-  const skills = selectNamedResources(resolved.skills, definition.skills, "Skill");
+  const skills = mergeSkills(
+    selectNamedResources(resolved.skills, definition.skills, "Skill"),
+    definition.bundledSkills,
+  );
   const phases = resolvePhases(resolved.phases, definition.phases);
   const contexts = selectNamedResources(input.contexts ?? [], base.contexts, "Context");
   return {

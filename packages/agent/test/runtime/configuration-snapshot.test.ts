@@ -35,6 +35,14 @@ test("snapshot resolution applies Definition, Layer, and Phase narrowing monoton
         prompt: "Base body.",
         tools: ["keep", "drop"],
         skills: ["review", "drop-skill"],
+        bundledSkills: [{
+          name: "review",
+          description: "Bundle Review",
+          filePath: "<bundle>",
+          baseDir: "<bundle>",
+          content: "Bundle Review",
+          disableModelInvocation: false,
+        }],
         phases: { entryPhaseId: "review", phaseIds: ["review", "build"] },
         contexts: ["project"],
       }],
@@ -79,6 +87,7 @@ test("snapshot resolution applies Definition, Layer, and Phase narrowing monoton
     expect(snapshot.definition.prompt).toBe("Workflow body.");
     expect(snapshot.resources.tools.map(({ name }) => name)).toEqual(["keep"]);
     expect(snapshot.resources.skills.map(({ name }) => name)).toEqual(["review"]);
+    expect(snapshot.resources.skills[0]?.description).toBe("Bundle Review");
     expect([...snapshot.resources.phases!.phases.values()].map(({ name }) => name)).toEqual(["review"]);
     expect(snapshot.resources.phases!.entryPhaseId).toBe("review");
     expect(snapshot.contexts).toEqual([{ name: "project", value: { id: "p1" } }]);

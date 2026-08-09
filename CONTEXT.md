@@ -27,8 +27,10 @@ _Avoid_: Agent Options, Agent Binding, serialized Agent
 **Agent Definition**:
 A reusable declarative description containing an Agent's identity, authored
 prompt, optional model, and named Tool, Skill, PhaseRegistry, and Context
-Candidate selections. It contains no host business scope, lifecycle
-operation, or executable resource closure.
+Candidate selections. A host may also attach concrete `bundledSkills` as
+private, parent-wide guidance; those values remain active after Scope Skill
+selection and replace same-name Scope values. It contains no host business
+scope, lifecycle operation, or executable resource closure.
 _Avoid_: Agent Context, Capability Allowlist, Agent Configuration
 
 **Resource Source**:
@@ -52,7 +54,9 @@ _Avoid_: Allowed Resource, Resource Reference, Registered Capability
 **Phase Bundle**:
 One file Phase plus its direct child Skill values, loaded and snapshotted as a
 single Phase contribution. Nested Skills have no independent Rowan Source ID or
-revision, and Rowan does not interpret the host concept that owns the directory.
+revision; entering the Phase merges them after the active Agent Context Skills
+and replaces same-name values, and Rowan does not interpret the host concept
+that owns the directory.
 _Avoid_: Nested Resource Registry, Workflow Bundle, Phase Dependency Graph
 
 **Definition Layer**:

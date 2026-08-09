@@ -98,6 +98,9 @@ function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
     ...config.definition,
     ...(config.definition.tools ? { tools: Object.freeze([...config.definition.tools]) } : {}),
     ...(config.definition.skills ? { skills: Object.freeze([...config.definition.skills]) } : {}),
+    ...(config.definition.bundledSkills ? {
+      bundledSkills: Object.freeze(config.definition.bundledSkills.map((skill) => Object.freeze({ ...skill }))),
+    } : {}),
     ...(config.definition.phases ? {
       phases: Object.freeze({
         entryPhaseId: config.definition.phases.entryPhaseId,

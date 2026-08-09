@@ -126,7 +126,7 @@ test("Runtime preserves an explicit custom Phase entry", async () => {
   }
 });
 
-test("default restores Scope Skills while a file Phase uses only its Bundle Skills", async () => {
+test("default keeps root Skills while a file Phase adds its Bundle Skills", async () => {
   const requests: string[] = [];
   const stream: StreamFn = async function* (request) {
     requests.push(request.system ?? "");
@@ -156,11 +156,11 @@ test("default restores Scope Skills while a file Phase uses only its Bundle Skil
     disableModelInvocation: false,
   };
   const bundleSkill = {
-    name: "bundle-skill",
-    description: "Bundle Skill",
+    name: "root-skill",
+    description: "Phase replacement Skill",
     filePath: "<bundle>",
     baseDir: "<bundle>",
-    content: "Bundle guidance",
+    content: "Phase replacement guidance",
     disableModelInvocation: false,
   };
   const observed: string[][] = [];
@@ -203,10 +203,119 @@ test("default restores Scope Skills while a file Phase uses only its Bundle Skil
     });
 
     await expect(run.wait()).resolves.toMatchObject({ type: "input_required", phase: "default" });
-    expect(observed).toEqual([["bundle-skill"]]);
+    expect(observed).toEqual([["root-skill"]]);
+    expect(requests[0]).not.toContain("Phase replacement guidance");
     expect(requests).toHaveLength(1);
     expect(requests[0]).toContain("root-skill");
     expect(requests[0]).not.toContain("bundle-skill");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("parallel file Phases add their Bundle Skills to root Skills", async () => {
+  const rootSkill = {
+    name: "root-skill",
+    description: "Root Skill",
+    filePath: "<root>",
+    baseDir: "<root>",
+    content: "Root guidance",
+    disableModelInvocation: false,
+  };
+  const observed: Record<string, string[]> = {};
+  const observedDescriptions: Record<string, string[]> = {};
+  const bundled = (name: string) => ({
+    name,
+    description: `${name} Skill`,
+    filePath: `<${name}>`,
+    baseDir: `<${name}>`,
+    content: `${name} guidance`,
+    disableModelInvocation: false,
+  });
+  const phases: PhaseRegistry = {
+    phases: new Map([
+      ["entry", {
+        name: "entry",
+        description: "Dispatch",
+        filePath: "<entry>",
+        baseDir: "<entry>",
+        content: "Dispatch",
+        isolated: false,
+        target: "stop",
+        run: async () => ({
+          message: "dispatch",
+          route: "left",
+          toolCalls: [{
+            id: "route-parallel",
+            name: "route",
+            args: { decision: [{ phase: "left" }, { phase: "right" }] },
+          }],
+        }),
+      }],
+      ["left", {
+        name: "left",
+        description: "Left",
+        filePath: "<left>",
+        baseDir: "<left>",
+        content: "Left",
+        isolated: false,
+        skills: [bundled("root-skill")],
+        run: async (context) => {
+          observed.left = context.skills.map(({ name }) => name);
+          observedDescriptions.left = context.skills.map(({ description }) => description);
+          return { message: "left", route: "stop" };
+        },
+      }],
+      ["right", {
+        name: "right",
+        description: "Right",
+        filePath: "<right>",
+        baseDir: "<right>",
+        content: "Right",
+        isolated: false,
+        skills: [bundled("right-skill")],
+        run: async (context) => {
+          observed.right = context.skills.map(({ name }) => name);
+          observedDescriptions.right = context.skills.map(({ description }) => description);
+          return { message: "right", route: "stop" };
+        },
+      }],
+    ]),
+    entryPhaseId: "entry",
+  };
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+  });
+  try {
+    const config = {
+      identity: "phase-normalization-parallel-skills-v1",
+      model: { provider: "test", id: "model" },
+      stream: async function* () { yield { type: "done" }; },
+      definition: {
+        name: "test",
+        description: "Test Agent.",
+        prompt: "Test",
+      },
+      resources: {
+        tools: [],
+        skills: [rootSkill],
+        phases,
+      },
+    } as unknown as AgentConfig;
+    const agentId = await runtime.createAgent(config, {
+      idempotencyKey: "phase-normalization-parallel-skills-agent",
+    });
+    const run = await runtime.start(agentId, "hello", {
+      idempotencyKey: "phase-normalization-parallel-skills-run",
+    });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(observed).toEqual({
+      left: ["root-skill"],
+      right: ["root-skill", "right-skill"],
+    });
+    expect(observedDescriptions.left).toEqual(["root-skill Skill"]);
   } finally {
     await runtime.close();
   }
