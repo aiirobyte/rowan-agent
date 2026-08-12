@@ -2,6 +2,7 @@ import { createId, createTimestamp } from "../utils";
 import type {
   AgentId,
   AgentRecord,
+  AgentDeletionRequest,
   AssistantMessage,
   ConsumerRegistration,
   ConfigToken,
@@ -33,7 +34,7 @@ import type {
   UserInput,
 } from "./contracts";
 import type { DurableStore, OwnedStore } from "./contracts";
-import { assertToolExecutionResult } from "./contracts";
+import { assertToolExecutionResult, isAssistantMessage } from "./contracts";
 import { RuntimeError } from "./errors";
 import { createIdempotencyScope, encodeIdempotencyScope, canonicalStartRunRequest } from "./idempotency";
 import { TOOL_VALUE_JSON_BYTES } from "./idempotency";
@@ -272,6 +273,44 @@ export class InMemoryStore implements DurableStore {
     agent.updatedAt = createTimestamp();
     this.writeReceipt(scope, payload, agent);
     return clone(agent);
+  }
+
+  deleteAgent(lease: OwnerLease, input: AgentDeletionRequest): void {
+    this.assertOwner(lease);
+    if (input.confirmation !== "conversation-delete-v1") {
+      throw new TypeError("Agent deletion requires the conversation deletion confirmation token");
+    }
+    const agent = this.requireAgent(input.agentId);
+    const runs = [...this.runs.values()].filter((run) => run.agentId === agent.id);
+    const expected = new Set(input.expectedRunIds.map(String));
+    const actual = new Set(runs.map((run) => String(run.id)));
+    if (expected.size !== actual.size || [...actual].some((runId) => !expected.has(runId))) {
+      throw new RuntimeError("run_state_conflict", {
+        runId: runs[0]?.id ?? input.expectedRunIds[0] ?? "unknown",
+        expected: [],
+        actual: "cancelled",
+      });
+    }
+    const runIds = new Set(runs.map((run) => run.id));
+    this.agents.delete(agent.id);
+    this.nextAgentSequence.delete(agent.id);
+    this.nextReadySequence.delete(agent.id);
+    for (const run of runs) this.runs.delete(run.id);
+    for (const [messageId, message] of this.messages) {
+      if (runIds.has(message.runId)) this.messages.delete(messageId);
+    }
+    for (const [toolCallId, toolCall] of this.toolCalls) {
+      if (runIds.has(toolCall.runId)) this.toolCalls.delete(toolCallId);
+    }
+    for (let index = this.events.length - 1; index >= 0; index -= 1) {
+      if (this.events[index]!.agentId === agent.id) this.events.splice(index, 1);
+    }
+    for (const [key] of this.idempotency) {
+      if (key.includes(String(agent.id)) || [...runIds].some((runId) => key.includes(String(runId)))) this.idempotency.delete(key);
+    }
+    for (const [key] of this.operationReceipts) {
+      if (key.includes(String(agent.id)) || [...runIds].some((runId) => key.includes(String(runId)))) this.operationReceipts.delete(key);
+    }
   }
 
   createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): RunRecord {
@@ -702,14 +741,19 @@ export class InMemoryStore implements DurableStore {
     return result;
   }
 
-  cancelRun(lease: OwnerLease, input: { runId: RunId; expectedRevision?: number; reason?: string }): RunRecord {
+  cancelRun(lease: OwnerLease, input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): RunRecord {
     this.assertOwner(lease);
     const operationKey = `cancel:${input.runId}:${input.expectedRevision ?? "current"}`;
-    const operationPayload = canonicalJson(input.reason ?? null as never);
+    const operationPayload = canonicalJson([input.reason ?? null, input.output ?? null] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as RunRecord);
     const run = this.requireRun(input.runId);
     if (input.expectedRevision !== undefined) this.assertRevision(run, input.expectedRevision);
+    if (input.output !== undefined) {
+      if (!isAssistantMessage(input.output) || input.output.agentId !== run.agentId || input.output.runId !== run.id || input.output.interrupted !== true) {
+        throw new TypeError("cancelled output must be an interrupted AssistantMessage from this Run");
+      }
+    }
     if (["completed", "failed", "cancelled"].includes(run.state)) {
       const result = clone(run);
       if (input.expectedRevision !== undefined) this.writeOperationReceipt(operationKey, operationPayload, result);
@@ -719,8 +763,15 @@ export class InMemoryStore implements DurableStore {
     const activeToolCalls = run.execution
       ? [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.state === "pending" || toolCall.state === "running"))
       : [];
-    const indeterminateToolCallIds = activeToolCalls.filter((toolCall) => toolCall.state === "running").map((toolCall) => toolCall.id);
+    const indeterminateToolCallIds = activeToolCalls
+      .filter((toolCall) => toolCall.state === "running")
+      .map((toolCall) => toolCall.id);
     for (const toolCall of activeToolCalls) this.interruptToolCall(run, toolCall, input.reason ?? "The Run was cancelled.");
+    if (input.output && (typeof input.output.content === "string" ? input.output.content.length > 0 : input.output.content.length > 0)) {
+      const output = { ...clone(input.output), sequenceWithinRun: this.nextMessageSequence(run.id) };
+      this.messages.set(output.id, output);
+      this.appendMessage(run, output);
+    }
     if (indeterminateToolCallIds.length > 0) {
       const failure: RunFailure = {
         code: "tool_indeterminate",
@@ -1016,6 +1067,7 @@ class MemoryOwnedStore implements OwnedStore {
   async reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   async activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   async updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
+  async deleteAgent(input: AgentDeletionRequest): Promise<void> { this.store.deleteAgent(this.lease, input); }
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
@@ -1026,7 +1078,7 @@ class MemoryOwnedStore implements OwnedStore {
   async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
   async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   async commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
-  async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
+  async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
   async snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   async listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }
   async listRuns(input?: { agentId?: AgentId; states?: readonly RunState[] }): Promise<readonly RunRecord[]> { return this.store.listRuns(this.lease, input); }

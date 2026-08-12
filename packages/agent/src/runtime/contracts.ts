@@ -165,6 +165,11 @@ export type AgentRecord = Readonly<{
   activatedAt?: string;
   updatedAt: string;
 }>;
+export type AgentDeletionRequest = Readonly<{
+  agentId: AgentId;
+  expectedRunIds: readonly RunId[];
+  confirmation: "conversation-delete-v1";
+}>;
 export type ExecutionToken = Readonly<{ runId: RunId; ownerEpoch: number; executionId: ExecutionId }>;
 export type ExecutionCheckpoint = Readonly<{ codec: string; version: number; data: JsonValue }>;
 export type InputRequest = Readonly<{ id: InputRequestId; phase: string; messageId: MessageId; createdAt: string }>;
@@ -242,6 +247,7 @@ export interface OwnedStore {
   reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): Promise<AgentRecord>;
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord>;
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord>;
+  deleteAgent(input: AgentDeletionRequest): Promise<void>;
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
@@ -301,7 +307,7 @@ export interface OwnedStore {
     state: "completed" | "failed" | "indeterminate";
     reason?: string;
   }): Promise<ToolCommit>;
-  cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string }): Promise<RunRecord>;
+  cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord>;
   snapshotRun(runId: RunId): Promise<RunSnapshot>;
   listAgents(): Promise<readonly AgentRecord[]>;
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[] }): Promise<readonly RunRecord[]>;
@@ -335,6 +341,7 @@ export interface AgentRuntime {
   unload(input: Readonly<{ kind: import("./resource-registry").ResourceKind; sourceId: string }>): Promise<LoadResult>;
   createAgent(config: AgentConfigRequest, options?: { idempotencyKey?: string; metadata?: Metadata }): Promise<AgentId>;
   updateAgentConfig(agentId: AgentId, config: AgentConfigRequest, options: { idempotencyKey: string }): Promise<void>;
+  deleteAgent(input: AgentDeletionRequest): Promise<void>;
   start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
@@ -386,10 +393,11 @@ export function normalizeUserInput(input: UserInput): UserInput {
 }
 export function canonicalUserInput(input: UserInput): string { return canonicalJson(normalizeUserInput(input) as never); }
 export function isAssistantMessage(value: unknown): value is AssistantMessage {
-  return isRecord(value) && hasOnlyKeys(value, ["id", "agentId", "runId", "role", "content", "metadata", "sequenceWithinRun", "createdAt"])
+  return isRecord(value) && hasOnlyKeys(value, ["id", "agentId", "runId", "role", "content", "metadata", "sequenceWithinRun", "createdAt", "interrupted"])
     && typeof value.id === "string" && typeof value.agentId === "string" && typeof value.runId === "string" && value.role === "assistant"
     && Number.isInteger(value.sequenceWithinRun) && (value.sequenceWithinRun as number) >= 0 && typeof value.createdAt === "string"
-    && isAssistantContent(value.content) && (value.metadata === undefined || isMetadata(value.metadata));
+    && isAssistantContent(value.content) && (value.metadata === undefined || isMetadata(value.metadata))
+    && (value.interrupted === undefined || typeof value.interrupted === "boolean");
 }
 function isToolResult(value: unknown): value is ToolExecutionResult {
   if (!isRecord(value) || !isJsonValue(value.content) || typeof value.ok !== "boolean") return false;

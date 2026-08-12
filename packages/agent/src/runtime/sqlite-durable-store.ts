@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import type {
   AgentId,
+  AgentDeletionRequest,
   AgentRecord,
   AssistantMessage,
   ConfigToken,
@@ -227,6 +228,10 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.updateAgentConfigToken(current, input));
   }
 
+  async deleteAgent(lease: OwnerLease, input: AgentDeletionRequest): Promise<void> {
+    return this.invoke(lease, (store, current) => store.deleteAgent(current, input));
+  }
+
   async createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> {
     return this.invoke(lease, (store, current) => store.createRun(current, input));
   }
@@ -282,7 +287,7 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.commitToolResult(current, input));
   }
 
-  async cancelRun(lease: OwnerLease, input: { runId: RunId; expectedRevision?: number; reason?: string }): Promise<RunRecord> {
+  async cancelRun(lease: OwnerLease, input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> {
     return this.invoke(lease, (store, current) => store.cancelRun(current, input));
   }
 
@@ -319,9 +324,11 @@ export class SqliteStore implements DurableStore {
         if (after === waterline) return [];
       }
       const rows = this.database.query(
-        "SELECT payload_json FROM run_events ORDER BY sequence LIMIT -1 OFFSET ?",
-      ).all(after) as EventRow[];
-      return rows.map((row) => JSON.parse(row.payload_json) as DurableRunEvent);
+        "SELECT payload_json FROM run_events ORDER BY sequence",
+      ).all() as EventRow[];
+      return rows
+        .map((row) => JSON.parse(row.payload_json) as DurableRunEvent)
+        .filter((event) => parseEventCursor(lease, event.cursor) > after);
     });
   }
 
@@ -551,6 +558,7 @@ class SqliteOwnedStore implements OwnedStore {
   reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
+  deleteAgent(input: AgentDeletionRequest): Promise<void> { return this.store.deleteAgent(this.lease, input); }
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
@@ -561,7 +569,7 @@ class SqliteOwnedStore implements OwnedStore {
   reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: JsonValue; toolCallId?: ToolCallId }>[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
   startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
-  cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
+  cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
   snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[] }): Promise<readonly RunRecord[]> { return this.store.listRuns(this.lease, input); }

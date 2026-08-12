@@ -91,6 +91,9 @@ export class AgentRuntime implements AgentRuntimeContract {
   private readonly storeIncarnation: string;
   private readonly activeAgents = new Set<AgentId>();
   private readonly executions = new Map<RunId, ActiveExecution>();
+  private readonly executionDone = new Map<RunId, Promise<void>>();
+  private readonly cancellationRequested = new Set<RunId>();
+  private readonly cancellationReasons = new Map<RunId, string>();
   private readonly consumers = new Map<string, ConsumerSubscription>();
   private readonly transientEvents = new TransientRunEventHub();
   private readonly resources: RuntimeBootstrapRegistry;
@@ -169,6 +172,17 @@ export class AgentRuntime implements AgentRuntimeContract {
     await this.commands.updateAgentConfig({ agentId, config, idempotencyKey: options.idempotencyKey });
   }
 
+  async deleteAgent(input: import("./contracts").AgentDeletionRequest): Promise<void> {
+    this.assertOpen();
+    const runs = await this.owned.listRuns({ agentId: input.agentId });
+    for (const run of runs) {
+      if (["queued", "running", "input_required"].includes(run.state)) {
+        await this.cancel(run.id, "Conversation deleted.");
+      }
+    }
+    await this.owned.deleteAgent(input);
+  }
+
   async start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: import("../runtime-events").Metadata }): Promise<AgentRun> {
     this.assertOpen();
     const agent = await this.requireAgent(agentId);
@@ -241,6 +255,14 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async cancel(runId: RunId, reason?: string): Promise<RunBoundary> {
     this.assertOpen();
+    const done = this.executionDone.get(runId);
+    if (done) {
+      this.cancellationRequested.add(runId);
+      this.cancellationReasons.set(runId, reason ?? "Agent run stopped.");
+      this.executions.get(runId)?.controller.abort();
+      await done;
+      return boundaryFromSnapshot(await this.owned.snapshotRun(runId));
+    }
     const snapshot = await this.owned.snapshotRun(runId);
     await this.owned.cancelRun({ runId, expectedRevision: snapshot.revision, ...(reason === undefined ? {} : { reason }) });
     const active = this.executions.get(runId);
@@ -263,8 +285,12 @@ export class AgentRuntime implements AgentRuntimeContract {
           if (execution) this.transientEvents.clear(next.id, execution.executionId);
           this.activeAgents.delete(next.agentId);
           this.executions.delete(next.id);
+          this.cancellationRequested.delete(next.id);
+          this.cancellationReasons.delete(next.id);
+          this.executionDone.delete(next.id);
           void this.pump();
         });
+        this.executionDone.set(next.id, task);
         void task;
       }
     } catch (error) {
@@ -323,6 +349,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       executionRevision = claim.run.revision;
       const controller = new AbortController();
       this.executions.set(run.id, { controller, executionId });
+      if (this.cancellationRequested.has(run.id)) controller.abort();
       const config = resolvedConfig as AgentConfig;
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner);
       let toolQueue = Promise.resolve();
@@ -417,6 +444,18 @@ export class AgentRuntime implements AgentRuntimeContract {
           },
         } satisfies AgentRuntimePort,
       });
+      if (this.cancellationRequested.has(run.id) || controller.signal.aborted) {
+        const output = latestAssistant(run, result.messages, claim.history.length, true);
+        const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
+        await this.owned.cancelRun({
+          runId: run.id,
+          expectedRevision: executionRevision,
+          reason,
+          ...(output && hasVisibleAssistantText(output) ? { output } : {}),
+        });
+        this.transientEvents.clear(run.id, claim.execution.executionId);
+        return;
+      }
       if (result.type === "input_required") {
         const prompt = promptMessage(run, result.request.prompt, result.messages.length);
         await this.owned.commitInputRequired({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, requestId: createId("input") as import("../runtime-events").InputRequestId, phase: result.request.phase, prompt, checkpoint: result.checkpoint });
@@ -435,6 +474,14 @@ export class AgentRuntime implements AgentRuntimeContract {
     } catch (error) {
       if (!claim && error instanceof RuntimeError && ["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) return;
       if (claim) {
+        if (this.cancellationRequested.has(run.id)) {
+          await this.owned.cancelRun({
+            runId: run.id,
+            expectedRevision: executionRevision,
+            reason: this.cancellationReasons.get(run.id) ?? "Agent run stopped.",
+          }).catch(() => undefined);
+          return;
+        }
         await this.owned.commitOutcome({
           runId: run.id,
           execution: claim.execution,
@@ -715,10 +762,16 @@ function promptMessage(run: RunRecord, prompt: string, sequence: number): Assist
   return { id: createId("msg") as MessageId, agentId: run.agentId, runId: run.id, role: "assistant", content: prompt, sequenceWithinRun: sequence, createdAt: new Date().toISOString() };
 }
 
-function latestAssistant(run: RunRecord, messages: readonly AgentMessage[], sequence: number): AssistantMessage | undefined {
+function latestAssistant(run: RunRecord, messages: readonly AgentMessage[], sequence: number, interrupted = false): AssistantMessage | undefined {
   const message = [...messages].reverse().find((candidate) => candidate.role === "assistant");
   if (!message) return undefined;
-  return projectAssistantMessage(message, run.agentId, run.id, sequence);
+  return projectAssistantMessage(message, run.agentId, run.id, sequence, { interrupted });
+}
+
+function hasVisibleAssistantText(message: AssistantMessage): boolean {
+  return typeof message.content === "string"
+    ? message.content.length > 0
+    : message.content.some((part) => part.type === "text" && part.text.length > 0);
 }
 
 function durableOutcome(outcome: import("../protocol").Outcome) {

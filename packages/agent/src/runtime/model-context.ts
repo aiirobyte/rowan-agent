@@ -34,17 +34,26 @@ export function projectAssistantMessage(
   agentId: AgentId,
   runId: RunId,
   sequenceWithinRun: number,
+  options: { interrupted?: boolean } = {},
 ): AssistantMessage {
   return {
     id: message.id as AssistantMessage["id"],
     agentId,
     runId,
     role: "assistant",
-    content: durableAssistantContent(message.content),
+    content: options.interrupted ? durableInterruptedAssistantContent(message.content) : durableAssistantContent(message.content),
     sequenceWithinRun,
     createdAt: message.createdAt,
     ...(message.metadata ? { metadata: message.metadata as never } : {}),
+    ...(options.interrupted ? { interrupted: true } : {}),
   };
+}
+
+function durableInterruptedAssistantContent(content: AgentMessage["content"]): AssistantContent {
+  if (typeof content === "string") return content;
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => ({ type: "text", text: part.text }));
 }
 
 function projectMessage(message: Message): AgentMessage {

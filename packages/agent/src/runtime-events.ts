@@ -72,7 +72,7 @@ export type MessageBase = Readonly<{
 }>;
 
 export type UserMessage = MessageBase & Readonly<{ role: "user"; content: UserContent }>;
-export type AssistantMessage = MessageBase & Readonly<{ role: "assistant"; content: AssistantContent }>;
+export type AssistantMessage = MessageBase & Readonly<{ role: "assistant"; content: AssistantContent; interrupted?: boolean }>;
 export type ToolMessage = MessageBase & Readonly<{ role: "tool"; content: ToolMessageContent }>;
 export type Message = UserMessage | AssistantMessage | ToolMessage;
 

@@ -65,6 +65,55 @@ test("Memory DurableStore replays idempotent writes and rejects changed payloads
   await expect(owner.reserveAgent({ idempotencyKey: "same", metadata: { a: 2 } })).rejects.toMatchObject({ code: "idempotency_conflict" });
 });
 
+test("Memory DurableStore physically deletes an Agent and all owned Run data", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-delete", leaseMs: 10_000 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-delete" });
+  const run = await owner.createRun({ agentId: agent.id, input: "remove me", idempotencyKey: "run-delete" });
+
+  await owner.deleteAgent({
+    agentId: agent.id,
+    expectedRunIds: [run.id],
+    confirmation: "conversation-delete-v1",
+  });
+
+  expect(await owner.listAgents()).toEqual([]);
+  expect(await owner.listRuns()).toEqual([]);
+  expect(await owner.listEvents()).toEqual([]);
+  await expect(owner.snapshotRun(run.id)).rejects.toMatchObject({ code: "run_not_found" });
+});
+
+test("Memory DurableStore keeps an interrupted assistant output on cancellation", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-partial", leaseMs: 10_000 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-partial" });
+  const run = await owner.createRun({ agentId: agent.id, input: "continue later", idempotencyKey: "run-partial" });
+  const claim = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
+  const output: AssistantMessage = {
+    id: "assistant-partial" as MessageId,
+    agentId: agent.id,
+    runId: run.id,
+    role: "assistant",
+    content: "Draft retained before stop.",
+    interrupted: true,
+    sequenceWithinRun: 1,
+    createdAt: "2026-08-13T00:00:00.000Z",
+  };
+
+  const cancelled = await owner.cancelRun({
+    runId: run.id,
+    expectedRevision: claim.run.revision,
+    reason: "user stopped",
+    output,
+  });
+
+  expect(cancelled.state).toBe("cancelled");
+  expect(await owner.listEvents()).toContainEqual(expect.objectContaining({
+    kind: "message_committed",
+    message: expect.objectContaining({ id: output.id, interrupted: true, content: output.content }),
+  }));
+});
+
 test("Memory DurableStore commits input boundaries and terminal outcomes atomically", async () => {
   const store = new InMemoryStore();
   const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
