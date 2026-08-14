@@ -24,6 +24,7 @@ import type {
   RunRecord,
   RunSnapshot,
   RunState,
+  RetentionResult,
   ToolCommit,
   UserInput,
 } from "./contracts";
@@ -34,8 +35,11 @@ import type { DurableStore, OwnedStore } from "./contracts";
 import type { ToolCallId, ToolExecutionResult, JsonValue } from "../runtime-events";
 
 const SCHEMA_ID = "rowan.agent.runtime";
-const SCHEMA_VERSION = "1";
+// Message revisions and history seeds are a clean durable-store cutover. Old
+// Rowan databases are rejected and must be removed/recreated by Doctor Repair.
+const SCHEMA_VERSION = "2";
 const SCHEMA_VALUE = `${SCHEMA_ID}:${SCHEMA_VERSION}`;
+const RETENTION_FLOOR_KEY = "retention_floor";
 const STATE_ROW = 1;
 
 const CURRENT_TABLES = new Set([
@@ -216,7 +220,7 @@ export class SqliteStore implements DurableStore {
     this.database.close();
   }
 
-  async reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): Promise<AgentRecord> {
+  async reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> {
     return this.invoke(lease, (store, current) => store.reserveAgent(current, input));
   }
 
@@ -230,6 +234,17 @@ export class SqliteStore implements DurableStore {
 
   async deleteAgent(lease: OwnerLease, input: AgentDeletionRequest): Promise<void> {
     return this.invoke(lease, (store, current) => store.deleteAgent(current, input));
+  }
+
+  async reviseMessage(lease: OwnerLease, input: {
+    agentId: AgentId;
+    messageId: MessageId;
+    expectedMessageRevision: number;
+    content: import("../runtime-events").UserContent;
+    operationId: string;
+    effectDigestConfirmation?: string;
+  }): Promise<import("./contracts").MessageRevisionResult> {
+    return this.invoke(lease, (store, current) => store.reviseMessage(current, input));
   }
 
   async createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> {
@@ -295,6 +310,10 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.snapshotRun(current, runId), false);
   }
 
+  async history(lease: OwnerLease, agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> {
+    return this.invoke(lease, (store, current) => store.history(current, agentId), false);
+  }
+
   async listAgents(lease: OwnerLease): Promise<readonly AgentRecord[]> {
     return this.invoke(lease, (store, current) => store.listAgents(current), false);
   }
@@ -307,17 +326,19 @@ export class SqliteStore implements DurableStore {
     this.assertOpen();
     return this.readTransaction(() => {
       this.requireMatchingOwner(lease, true);
-      const after = input.after ? parseEventCursor(lease, input.after) : 0;
+      const retentionRow = this.database.query(
+        "SELECT value FROM runtime_meta WHERE key = ?",
+      ).get(RETENTION_FLOOR_KEY) as { value: string } | null;
+      const retentionFloor = Math.max(1, Number(retentionRow?.value ?? "1"));
+      const after = input.after ? parseEventCursor(lease, input.after) : retentionFloor - 1;
+      if (input.after && after < retentionFloor - 1) {
+        throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "expired" });
+      }
       if (input.after) {
         const latest = this.database.query(
-          "SELECT payload_json FROM run_events ORDER BY sequence DESC LIMIT 1",
-        ).get() as EventRow | null;
-        const waterline = latest
-          ? parseEventCursor(
-              lease,
-              (JSON.parse(latest.payload_json) as DurableRunEvent).cursor,
-            )
-          : 0;
+          "SELECT max(sequence) AS sequence FROM run_events",
+        ).get() as { sequence: number | null };
+        const waterline = latest.sequence ?? 0;
         if (after > waterline) {
           throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "beyond_waterline" });
         }
@@ -338,6 +359,16 @@ export class SqliteStore implements DurableStore {
 
   async advanceConsumerCheckpoint(lease: OwnerLease, input: { consumerId: string; cursor: EventCursor }): Promise<void> {
     return this.invoke(lease, (store, current) => store.advanceConsumerCheckpoint(current, input));
+  }
+
+  async compact(lease: OwnerLease, input: { now?: string; retentionMs?: number } = {}): Promise<RetentionResult> {
+    this.assertOpen();
+    const result = this.invoke(lease, (store, current) => store.compact(current, input));
+    if (result.deletedEventCount > 0 || result.deletedRunIds.length > 0) {
+      this.database.run("PRAGMA wal_checkpoint(PASSIVE)");
+      this.database.run("PRAGMA incremental_vacuum");
+    }
+    return result;
   }
 
   async renewOwner(lease: OwnerLease, leaseMs: number): Promise<OwnerLease> {
@@ -398,6 +429,7 @@ export class SqliteStore implements DurableStore {
           if (sql) this.database.run(sql);
         }
         this.database.run("INSERT INTO runtime_meta (key, value) VALUES (?, ?)", ["schema_version", SCHEMA_VALUE]);
+        this.database.run("INSERT INTO runtime_meta (key, value) VALUES (?, ?)", [RETENTION_FLOOR_KEY, "1"]);
         const state = new InMemoryStore();
         this.database.run("INSERT INTO runtime_owner (singleton, epoch) VALUES (?, ?)", [STATE_ROW, 0]);
         this.database.run("INSERT INTO runtime_state (singleton, state_json) VALUES (?, ?)", [STATE_ROW, JSON.stringify(state.exportState())]);
@@ -454,6 +486,10 @@ export class SqliteStore implements DurableStore {
 
   private persistState(state: InMemoryStoreState): void {
     this.writeState(state);
+    this.database.run(
+      "INSERT INTO runtime_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      [RETENTION_FLOOR_KEY, String(Math.max(1, state.retentionFloor ?? 1))],
+    );
     for (const table of ["consumer_checkpoints", "idempotency", "run_events", "messages", "input_requests", "tool_calls", "runs", "agents"] as const) {
       this.database.run(`DELETE FROM ${table}`);
     }
@@ -555,10 +591,19 @@ export class SqliteStore implements DurableStore {
 class SqliteOwnedStore implements OwnedStore {
   constructor(private readonly store: SqliteStore, public lease: OwnerLease) {}
 
-  reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
+  reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
   deleteAgent(input: AgentDeletionRequest): Promise<void> { return this.store.deleteAgent(this.lease, input); }
+  reviseMessage(input: {
+    agentId: AgentId;
+    messageId: MessageId;
+    expectedMessageRevision: number;
+    content: import("../runtime-events").UserContent;
+    operationId: string;
+    effectDigestConfirmation?: string;
+  }): Promise<import("./contracts").MessageRevisionResult> { return this.store.reviseMessage(this.lease, input); }
+  compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult> { return this.store.compact(this.lease, input); }
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
@@ -571,6 +616,7 @@ class SqliteOwnedStore implements OwnedStore {
   commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
   snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
+  history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> { return this.store.history(this.lease, agentId); }
   listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[] }): Promise<readonly RunRecord[]> { return this.store.listRuns(this.lease, input); }
   listEvents(input?: { after?: EventCursor }): Promise<readonly DurableRunEvent[]> { return this.store.listEvents(this.lease, input); }

@@ -91,8 +91,22 @@ JSON-safe user content accepted to create an Agent Run or answer an Input Reques
 _Avoid_: Command, Runtime Message, arbitrary Agent Message
 
 **Canonical Message**:
-An immutable Rowan-generated Message in an Agent's durable conversation history. Its identity, provenance, and ordering are Runtime-owned.
+An active Rowan-generated Message in an Agent's durable conversation history.
+Its identity and ordering are Runtime-owned; its active content may advance
+through Message Revisions while each revision fact remains immutable.
 _Avoid_: Pending input, Stream Event, mutable transcript entry
+
+**Message Revision**:
+The monotonic version of one stable Canonical Message identity. The active
+history exposes the latest revision and the Durable Run Event log retains the
+revision fact until retention cleanup.
+_Avoid_: New Message, Branch Message, mutable Event
+
+**History Seed**:
+A validated active Model Context copied by value when creating a new Agent.
+Rowan allocates new Message identities and stores no source Agent or execution
+relation; a seed never creates a Run.
+_Avoid_: Agent Fork Link, Run Clone, Checkpoint Import
 
 **Model Context**:
 The execution-local projection built from Canonical Messages and the Run's Configuration Snapshot. Compaction and Phase-local prompts may change this projection without rewriting canonical history.

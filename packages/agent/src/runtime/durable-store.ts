@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createId, createTimestamp } from "../utils";
 import type {
   AgentId,
@@ -16,6 +17,9 @@ import type {
   InputRequestId,
   InputRequiredCommit,
   Message,
+  MessageRevisionResult,
+  RetentionResult,
+  MessageRevised,
   MessageCommitted,
   MessageId,
   Metadata,
@@ -48,7 +52,9 @@ import type {
   ToolExecutionResult,
   ToolStateChanged,
   UserContent,
+  UserMessage,
 } from "../runtime-events";
+import type { HistorySeed } from "./contracts";
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type StoredAgent = Mutable<AgentRecord>;
@@ -85,7 +91,9 @@ export type InMemoryStoreState = Readonly<{
   events: readonly DurableRunEvent[];
   idempotency: readonly (readonly [string, IdempotencyReceipt])[];
   operationReceipts: readonly (readonly [string, IdempotencyReceipt])[];
+  historySeeds?: readonly (readonly [AgentId, readonly Message[]])[];
   consumerCheckpoints: readonly (readonly [string, EventCursor])[];
+  retentionFloor?: number;
   nextAgentSequence: readonly (readonly [AgentId, number])[];
   nextReadySequence: readonly (readonly [AgentId, number])[];
   eventSequence: number;
@@ -100,12 +108,14 @@ export class InMemoryStore implements DurableStore {
   private readonly events: DurableRunEvent[] = [];
   private readonly idempotency = new Map<string, IdempotencyReceipt>();
   private readonly operationReceipts = new Map<string, IdempotencyReceipt>();
+  private readonly historySeeds = new Map<AgentId, readonly Message[]>();
   private readonly consumerCheckpoints = new Map<string, EventCursor>();
   private readonly nextAgentSequence = new Map<AgentId, number>();
   private readonly nextReadySequence = new Map<AgentId, number>();
   private owner?: StoredOwner;
   private ownerEpoch = 0;
   private eventSequence = 0;
+  private retentionFloor = 1;
 
   constructor(options: { incarnation?: string } = {}) {
     this.incarnation = options.incarnation ?? createId("store");
@@ -120,10 +130,12 @@ export class InMemoryStore implements DurableStore {
     store.events.push(...clone(state.events));
     for (const [key, receipt] of state.idempotency) store.idempotency.set(key, clone(receipt));
     for (const [key, receipt] of state.operationReceipts) store.operationReceipts.set(key, clone(receipt));
+    for (const [agentId, messages] of state.historySeeds ?? []) store.historySeeds.set(agentId, clone(messages));
     for (const [consumerId, cursor] of state.consumerCheckpoints ?? []) store.consumerCheckpoints.set(consumerId, cursor);
     for (const [agentId, sequence] of state.nextAgentSequence) store.nextAgentSequence.set(agentId, sequence);
     for (const [agentId, sequence] of state.nextReadySequence) store.nextReadySequence.set(agentId, sequence);
     store.eventSequence = state.eventSequence;
+    store.retentionFloor = Math.max(1, state.retentionFloor ?? 1);
     store.ownerEpoch = Math.max(
       0,
       ...state.runs.map((run) => run.execution?.ownerEpoch ?? 0),
@@ -141,7 +153,9 @@ export class InMemoryStore implements DurableStore {
       events: this.events,
       idempotency: [...this.idempotency.entries()],
       operationReceipts: [...this.operationReceipts.entries()],
+      historySeeds: [...this.historySeeds.entries()],
       consumerCheckpoints: [...this.consumerCheckpoints.entries()],
+      retentionFloor: this.retentionFloor,
       nextAgentSequence: [...this.nextAgentSequence.entries()],
       nextReadySequence: [...this.nextReadySequence.entries()],
       eventSequence: this.eventSequence,
@@ -227,12 +241,13 @@ export class InMemoryStore implements DurableStore {
     this.owner = undefined;
   }
 
-  reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): AgentRecord {
+  reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: HistorySeed }): AgentRecord {
     this.assertOwner(lease);
     const scope = createIdempotencyScope("create_agent", input.idempotencyKey);
     const payload = canonicalJson({
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
       ...(input.configIdentity === undefined ? {} : { configIdentity: input.configIdentity }),
+      ...(input.historySeed === undefined ? {} : { historySeed: input.historySeed }),
     } as never);
     const replay = this.replay(scope, payload);
     if (replay) return clone(replay as AgentRecord);
@@ -245,6 +260,7 @@ export class InMemoryStore implements DurableStore {
       updatedAt: timestamp,
     };
     this.agents.set(agent.id, agent);
+    if (input.historySeed && input.historySeed.length > 0) this.historySeeds.set(agent.id, materializeHistorySeed(agent.id, input.historySeed));
     this.nextAgentSequence.set(agent.id, 0);
     this.nextReadySequence.set(agent.id, 0);
     this.writeReceipt(scope, payload, agent);
@@ -295,6 +311,7 @@ export class InMemoryStore implements DurableStore {
     this.agents.delete(agent.id);
     this.nextAgentSequence.delete(agent.id);
     this.nextReadySequence.delete(agent.id);
+    this.historySeeds.delete(agent.id);
     for (const run of runs) this.runs.delete(run.id);
     for (const [messageId, message] of this.messages) {
       if (runIds.has(message.runId)) this.messages.delete(messageId);
@@ -311,6 +328,165 @@ export class InMemoryStore implements DurableStore {
     for (const [key] of this.operationReceipts) {
       if (key.includes(String(agent.id)) || [...runIds].some((runId) => key.includes(String(runId)))) this.operationReceipts.delete(key);
     }
+  }
+
+  reviseMessage(lease: OwnerLease, input: {
+    agentId: AgentId;
+    messageId: MessageId;
+    expectedMessageRevision: number;
+    content: UserContent;
+    operationId: string;
+    effectDigestConfirmation?: string;
+  }): MessageRevisionResult {
+    this.assertOwner(lease);
+    if (!Number.isInteger(input.expectedMessageRevision) || input.expectedMessageRevision < 0) {
+      throw new TypeError("expectedMessageRevision must be a non-negative integer");
+    }
+    if (typeof input.operationId !== "string" || input.operationId.length === 0) throw new TypeError("operationId must be non-empty");
+    const normalized = normalizeUserInput({ content: input.content });
+    const operationKey = `revise_message:${input.agentId}:${input.operationId}`;
+    const operationPayload = canonicalJson([
+      input.messageId,
+      input.expectedMessageRevision,
+      normalized,
+      input.effectDigestConfirmation ?? null,
+    ] as never);
+    const replay = this.replayOperation(operationKey, operationPayload);
+    if (replay) return clone(replay as MessageRevisionResult);
+
+    const agent = this.requireAgent(input.agentId);
+    const seed = this.historySeeds.get(agent.id) ?? [];
+    const original = this.messages.get(input.messageId)
+      ?? seed.find(({ id }) => id === input.messageId);
+    if (!original || original.agentId !== agent.id || original.role !== "user") {
+      throw new RuntimeError("message_revision_conflict", {
+        agentId: agent.id,
+        messageId: input.messageId,
+        expected: input.expectedMessageRevision,
+        actual: -1,
+      });
+    }
+    const actualRevision = original.messageRevision ?? 0;
+    if (actualRevision !== input.expectedMessageRevision) {
+      throw new RuntimeError("message_revision_conflict", {
+        agentId: agent.id,
+        messageId: input.messageId,
+        expected: input.expectedMessageRevision,
+        actual: actualRevision,
+      });
+    }
+    // A fork's copied context is intentionally not represented by a Run. It
+    // is still editable: treat its synthetic seed sequence as the prefix
+    // before the first real Run, then move the revised Message into the new
+    // replacement Run below.
+    const targetRun = this.runs.get(original.runId);
+    const isSeedMessage = !targetRun
+      && seed.some(({ id }) => id === original.id);
+    if (!targetRun && !isSeedMessage) {
+      throw new RuntimeError("message_revision_conflict", {
+        agentId: agent.id,
+        messageId: input.messageId,
+        expected: input.expectedMessageRevision,
+        actual: actualRevision,
+      });
+    }
+    const targetAgentSequence = targetRun?.agentSequence ?? -1;
+    const affectedRuns = [...this.runs.values()]
+      .filter((run) => run.agentId === agent.id && run.agentSequence >= targetAgentSequence)
+      .sort((left, right) => left.agentSequence - right.agentSequence);
+    const affectedRunIds = affectedRuns.map((run) => run.id);
+    const affectedRunSet = new Set(affectedRunIds);
+    const affectedTools = [...this.toolCalls.values()]
+      .filter((toolCall) => affectedRunSet.has(toolCall.runId))
+      .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+    const effectDigest = affectedTools.length > 0 ? digestToolEffects(affectedTools) : undefined;
+    if (effectDigest && input.effectDigestConfirmation !== effectDigest) {
+      throw new RuntimeError("tool_effect_confirmation_required", {
+        agentId: agent.id,
+        messageId: input.messageId,
+        effectDigest,
+        toolCallIds: affectedTools.map((toolCall) => toolCall.id),
+      });
+    }
+
+    const timestamp = createTimestamp();
+    const replacementRun: StoredRun = {
+      id: createId("run") as RunId,
+      agentId: agent.id,
+      agentSequence: this.nextSequence(agent.id),
+      readySequence: this.nextReady(agent.id),
+      revision: 0,
+      state: "queued",
+      input: targetInput(normalized, original.metadata),
+      initialMessageId: original.id,
+      ...((targetRun?.pinnedConfigToken ?? this.agents.get(agent.id)?.currentConfigToken) === undefined
+        ? {}
+        : { pinnedConfigToken: targetRun?.pinnedConfigToken ?? this.agents.get(agent.id)?.currentConfigToken }),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    for (const run of affectedRuns) {
+      const previousState = run.state;
+      run.invalidatedBy = { messageId: original.id, messageRevision: actualRevision + 1 };
+      if (run.state === "running" || run.state === "queued" || run.state === "input_required") {
+        if (run.state === "running") {
+          const openToolCalls = [...this.toolCalls.values()]
+            .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.state === "pending" || toolCall.state === "running"));
+          for (const toolCall of openToolCalls) this.interruptToolCall(run, toolCall, "Run superseded by Message revision.");
+        } else {
+          delete run.openInputRequest;
+          delete run.checkpoint;
+        }
+        delete run.execution;
+        run.state = "cancelled";
+        run.cancellationReason = "Run superseded by Message revision.";
+        run.revision += 1;
+        run.updatedAt = timestamp;
+        this.appendTransition(run, previousState, "cancelled", undefined, undefined, undefined, undefined, run.cancellationReason);
+      } else {
+        run.revision += 1;
+        run.updatedAt = timestamp;
+      }
+    }
+
+    for (const [messageId, message] of this.messages) {
+      if (!affectedRunSet.has(message.runId)) continue;
+      if (message.runId !== original.runId || message.sequenceWithinRun > original.sequenceWithinRun) this.messages.delete(messageId);
+    }
+    if (isSeedMessage) {
+      const targetIndex = seed.findIndex(({ id }) => id === original.id);
+      if (targetIndex >= 0) this.historySeeds.set(agent.id, seed.slice(0, targetIndex));
+    }
+    const revisedMessage: UserMessage & Readonly<{ messageRevision: number }> = {
+      ...clone(original),
+      runId: replacementRun.id,
+      content: userInputContent(normalized),
+      messageRevision: actualRevision + 1,
+      sequenceWithinRun: 0,
+      createdAt: timestamp,
+    };
+    this.messages.set(revisedMessage.id, revisedMessage);
+    this.runs.set(replacementRun.id, replacementRun);
+    this.appendTransition(replacementRun, null, "queued");
+    this.events.push({
+      ...this.baseEvent(replacementRun),
+      kind: "message_revised",
+      message: revisedMessage,
+      previousRevision: actualRevision,
+      invalidatedRunIds: affectedRunIds,
+      targetRunId: original.runId,
+      cutoffSequenceWithinRun: original.sequenceWithinRun,
+    } as MessageRevised);
+    const result: MessageRevisionResult = {
+      message: clone(revisedMessage),
+      replacementRun: clone(replacementRun),
+      invalidatedRunIds: affectedRunIds,
+      affectedToolCallIds: affectedTools.map((toolCall) => toolCall.id),
+      ...(effectDigest === undefined ? {} : { effectDigest }),
+    };
+    this.writeOperationReceipt(operationKey, operationPayload, result);
+    return clone(result);
   }
 
   createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): RunRecord {
@@ -363,7 +539,7 @@ export class InMemoryStore implements DurableStore {
     }
     if (!run.pinnedConfigToken && input.configToken) run.pinnedConfigToken = input.configToken;
     let message: Message | undefined;
-    if (!run.checkpoint) {
+    if (!run.checkpoint && !run.initialMessageId) {
       const userInput = normalizeUserInput(run.input);
       message = {
         id: input.messageId ?? (createId("msg") as MessageId),
@@ -388,7 +564,7 @@ export class InMemoryStore implements DurableStore {
     run.updatedAt = createTimestamp();
     if (message) this.appendMessage(run, message);
     this.appendTransition(run, "queued", "running");
-    const result = { run: clone(run), execution: clone(execution), history: this.history(run.agentId, run.agentSequence) };
+    const result = { run: clone(run), execution: clone(execution), history: this.activeHistory(run.agentId, run.agentSequence) };
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
   }
@@ -851,7 +1027,10 @@ export class InMemoryStore implements DurableStore {
 
   listEvents(lease: OwnerLease, input: { after?: EventCursor } = {}): readonly DurableRunEvent[] {
     this.assertOwner(lease);
-    const after = input.after ? this.parseCursor(input.after) : 0;
+    const after = input.after ? this.parseCursor(input.after) : this.retentionFloor - 1;
+    if (input.after && after < this.retentionFloor - 1) {
+      throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "expired" });
+    }
     if (after > this.eventSequence) {
       throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "beyond_waterline" });
     }
@@ -870,10 +1049,97 @@ export class InMemoryStore implements DurableStore {
   advanceConsumerCheckpoint(lease: OwnerLease, input: { consumerId: string; cursor: EventCursor }): void {
     this.assertOwner(lease);
     const next = this.parseCursor(input.cursor);
+    if (next < this.retentionFloor - 1) {
+      throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "expired" });
+    }
     if (next > this.eventSequence) throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "beyond_waterline" });
     const previous = this.consumerCheckpoints.get(input.consumerId);
     if (previous !== undefined && next <= this.parseCursor(previous)) return;
     this.consumerCheckpoints.set(input.consumerId, input.cursor);
+  }
+
+  compact(lease: OwnerLease, input: { now?: string; retentionMs?: number } = {}): RetentionResult {
+    this.assertOwner(lease);
+    const retentionMs = input.retentionMs ?? 7 * 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(retentionMs) || retentionMs < 0) {
+      throw new TypeError("retentionMs must be a non-negative finite number");
+    }
+    const now = input.now === undefined ? Date.now() : Date.parse(input.now);
+    if (!Number.isFinite(now)) throw new TypeError("now must be an ISO timestamp");
+    const cutoff = now - retentionMs;
+    const checkpointSequences = [...this.consumerCheckpoints.values()]
+      .map((cursor) => this.parseCursor(cursor));
+    const consumerFloor = checkpointSequences.length > 0
+      ? Math.min(...checkpointSequences)
+      : this.eventSequence;
+    const blockedRunIds = new Set<RunId>();
+    for (const run of this.runs.values()) {
+      if (run.state === "running") blockedRunIds.add(run.id);
+    }
+    for (const tool of this.toolCalls.values()) {
+      if (tool.state === "pending" || tool.state === "running" || tool.state === "indeterminate") {
+        blockedRunIds.add(tool.runId);
+      }
+    }
+
+    let deleteThrough = this.retentionFloor - 1;
+    for (const event of this.events) {
+      const sequence = this.parseCursor(event.cursor);
+      if (sequence < this.retentionFloor) continue;
+      if (sequence > consumerFloor) break;
+      if (Date.parse(event.createdAt) > cutoff || blockedRunIds.has(event.runId)) break;
+      // Keep events that still back the active Conversation projection. Only
+      // an invalidated, terminal suffix is disposable; deleting events from
+      // a live Run would erase its tool/activity history before deletion.
+      const eventRun = this.runs.get(event.runId);
+      if (
+        !eventRun
+        || eventRun.invalidatedBy === undefined
+        || !["completed", "failed", "cancelled"].includes(eventRun.state)
+        || Date.parse(eventRun.updatedAt) > cutoff
+      ) break;
+      deleteThrough = sequence;
+    }
+    const deletedEvents = deleteThrough >= this.retentionFloor
+      ? this.events.filter((event) => this.parseCursor(event.cursor) <= deleteThrough)
+      : [];
+    if (deleteThrough >= this.retentionFloor) {
+      this.events.splice(0, this.events.length, ...this.events.filter((event) => this.parseCursor(event.cursor) > deleteThrough));
+      this.retentionFloor = deleteThrough + 1;
+      for (const [consumerId, cursor] of this.consumerCheckpoints) {
+        if (this.parseCursor(cursor) < this.retentionFloor - 1) {
+          this.consumerCheckpoints.delete(consumerId);
+        }
+      }
+    }
+
+    const activeMessageRunIds = new Set([...this.messages.values()].map((message) => message.runId));
+    const deletableRuns = [...this.runs.values()].filter((run) =>
+      run.invalidatedBy !== undefined
+      && ["completed", "failed", "cancelled"].includes(run.state)
+      && Date.parse(run.updatedAt) <= cutoff
+      && !activeMessageRunIds.has(run.id)
+      && !blockedRunIds.has(run.id)
+      && this.events
+        .filter((event) => event.runId === run.id)
+        .every((event) => this.parseCursor(event.cursor) <= consumerFloor && Date.parse(event.createdAt) <= cutoff));
+    const deletedRunIds = deletableRuns.map((run) => run.id);
+    const deletedRunSet = new Set(deletedRunIds);
+    const deletedTools = [...this.toolCalls.values()].filter((tool) => deletedRunSet.has(tool.runId));
+    for (const runId of deletedRunIds) this.runs.delete(runId);
+    for (const [messageId, message] of this.messages) {
+      if (deletedRunSet.has(message.runId)) this.messages.delete(messageId);
+    }
+    for (const tool of deletedTools) this.toolCalls.delete(tool.id);
+    return {
+      deletedRunIds,
+      deletedToolCallIds: deletedTools.map((tool) => tool.id),
+      deletedEventCount: deletedEvents.length,
+      retentionFloor: `${this.incarnation}:${this.retentionFloor}` as EventCursor,
+      ...(deletedRunIds.length === 0 && deletedEvents.length === 0
+        ? { skipped: "no_eligible_events" as const }
+        : {}),
+    };
   }
 
   private replay(scope: readonly string[], payload: string): unknown | undefined {
@@ -989,11 +1255,20 @@ export class InMemoryStore implements DurableStore {
     return [...this.messages.values()].filter((message) => message.runId === runId).sort((a, b) => a.sequenceWithinRun - b.sequenceWithinRun);
   }
 
-  private history(agentId: AgentId, beforeSequence: number): readonly Message[] {
-    return clone([...this.runs.values()]
+  history(lease: OwnerLease, agentId: AgentId): readonly Message[] {
+    this.assertOwner(lease);
+    this.requireAgent(agentId);
+    return this.activeHistory(agentId, Number.MAX_SAFE_INTEGER);
+  }
+
+  private activeHistory(agentId: AgentId, beforeSequence: number): readonly Message[] {
+    return clone([
+      ...(this.historySeeds.get(agentId) ?? []),
+      ...[...this.runs.values()]
       .filter((run) => run.agentId === agentId && run.agentSequence <= beforeSequence)
       .sort((a, b) => a.agentSequence - b.agentSequence)
-      .flatMap((run) => this.messagesForRun(run.id)));
+      .flatMap((run) => this.messagesForRun(run.id))
+    ].map((message) => ({ ...message, messageRevision: message.messageRevision ?? 0 })));
   }
 
   private appendMessage(run: StoredRun, message: Message): void {
@@ -1064,10 +1339,21 @@ export class InMemoryStore implements DurableStore {
 class MemoryOwnedStore implements OwnedStore {
   constructor(private readonly store: InMemoryStore, public lease: OwnerLease) {}
 
-  async reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
+  async reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   async activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   async updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
   async deleteAgent(input: AgentDeletionRequest): Promise<void> { this.store.deleteAgent(this.lease, input); }
+  async reviseMessage(input: {
+    agentId: AgentId;
+    messageId: MessageId;
+    expectedMessageRevision: number;
+    content: UserContent;
+    operationId: string;
+    effectDigestConfirmation?: string;
+  }): Promise<MessageRevisionResult> { return this.store.reviseMessage(this.lease, input); }
+  async compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult> {
+    return this.store.compact(this.lease, input);
+  }
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
@@ -1080,6 +1366,7 @@ class MemoryOwnedStore implements OwnedStore {
   async commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
   async snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
+  async history(agentId: AgentId): Promise<readonly Message[]> { return this.store.history(this.lease, agentId); }
   async listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }
   async listRuns(input?: { agentId?: AgentId; states?: readonly RunState[] }): Promise<readonly RunRecord[]> { return this.store.listRuns(this.lease, input); }
   async listEvents(input?: { after?: EventCursor }): Promise<readonly DurableRunEvent[]> { return this.store.listEvents(this.lease, input); }
@@ -1119,6 +1406,49 @@ function userInputContent(input: UserInput): UserContent {
 
 function userInputMetadata(input: UserInput): Metadata | undefined {
   return typeof input === "string" ? undefined : input.metadata;
+}
+
+function targetInput(input: UserInput, metadata: Metadata | undefined): UserInput {
+  const content = typeof input === "string" ? input : input.content;
+  return metadata === undefined ? { content } : { content, metadata: clone(metadata) };
+}
+
+function materializeHistorySeed(agentId: AgentId, source: HistorySeed): readonly Message[] {
+  const seedRunId = createId("seed") as RunId;
+  const toolIds = new Map<ToolCallId, ToolCallId>();
+  return source.map((message, sequenceWithinRun) => {
+    const content = remapSeedContent(message.content, toolIds);
+    return {
+      ...clone(message),
+      id: createId("msg") as MessageId,
+      agentId,
+      runId: seedRunId,
+      content,
+      messageRevision: message.messageRevision ?? 0,
+      sequenceWithinRun,
+      createdAt: createTimestamp(),
+    } as Message;
+  });
+}
+
+function remapSeedContent(content: import("../runtime-events").MessageContent, toolIds: Map<ToolCallId, ToolCallId>): import("../runtime-events").MessageContent {
+  if (typeof content === "string") return content;
+  return content.map((part) => {
+    if (part.type === "tool_use" || part.type === "tool_result") {
+      const toolCallId = toolIds.get(part.toolCallId) ?? (createId("tool") as ToolCallId);
+      toolIds.set(part.toolCallId, toolCallId);
+      return part.type === "tool_result"
+        ? { ...part, toolCallId, result: clone(part.result) }
+        : { ...part, toolCallId };
+    }
+    return clone(part);
+  }) as import("../runtime-events").MessageContent;
+}
+
+function digestToolEffects(toolCalls: readonly StoredToolCall[]): string {
+  return createHash("sha256")
+    .update(canonicalJson(toolCalls as never))
+    .digest("hex");
 }
 
 function assertToolValue(value: import("../runtime-events").JsonValue, argument: string): void {

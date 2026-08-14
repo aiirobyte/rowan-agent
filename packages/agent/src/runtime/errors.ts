@@ -1,4 +1,4 @@
-import type { AgentId, InputRequestId, RunId, RunState } from "../runtime-events";
+import type { AgentId, InputRequestId, MessageId, RunId, RunState, ToolCallId } from "../runtime-events";
 
 export type RuntimeErrorCode =
   | "invalid_argument"
@@ -8,6 +8,8 @@ export type RuntimeErrorCode =
   | "agent_not_found"
   | "run_not_found"
   | "run_state_conflict"
+  | "message_revision_conflict"
+  | "tool_effect_confirmation_required"
   | "input_request_conflict"
   | "idempotency_conflict"
   | "configuration_unavailable"
@@ -30,6 +32,13 @@ export type RuntimeErrorDetails = {
   agent_not_found: Readonly<{ agentId: AgentId }>;
   run_not_found: Readonly<{ runId: RunId }>;
   run_state_conflict: Readonly<{ runId: RunId; expected: readonly RunState[]; actual: RunState }>;
+  message_revision_conflict: Readonly<{ agentId: AgentId; messageId: MessageId; expected: number; actual: number }>;
+  tool_effect_confirmation_required: Readonly<{
+    agentId: AgentId;
+    messageId: MessageId;
+    effectDigest: string;
+    toolCallIds: readonly ToolCallId[];
+  }>;
   input_request_conflict: Readonly<{
     runId: RunId;
     requestId: InputRequestId;
@@ -48,7 +57,7 @@ export type RuntimeErrorDetails = {
   consumer_already_active: Readonly<{ consumerId: string }>;
   invalid_cursor: Readonly<{
     cursorType: "agent_list" | "run_list" | "event";
-    reason: "malformed" | "wrong_store" | "wrong_collection" | "filter_mismatch" | "beyond_waterline";
+    reason: "malformed" | "wrong_store" | "wrong_collection" | "filter_mismatch" | "beyond_waterline" | "expired";
   }>;
   store_unavailable: Readonly<{ operation: string; retryable: boolean; reason: string }>;
   unsupported_store_version: Readonly<{ found: string | null; supported: string }>;

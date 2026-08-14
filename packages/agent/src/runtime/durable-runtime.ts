@@ -22,11 +22,13 @@ import type {
   RunSnapshot,
   RunState,
   RunSummary,
+  MessageRevisionResult,
+  HistorySeed,
   Tool as DurableTool,
   UserInput,
 } from "./contracts";
 import { assertToolExecutionResult, isAgentConfiguration } from "./contracts";
-import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId } from "../runtime-events";
+import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import { pageAgents, pageRuns } from "./read-models";
 import { projectAssistantMessage, projectModelContext } from "./model-context";
@@ -158,11 +160,12 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.resources.unload(input);
   }
 
-  async createAgent(config: AgentConfigRequest, options: { idempotencyKey?: string; metadata?: import("../runtime-events").Metadata } = {}): Promise<AgentId> {
+  async createAgent(config: AgentConfigRequest, options: { idempotencyKey?: string; metadata?: import("../runtime-events").Metadata; historySeed?: HistorySeed } = {}): Promise<AgentId> {
     this.assertOpen();
     return this.commands.createAgent({
       config,
       ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      ...(options.historySeed === undefined ? {} : { historySeed: options.historySeed }),
       idempotencyKey: options.idempotencyKey ?? crypto.randomUUID(),
     });
   }
@@ -181,6 +184,31 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
     }
     await this.owned.deleteAgent(input);
+  }
+
+  async revise(agentId: AgentId, input: {
+    messageId: MessageId;
+    expectedMessageRevision: number;
+    content: UserContent;
+    operationId: string;
+    effectDigestConfirmation?: string;
+  }): Promise<MessageRevisionResult> {
+    this.assertOpen();
+    const result = await this.owned.reviseMessage({ agentId, ...input });
+    for (const runId of result.invalidatedRunIds) {
+      const execution = this.executions.get(runId);
+      if (execution) {
+        execution.controller.abort();
+        this.transientEvents.clear(runId, execution.executionId);
+      }
+    }
+    void this.pump();
+    return result;
+  }
+
+  async compact(input: { now?: string; retentionMs?: number } = {}) {
+    this.assertOpen();
+    return this.owned.compact(input);
   }
 
   async start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: import("../runtime-events").Metadata }): Promise<AgentRun> {
@@ -241,6 +269,11 @@ export class AgentRuntime implements AgentRuntimeContract {
   async snapshot(runId: RunId): Promise<RunSnapshot> {
     this.assertOpen();
     return this.owned.snapshotRun(runId);
+  }
+
+  async history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> {
+    this.assertOpen();
+    return this.owned.history(agentId);
   }
 
   async respond(runId: RunId, input: { requestId: import("../runtime-events").InputRequestId; input: UserInput }): Promise<void> {

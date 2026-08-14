@@ -66,6 +66,8 @@ export type MessageBase = Readonly<{
   id: MessageId;
   agentId: AgentId;
   runId: RunId;
+  /** Monotonic active revision. Omitted on legacy/initial messages and read as 0. */
+  messageRevision?: number;
   metadata?: Metadata;
   sequenceWithinRun: number;
   createdAt: string;
@@ -168,6 +170,15 @@ export type MessageCommitted = DurableEventBase & Readonly<{
   message: Message;
 }>;
 
+export type MessageRevised = DurableEventBase & Readonly<{
+  kind: "message_revised";
+  message: UserMessage;
+  previousRevision: number;
+  invalidatedRunIds: readonly RunId[];
+  targetRunId: RunId;
+  cutoffSequenceWithinRun: number;
+}>;
+
 export type RunStateChanged = DurableEventBase & (
   | Readonly<{ kind: "run_state_changed"; from: null; to: "queued" }>
   | Readonly<{ kind: "run_state_changed"; from: "input_required"; to: "queued" }>
@@ -228,7 +239,7 @@ export type ToolStateChanged = DurableEventBase & (
     }>
 );
 
-export type DurableRunEvent = MessageCommitted | RunStateChanged | ToolStateChanged;
+export type DurableRunEvent = MessageCommitted | MessageRevised | RunStateChanged | ToolStateChanged;
 
 export type MessageDelta = Readonly<{
   kind: "message_delta";

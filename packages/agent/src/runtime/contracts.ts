@@ -15,6 +15,7 @@ import type {
   Message,
   MessageDelta,
   MessageId,
+  MessageRevised,
   Metadata,
   OwnerToken,
   Outcome,
@@ -29,6 +30,7 @@ import type {
   ToolProgress,
   ToolExecutionResult,
   UserContent,
+  UserMessage,
 } from "../runtime-events";
 import type { Skill } from "../protocol";
 import type { PhaseRegistry } from "../harness/phases/types";
@@ -65,6 +67,7 @@ export type {
   MessageCommitted,
   MessageContent,
   MessageId,
+  MessageRevised,
   Metadata,
   OpaqueId,
   OwnerToken,
@@ -92,6 +95,7 @@ export type {
 } from "../runtime-events";
 
 export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
+export type HistorySeed = readonly Message[];
 export type ToolInvocationContext = Readonly<{
   agentId: AgentId;
   runId: RunId;
@@ -192,6 +196,8 @@ export type RunRecord = Readonly<{
   revision: number;
   state: RunState;
   input: UserInput;
+  initialMessageId?: MessageId;
+  invalidatedBy?: Readonly<{ messageId: MessageId; messageRevision: number }>;
   metadata?: Metadata;
   pinnedConfigToken?: ConfigToken;
   checkpoint?: ExecutionCheckpoint;
@@ -202,6 +208,20 @@ export type RunRecord = Readonly<{
   cancellationReason?: string;
   createdAt: string;
   updatedAt: string;
+}>;
+export type MessageRevisionResult = Readonly<{
+  message: UserMessage & Readonly<{ messageRevision: number }>;
+  replacementRun: RunRecord;
+  invalidatedRunIds: readonly RunId[];
+  affectedToolCallIds: readonly ToolCallId[];
+  effectDigest?: string;
+}>;
+export type RetentionResult = Readonly<{
+  deletedRunIds: readonly RunId[];
+  deletedToolCallIds: readonly ToolCallId[];
+  deletedEventCount: number;
+  retentionFloor: EventCursor;
+  skipped?: "active_consumers" | "no_eligible_events";
 }>;
 export type AgentSummary = Readonly<{ id: AgentId; metadata?: Metadata; currentConfigIdentity?: string; createdAt: string; activatedAt: string; updatedAt: string }>;
 export type RunSummary = Readonly<{ id: RunId; agentId: AgentId; agentSequence: number; state: RunState; metadata?: Metadata; createdAt: string; updatedAt: string }>;
@@ -244,10 +264,19 @@ export interface ConfigProvider {
 }
 export interface OwnedStore {
   readonly lease: OwnerLease;
-  reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string }): Promise<AgentRecord>;
+  reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord>;
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord>;
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord>;
   deleteAgent(input: AgentDeletionRequest): Promise<void>;
+  reviseMessage(input: {
+    agentId: AgentId;
+    messageId: MessageId;
+    expectedMessageRevision: number;
+    content: UserContent;
+    operationId: string;
+    effectDigestConfirmation?: string;
+  }): Promise<MessageRevisionResult>;
+  compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
@@ -309,6 +338,7 @@ export interface OwnedStore {
   }): Promise<ToolCommit>;
   cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord>;
   snapshotRun(runId: RunId): Promise<RunSnapshot>;
+  history(agentId: AgentId): Promise<readonly Message[]>;
   listAgents(): Promise<readonly AgentRecord[]>;
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[] }): Promise<readonly RunRecord[]>;
   listEvents(input?: { after?: EventCursor }): Promise<readonly DurableRunEvent[]>;
@@ -339,11 +369,20 @@ export interface AgentRuntime {
   loadPhases(input: LoadInput<import("../harness/phases/types").Phase>): Promise<LoadResult>;
   loadTools(input: Readonly<{ sourceId: string; values: readonly Tool[] }>): Promise<LoadResult>;
   unload(input: Readonly<{ kind: import("./resource-registry").ResourceKind; sourceId: string }>): Promise<LoadResult>;
-  createAgent(config: AgentConfigRequest, options?: { idempotencyKey?: string; metadata?: Metadata }): Promise<AgentId>;
+  createAgent(config: AgentConfigRequest, options?: { idempotencyKey?: string; metadata?: Metadata; historySeed?: HistorySeed }): Promise<AgentId>;
   updateAgentConfig(agentId: AgentId, config: AgentConfigRequest, options: { idempotencyKey: string }): Promise<void>;
   deleteAgent(input: AgentDeletionRequest): Promise<void>;
+  revise(agentId: AgentId, input: {
+    messageId: MessageId;
+    expectedMessageRevision: number;
+    content: UserContent;
+    operationId: string;
+    effectDigestConfirmation?: string;
+  }): Promise<MessageRevisionResult>;
+  compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
   start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
+  history(agentId: AgentId): Promise<readonly Message[]>;
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[]; after?: RunListCursor; limit?: number }): Promise<Page<RunSummary, RunListCursor>>;
   consume(input: { consumerId: string; signal: AbortSignal; onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void> }): Promise<DurableConsumer>;
@@ -393,8 +432,9 @@ export function normalizeUserInput(input: UserInput): UserInput {
 }
 export function canonicalUserInput(input: UserInput): string { return canonicalJson(normalizeUserInput(input) as never); }
 export function isAssistantMessage(value: unknown): value is AssistantMessage {
-  return isRecord(value) && hasOnlyKeys(value, ["id", "agentId", "runId", "role", "content", "metadata", "sequenceWithinRun", "createdAt", "interrupted"])
+  return isRecord(value) && hasOnlyKeys(value, ["id", "agentId", "runId", "messageRevision", "role", "content", "metadata", "sequenceWithinRun", "createdAt", "interrupted"])
     && typeof value.id === "string" && typeof value.agentId === "string" && typeof value.runId === "string" && value.role === "assistant"
+    && (value.messageRevision === undefined || (Number.isInteger(value.messageRevision) && (value.messageRevision as number) >= 0))
     && Number.isInteger(value.sequenceWithinRun) && (value.sequenceWithinRun as number) >= 0 && typeof value.createdAt === "string"
     && isAssistantContent(value.content) && (value.metadata === undefined || isMetadata(value.metadata))
     && (value.interrupted === undefined || typeof value.interrupted === "boolean");

@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentConfigRequest, AgentRecord, ConfigProvider, ConfigResolution, OwnedStore } from "./contracts";
+import type { AgentConfig, AgentConfigRequest, AgentRecord, ConfigProvider, ConfigResolution, HistorySeed, OwnedStore } from "./contracts";
 import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
 import { assertAgentConfigRequest } from "./contracts";
 import { brandConfigToken, validateConfigResolution } from "./config-provider";
@@ -15,12 +15,13 @@ export class ConfigCommandService {
     private readonly storeIncarnation: string,
   ) {}
 
-  async createAgent(input: { config: AgentConfigRequest; metadata?: Metadata; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
+  async createAgent(input: { config: AgentConfigRequest; metadata?: Metadata; historySeed?: HistorySeed; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
     assertAgentConfigRequest(input.config);
     assertIdentity(input.config.identity);
     const reserved = await this.store.reserveAgent({
       idempotencyKey: input.idempotencyKey,
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      ...(input.historySeed === undefined ? {} : { historySeed: input.historySeed }),
       configIdentity: input.config.identity,
     });
     if (reserved.activatedAt && reserved.currentConfigToken) return reserved.id;
