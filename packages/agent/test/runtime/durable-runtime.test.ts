@@ -8,6 +8,7 @@ import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
+import { stopResponse } from "./route-test-utils";
 
 function simpleConfig(stream: StreamFn): AgentConfig {
   return {
@@ -76,7 +77,7 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
     const text = "done";
     yield { type: "start", partial: { role: "assistant", contentBlocks: [] } };
     yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
-    yield { type: "done", response: { content: text, stopReason: "stop" } };
+    yield { type: "done", response: stopResponse(text) };
   };
   const store = new InMemoryStore();
   const runtime = await AgentRuntime.init({ store, concurrency: 1 });
@@ -130,7 +131,7 @@ test("AgentRun.observe streams message deltas before the durable boundary", asyn
       text: "lo",
       partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Hello" }] },
     };
-    yield { type: "done", response: { content: "Hello", stopReason: "stop" } };
+    yield { type: "done", response: stopResponse("Hello") };
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
@@ -220,7 +221,7 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
     if (!hasResult) throw new Error("model did not receive the Tool result");
     const text = "lookup complete";
     yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
-    yield { type: "done" };
+    yield { type: "done", response: stopResponse("lookup complete") };
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
@@ -311,7 +312,7 @@ test("AgentRuntime atomically commits one assistant Tool-use Message for a multi
       text: "both complete",
       partial: { role: "assistant", contentBlocks: [{ type: "text", text: "both complete" }] },
     };
-    yield { type: "done", response: { content: "both complete", stopReason: "stop" } };
+    yield { type: "done", response: stopResponse("both complete") };
   };
 
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
@@ -374,7 +375,7 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
       text: "done",
       partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] },
     };
-    yield { type: "done", response: { content: "done", stopReason: "stop" } };
+    yield { type: "done", response: stopResponse("done") };
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
@@ -453,7 +454,7 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
       .find((part) => part.type === "tool_result");
     expect(toolResult && "content" in toolResult ? toolResult.content : "").toContain("wrapped");
     yield { type: "text_delta", text: "extension complete", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "extension complete" }] } };
-    yield { type: "done" };
+    yield { type: "done", response: stopResponse("extension complete") };
   };
   const runtime = await AgentRuntime.init({
     store: new InMemoryStore(),
@@ -643,7 +644,7 @@ test("Phase callbacks receive the durable Run execution identity", async () => {
 test("AgentRuntime retries the same Event before advancing live delivery", async () => {
   const stream: StreamFn = async function* () {
     yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
-    yield { type: "done", response: { content: "done", stopReason: "stop" } };
+    yield { type: "done", response: stopResponse("done") };
   };
   const controller = new AbortController();
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
@@ -718,7 +719,7 @@ test("AgentRuntime backs off an idle durable Consumer after catching up", async 
 test("AgentRuntime consumer receives Run metadata on terminal durable events", async () => {
   const stream: StreamFn = async function* () {
     yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
-    yield { type: "done", response: { content: "done", stopReason: "stop" } };
+    yield { type: "done", response: stopResponse("done") };
   };
   const controller = new AbortController();
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });

@@ -9,6 +9,7 @@ import type {
 import { createMessage } from "../types";
 import { createId, createTimestamp } from "../utils";
 import type { ExecutionState, AgentConfig, InputRequestPrompt, MessageDeltaNotification } from "./types";
+import { DEFAULT_MAX_ATTEMPTS, validateMaxAttempts } from "./types";
 
 // Execution types (loop-level)
 import type {
@@ -96,6 +97,53 @@ function applyFirstDecision(route: RouteToolArgs, output: PhaseOutput): void {
   output.route = first.phase;
   if (first.reason) output.routeReason = first.reason;
   if (first.payload !== undefined) output.payload = normalizePayload(first.payload);
+}
+
+type ResolvedRouteDecision = RouteToolArgs & {
+  /** Number of targets in the original decision before invalid targets were filtered. */
+  requestedCount: number;
+};
+
+/** Normalize model route targets without ever turning malformed input into stop. */
+function resolveRouteDecision(
+  route: RouteToolArgs | undefined,
+  registry: PhaseRegistry,
+): ResolvedRouteDecision | undefined {
+  if (!route || route.decision.length === 0) return undefined;
+
+  const requestedCount = route.decision.length;
+  const hasStop = route.decision.some(({ phase }) => phase === "stop");
+  if (hasStop) {
+    // stop is terminal and must be the only original target, even if another
+    // target would later be filtered as invalid.
+    if (requestedCount !== 1) return undefined;
+    return { ...route, requestedCount };
+  }
+
+  const decision = route.decision.filter(({ phase }) => registry.phases.has(phase));
+  if (decision.length === 0) return undefined;
+  return { ...route, decision, requestedCount };
+}
+
+function resolveModelRouteDecision(
+  toolCalls: PhaseOutput["toolCalls"],
+  registry: PhaseRegistry,
+): ResolvedRouteDecision | undefined {
+  return resolveRouteDecision(toolCalls ? extractRouteCall(toolCalls) : undefined, registry);
+}
+
+function resolveHookRouteDecision(
+  output: PhaseOutput,
+  registry: PhaseRegistry,
+): ResolvedRouteDecision | undefined {
+  if (output.route === undefined || output.route === "continue") return undefined;
+  return resolveRouteDecision({
+    decision: [{
+      phase: output.route,
+      ...(output.routeReason ? { reason: output.routeReason } : {}),
+      ...(output.payload === undefined ? {} : { payload: output.payload }),
+    }],
+  }, registry);
 }
 
 /** Inject phase content as a user context message.
@@ -306,12 +354,13 @@ function createToolResultContent(result: ToolResult): LlmContentPart[] {
   ];
 }
 
-function createRouteToolResultContent(toolCall: ToolCall): LlmContentPart[] {
+function createRouteToolResultContent(toolCall: ToolCall, error?: string): LlmContentPart[] {
   return [
     {
       type: "tool_result",
       toolUseId: toolCall.id,
-      content: '{"ok": true}',
+      content: error ? JSON.stringify({ ok: false, error }) : '{"ok": true}',
+      ...(error ? { isError: true } : {}),
     },
   ];
 }
@@ -324,7 +373,6 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
   );
   let output: PhaseOutput = {
     message: "",
-    route: "stop",
     phase: ctx.phase.name,
     toolCalls: [],
   };
@@ -339,16 +387,30 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
 
     output = {
       message: collected.text,
-      route: "stop",
       phase: ctx.phase.name,
-      toolCalls: collected.toolCalls,
+      // A route decision sharing a model response with an ordinary Tool is
+      // rejected for this round. Keep ordinary calls visible so they can run,
+      // but do not let the route escape the error/re-decision boundary.
+      toolCalls: collected.toolCalls.some((candidate) => candidate.name === PhaseRouteTool)
+        && collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
+        ? collected.toolCalls.filter((candidate) => candidate.name !== PhaseRouteTool)
+        : collected.toolCalls,
     };
 
     for (const toolCall of collected.toolCalls) {
       if (toolCall.name !== PhaseRouteTool) continue;
-      const messageId = ctx.messageManager.start("tool", createRouteToolResultContent(toolCall), {
+      const messageId = ctx.messageManager.start(
+        "tool",
+        createRouteToolResultContent(
+          toolCall,
+          collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
+            ? "Route must be called separately after ordinary tools finish; this route decision was ignored."
+            : undefined,
+        ),
+        {
         phase: ctx.phase.name,
-      });
+        },
+      );
       await ctx.messageManager.end(messageId);
     }
 
@@ -403,6 +465,7 @@ async function runPhaseLoop(
   state: ExecutionState,
   registry: PhaseRegistry,
 ): Promise<LoopResult> {
+  const maxAttempts = validateMaxAttempts(config.maxAttempts) ?? DEFAULT_MAX_ATTEMPTS;
   const resumingSuspendedRun = state.status === "suspended" && Boolean(state.currentPhase);
   let currentPhaseId = resumingSuspendedRun ? state.currentPhase : registry.entryPhaseId!;
   let isContinuing = resumingSuspendedRun
@@ -423,6 +486,66 @@ async function runPhaseLoop(
     ? state.continuation?.pendingInstruction
     : undefined;
 
+  type InputWaitResult =
+    | { type: "continued" }
+    | { type: "completed"; result: LoopResult };
+
+  const awaitInput = async (
+    prompt: string,
+    resumeAsContinuing: boolean,
+  ): Promise<InputWaitResult | undefined> => {
+    if (!config.waitForInput) return undefined;
+
+    const preAbort = LoopGuard.checkAbort(config.signal);
+    if (preAbort.stopReason !== "none") {
+      removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
+      previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
+      return {
+        type: "completed",
+        result: await completeRun(config, state, createOutcome.aborted()),
+      };
+    }
+
+    const requestedAt = createTimestamp();
+    const inputRequest: InputRequestPrompt = {
+      phase: currentPhaseId,
+      prompt,
+      requestedAt,
+    };
+    state.currentPhase = currentPhaseId;
+    state.status = "suspended";
+    // A user boundary resets the autonomous execution burst. The checkpoint
+    // therefore resumes with a fresh maxAttempts window.
+    state.attempt = 0;
+    state.continuation = {
+      isContinuing: resumeAsContinuing,
+      previousPayload,
+      previousResults: previousResults.map((result) => ({ ...result })),
+      pendingInstruction,
+      previousPhaseMessageId: previousPhaseMsgId,
+    };
+
+    const userMessages = await config.waitForInput(state, inputRequest);
+    state.status = "running";
+    const abortResult = LoopGuard.checkAbort(config.signal);
+    if (abortResult.stopReason !== "none") {
+      removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
+      previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
+      return {
+        type: "completed",
+        result: await completeRun(config, state, createOutcome.aborted()),
+      };
+    }
+    for (const message of userMessages) {
+      config.context.messages.push(message);
+    }
+    return { type: "continued" };
+  };
+
   while (currentPhaseId) {
     // Build available phases list for route tool from the explicit registry.
     const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[] = [];
@@ -439,6 +562,20 @@ async function runPhaseLoop(
       return completeRun(config, state, createOutcome.aborted());
     }
 
+    if (state.attempt >= maxAttempts) {
+      const input = await awaitInput(
+        `The autonomous Phase execution limit (${maxAttempts}) was reached. Provide input to continue.`,
+        false,
+      );
+      if (input?.type === "completed") return input.result;
+      if (input?.type === "continued") {
+        isContinuing = false;
+        continue;
+      }
+      throw new Error("Phase execution reached maxAttempts but waitForInput is unavailable.");
+    }
+
+    state.attempt++;
     state.metrics.iterations++;
 
     // Auto-compact when transcript grows too long
@@ -565,14 +702,12 @@ async function runPhaseLoop(
     const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext };
     let output = await executePhase(runtime);
 
-    // Extract route from tool calls
-    let routeDecision: RouteToolArgs | undefined;
-    if (output.toolCalls && output.toolCalls.length > 0) {
-      routeDecision = extractRouteCall(output.toolCalls);
-      if (routeDecision) {
-        applyFirstDecision(routeDecision, output);
-      }
-    }
+    // Extract and normalize a model route. Invalid targets are filtered, but
+    // an explicit stop mixed with any other original target invalidates the
+    // whole decision.
+    let modelRouteDecision = resolveModelRouteDecision(output.toolCalls, registry);
+    let routeDecision = modelRouteDecision;
+    if (routeDecision) applyFirstDecision(routeDecision, output);
 
     // afterPhase hook
     if (config.afterPhase) {
@@ -586,53 +721,38 @@ async function runPhaseLoop(
       }
       if (extAfter.retry && (phase.run || phase.factory)) {
         output = await executePhase(runtime);
-        routeDecision = output.toolCalls ? extractRouteCall(output.toolCalls) : undefined;
+        modelRouteDecision = resolveModelRouteDecision(output.toolCalls, registry);
+        routeDecision = modelRouteDecision;
         if (routeDecision) applyFirstDecision(routeDecision, output);
       }
       if (extAfter.output) {
+        const hookHasRoute = extAfter.output.route !== undefined;
         output = extAfter.output;
+        if (hookHasRoute) {
+          // A Hook route is authoritative and cancels a model fan-out. The
+          // special programmatic continue sentinel remains handled below.
+          routeDecision = resolveHookRouteDecision(output, registry);
+        } else if (phase.run || phase.factory) {
+          // Programmatic Phase output omission retains its historical stop
+          // fallback, including when an after hook replaces the output.
+          output = { ...output, route: "stop" };
+          routeDecision = undefined;
+        } else {
+          // An after hook may change the message without taking routing
+          // authority; preserve the model decision and its first-target data.
+          routeDecision = modelRouteDecision;
+          if (routeDecision) applyFirstDecision(routeDecision, output);
+        }
       }
     }
 
-    const routeToolAvailable = phaseContext.tools.some(tool => tool.name === PhaseRouteTool);
-    const routeRequired = !phase.target && !phase.run && !phase.factory && routeToolAvailable && registry.phases.size > 1;
-    if (routeRequired && !routeDecision) {
-      if (config.waitForInput) {
-        const preAbort = LoopGuard.checkAbort(config.signal);
-        if (preAbort.stopReason !== "none") {
-          removePhaseMessage(config.context.messages, previousPhaseMsgId);
-          removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
-          previousPhaseMsgId = undefined;
-          previousPhaseInputMsgId = undefined;
-          return completeRun(config, state, createOutcome.aborted());
-        }
-        const requestedAt = createTimestamp();
-        const inputRequest: InputRequestPrompt = {
-          phase: currentPhaseId,
-          prompt: output.message,
-          requestedAt,
-        };
-        state.status = "suspended";
-        state.continuation = {
-          isContinuing,
-          previousPayload,
-          previousResults: previousResults.map((result) => ({ ...result })),
-          pendingInstruction,
-          previousPhaseMessageId: previousPhaseMsgId,
-        };
-        const userMessages = await config.waitForInput(state, inputRequest);
-        state.status = "running";
-        const abortResult = LoopGuard.checkAbort(config.signal);
-        if (abortResult.stopReason !== "none") {
-          removePhaseMessage(config.context.messages, previousPhaseMsgId);
-          removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
-          previousPhaseMsgId = undefined;
-          previousPhaseInputMsgId = undefined;
-          return completeRun(config, state, createOutcome.aborted());
-        }
-        for (const message of userMessages) {
-          config.context.messages.push(message);
-        }
+    if (phase.run || phase.factory) {
+      // Programmatic phases retain their existing implicit stop behavior.
+      if (output.route === undefined && !routeDecision) output = { ...output, route: "stop" };
+    } else if (!phase.target && output.route === undefined && !routeDecision) {
+      const input = await awaitInput(output.message, true);
+      if (input?.type === "completed") return input.result;
+      if (input?.type === "continued") {
         isContinuing = true;
         continue;
       }
@@ -653,7 +773,7 @@ async function runPhaseLoop(
     // Each target gets its own PhaseContext (isolated=true → fresh, otherwise fork of current).
     // After all complete, results are stashed as previousResults for the next iteration's
     // phase entry injection (so the entry phase sees them inside its user context message).
-    if (routeDecision && routeDecision.decision.length > 1) {
+    if (routeDecision && routeDecision.requestedCount > 1) {
       const contextSnapshot = snapshotMessages(config.context.messages);
       const parallelTasks = new Map<string, { promise: Promise<ParallelResult>; phaseId: string }>();
 
@@ -679,6 +799,7 @@ async function runPhaseLoop(
           registry,
           pt,
           payload,
+          routeDecision.instruction,
           context,
           availablePhases,
           instanceId,
@@ -696,7 +817,9 @@ async function runPhaseLoop(
       // Stash merged results + instruction; the next iteration's entry injection will
       // assemble them into the entry phase's context message (under <prev_phase_outputs>).
       previousResults = successfulResults.map(r => ({ name: r.instanceId, output: r.payload }));
-      pendingInstruction = routeDecision.instruction;
+      // The instruction belongs to the direct fan-out targets. Do not carry
+      // it across the implicit join into the next serial Phase.
+      pendingInstruction = undefined;
 
       // Determine entry phase: original phase's target > registry entry.
       // In parallel mode, the original phase's target field determines where to go after
@@ -752,6 +875,7 @@ async function runPhaseLoop(
     // Pass payload to next phase (also surfaced as previousResults for entry injection)
     previousPayload = output.payload;
     previousResults = output.payload !== undefined ? [{ name: phase.name, output: output.payload }] : [];
+    pendingInstruction = phase.target ? undefined : routeDecision?.instruction;
 
     currentPhaseId = targetPhaseId;
   }
@@ -1097,6 +1221,7 @@ async function executeParallelPhase(
   registry: PhaseRegistry,
   phase: Phase,
   payload: unknown,
+  instruction: string | undefined,
   context: AgentMessage[],
   availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
   instanceId: string,
@@ -1108,7 +1233,9 @@ async function executeParallelPhase(
   const messages = [...context];
 
   const allTools = buildToolsWithRouting(config, availablePhases);
-  const phaseTools = selectPhaseTools(allTools, phase.tools);
+  // Parallel workers are one-shot executions; they return a result to the
+  // serial coordinator instead of routing or waiting for user input.
+  const phaseTools = selectPhaseTools(allTools, phase.tools, false);
   const phaseSkills = mergeSkills(config.context.skills, phase.skills);
 
   // Both isolated and forked phases use the host system prompt. Phase content
@@ -1143,7 +1270,10 @@ async function executeParallelPhase(
   // user-context representation as the serial path.
   const phaseMsgId = injectPhaseContent(
     phase,
-    { results: payload !== undefined ? [{ name: sourcePhaseId, output: payload }] : [] },
+    {
+      instruction,
+      results: payload !== undefined ? [{ name: sourcePhaseId, output: payload }] : [],
+    },
     messages,
   );
 
@@ -1168,8 +1298,11 @@ async function executeParallelPhase(
 function selectPhaseTools(
   candidates: readonly Tool[],
   names: readonly string[] | undefined,
+  includeRouting = true,
 ): Tool[] {
-  const routing = candidates.filter(({ name }) => name === PhaseRouteTool);
+  const routing = includeRouting
+    ? candidates.filter(({ name }) => name === PhaseRouteTool)
+    : [];
   const ordinary = candidates.filter(({ name }) => name !== PhaseRouteTool);
   return [...selectNamedResources(ordinary, names, "Tool"), ...routing];
 }

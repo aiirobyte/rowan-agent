@@ -7,6 +7,7 @@ import { assertUtf8ByteLimit, canonicalJson } from "./json";
 import type { JsonValue } from "../runtime-events";
 import type { ResourceKind } from "./resource-registry";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
+import { validateMaxAttempts } from "../loop/types";
 
 type ConfigEntry = Readonly<{
   agentId: AgentId;
@@ -93,6 +94,7 @@ export function validateConfigResolution(
 }
 
 function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
+  validateMaxAttempts(config.maxAttempts);
   if (isAgentConfiguration(config)) return snapshotConfiguration(config);
   const definition = Object.freeze({
     ...config.definition,

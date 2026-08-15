@@ -11,6 +11,16 @@ import type {
 import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
+
+export const DEFAULT_MAX_ATTEMPTS = 16;
+
+export function validateMaxAttempts(value: number | undefined): number | undefined {
+  if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
+    throw new TypeError("maxAttempts must be a positive integer.");
+  }
+  return value;
+}
+
 export type InputRequestPrompt = {
   phase: string;
   prompt: string;

@@ -10,6 +10,7 @@ import {
   type RunEvent,
   type ToolInvocationContext,
 } from "../../src";
+import { stopResponse } from "./route-test-utils";
 
 function config(stream: StreamFn): AgentConfig {
   return {
@@ -34,7 +35,7 @@ test("AgentRun.observe rejects an Event cursor beyond the Store waterline", asyn
       text: "done",
       partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] },
     };
-    yield { type: "done", response: { content: "done", stopReason: "stop" } };
+    yield { type: "done", response: stopResponse("done") };
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
@@ -216,7 +217,7 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
       text: "done",
       partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] },
     };
-    yield { type: "done", response: { content: "done", stopReason: "stop" } };
+    yield { type: "done", response: stopResponse("done") };
   };
   const tool = {
     name: "lookup",
@@ -291,7 +292,7 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
     }
     resolveAllDeltasPublished();
     await completion;
-    yield { type: "done", response: { content: output, stopReason: "stop" } };
+    yield { type: "done", response: stopResponse(output) };
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {

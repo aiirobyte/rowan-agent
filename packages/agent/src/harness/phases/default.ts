@@ -9,6 +9,6 @@ export function createDefaultPhase(): Phase {
     filePath: "",
     baseDir: "",
     skills: [],
-    content: "Execute tasks using current context.\nNo planning. No evaluation.\nRoute to next phase or stop when done.",
+    content: "Execute tasks using current context.\nNo planning. No evaluation.\nOmit route when more user input is needed. Use route for immediate phase execution, or route(stop) only when the current user request or task is complete and no further user input is needed.",
   };
 }

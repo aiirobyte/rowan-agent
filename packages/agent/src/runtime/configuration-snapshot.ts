@@ -7,6 +7,7 @@ import { mergeSkills, selectNamedResources } from "../harness/resource-selection
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
 import { DEFAULT_PHASE_ID } from "../harness/phases/default";
 import type { ContextCandidate } from "./contracts";
+import { validateMaxAttempts } from "../loop/types";
 import {
   ResourceRegistry,
   type ResourceKind,
@@ -58,6 +59,7 @@ export function resolveConfigurationSnapshot(
   registry: ResourceRegistry,
   input: AgentConfiguration,
 ): ConfigurationSnapshot {
+  validateMaxAttempts(input.maxAttempts);
   const resolved = registry.resolveView(input.resourceView);
   const base = resolved.agents.find(({ name }) => name === input.definition.name);
   if (!base) {

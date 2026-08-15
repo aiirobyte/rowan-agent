@@ -4,11 +4,11 @@ import type { Tool } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
 
-/** Unified phase output — model decides routing via route. */
+/** Unified phase output — model-driven routing is optional; programmatic phases may normalize omission to stop. */
 export type PhaseOutput = {
   message: string;
-  /** Route to next phase, or "continue" to re-execute current phase, or "stop" to end */
-  route: string;
+  /** Route to next phase, or "continue" to re-execute current phase, or "stop" to end. Undefined means no model route. */
+  route?: string;
   /** Phase name that produced this output */
   phase?: string;
   /** Tool calls from the model invocation (used by framework for route extraction) */

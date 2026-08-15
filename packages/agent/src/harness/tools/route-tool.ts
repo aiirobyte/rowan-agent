@@ -26,19 +26,25 @@ function buildPhaseEntry(p: Pick<Phase, 'name' | 'description' | 'tools' | 'skil
 function buildRouteDescription(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): string {
   const phasesBlock = buildStructuredSection("phase", [
     ...availablePhases.map(buildPhaseEntry),
-    { name: "stop", description: "Terminate the workflow and return final result to the user" },
+    {
+      name: "stop",
+      description: "Explicitly finish the current user request or task when no further user input is needed",
+    },
   ]);
 
   return [
-    "Route execution to one or more phases concurrently, or stop execution.",
+    "Route is optional. Omit it when the current reply should wait for more user input and remain in the current phase.",
     "",
     "Rules:",
-    "- `decision` lists phase executions; use phase 'stop' to terminate.",
+    "- Call route only to continue execution immediately in one or more phases, or to explicitly stop.",
+    "- `decision` lists phase executions; a single target equal to the current phase starts another iteration of that phase.",
+    "- `stop` means the current user request or task is complete and no further user input is needed; `stop` must be the only target.",
     "- Each target may include `phase`, `reason`, `payload`.",
     "- A phase may appear multiple times as independent execution instances.",
     "- `payload` MUST match the phase's `payload_schema`",
     "- `instruction` is optional shared guidance for all phases.",
     "- Executions are independent and concurrent; order is irrelevant.",
+    "- Do not call route in the same response as an ordinary tool; finish ordinary tools first.",
     "",
     "<available_phases>",
     phasesBlock,
@@ -64,12 +70,13 @@ export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'descripti
   return {
     name: PhaseRouteTool,
     description: buildRouteDescription(availablePhases),
-    promptSnippet: "Route to next phase on completion.",
+    promptSnippet: "Route is optional: omit it to remain in the current phase and wait for user input; use it for immediate phase execution or an explicit stop.",
     promptGuidelines: [
-      "Call route immediately when the phase is complete.",
+      "Do not call route together with ordinary tools.",
+      "Use route(stop) only when the current user request or task is complete and no further user input is needed.",
     ],
     parameters: Type.Object({
-      decision: Type.Array(DecisionTarget, { description: "Phase executions to start" }),
+      decision: Type.Array(DecisionTarget, { description: "Phase executions to start", minItems: 1 }),
       instruction: Type.Optional(Type.String({ description: "Overall instruction, passed as context" })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution
@@ -84,18 +91,24 @@ export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'descripti
 
 /** Extract route tool call from collected tool calls. Returns undefined if not found. */
 export function extractRouteCall(toolCalls: Array<{ name: string; args: unknown }>): RouteToolArgs | undefined {
-  const routeCall = toolCalls.find(t => t.name === PhaseRouteTool);
-  if (!routeCall) return undefined;
+  const routeCalls = toolCalls.filter(t => t.name === PhaseRouteTool);
+  if (routeCalls.length !== 1) return undefined;
+  const routeCall = routeCalls[0]!;
 
   let args: Record<string, unknown>;
   if (typeof routeCall.args === "string") {
     try {
-      args = JSON.parse(routeCall.args);
+      const parsed: unknown = JSON.parse(routeCall.args);
+      args = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
     } catch {
-      return undefined;
+      return { decision: [{ phase: "" }] };
     }
   } else {
-    args = routeCall.args as Record<string, unknown>;
+    args = routeCall.args !== null && typeof routeCall.args === "object"
+      ? routeCall.args as Record<string, unknown>
+      : {};
   }
 
   // Extract decision array
@@ -104,13 +117,17 @@ export function extractRouteCall(toolCalls: Array<{ name: string; args: unknown 
 
   if (Array.isArray(decisionRaw)) {
     decision = decisionRaw.map((d: unknown) => {
-      const obj = d as Record<string, unknown>;
+      const obj = d !== null && typeof d === "object" ? d as Record<string, unknown> : {};
       return {
-        phase: typeof obj?.phase === "string" ? obj.phase : "stop",
+        // Empty phase is an invalid target sentinel. Never coerce malformed
+        // input to stop: only an explicit, valid stop target may terminate.
+        phase: typeof obj.phase === "string" ? obj.phase : "",
         reason: typeof obj?.reason === "string" ? obj.reason : undefined,
         payload: obj?.payload,
       };
     });
+  } else if (decisionRaw !== undefined) {
+    decision = [{ phase: "" }];
   }
 
   return {

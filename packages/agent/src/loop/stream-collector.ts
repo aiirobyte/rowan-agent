@@ -149,7 +149,9 @@ async function collectStreamResult(input: {
       stopReason = event.response?.stopReason;
 
       const contentBlocks = lastPartial?.contentBlocks ?? [];
-      const hasContent = contentBlocks.length > 0 || (event.response?.content?.length ?? 0) > 0;
+      const hasContent = contentBlocks.length > 0
+        || (event.response?.content?.length ?? 0) > 0
+        || (event.response?.toolCalls?.length ?? 0) > 0;
 
       const shouldStoreContentParts = contentBlocks.some((block) => block.type !== "text");
       if (activeMessageId && hasContent && shouldStoreContentParts) {
@@ -179,7 +181,9 @@ async function collectStreamResult(input: {
 
   // Detect empty responses — model returned no text and no tool calls.
   // Abort and error stop reasons are handled upstream, so only flag benign stop reasons.
-  const hasContent = (lastPartial?.contentBlocks?.length ?? 0) > 0 || (doneResponse?.content?.length ?? 0) > 0;
+  const hasContent = (lastPartial?.contentBlocks?.length ?? 0) > 0
+    || (doneResponse?.content?.length ?? 0) > 0
+    || (doneResponse?.toolCalls?.length ?? 0) > 0;
   if (!hasContent && stopReason !== "error" && stopReason !== "aborted") {
     throw new EmptyResponseError();
   }

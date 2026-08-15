@@ -4,6 +4,7 @@ import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore, type AgentConfig, type ContextCandidate } from "../../src/runtime";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
+import { stopResponse } from "./route-test-utils";
 
 test("Runtime resolves Definition names after selected Extension assembly", async () => {
   const extension = {
@@ -40,7 +41,7 @@ test("Runtime resolves Definition names after selected Extension assembly", asyn
       };
       yield {
         type: "done" as const,
-        response: { content: "done", stopReason: "stop" as const },
+        response: stopResponse("done"),
       };
     },
   } satisfies AgentConfig;
@@ -171,13 +172,13 @@ test("Definition Bundle Skills override same-name Scope Skills", async () => {
       }],
     },
     model: { provider: "test", id: "model" },
-    stream: async function* (request) {
+    stream: async function* (request: Parameters<StreamFn>[0]) {
       expect(request.system).toContain('<name>root-skill</name>');
       expect(request.system).toContain('<name>parent-skill</name>');
       expect(request.system).toContain("Parent replacement Skill");
       expect(request.system).not.toContain("Scope Skill");
       expect(request.system).not.toContain('<name>unused-skill</name>');
-      yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
+      yield { type: "done" as const, response: stopResponse("done") };
     },
   } as unknown as AgentConfig;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
@@ -222,7 +223,7 @@ test("Runtime selects structured Context Candidates for the System Prompt", asyn
         text: "done",
         partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
       };
-      yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
+      yield { type: "done" as const, response: stopResponse("done") };
     },
   } satisfies AgentConfig;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });

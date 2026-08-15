@@ -105,3 +105,13 @@ test("buildPhaseDirectiveMessage returns user context text", () => {
   expect(output).toContain("<ok>true</ok>");
   expect(output).toContain("</phase_content>");
 });
+
+test("buildPhaseDirectiveMessage preserves direct-route instructions without a payload", () => {
+  const output = buildPhaseDirectiveMessage(
+    { name: "review", content: "Review the change." },
+    { instruction: "Check the current result." },
+  );
+
+  expect(output).toContain("<prev_phase_outputs>");
+  expect(output).toContain("<instruction>Check the current result.</instruction>");
+});

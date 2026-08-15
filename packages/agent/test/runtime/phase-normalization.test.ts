@@ -233,7 +233,7 @@ test("parallel file Phases add their Bundle Skills to root Skills", async () => 
     disableModelInvocation: false,
   });
   const phases: PhaseRegistry = {
-    phases: new Map([
+    phases: new Map<string, Phase>([
       ["entry", {
         name: "entry",
         description: "Dispatch",

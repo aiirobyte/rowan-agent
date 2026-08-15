@@ -831,6 +831,11 @@ function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegis
   if (registry?.phases.has(DEFAULT_PHASE_ID) && registry.phases.get(DEFAULT_PHASE_ID)?.filePath !== "") {
     throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${DEFAULT_PHASE_ID}".`);
   }
+  for (const [name] of registry?.phases ?? []) {
+    if (name === "stop" || name === "continue") {
+      throw new TypeError(`Configured Phase name "${name}" is reserved by Rowan routing controls.`);
+    }
+  }
   return {
     phases: new Map([
       [DEFAULT_PHASE_ID, createDefaultPhase()],
