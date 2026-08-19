@@ -132,6 +132,37 @@ providers:
   }
 });
 
+test("loadConfigFile reads model thinking level and headers", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "rowan-config-model-fields-"));
+  try {
+    const rowanDir = join(dir, ".rowan");
+    await mkdir(rowanDir, { recursive: true });
+    await writeFile(join(rowanDir, "config.yaml"), `
+providers:
+  - id: openai
+    baseUrl: https://api.openai.com/v1
+    apiKey: test-key
+    protocol: openai-responses
+    headers:
+      X-Provider: provider
+    models:
+      - id: gpt-4.1
+        thinkingLevel: high
+        headers:
+          X-Model: model
+`);
+
+    const result = await loadConfigFile(ws(dir));
+    expect(result!.providers[0]!.models[0]).toMatchObject({
+      id: "gpt-4.1",
+      thinkingLevel: "high",
+      headers: { "X-Model": "model" },
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfigFile interpolates ${VAR} in apiKey", async () => {
   const dir = await mkdtemp(join(tmpdir(), "rowan-config-interpolate-"));
   process.env._TEST_API_KEY = "interpolated-key";
@@ -417,5 +448,32 @@ test("registerConfigModels handles provider headers", () => {
   registerConfigModels(config);
   const model = getModel("test", "m");
   expect(model!.headers).toEqual({ "X-Custom": "value" });
+  clearModels();
+});
+
+test("registerConfigModels merges provider and model headers", () => {
+  clearModels();
+  const config: AgentConfigFile = {
+    providers: [{
+      id: "test",
+      baseUrl: "",
+      apiKey: "",
+      protocol: "openai-completions",
+      headers: { "X-Shared": "provider", "X-Override": "provider" },
+      models: [{
+        id: "m",
+        thinkingLevel: "high",
+        headers: { "X-Model": "model", "X-Override": "model" },
+      }],
+    }],
+  };
+  registerConfigModels(config);
+  const model = getModel("test", "m");
+  expect(model!.thinkingLevel).toBe("high");
+  expect(model!.headers).toEqual({
+    "X-Shared": "provider",
+    "X-Model": "model",
+    "X-Override": "model",
+  });
   clearModels();
 });

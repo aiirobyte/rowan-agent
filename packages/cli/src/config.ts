@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { registerModel } from "@rowan-agent/models";
-import type { ModelRef, Model, ModelCost, Protocol } from "@rowan-agent/models";
+import type { ModelRef, Model, ModelCost, Protocol, ThinkingLevel } from "@rowan-agent/models";
 import type { WorkspacePaths } from "./workspace";
 
 export { parseModelRef } from "@rowan-agent/models";
@@ -17,10 +17,12 @@ export type ModelConfigFromFile = {
   name?: string;
   primary?: boolean;
   reasoning?: boolean;
+  thinkingLevel?: ThinkingLevel;
   input?: ("text" | "image")[];
   contextWindow?: number;
   maxTokens?: number;
   cost?: Partial<ModelCost>;
+  headers?: Record<string, string>;
 };
 
 export type ProviderConfigFromFile = {
@@ -52,6 +54,7 @@ const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 16_384;
 const DEFAULT_COST: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const DEFAULT_TIMEOUT_MS = 60_000;
+const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // ---------------------------------------------------------------------------
 // Env var interpolation
@@ -152,6 +155,19 @@ function validateConfigFile(parsed: unknown, configFilename: string): AgentConfi
       if (typeof model.id !== "string" || !model.id) {
         throw new Error(`providers[${i}].models[${j}].id is required and must be a non-empty string.`);
       }
+      if (model.thinkingLevel !== undefined
+        && (typeof model.thinkingLevel !== "string" || !THINKING_LEVELS.includes(model.thinkingLevel as ThinkingLevel))) {
+        throw new Error(
+          `providers[${i}].models[${j}].thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}.`,
+        );
+      }
+      if (model.headers !== undefined
+        && (typeof model.headers !== "object"
+          || model.headers === null
+          || Array.isArray(model.headers)
+          || Object.values(model.headers).some((value) => typeof value !== "string"))) {
+        throw new Error(`providers[${i}].models[${j}].headers must be an object with string values.`);
+      }
       return model as unknown as ModelConfigFromFile;
     });
 
@@ -233,6 +249,7 @@ export function registerConfigModels(config: AgentConfigFile): void {
         provider: provider.id,
         baseUrl: provider.baseUrl,
         reasoning: fileModel.reasoning ?? DEFAULT_REASONING,
+        ...(fileModel.thinkingLevel !== undefined ? { thinkingLevel: fileModel.thinkingLevel } : {}),
         input: fileModel.input ?? DEFAULT_INPUT,
         cost: { ...DEFAULT_COST, ...fileModel.cost },
         contextWindow: fileModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
@@ -241,7 +258,9 @@ export function registerConfigModels(config: AgentConfigFile): void {
         timeoutMs: provider.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         ...(provider.maxRetries !== undefined ? { maxRetries: provider.maxRetries } : {}),
         ...(provider.retryDelayMs !== undefined ? { retryDelayMs: provider.retryDelayMs } : {}),
-        ...(provider.headers ? { headers: provider.headers } : {}),
+        ...(provider.headers || fileModel.headers
+          ? { headers: { ...provider.headers, ...fileModel.headers } }
+          : {}),
       };
       registerModel(model);
     }

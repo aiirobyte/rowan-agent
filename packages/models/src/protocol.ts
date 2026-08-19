@@ -26,6 +26,9 @@ export type KnownProvider =
 
 export type Provider = KnownProvider | string;
 
+/** Provider-neutral reasoning level, matching Pi's model/runtime vocabulary. */
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 // ---------------------------------------------------------------------------
 // Model descriptor
 // ---------------------------------------------------------------------------
@@ -44,6 +47,8 @@ export interface Model {
   provider: Provider;
   baseUrl: string;
   reasoning: boolean;
+  /** Default reasoning level; an individual request may override it. */
+  thinkingLevel?: ThinkingLevel;
   input: ("text" | "image")[];
   cost: ModelCost;
   contextWindow: number;
@@ -66,6 +71,7 @@ export type ModelConfig = {
   apiKey: string;
   name?: string;
   reasoning?: boolean;
+  thinkingLevel?: ThinkingLevel;
   input?: ("text" | "image")[];
   cost?: Partial<ModelCost>;
   contextWindow?: number;
@@ -87,10 +93,12 @@ export type ProviderModelConfig = {
   name?: string;
   protocol: Protocol;
   reasoning: boolean;
+  thinkingLevel?: ThinkingLevel;
   input: ("text" | "image")[];
   cost: ModelCost;
   contextWindow: number;
   maxTokens: number;
+  headers?: Record<string, string>;
 };
 
 export type ProviderConfig = {
@@ -213,6 +221,8 @@ export type LlmRequest = {
   messages: LlmMessage[];
   tools?: LlmToolDefinition[];
   toolChoice?: LlmToolChoice;
+  /** Per-request reasoning level; falls back to the selected model's default. */
+  thinkingLevel?: ThinkingLevel;
   maxTokens?: number;
   temperature?: number;
 };

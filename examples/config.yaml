@@ -31,6 +31,11 @@ providers:
         contextWindow: 1048576
         maxTokens: 32768
         reasoning: false
+        # Optional default reasoning level: off | minimal | low | medium | high | xhigh | max
+        # thinkingLevel: high
+        # Optional headers for this model; they override provider-level headers with the same name.
+        # headers:
+        #   X-Model-Route: reasoning
         input: ["text", "image"]
         cost:                    # per-token pricing (optional, for tracking)
           input: 2

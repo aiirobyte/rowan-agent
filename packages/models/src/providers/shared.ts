@@ -1,4 +1,4 @@
-import type { LlmRequest, LlmModelUsage, LlmTokenUsage } from "../protocol";
+import type { LlmRequest, LlmModelUsage, LlmTokenUsage, ThinkingLevel } from "../protocol";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -125,6 +125,7 @@ export type BaseProviderConfig = {
   model: string;
   temperature?: number;
   maxTokens?: number;
+  thinkingLevel?: ThinkingLevel;
   headers?: Record<string, string>;
   /** Maximum idle gap while waiting for response headers or body bytes. */
   timeoutMs?: number;
@@ -150,6 +151,7 @@ export function resolveBaseProviderConfig(
     model: requireValue("model", input.model, "model.id is required"),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
+    ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.headers ? { headers: { ...input.headers } } : {}),
     ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     ...(input.maxRetries !== undefined ? { maxRetries: input.maxRetries } : {}),

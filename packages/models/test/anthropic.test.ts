@@ -129,6 +129,38 @@ test("Anthropic preserves successful stream events", async () => {
   });
 });
 
+test("Anthropic converts the configured thinking level to a token budget", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const stream = createAnthropicStream({
+    baseUrl: "https://api.example",
+    apiKey: "test-key",
+    model: "test-model",
+    maxTokens: 4096,
+    thinkingLevel: "low",
+    fetch: async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return anthropicSseResponse([
+        {
+          event: "message_start",
+          data: { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } } },
+        },
+        {
+          event: "message_delta",
+          data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 0 } },
+        },
+        { event: "message_stop", data: { type: "message_stop" } },
+      ]);
+    },
+  });
+
+  await collect(stream(
+    { model: { provider: "anthropic", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(requestBody?.thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
+});
+
 test("Anthropic applies custom request headers", async () => {
   let requestHeaders: Record<string, string> | undefined;
   const config = {

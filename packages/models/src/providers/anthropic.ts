@@ -10,6 +10,7 @@ import type {
   StreamFn,
   ApiStreamFn,
   AssistantMessagePartial,
+  ThinkingLevel,
 } from "../protocol";
 import { streamProviderRequest } from "./http";
 import {
@@ -29,6 +30,43 @@ export type AnthropicConfig = Omit<BaseProviderConfig, "temperature"> & {
 export type ResolveAnthropicConfigInput = Partial<AnthropicConfig>;
 
 const DEFAULT_MAX_TOKENS = 8192;
+const DEFAULT_THINKING_BUDGETS: Record<Exclude<ThinkingLevel, "off">, number> = {
+  minimal: 1024,
+  low: 2048,
+  medium: 8192,
+  high: 16384,
+  xhigh: 16384,
+  max: 16384,
+};
+
+function thinkingBudgetForLevel(level: ThinkingLevel, maxTokens: number): number | undefined {
+  if (level === "off") return undefined;
+  const available = Math.max(0, maxTokens - 1024);
+  const budget = Math.min(DEFAULT_THINKING_BUDGETS[level], available);
+  return budget >= 1024 ? budget : undefined;
+}
+
+function resolveThinkingConfig(
+  config: AnthropicConfig,
+  request: LlmRequest,
+): { budgetTokens: number } | undefined {
+  if (request.thinkingLevel !== undefined) {
+    const budgetTokens = thinkingBudgetForLevel(
+      request.thinkingLevel,
+      request.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
+    );
+    return budgetTokens === undefined ? undefined : { budgetTokens };
+  }
+
+  if (config.thinking) return config.thinking;
+  if (config.thinkingLevel === undefined) return undefined;
+
+  const budgetTokens = thinkingBudgetForLevel(
+    config.thinkingLevel,
+    request.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
+  );
+  return budgetTokens === undefined ? undefined : { budgetTokens };
+}
 
 export function resolveAnthropicConfig(input: ResolveAnthropicConfigInput = {}): AnthropicConfig {
   return {
@@ -149,8 +187,9 @@ function buildRequestBody(config: AnthropicConfig, request: LlmRequest): Record<
   if (request.system) body.system = request.system;
   if (request.temperature !== undefined) body.temperature = request.temperature;
   if (request.tools && request.tools.length > 0) body.tools = convertTools(request.tools);
-  if (config.thinking) {
-    body.thinking = { type: "enabled", budget_tokens: config.thinking.budgetTokens };
+  const thinking = resolveThinkingConfig(config, request);
+  if (thinking?.budgetTokens !== undefined) {
+    body.thinking = { type: "enabled", budget_tokens: thinking.budgetTokens };
   }
 
   return body;
@@ -350,6 +389,7 @@ export const streamAnthropic: ApiStreamFn = (model, request, options) => {
     baseUrl: model.baseUrl,
     model: model.id,
     apiKey: model.apiKey,
+    thinkingLevel: model.thinkingLevel,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,

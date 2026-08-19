@@ -149,6 +149,27 @@ test("resolveOpenAICompletionsConfig reports missing API key", () => {
   ).toThrow("Missing API key");
 });
 
+test("createOpenAICompletionsStream applies the configured thinking level", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    thinkingLevel: "medium",
+    fetch: async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return sseChunkResponse("hello");
+    },
+  });
+
+  await collect(stream(
+    { model: { provider: "openai", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(requestBody?.reasoning_effort).toBe("medium");
+});
+
 // ---------------------------------------------------------------------------
 // Non-streaming API tests
 // ---------------------------------------------------------------------------

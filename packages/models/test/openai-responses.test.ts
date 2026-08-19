@@ -126,6 +126,66 @@ test("Responses applies custom request headers", async () => {
   expect(requestHeaders?.["content-type"]).toBe("application/json");
 });
 
+test("Responses applies the configured thinking level and honors a request override", async () => {
+  const requestBodies: Array<Record<string, unknown>> = [];
+  const stream = createOpenAIResponsesStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    thinkingLevel: "high",
+    fetch: async (_url, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return completedResponse();
+    },
+  });
+
+  const request: LlmRequest = {
+    model: { provider: "openai", id: "test-model" },
+    messages: [{ role: "user", content: "hello" }],
+  };
+  await collect(stream(request, {}));
+  await collect(stream({ ...request, thinkingLevel: "off" }, {}));
+
+  expect(requestBodies[0]?.reasoning).toEqual({ effort: "high", summary: "auto" });
+  expect(requestBodies[1]?.reasoning).toBeUndefined();
+});
+
+test("Responses forwards user images as input_image content", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const stream = createOpenAIResponsesStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return completedResponse();
+    },
+  });
+
+  await collect(stream({
+    model: { provider: "openai", id: "test-model" },
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: "What is in this image?" },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      ],
+    }],
+  }, {}));
+
+  expect(requestBody?.input).toEqual([{
+    role: "user",
+    content: [
+      { type: "input_text", text: "What is in this image?" },
+      {
+        type: "input_image",
+        detail: "auto",
+        image_url: "data:image/png;base64,aW1hZ2U=",
+      },
+    ],
+  }]);
+});
+
 test("Responses preserves call_id across a streamed tool call and its output", async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
   let requestNumber = 0;

@@ -9,6 +9,7 @@ import type {
   StreamFn,
   ApiStreamFn,
   AssistantMessagePartial,
+  ThinkingLevel,
 } from "../protocol";
 import { streamProviderRequest } from "./http";
 import {
@@ -24,7 +25,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export type OpenAIResponsesConfig = BaseProviderConfig & {
-  reasoningEffort?: "low" | "medium" | "high";
+  reasoningEffort?: Exclude<ThinkingLevel, "off">;
 };
 
 export type ResolveOpenAIResponsesConfigInput = Partial<OpenAIResponsesConfig>;
@@ -43,10 +44,14 @@ export function resolveOpenAIResponsesConfig(
 // ---------------------------------------------------------------------------
 
 type ResponsesInputMessage =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string | ResponsesInputContent[] }
   | { role: "assistant"; content: string }
   | { type: "function_call"; call_id: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string };
+
+type ResponsesInputContent =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; detail: "auto"; image_url: string };
 
 function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
   const result: ResponsesInputMessage[] = [];
@@ -55,11 +60,20 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
       if (typeof msg.content === "string") {
         result.push({ role: "user", content: msg.content });
       } else {
-        const text = msg.content
-          .filter((p): p is { type: "text"; text: string } => p.type === "text")
-          .map((p) => p.text)
-          .join("\n");
-        if (text) result.push({ role: "user", content: text });
+        const content: ResponsesInputContent[] = msg.content.flatMap((part): ResponsesInputContent[] => {
+          if (part.type === "text") {
+            return [{ type: "input_text", text: part.text }];
+          }
+          if (part.type === "image") {
+            return [{
+              type: "input_image",
+              detail: "auto",
+              image_url: `data:${part.mimeType};base64,${part.data}`,
+            }];
+          }
+          return [];
+        });
+        if (content.length > 0) result.push({ role: "user", content });
       }
     } else if (msg.role === "assistant") {
       if (typeof msg.content === "string") {
@@ -148,8 +162,12 @@ function buildRequestBody(
     body.tools = convertTools(request.tools);
   }
 
-  if (config.reasoningEffort) {
-    body.reasoning = { effort: config.reasoningEffort, summary: "auto" };
+  const requestedThinkingLevel = request.thinkingLevel ?? config.thinkingLevel;
+  const reasoningEffort = requestedThinkingLevel === "off"
+    ? undefined
+    : requestedThinkingLevel ?? config.reasoningEffort;
+  if (reasoningEffort) {
+    body.reasoning = { effort: reasoningEffort, summary: "auto" };
   }
 
   return body;
@@ -364,6 +382,7 @@ export const streamOpenAIResponses: ApiStreamFn = (model, request, options) => {
     baseUrl: model.baseUrl,
     model: model.id,
     apiKey: model.apiKey,
+    thinkingLevel: model.thinkingLevel,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,

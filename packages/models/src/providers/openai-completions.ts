@@ -147,6 +147,11 @@ function buildRequestBody(
     body.max_tokens = request.maxTokens ?? config.maxTokens;
   }
 
+  const thinkingLevel = request.thinkingLevel ?? config.thinkingLevel;
+  if (thinkingLevel && thinkingLevel !== "off") {
+    body.reasoning_effort = thinkingLevel;
+  }
+
   if (request.tools && request.tools.length > 0) {
     body.tools = convertTools(request.tools);
   }
@@ -400,6 +405,7 @@ export const streamOpenAICompletions: ApiStreamFn = (model, request, options) =>
     baseUrl: model.baseUrl,
     model: model.id,
     apiKey: model.apiKey,
+    thinkingLevel: model.thinkingLevel,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,

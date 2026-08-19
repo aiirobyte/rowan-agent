@@ -133,6 +133,7 @@ function modelFromConfig(config: ModelConfig): Model {
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
     reasoning: config.reasoning ?? false,
+    ...(config.thinkingLevel !== undefined ? { thinkingLevel: config.thinkingLevel } : {}),
     input: config.input ?? ["text"],
     cost: { ...ZERO_COST, ...config.cost },
     contextWindow: config.contextWindow ?? 128_000,

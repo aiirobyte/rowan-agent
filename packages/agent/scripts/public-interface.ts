@@ -131,6 +131,7 @@ export const publicTypeExports = [
   "StreamFn",
   "TextContent",
   "ThinkingContent",
+  "ThinkingLevel",
   "Tool",
   "ToolContribution",
   "ToolCallId",

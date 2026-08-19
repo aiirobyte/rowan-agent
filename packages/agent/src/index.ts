@@ -149,7 +149,7 @@ export type {
   RuntimeErrorDetails,
 } from "./runtime/errors";
 
-export type { ModelConfig, ModelRef, StreamFn } from "@rowan-agent/models";
+export type { ModelConfig, ModelRef, StreamFn, ThinkingLevel } from "@rowan-agent/models";
 export type {
   Skill,
 } from "./protocol";
