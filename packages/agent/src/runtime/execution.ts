@@ -20,6 +20,7 @@ import type {
 import type { PhaseExecutionIdentity, PhaseRegistry } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
+import type { ThinkingLevel } from "@rowan-agent/models";
 import { assertJsonValue, canonicalJson, isJsonValue } from "./json";
 import type { ExecutionCheckpoint } from "./contracts";
 
@@ -47,6 +48,7 @@ export type OneShotExecutionInput = Readonly<{
   /** Durable identity exposed to Phase callbacks. */
   execution: PhaseExecutionIdentity;
   model: ModelRef;
+  thinkingLevel?: ThinkingLevel;
   stream: StreamFn;
   checkpoint?: ExecutionCheckpoint;
   maxAttempts?: number;
@@ -221,6 +223,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     context,
     execution: input.execution,
     model: input.model,
+    ...(input.thinkingLevel === undefined ? {} : { thinkingLevel: input.thinkingLevel }),
     stream: input.stream,
     maxAttempts: input.maxAttempts,
     signal: input.signal,

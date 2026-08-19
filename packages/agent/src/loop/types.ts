@@ -11,6 +11,7 @@ import type {
 import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
+import type { ThinkingLevel } from "@rowan-agent/models";
 
 export const DEFAULT_MAX_ATTEMPTS = 16;
 
@@ -73,6 +74,7 @@ export type ExecutionContinuationState = {
 
 export type AgentConfig = {
   model: ModelRef;
+  thinkingLevel?: ThinkingLevel;
   stream: StreamFn;
   context: AgentContext;
   /** Durable Run identity passed to generated Phase callbacks. */

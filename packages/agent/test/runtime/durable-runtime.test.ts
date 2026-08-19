@@ -91,6 +91,35 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
   }
 });
 
+test("AgentRuntime forwards the user ThinkingLevel on the LLM Request", async () => {
+  const requests: Parameters<StreamFn>[0][] = [];
+  const stream: StreamFn = async function* (input) {
+    requests.push(input);
+    const text = "done";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse(text) };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "thinking-level-agent" });
+    const run = await runtime.start(agentId, {
+      content: "Think carefully",
+      metadata: { everyield: { thinkingLevel: "high" } },
+    }, { idempotencyKey: "thinking-level-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+
+    const offRun = await runtime.start(agentId, {
+      content: "Do not reason",
+      metadata: { everyield: { thinkingLevel: "off" } },
+    }, { idempotencyKey: "thinking-level-off-run" });
+    await expect(offRun.wait()).resolves.toMatchObject({ type: "completed" });
+
+    expect(requests.map(({ thinkingLevel }) => thinkingLevel)).toEqual(["high", "off"]);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("a failed Definition Snapshot fails the queued Run instead of leaving it stuck", async () => {
   const stream: StreamFn = async function* () {
     yield { type: "done", response: { content: "unused", stopReason: "stop" } };

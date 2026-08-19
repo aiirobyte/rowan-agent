@@ -1122,7 +1122,12 @@ function createPhaseExecution(
         skills: phaseContext.skills,
         promptGuidelines: phaseContext.promptGuidelines,
         appendSystemPrompt: phaseContext.appendSystemPrompt,
-      }, { model: phase.model ?? config.model });
+      }, {
+        model: phase.model ?? config.model,
+        ...(config.thinkingLevel === undefined
+          ? {}
+          : { thinkingLevel: config.thinkingLevel }),
+      });
 
       // Ensure tools are available
       if (!request.tools) {

@@ -27,7 +27,11 @@ import type {
   Tool as DurableTool,
   UserInput,
 } from "./contracts";
-import { assertToolExecutionResult, isAgentConfiguration } from "./contracts";
+import {
+  assertToolExecutionResult,
+  isAgentConfiguration,
+  thinkingLevelFromMessages,
+} from "./contracts";
 import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import { pageAgents, pageRuns } from "./read-models";
@@ -415,6 +419,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           ...(run.metadata === undefined ? {} : { runMetadata: run.metadata }),
         },
         model,
+        thinkingLevel: thinkingLevelFromMessages(executionContext.messages),
         stream,
         maxAttempts: config.maxAttempts,
         checkpoint: claim.run.checkpoint,

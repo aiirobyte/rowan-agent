@@ -59,6 +59,12 @@ test("buildModelRequest returns a valid LlmRequest with system, messages, and to
   expect(req.tools![0].name).toBe("echo");
 });
 
+test("buildModelRequest forwards the selected ThinkingLevel", () => {
+  const req = buildModelRequest(createTestInput(), { thinkingLevel: "high" });
+
+  expect(req.thinkingLevel).toBe("high");
+});
+
 test("buildModelRequest includes skills in system prompt when present", () => {
   const input = createTestInput({
     skills: [{ name: "writer", description: "Write concise plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", content: "", disableModelInvocation: false }],

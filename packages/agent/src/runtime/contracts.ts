@@ -1,5 +1,10 @@
 import Type from "typebox";
-import type { ModelConfig, ModelRef, StreamFn } from "@rowan-agent/models";
+import type {
+  ModelConfig,
+  ModelRef,
+  StreamFn,
+  ThinkingLevel,
+} from "@rowan-agent/models";
 import type {
   AgentId,
   AgentListCursor,
@@ -96,6 +101,46 @@ export type {
 
 export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
 export type HistorySeed = readonly Message[];
+
+const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly ThinkingLevel[];
+
+function thinkingLevelFromMetadata(metadata: unknown): ThinkingLevel | undefined {
+  const record = isRecord(metadata) ? metadata : undefined;
+  const everyield = record?.everyield;
+  if (!isRecord(everyield)) return undefined;
+  const level = everyield.thinkingLevel;
+  return typeof level === "string" && THINKING_LEVELS.includes(level as ThinkingLevel)
+    ? level as ThinkingLevel
+    : undefined;
+}
+
+export function thinkingLevelFromUserInput(input: UserInput): ThinkingLevel | undefined {
+  return typeof input === "string" ? undefined : thinkingLevelFromMetadata(input.metadata);
+}
+
+export function thinkingLevelFromMessages(
+  messages: readonly { role: string; metadata?: unknown }[],
+): ThinkingLevel | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "user") continue;
+    const metadata = message.metadata;
+    const kind = isRecord(metadata) && typeof metadata.kind === "string"
+      ? metadata.kind
+      : undefined;
+    if (kind === "phase_prompt" || kind === "phase_input") continue;
+    return thinkingLevelFromMetadata(metadata);
+  }
+  return undefined;
+}
 export type ToolInvocationContext = Readonly<{
   agentId: AgentId;
   runId: RunId;

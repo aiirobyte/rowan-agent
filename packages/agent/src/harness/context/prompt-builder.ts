@@ -1,5 +1,10 @@
 import type { AgentMessage, Skill } from "../../protocol";
-import type { LlmRequest, LlmMessage, ModelRef } from "@rowan-agent/models";
+import type {
+  LlmRequest,
+  LlmMessage,
+  ModelRef,
+  ThinkingLevel,
+} from "@rowan-agent/models";
 import { buildSystemPrompt } from "./system-prompt";
 import { messageContentText } from "../../types";
 
@@ -74,7 +79,7 @@ type ModelRequestInput = {
 
 export function buildModelRequest(
   input: ModelRequestInput,
-  options?: { model?: ModelRef },
+  options?: { model?: ModelRef; thinkingLevel?: ThinkingLevel },
 ): LlmRequest {
   const toolMeta = input.tools.map((t) => ({
     name: t.name,
@@ -101,6 +106,7 @@ export function buildModelRequest(
 
   return {
     model: options?.model ?? { provider: "", id: "" },
+    ...(options?.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
     system: systemText,
     messages,
     tools: modelTools.length > 0 ? modelTools : undefined,
