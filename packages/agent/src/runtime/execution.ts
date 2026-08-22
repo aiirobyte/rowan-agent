@@ -18,6 +18,7 @@ import type {
   MessageDeltaNotification,
 } from "../loop/types";
 import type { PhaseExecutionIdentity, PhaseRegistry } from "../harness/phases/types";
+import { PhaseInteractionBoundary, type PhaseInteraction, type PhaseInteractionState } from "../harness/phases/interactions";
 import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
 import type { ThinkingLevel } from "@rowan-agent/models";
@@ -51,6 +52,7 @@ export type OneShotExecutionInput = Readonly<{
   thinkingLevel?: ThinkingLevel;
   stream: StreamFn;
   checkpoint?: ExecutionCheckpoint;
+  interactionAnswers?: Readonly<Record<string, JsonValue>>;
   maxAttempts?: number;
   signal?: AbortSignal;
   beforeToolCall?: BeforeToolCall;
@@ -70,6 +72,7 @@ export type OneShotExecutionResult =
   | Readonly<{
       type: "input_required";
       request: ExecutionInputRequest;
+      interactions: readonly PhaseInteraction[];
       checkpoint: ExecutionCheckpoint;
       messages: readonly AgentMessage[];
     }>
@@ -109,6 +112,7 @@ type CheckpointData = Readonly<{
   attempt: number;
   metrics: CheckpointMetrics;
   continuation?: CheckpointContinuation;
+  phaseInteractions?: PhaseInteractionState;
 }>;
 
 export class ExecutionCheckpointError extends Error {
@@ -161,6 +165,7 @@ export function encodeExecutionCheckpoint(state: ExecutionState): ExecutionCheck
     attempt: state.attempt,
     metrics,
     ...(continuation ? { continuation } : {}),
+    ...(state.phaseInteractions === undefined ? {} : { phaseInteractions: state.phaseInteractions }),
   } as unknown as CheckpointData;
   assertJsonValue(data, "execution checkpoint");
   return {
@@ -193,6 +198,15 @@ export function decodeExecutionCheckpoint(checkpoint: ExecutionCheckpoint): Exec
         previousResults: checkpoint.data.continuation.previousResults.map((result) => ({ ...result })),
       },
     } : {}),
+    ...(checkpoint.data.phaseInteractions ? {
+      phaseInteractions: {
+        requests: checkpoint.data.phaseInteractions.requests.map((request) => ({ ...request })),
+        answers: { ...checkpoint.data.phaseInteractions.answers },
+        ...(checkpoint.data.phaseInteractions.checkpoint === undefined
+          ? {}
+          : { checkpoint: checkpoint.data.phaseInteractions.checkpoint }),
+      },
+    } : {}),
   };
 }
 
@@ -219,6 +233,18 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     status: "running",
     metrics: createMetrics(),
   };
+  if (input.interactionAnswers) {
+    state.phaseInteractions = {
+      requests: state.phaseInteractions?.requests ?? [],
+      answers: {
+        ...(state.phaseInteractions?.answers ?? {}),
+        ...input.interactionAnswers,
+      },
+      ...(state.phaseInteractions?.checkpoint === undefined
+        ? {}
+        : { checkpoint: state.phaseInteractions.checkpoint }),
+    };
+  }
   const config = {
     context,
     execution: input.execution,
@@ -255,6 +281,20 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
       return {
         type: "input_required",
         request: error.request,
+        interactions: [],
+        checkpoint: encodeExecutionCheckpoint(error.state),
+        messages: snapshotMessages(context.messages),
+      };
+    }
+    if (error instanceof PhaseInteractionBoundary) {
+      return {
+        type: "input_required",
+        request: {
+          phase: error.interactions[0]?.phase ?? state.currentPhase,
+          prompt: error.interactions.map((interaction) => interaction.prompt).join("\n"),
+          requestedAt: error.interactions[0]?.createdAt ?? new Date().toISOString(),
+        },
+        interactions: error.interactions,
         checkpoint: encodeExecutionCheckpoint(error.state),
         messages: snapshotMessages(context.messages),
       };
@@ -287,7 +327,22 @@ function isCheckpointData(value: JsonValue): value is CheckpointData {
   if (!isRecord(value) || typeof value.currentPhase !== "string" || !Number.isInteger(value.attempt)) return false;
   if (!isMetrics(value.metrics)) return false;
   if (value.continuation !== undefined && !isContinuation(value.continuation)) return false;
+  if (value.phaseInteractions !== undefined && !isPhaseInteractionState(value.phaseInteractions)) return false;
   return true;
+}
+
+function isPhaseInteractionState(value: unknown): value is PhaseInteractionState {
+  if (!isRecord(value) || !Array.isArray(value.requests) || !isRecord(value.answers)) return false;
+  if (!Object.values(value.answers).every((answer) => isJsonValue(answer))) return false;
+  if (value.checkpoint !== undefined && !isJsonValue(value.checkpoint)) return false;
+  return value.requests.every((request) => isRecord(request)
+    && typeof request.id === "string"
+    && typeof request.phase === "string"
+    && ["user_input", "permission", "elicitation", "confirmation"].includes(request.kind as string)
+    && typeof request.prompt === "string"
+    && typeof request.createdAt === "string"
+    && ["pending", "answered", "denied", "cancelled", "expired"].includes(request.status as string)
+    && (request.payload === undefined || isJsonValue(request.payload)));
 }
 
 function isMetrics(value: unknown): value is CheckpointMetrics {

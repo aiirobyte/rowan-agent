@@ -28,6 +28,7 @@ import type {
   Phase,
   PhaseRegistry,
 } from "../harness/phases";
+import { createPhaseInteractionDriver } from "../harness/phases/interactions";
 import { readPhaseContent } from "../harness/phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 
@@ -1089,7 +1090,9 @@ function createPhaseExecution(
   toolExecutionManager: PhaseToolExecutionManager,
   registry: PhaseRegistry,
 ): PhaseExecution {
+  const interaction = createPhaseInteractionDriver(state, phase.name, config.signal);
   return {
+    interaction,
     snapshot(): PhaseContextSnapshot {
       return {
         systemPrompt: config.context.systemPrompt,

@@ -176,4 +176,16 @@ export type {
   PhaseRegistry,
   PhaseState,
 } from "./harness/phases/types";
+export type { PhaseExecution } from "./loop/execution";
+export type {
+  PhaseInteraction,
+  PhaseInteractionDriver,
+  PhaseInteractionKind,
+  PhaseInteractionState,
+  PhaseInteractionStatus,
+} from "./harness/phases/interactions";
+export {
+  PhaseInteractionBoundary,
+  PhaseInteractionCancelledError,
+} from "./harness/phases/interactions";
 export type { CoreToolContext } from "./harness/tools";

@@ -1,5 +1,7 @@
 /** Durable and transient DTOs owned by the event-driven Agent Runtime. */
 
+import type { PhaseInteraction } from "./harness/phases/interactions";
+
 declare const opaqueIdBrand: unique symbol;
 
 export type OpaqueId<Kind extends string> = string & {
@@ -188,6 +190,8 @@ export type RunStateChanged = DurableEventBase & (
       from: "running";
       to: "input_required";
       request: Readonly<{ id: InputRequestId; phase: string; prompt: AssistantMessage }>;
+      interactions: readonly PhaseInteraction[];
+      answers: Readonly<Record<string, JsonValue>>;
     }>
   | Readonly<{
       kind: "run_state_changed";

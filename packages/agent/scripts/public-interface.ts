@@ -21,6 +21,8 @@ export const publicValueExports = [
   "loadSkills",
   "parseAgentDefinition",
   "parseFrontmatter",
+  "PhaseInteractionBoundary",
+  "PhaseInteractionCancelledError",
 ] as const;
 
 export const publicTypeExports = [
@@ -98,7 +100,13 @@ export const publicTypeExports = [
   "Page",
   "Phase",
   "PhaseContext",
+  "PhaseExecution",
   "PhaseExecutionIdentity",
+  "PhaseInteraction",
+  "PhaseInteractionDriver",
+  "PhaseInteractionKind",
+  "PhaseInteractionState",
+  "PhaseInteractionStatus",
   "PhaseInvocation",
   "PhaseOutput",
   "PhaseRegistry",

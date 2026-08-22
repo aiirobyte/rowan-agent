@@ -9,6 +9,7 @@ import type {
   ToolResult,
 } from "../types";
 import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput } from "../harness/phases/types";
+import type { PhaseInteractionState } from "../harness/phases/interactions";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
 import type { ThinkingLevel } from "@rowan-agent/models";
@@ -62,6 +63,7 @@ export type ExecutionState = {
   metrics: LoopMetrics;
   status: "idle" | "running" | "suspended" | "completed" | "aborted" | "failed";
   continuation?: ExecutionContinuationState;
+  phaseInteractions?: PhaseInteractionState;
 };
 
 export type ExecutionContinuationState = {

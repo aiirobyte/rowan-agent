@@ -52,6 +52,17 @@ export type {
   UserInput,
 } from "./contracts";
 export type {
+  PhaseInteraction,
+  PhaseInteractionDriver,
+  PhaseInteractionKind,
+  PhaseInteractionState,
+  PhaseInteractionStatus,
+} from "../harness/phases/interactions";
+export {
+  PhaseInteractionBoundary,
+  PhaseInteractionCancelledError,
+} from "../harness/phases/interactions";
+export type {
   AgentDefinition,
   LoadInput,
   LoadResult,

@@ -55,6 +55,7 @@ import type {
   UserMessage,
 } from "../runtime-events";
 import type { HistorySeed } from "./contracts";
+import type { PhaseInteraction } from "../harness/phases/interactions";
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type StoredAgent = Mutable<AgentRecord>;
@@ -596,12 +597,15 @@ export class InMemoryStore implements DurableStore {
     phase: string;
     prompt: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
+    interactions?: readonly PhaseInteraction[];
+    interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>;
   }): InputRequiredCommit {
     this.assertOwner(lease);
     if (typeof input.phase !== "string" || input.phase.length === 0) throw new TypeError("phase must be non-empty");
     const requestId = input.requestId ?? (createId("input") as InputRequestId);
     const operationKey = `input_required:${requestId}`;
-    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.phase, input.prompt.id, input.checkpoint] as never);
+    const interactions = input.interactions ?? [];
+    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.phase, input.prompt.id, input.checkpoint, interactions, input.interactionAnswers ?? null] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as InputRequiredCommit);
     const run = this.requireRun(input.runId);
@@ -622,12 +626,19 @@ export class InMemoryStore implements DurableStore {
     run.state = "input_required";
     run.checkpoint = clone(input.checkpoint);
     run.openInputRequest = request;
+    if (interactions.length > 0) {
+      run.openInteractions = clone(interactions);
+      run.interactionAnswers = clone(input.interactionAnswers ?? run.interactionAnswers ?? {});
+    } else {
+      delete run.openInteractions;
+      delete run.interactionAnswers;
+    }
     delete run.execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
     this.appendMessage(run, prompt);
-    this.appendTransition(run, "running", "input_required", request, prompt);
-    const result = { run: clone(run), prompt: clone(prompt), request: clone(request) };
+    this.appendTransition(run, "running", "input_required", request, prompt, undefined, undefined, undefined, interactions, run.interactionAnswers ?? {});
+    const result = { run: clone(run), prompt: clone(prompt), request: clone(request), interactions: clone(interactions) };
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
   }
@@ -643,6 +654,9 @@ export class InMemoryStore implements DurableStore {
     this.assertRevision(run, input.expectedRevision);
     this.assertState(run, ["input_required"]);
     if (!run.openInputRequest || run.openInputRequest.id !== input.requestId) {
+      throw new RuntimeError("input_request_conflict", { runId: run.id, requestId: input.requestId, reason: "not_found" });
+    }
+    if (run.openInteractions && run.openInteractions.length > 0) {
       throw new RuntimeError("input_request_conflict", { runId: run.id, requestId: input.requestId, reason: "not_found" });
     }
     const message: Message = {
@@ -663,6 +677,51 @@ export class InMemoryStore implements DurableStore {
     run.updatedAt = createTimestamp();
     this.appendMessage(run, message);
     this.appendTransition(run, "input_required", "queued");
+    const result = clone(run);
+    this.writeOperationReceipt(operationKey, operationPayload, result);
+    return result;
+  }
+
+  answerInteraction(lease: OwnerLease, input: { runId: RunId; interactionId: string; expectedRevision: number; input: import("../runtime-events").JsonValue }): RunRecord {
+    this.assertOwner(lease);
+    if (input.interactionId.trim().length === 0) throw new TypeError("interactionId must be non-empty");
+    const operationKey = `interaction_answer:${input.runId}:${input.interactionId}`;
+    const operationPayload = canonicalJson(input.input as never);
+    const replay = this.replayOperation(operationKey, operationPayload);
+    if (replay) return clone(replay as RunRecord);
+    const run = this.requireRun(input.runId);
+    this.assertRevision(run, input.expectedRevision);
+    this.assertState(run, ["input_required"]);
+    const openInteractions = run.openInteractions ?? [];
+    if (!openInteractions.some((interaction) => interaction.id === input.interactionId)) {
+      throw new RuntimeError("input_request_conflict", { runId: run.id, requestId: input.interactionId as InputRequestId, reason: "not_found" });
+    }
+    const message: Message = {
+      id: createId("msg") as MessageId,
+      agentId: run.agentId,
+      runId: run.id,
+      role: "user",
+      content: typeof input.input === "string" ? input.input : JSON.stringify(input.input),
+      metadata: { kind: "phase_interaction", interactionId: input.interactionId },
+      sequenceWithinRun: this.nextMessageSequence(run.id),
+      createdAt: createTimestamp(),
+    };
+    this.messages.set(message.id, message);
+    run.openInteractions = openInteractions.filter((interaction) => interaction.id !== input.interactionId);
+    run.interactionAnswers = {
+      ...(run.interactionAnswers ?? {}),
+      [input.interactionId]: clone(input.input),
+    };
+    run.revision += 1;
+    run.updatedAt = message.createdAt;
+    this.appendMessage(run, message);
+    if (run.openInteractions.length === 0) {
+      delete run.openInteractions;
+      delete run.openInputRequest;
+      run.readySequence = this.nextReady(run.agentId);
+      run.state = "queued";
+      this.appendTransition(run, "input_required", "queued");
+    }
     const result = clone(run);
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
@@ -909,6 +968,8 @@ export class InMemoryStore implements DurableStore {
     if (input.outcome) run.outcome = clone(input.outcome);
     if (input.failure) run.failure = clone(input.failure);
     delete run.execution;
+    delete run.openInteractions;
+    delete run.interactionAnswers;
     run.revision += 1;
     run.updatedAt = createTimestamp();
     this.appendTransition(run, "running", nextState, undefined, output, input.outcome, input.failure);
@@ -959,6 +1020,8 @@ export class InMemoryStore implements DurableStore {
       delete run.cancellationReason;
       delete run.execution;
       delete run.openInputRequest;
+      delete run.openInteractions;
+      delete run.interactionAnswers;
       run.revision += 1;
       run.updatedAt = createTimestamp();
       this.appendTransition(run, from, "failed", undefined, undefined, undefined, failure);
@@ -970,6 +1033,8 @@ export class InMemoryStore implements DurableStore {
     run.cancellationReason = input.reason;
     delete run.execution;
     delete run.openInputRequest;
+    delete run.openInteractions;
+    delete run.interactionAnswers;
     run.revision += 1;
     run.updatedAt = createTimestamp();
     this.appendTransition(run, from, "cancelled", undefined, undefined, undefined, undefined, input.reason);
@@ -1001,7 +1066,13 @@ export class InMemoryStore implements DurableStore {
         const request = run.openInputRequest;
         const prompt = request && this.messages.get(request.messageId);
         if (!prompt || prompt.role !== "assistant") throw new Error(`Run ${run.id} has an invalid input prompt.`);
-        return { ...base, state: "input_required", request: { id: request.id, phase: request.phase, prompt: clone(prompt) } };
+        return {
+          ...base,
+          state: "input_required",
+          request: { id: request.id, phase: request.phase, prompt: clone(prompt) },
+          interactions: clone(run.openInteractions ?? []),
+          answers: clone(run.interactionAnswers ?? {}),
+        };
       }
       case "completed": {
         const output = this.messagesForRun(run.id).filter((message): message is AssistantMessage => message.role === "assistant").at(-1);
@@ -1287,6 +1358,8 @@ export class InMemoryStore implements DurableStore {
     outcome?: Outcome,
     failure?: RunFailure,
     reason?: string,
+    interactions?: readonly PhaseInteraction[],
+    answers?: Readonly<Record<string, import("../runtime-events").JsonValue>>,
   ): void {
     const transition: RunStateChanged = {
       ...this.baseEvent(run),
@@ -1294,6 +1367,7 @@ export class InMemoryStore implements DurableStore {
       from,
       to,
       ...(to === "input_required" && request && prompt ? { request: { id: request.id, phase: request.phase, prompt } } : {}),
+      ...(to === "input_required" ? { interactions: clone(interactions ?? []), answers: clone(answers ?? {}) } : {}),
       ...(to === "completed" && outcome ? { outcome } : {}),
       ...(to === "failed" && failure ? { failure: failure as never } : {}),
       ...(to === "cancelled" && reason ? { reason } : {}),
@@ -1357,8 +1431,9 @@ class MemoryOwnedStore implements OwnedStore {
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
-  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
+  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly PhaseInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>> }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
   async answerInput(input: { runId: RunId; requestId: InputRequestId; expectedRevision: number; input: UserInput; messageId?: MessageId }): Promise<RunRecord> { return this.store.answerInput(this.lease, input); }
+  async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input: import("../runtime-events").JsonValue }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
   async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }

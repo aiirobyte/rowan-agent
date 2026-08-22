@@ -124,12 +124,40 @@ _Avoid_: Worker, Lease, Agent process
 
 **Phase Execution**:
 One invocation of a selected Phase inside an Execution Attempt, governed by the
-Run's Phase state, routing, and Execution Checkpoint. It is not an independent
-durable Tool Call and has no Tool-style automatic retry contract.
+Run's Phase state, routing, Execution Checkpoint, and protocol-neutral Phase
+Interaction Driver. It is not an independent durable Tool Call and has no
+Tool-style automatic retry contract.
 _Avoid_: Tool Call, Phase Job, Generic Invocation
 
+**Phase Interaction**:
+A durable, typed Phase boundary that requests host input while a Phase is
+executing. Interaction kinds are generic runtime concepts such as `user_input`,
+`permission`, `elicitation`, and `confirmation`; their payload schema remains
+opaque to Rowan.
+_Avoid_: ACP Message, Tool Call, Prompt String
+
+**Phase Interaction Driver**:
+The execution-scoped Rowan capability through which a Phase creates pending
+Interactions, reads resolved answers, checkpoints continuation state, suspends,
+and observes cancellation. It is protocol-neutral and does not know Providers,
+processes, or host business domains.
+_Avoid_: ACP Client, Provider Adapter, Tool Registry
+
+**Phase Suspension**:
+A durable execution boundary produced by a Phase when it cannot continue until
+one or more Phase Interactions are resolved. It stores JSON-safe continuation
+data and resumes through a new Execution Attempt; it never serializes a
+JavaScript closure or automatically replays an external side effect. Host
+integrations may map Interaction IDs to their own Sessions or streams outside
+Rowan.
+_Avoid_: Suspended Promise, Callback Handle, Automatic Retry
+
 **Input Request**:
-A durable one-shot request for more Agent Input, linked to the Phase that requested it, one prompt Message, and one Execution Checkpoint. Its ID is the idempotency identity of its answer.
+A legacy `user_input` Phase Interaction projection: one durable one-shot
+request for more Agent Input, linked to the Phase that requested it, one prompt
+Message, and one Execution Checkpoint. Its ID remains the idempotency identity
+of its answer while the general Interaction collection supports multiple
+pending requests.
 _Avoid_: Suspension Promise, pending callback, resume token
 
 **Execution Checkpoint**:

@@ -10,6 +10,7 @@ Phases are the core unit of work in Rowan's agent loop. Each phase defines a bou
 - [How Phases Work](#how-phases-work)
 - [PHASE.md Format](#phasemd-format)
 - [Execution Modes](#execution-modes)
+- [Interactive Phases](#interactive-phases)
 - [The Route Tool](#the-route-tool)
 - [Parallel Execution](#parallel-execution)
 - [Inter-Phase Data](#inter-phase-data)
@@ -289,6 +290,23 @@ export default async function(api: ExtensionAPI) {
 ```
 
 ---
+
+## Interactive Phases
+
+Programmatic Phases that need a durable host interaction use the generic
+[`PhaseInteractionDriver`](./phase-interactions.md) attached to their
+`PhaseExecution`. The driver is suitable for permission requests, user input,
+elicitation, and confirmations. A host may map Interaction IDs to its own
+activity streams or concurrent Sessions without adding those concepts to Rowan.
+
+The driver does not add ACP, Provider, process, or transport concepts to Rowan.
+It turns an interaction into a durable boundary, stores JSON-safe continuation
+state, and resumes the Phase through a later Execution Attempt. Existing
+`Phase.run` callbacks and the legacy single `input_required` boundary remain
+valid while the typed Interaction collection is introduced additively.
+
+See [Phase Interactions](./phase-interactions.md) for the lifecycle and public
+contract design.
 
 ## The Route Tool
 

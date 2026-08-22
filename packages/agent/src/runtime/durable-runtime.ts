@@ -290,6 +290,16 @@ export class AgentRuntime implements AgentRuntimeContract {
     void this.pump();
   }
 
+  async respondInteraction(runId: RunId, input: { interactionId: string; input: JsonValue }): Promise<void> {
+    this.assertOpen();
+    const snapshot = await this.owned.snapshotRun(runId);
+    if (snapshot.state !== "input_required" || !snapshot.interactions.some((interaction) => interaction.id === input.interactionId)) {
+      throw new RuntimeError("input_request_conflict", { runId, requestId: input.interactionId as import("../runtime-events").InputRequestId, reason: "not_found" });
+    }
+    await this.owned.answerInteraction({ runId, interactionId: input.interactionId, expectedRevision: snapshot.revision, input: input.input });
+    void this.pump();
+  }
+
   async cancel(runId: RunId, reason?: string): Promise<RunBoundary> {
     this.assertOpen();
     const done = this.executionDone.get(runId);
@@ -423,6 +433,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         stream,
         maxAttempts: config.maxAttempts,
         checkpoint: claim.run.checkpoint,
+        interactionAnswers: claim.run.interactionAnswers,
         signal: controller.signal,
         beforePhase: assembly.beforePhase,
         afterPhase: assembly.afterPhase,
@@ -496,7 +507,17 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
       if (result.type === "input_required") {
         const prompt = promptMessage(run, result.request.prompt, result.messages.length);
-        await this.owned.commitInputRequired({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, requestId: createId("input") as import("../runtime-events").InputRequestId, phase: result.request.phase, prompt, checkpoint: result.checkpoint });
+        await this.owned.commitInputRequired({
+          runId: run.id,
+          execution: claim.execution,
+          expectedRevision: executionRevision,
+          requestId: createId("input") as import("../runtime-events").InputRequestId,
+          phase: result.request.phase,
+          prompt,
+          checkpoint: result.checkpoint,
+          interactions: result.interactions,
+          interactionAnswers: claim.run.interactionAnswers,
+        });
         this.transientEvents.clear(run.id, claim.execution.executionId);
         return;
       }
@@ -793,6 +814,7 @@ class DurableRun implements AgentRun {
   observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<RunEvent> { return this.runtime.observe(this.id, options); }
   wait(options?: { signal?: AbortSignal }): Promise<RunBoundary> { return this.runtime.wait(this.id, options); }
   respond(input: { requestId: import("../runtime-events").InputRequestId; input: UserInput }): Promise<void> { return this.runtime.respond(this.id, input); }
+  respondInteraction(input: { interactionId: string; input: JsonValue }): Promise<void> { return this.runtime.respondInteraction(this.id, input); }
   cancel(reason?: string): Promise<RunBoundary> { return this.runtime.cancel(this.id, reason); }
 }
 
@@ -823,7 +845,14 @@ function durableOutcome(outcome: import("../protocol").Outcome) {
 
 function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
   switch (snapshot.state) {
-    case "input_required": return { type: "input_required", requestId: snapshot.request.id, phase: snapshot.request.phase, prompt: snapshot.request.prompt };
+    case "input_required": return {
+      type: "input_required",
+      requestId: snapshot.request.id,
+      phase: snapshot.request.phase,
+      prompt: snapshot.request.prompt,
+      interactions: snapshot.interactions,
+      answers: snapshot.answers,
+    };
     case "completed": return { type: "completed", outcome: snapshot.outcome, ...(snapshot.output ? { output: snapshot.output } : {}) };
     case "failed": return { type: "failed", failure: snapshot.failure };
     case "cancelled": return { type: "cancelled", ...(snapshot.reason ? { reason: snapshot.reason } : {}) };

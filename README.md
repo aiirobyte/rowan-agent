@@ -17,6 +17,11 @@ Key Principles:
 
 See details in [docs/phases](packages/agent/docs/phases.md), [docs/extensions](packages/agent/docs/extensions.md).
 
+Interactive programmatic Phases use the protocol-neutral
+[Phase Interaction Driver](packages/agent/docs/phase-interactions.md). Rowan
+does not interpret host Sessions or transport; it owns durable boundaries,
+checkpoints, observations, answers, and cancellation.
+
 ## Quick Start
 
 Clone the repository and install dependencies:
@@ -115,6 +120,7 @@ bun run release
 | [CLI package README](packages/cli) | CLI usage, options, Runs, and output behavior |
 | [Examples](examples) | Config templates, extension examples, phase examples |
 | [Phases](packages/agent/docs/phases.md) | `PHASE.md` format, routing, execution modes, parallel phases |
+| [Phase Interactions](packages/agent/docs/phase-interactions.md) | Suspendable Phase execution, typed interactions, and resume |
 | [Extensions](packages/agent/docs/extensions.md) | Extension discovery, hooks, tools, phases, providers, event bus |
 
 ## Acknowledgements

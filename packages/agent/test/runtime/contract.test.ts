@@ -106,6 +106,8 @@ test("input-required and terminal snapshots require valid committed Assistant me
     ...base,
     state: "input_required",
     request: { id: "request-1" as never, phase: "plan", prompt },
+    interactions: [],
+    answers: {},
   } satisfies RunSnapshot;
   assertValidRunSnapshot(waiting, { committedMessages: [prompt] });
   expect(() => assertValidRunSnapshot(waiting)).toThrow();
