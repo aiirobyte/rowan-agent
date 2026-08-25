@@ -563,7 +563,8 @@ What a phase returns.
 
 ```typescript
 type PhaseOutput = {
-  message: string;                     // outcome message
+  message?: string;                    // user-visible assistant message
+  status?: PhaseStatus;                // non-conversational execution status
   route: string;                       // next phase name, "continue", or "stop"
   phase?: string;                      // phase name (auto-filled)
   toolCalls?: Array<{ id: string; name: string; args: unknown }>;

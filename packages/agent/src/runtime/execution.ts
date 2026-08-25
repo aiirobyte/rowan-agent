@@ -17,8 +17,8 @@ import type {
   ExecutionState,
   MessageDeltaNotification,
 } from "../loop/types";
-import type { PhaseExecutionIdentity, PhaseRegistry } from "../harness/phases/types";
 import { PhaseInteractionBoundary, type PhaseInteraction, type PhaseInteractionState } from "../harness/phases/interactions";
+import type { PhaseExecutionIdentity, PhaseRegistry, PhaseStatus } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
 import type { ThinkingLevel } from "@rowan-agent/models";
@@ -64,6 +64,7 @@ export type OneShotExecutionInput = Readonly<{
   onMessageDelta?: (event: MessageDeltaNotification) => void;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
+  onPhaseStatus?: (phaseId: string, status: PhaseStatus) => void | Promise<void>;
   runtime?: AgentRuntimePort;
   onContext?: (context: AgentContext) => void;
 }>;
@@ -262,6 +263,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     onMessageDelta: input.onMessageDelta,
     onOutcome: input.onOutcome,
     onModelTranscript: input.onModelTranscript,
+    onPhaseStatus: input.onPhaseStatus,
     runtime: input.runtime,
     waitForInput: async (nextState: ExecutionState | undefined, request: { phase: string; prompt: string; requestedAt: string } | undefined) => {
       if (!nextState || !request) throw new Error("Input boundary did not include execution state.");

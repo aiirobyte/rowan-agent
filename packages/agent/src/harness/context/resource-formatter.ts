@@ -34,9 +34,9 @@ export function buildStructuredSection(
 
 /** Build a structured description for skills. */
 export function buildSkillsDescription(
-  skills: Array<{ name: string; description: string; filePath: string; disableModelInvocation?: boolean }>,
+  skills: Array<{ name: string; description: string; filePath: string; disableAutoInvocation?: boolean; disableModelInvocation?: boolean }>,
 ): string {
-  const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
+  const visibleSkills = skills.filter((skill) => !(skill.disableAutoInvocation ?? skill.disableModelInvocation));
   if (visibleSkills.length === 0) return "";
 
   const lines = ["<available_skills>"];

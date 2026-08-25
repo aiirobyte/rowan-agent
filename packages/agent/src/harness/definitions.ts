@@ -131,7 +131,8 @@ function optionalBundledSkills(value: unknown, field: string): readonly Skill[] 
       || typeof item.filePath !== "string"
       || typeof item.baseDir !== "string"
       || typeof item.content !== "string"
-      || typeof item.disableModelInvocation !== "boolean") {
+      || (item.disableAutoInvocation !== undefined && typeof item.disableAutoInvocation !== "boolean")
+      || (item.disableImplicitInvocation !== undefined && typeof item.disableImplicitInvocation !== "boolean")) {
       throw new TypeError(`${field}[${index}] is invalid`);
     }
     if (names.has(item.name)) throw new TypeError(`Duplicate bundled Skill "${item.name}".`);

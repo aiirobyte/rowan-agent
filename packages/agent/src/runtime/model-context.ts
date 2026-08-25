@@ -107,6 +107,7 @@ function projectToolContent(content: Extract<Message, { role: "tool" }>["content
 export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): LoopTool {
   return {
     name: tool.name,
+    ...(tool.core ? { core: true } : {}),
     description: tool.description,
     parameters: tool.parameters,
     execute: async (args, context, signal): Promise<ToolResult> => {

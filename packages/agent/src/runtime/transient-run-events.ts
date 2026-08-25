@@ -1,11 +1,12 @@
 import type {
   ExecutionId,
   MessageDelta,
+  PhaseStatusEvent,
   RunId,
   ToolProgress,
 } from "../runtime-events";
 
-export type TransientRunEvent = MessageDelta | ToolProgress;
+export type TransientRunEvent = MessageDelta | ToolProgress | PhaseStatusEvent;
 
 const MAX_BUFFERED_EVENTS = 128;
 const MAX_BUFFERED_TEXT = 64 * 1024;
@@ -53,11 +54,19 @@ export class TransientRunEventSubscription {
     return this.queue.shift();
   }
 
-  clear(executionId?: ExecutionId): void {
+  clear(executionId?: ExecutionId, preserveCompletedPhaseStatus = false): void {
     if (executionId === undefined) this.queue.length = 0;
     else {
       for (let index = this.queue.length - 1; index >= 0; index -= 1) {
-        if (this.queue[index]?.executionId === executionId) this.queue.splice(index, 1);
+        const event = this.queue[index];
+        if (
+          event?.executionId === executionId
+          && !(preserveCompletedPhaseStatus
+            && event.kind === "phase_status"
+            && event.status.state === "completed")
+        ) {
+          this.queue.splice(index, 1);
+        }
       }
     }
     this.notify();
@@ -151,9 +160,9 @@ export class TransientRunEventHub {
     }
   }
 
-  clear(runId: RunId, executionId?: ExecutionId): void {
+  clear(runId: RunId, executionId?: ExecutionId, preserveCompletedPhaseStatus = false): void {
     for (const subscription of this.subscriptions.get(runId) ?? []) {
-      subscription.clear(executionId);
+      subscription.clear(executionId, preserveCompletedPhaseStatus);
     }
   }
 

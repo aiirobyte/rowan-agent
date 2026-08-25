@@ -92,6 +92,8 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
     baseDir,
     content: definition.prompt,
     model: definition.model,
+    disableAutoInvocation: metadata["disable-auto-invocation"] === true,
+    disableImplicitInvocation: metadata["disable-implicit-invocation"] === true,
   };
 
   // Try to load execution code

@@ -24,11 +24,12 @@ function buildPhaseEntry(p: Pick<Phase, 'name' | 'description' | 'tools' | 'skil
 }
 
 function buildRouteDescription(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): string {
+  const routablePhases = availablePhases.filter(({ name }) => name !== "stop");
   const phasesBlock = buildStructuredSection("phase", [
-    ...availablePhases.map(buildPhaseEntry),
+    ...routablePhases.map(buildPhaseEntry),
     {
       name: "stop",
-      description: "Explicitly finish the current user request or task when no further user input is needed",
+      description: "Complete the task; when the current reply has no final user-facing conclusion, the built-in Stop Phase provides one",
     },
   ]);
 
@@ -38,7 +39,7 @@ function buildRouteDescription(availablePhases: Pick<Phase, 'name' | 'descriptio
     "Rules:",
     "- Call route only to continue execution immediately in one or more phases, or to explicitly stop.",
     "- `decision` lists phase executions; a single target equal to the current phase starts another iteration of that phase.",
-    "- `stop` means the current user request or task is complete and no further user input is needed; `stop` must be the only target.",
+    "- `stop` completes the task; when the current reply has no final user-facing conclusion, the built-in Stop Phase provides one. Use it only when the task is complete and no further user input is needed, and make it the only target.",
     "- Each target may include `phase`, `reason`, `payload`.",
     "- A phase may appear multiple times as independent execution instances.",
     "- `payload` MUST match the phase's `payload_schema`",
@@ -58,9 +59,10 @@ function buildRouteDescription(availablePhases: Pick<Phase, 'name' | 'descriptio
  * intercepting route tool calls in each phase's run function.
  */
 export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): Tool<RouteToolArgs> {
+  const routablePhases = availablePhases.filter(({ name }) => name !== "stop");
   const DecisionTarget = Type.Object({
     phase: Type.Union([
-      ...availablePhases.map(p => Type.Literal(p.name)),
+      ...routablePhases.map(p => Type.Literal(p.name)),
       Type.Literal("stop"),
     ]),
     reason: Type.Optional(Type.String({ description: "Brief reason for this decision" })),
@@ -70,10 +72,10 @@ export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'descripti
   return {
     name: PhaseRouteTool,
     description: buildRouteDescription(availablePhases),
-    promptSnippet: "Route is optional: omit it to remain in the current phase and wait for user input; use it for immediate phase execution or an explicit stop.",
+    promptSnippet: "Route is optional: omit it to remain in the current phase and wait for user input; use it for immediate phase execution, or use stop to complete the task and obtain a final user-facing conclusion when needed.",
     promptGuidelines: [
       "Do not call route together with ordinary tools.",
-      "Use route(stop) only when the current user request or task is complete and no further user input is needed.",
+      "Use route(stop) only when the current user request or task is complete; the Stop Phase will provide the final user-facing conclusion.",
     ],
     parameters: Type.Object({
       decision: Type.Array(DecisionTarget, { description: "Phase executions to start", minItems: 1 }),

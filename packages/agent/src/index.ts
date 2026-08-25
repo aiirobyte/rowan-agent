@@ -1,5 +1,6 @@
-import { createCoreTools as createLegacyCoreTools, type CoreToolContext } from "./harness/tools";
-import type { JsonValue, Tool as RuntimeTool, ToolInvocationContext } from "./runtime/contracts";
+import { type CoreToolContext } from "./harness/tools";
+import type { Tool as RuntimeTool } from "./runtime/contracts";
+import { createRuntimeCoreTools } from "./runtime/core-tools";
 
 export { AgentRuntime } from "./runtime/durable-runtime";
 export { ResourceRegistry, ResourceRegistryError } from "./runtime/resource-registry";
@@ -24,22 +25,21 @@ export { RuntimeError, isRuntimeError } from "./runtime/errors";
 export { loadSkill, loadSkills } from "./harness/skills";
 export { loadPhase } from "./harness/phases/loader";
 export { loadPhases } from "./harness/phases/loader";
+export {
+  COMPACT_PHASE_ID,
+  DEFAULT_PHASE_ID,
+  STOP_PHASE_ID,
+  createCompactPhase,
+  createCorePhases,
+  createDefaultPhase,
+  createStopPhase,
+} from "./harness/phases/default";
 export { loadExtensionsFromPath as loadExtensions } from "./extensions/loader";
 export { parseAgentDefinition } from "./harness/definitions";
 export { parseFrontmatter } from "./harness/loader";
 
 export function createCoreTools(input: CoreToolContext = {}): RuntimeTool[] {
-  return createLegacyCoreTools(input).map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-    execute: async (args: JsonValue, context: ToolInvocationContext, signal: AbortSignal) => {
-      const result = await tool.execute(args, { skills: [], toolCallId: context.toolCallId }, signal);
-      return result.ok
-        ? { ok: true, content: result.content as JsonValue }
-        : { ok: false, content: result.content as JsonValue, error: result.error ?? "Tool failed." };
-    },
-  }));
+  return createRuntimeCoreTools(input);
 }
 
 export type {
@@ -60,6 +60,8 @@ export type {
   ConfigPutResult,
   ConfigResolution,
   ConfigToken,
+  ContextCompactionRecord,
+  ContextStatus,
   ContextCandidate,
   DurableConsumer,
   DurableRunEvent,
@@ -73,6 +75,8 @@ export type {
   InputRequest,
   InputRequestId,
   InputRequiredCommit,
+  InvocationCatalogEntry,
+  InvocationSource,
   HistorySeed,
   JsonObject,
   JsonPrimitive,
@@ -172,7 +176,9 @@ export type {
   PhaseContext,
   PhaseExecutionIdentity,
   PhaseInvocation,
+  PhaseStatusState,
   PhaseOutput,
+  PhaseStatus,
   PhaseRegistry,
   PhaseState,
 } from "./harness/phases/types";

@@ -129,6 +129,13 @@ Interaction Driver. It is not an independent durable Tool Call and has no
 Tool-style automatic retry contract.
 _Avoid_: Tool Call, Phase Job, Generic Invocation
 
+**Phase Status**:
+A transient consumer-facing update emitted by a Phase without entering the
+Conversation transcript. Its arbitrary `kind` identifies the business status;
+its lifecycle `state` is explicitly `running` for in-progress work or
+`completed` for the final update. Every status update must provide its state.
+_Avoid_: Conversation Message, Run State, Tool Progress
+
 **Phase Interaction**:
 A durable, typed Phase boundary that requests host input while a Phase is
 executing. Interaction kinds are generic runtime concepts such as `user_input`,

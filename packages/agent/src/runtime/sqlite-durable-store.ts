@@ -1,10 +1,15 @@
 import { Database } from "bun:sqlite";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import type {
   AgentId,
   AgentDeletionRequest,
   AgentRecord,
   AssistantMessage,
   ConfigToken,
+  ContextCompactionRecord,
+  ContextStatus,
   ConsumerRegistration,
   DurableRunEvent,
   ExecutionCheckpoint,
@@ -13,6 +18,7 @@ import type {
   EventCursor,
   InputRequestId,
   InputRequiredCommit,
+  Message,
   MessageId,
   Metadata,
   Outcome,
@@ -158,6 +164,10 @@ type SqliteOperation<T> = (store: InMemoryStore, lease: OwnerLease) => T;
 
 export class SqliteStore implements DurableStore {
   private readonly database: Database;
+  private readonly archiveRoot: string;
+  private readonly mirroredEventIds = new Map<string, Set<string>>();
+  private readonly mirroredCompactionIds = new Map<string, Set<string>>();
+  private mirroredAgents = new Set<string>();
   private closed = false;
   private configured = false;
 
@@ -165,6 +175,9 @@ export class SqliteStore implements DurableStore {
     // Opening the SQLite handle is intentionally the only constructor side effect.
     // Schema inspection, PRAGMAs, and all writes happen in openOwner().
     this.database = new Database(filename, { create: true, readwrite: true, strict: true });
+    this.archiveRoot = filename === ":memory:"
+      ? join(tmpdir(), `rowan-context-archives-${crypto.randomUUID()}`)
+      : join(dirname(resolve(filename)), "context-archives");
   }
 
   async openOwner(input: { ownerId: string; leaseMs: number }): Promise<OwnedStore> {
@@ -221,6 +234,11 @@ export class SqliteStore implements DurableStore {
     this.database.close();
   }
 
+  /** Filesystem location owned by this Store for one Agent's readable archive. */
+  contextArchiveDir(agentId: AgentId): string {
+    return join(this.archiveRoot, String(agentId));
+  }
+
   async reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> {
     return this.invoke(lease, (store, current) => store.reserveAgent(current, input));
   }
@@ -246,6 +264,18 @@ export class SqliteStore implements DurableStore {
     effectDigestConfirmation?: string;
   }): Promise<import("./contracts").MessageRevisionResult> {
     return this.invoke(lease, (store, current) => store.reviseMessage(current, input));
+  }
+
+  async contextStatus(lease: OwnerLease, agentId: AgentId, contextWindow: number): Promise<ContextStatus> {
+    return this.invoke(lease, (store, current) => store.contextStatus(current, agentId, contextWindow), false);
+  }
+
+  async contextMessages(lease: OwnerLease, agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]> {
+    return this.invoke(lease, (store, current) => store.contextMessages(current, agentId, recentTokenBudget), false);
+  }
+
+  async commitContextCompaction(lease: OwnerLease, record: ContextCompactionRecord): Promise<ContextCompactionRecord> {
+    return this.invoke(lease, (store, current) => store.commitContextCompaction(current, record));
   }
 
   async createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> {
@@ -548,6 +578,65 @@ export class SqliteStore implements DurableStore {
         [consumerId, Number(String(cursor).split(":").at(-1)), null, new Date().toISOString()],
       );
     }
+    this.mirrorState(state);
+  }
+
+  /** Append the semantic durable event mirror and remove deleted Agent sidecars. */
+  private mirrorState(state: InMemoryStoreState): void {
+    mkdirSync(this.archiveRoot, { recursive: true, mode: 0o700 });
+    chmodSync(this.archiveRoot, 0o700);
+    const currentAgents = new Set(state.agents.map((agent) => String(agent.id)));
+    for (const agentId of this.mirroredAgents) {
+      if (currentAgents.has(agentId)) continue;
+      rmSync(join(this.archiveRoot, agentId), { recursive: true, force: true });
+      this.mirroredEventIds.delete(agentId);
+      this.mirroredCompactionIds.delete(agentId);
+    }
+    for (const agent of state.agents) {
+      const agentId = String(agent.id);
+      const archiveDir = join(this.archiveRoot, agentId);
+      const toolDir = join(archiveDir, "tool-results");
+      mkdirSync(toolDir, { recursive: true, mode: 0o700 });
+      chmodSync(archiveDir, 0o700);
+      chmodSync(toolDir, 0o700);
+      const sessionPath = join(archiveDir, "session.jsonl");
+      try { chmodSync(sessionPath, 0o600); } catch { /* created below */ }
+      const known = this.mirroredEventIds.get(agentId) ?? new Set<string>();
+      const knownCompactions = this.mirroredCompactionIds.get(agentId) ?? new Set<string>();
+      if (known.size === 0 || knownCompactions.size === 0) {
+        try {
+          for (const line of readFileSync(sessionPath, "utf8").split("\n")) {
+            if (!line.trim()) continue;
+            const parsed = JSON.parse(line) as { event?: { id?: string }; record?: { id?: string } };
+            if (parsed.event?.id) known.add(parsed.event.id);
+            if (parsed.record?.id) knownCompactions.add(parsed.record.id);
+          }
+        } catch { /* first mirror write */ }
+      }
+      const lines = state.events
+        .filter((event) => String(event.agentId) === agentId && !known.has(String(event.id)))
+        .map((event) => JSON.stringify({ schemaVersion: 1, kind: "rowan_event", event }) + "\n");
+      if (lines.length > 0) {
+        appendFileSync(sessionPath, lines.join(""), { encoding: "utf8", mode: 0o600 });
+        chmodSync(sessionPath, 0o600);
+        for (const event of state.events) {
+          if (String(event.agentId) === agentId) known.add(String(event.id));
+        }
+      }
+      const compactionLines = (state.contextCompactions ?? [])
+        .filter(([candidateId, record]) => String(candidateId) === agentId && !knownCompactions.has(record.id))
+        .map(([, record]) => JSON.stringify({ schemaVersion: 1, kind: "context_compacted", record }) + "\n");
+      if (compactionLines.length > 0) {
+        appendFileSync(sessionPath, compactionLines.join(""), { encoding: "utf8", mode: 0o600 });
+        chmodSync(sessionPath, 0o600);
+        for (const [, record] of state.contextCompactions ?? []) {
+          if (String(record.agentId) === agentId) knownCompactions.add(record.id);
+        }
+      }
+      this.mirroredEventIds.set(agentId, known);
+      this.mirroredCompactionIds.set(agentId, knownCompactions);
+    }
+    this.mirroredAgents = currentAgents;
   }
 
   private requireMatchingOwner(lease: OwnerLease, requireLive: boolean): OwnerRow {
@@ -598,6 +687,8 @@ export class SqliteStore implements DurableStore {
 class SqliteOwnedStore implements OwnedStore {
   constructor(private readonly store: SqliteStore, public lease: OwnerLease) {}
 
+  contextArchiveDir(agentId: AgentId): string { return this.store.contextArchiveDir(agentId); }
+
   reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
@@ -611,6 +702,9 @@ class SqliteOwnedStore implements OwnedStore {
     effectDigestConfirmation?: string;
   }): Promise<import("./contracts").MessageRevisionResult> { return this.store.reviseMessage(this.lease, input); }
   compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult> { return this.store.compact(this.lease, input); }
+  contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus> { return this.store.contextStatus(this.lease, agentId, contextWindow); }
+  contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]> { return Promise.resolve(this.store.contextMessages(this.lease, agentId, recentTokenBudget)); }
+  commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> { return this.store.commitContextCompaction(this.lease, record); }
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }

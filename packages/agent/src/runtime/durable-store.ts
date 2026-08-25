@@ -6,6 +6,8 @@ import type {
   AgentDeletionRequest,
   AssistantMessage,
   ConsumerRegistration,
+  ContextCompactionRecord,
+  ContextStatus,
   ConfigToken,
   DurableEventBase,
   DurableRunEvent,
@@ -98,6 +100,7 @@ export type InMemoryStoreState = Readonly<{
   nextAgentSequence: readonly (readonly [AgentId, number])[];
   nextReadySequence: readonly (readonly [AgentId, number])[];
   eventSequence: number;
+  contextCompactions?: readonly (readonly [AgentId, ContextCompactionRecord])[];
 }>;
 
 export class InMemoryStore implements DurableStore {
@@ -117,6 +120,7 @@ export class InMemoryStore implements DurableStore {
   private ownerEpoch = 0;
   private eventSequence = 0;
   private retentionFloor = 1;
+  private readonly contextCompactions = new Map<AgentId, ContextCompactionRecord>();
 
   constructor(options: { incarnation?: string } = {}) {
     this.incarnation = options.incarnation ?? createId("store");
@@ -137,6 +141,7 @@ export class InMemoryStore implements DurableStore {
     for (const [agentId, sequence] of state.nextReadySequence) store.nextReadySequence.set(agentId, sequence);
     store.eventSequence = state.eventSequence;
     store.retentionFloor = Math.max(1, state.retentionFloor ?? 1);
+    for (const [agentId, record] of state.contextCompactions ?? []) store.contextCompactions.set(agentId, clone(record));
     store.ownerEpoch = Math.max(
       0,
       ...state.runs.map((run) => run.execution?.ownerEpoch ?? 0),
@@ -160,6 +165,7 @@ export class InMemoryStore implements DurableStore {
       nextAgentSequence: [...this.nextAgentSequence.entries()],
       nextReadySequence: [...this.nextReadySequence.entries()],
       eventSequence: this.eventSequence,
+      contextCompactions: [...this.contextCompactions.entries()],
     });
   }
 
@@ -367,6 +373,18 @@ export class InMemoryStore implements DurableStore {
         actual: -1,
       });
     }
+    const coveredThrough = this.contextCompactions.get(agent.id)?.coveredThrough;
+    if (coveredThrough) {
+      const history = this.activeHistory(agent.id, Number.MAX_SAFE_INTEGER);
+      const coveredIndex = history.findIndex((message) => message.id === coveredThrough.messageId);
+      const originalIndex = history.findIndex((message) => message.id === original.id);
+      if (coveredIndex >= 0 && originalIndex >= 0 && originalIndex <= coveredIndex) {
+        throw new RuntimeError("message_history_compacted", {
+          agentId: agent.id,
+          messageId: original.id,
+        });
+      }
+    }
     const actualRevision = original.messageRevision ?? 0;
     if (actualRevision !== input.expectedMessageRevision) {
       throw new RuntimeError("message_revision_conflict", {
@@ -528,10 +546,12 @@ export class InMemoryStore implements DurableStore {
     const run = this.requireRun(input.runId);
     this.assertRevision(run, input.expectedRevision);
     this.assertState(run, ["queued"]);
-    if ([...this.runs.values()].some((candidate) => candidate.agentId === run.agentId && candidate.id !== run.id && candidate.agentSequence < run.agentSequence && !["completed", "failed", "cancelled"].includes(candidate.state))) {
+    if (!isControlRun(run) && [...this.runs.values()].some((candidate) => candidate.agentId === run.agentId && candidate.id !== run.id && candidate.agentSequence < run.agentSequence && !["completed", "failed", "cancelled"].includes(candidate.state))) {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["queued"], actual: run.state });
     }
-    if ([...this.runs.values()].some((candidate) => candidate.agentId === run.agentId && candidate.id !== run.id && ["running", "input_required"].includes(candidate.state))) {
+    if ([...this.runs.values()].some((candidate) => candidate.agentId === run.agentId
+      && candidate.id !== run.id
+      && (candidate.state === "running" || (!isControlRun(run) && candidate.state === "input_required")))) {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["queued"], actual: run.state });
     }
 
@@ -540,7 +560,7 @@ export class InMemoryStore implements DurableStore {
     }
     if (!run.pinnedConfigToken && input.configToken) run.pinnedConfigToken = input.configToken;
     let message: Message | undefined;
-    if (!run.checkpoint && !run.initialMessageId) {
+    if (!run.checkpoint && !run.initialMessageId && !isControlRun(run)) {
       const userInput = normalizeUserInput(run.input);
       message = {
         id: input.messageId ?? (createId("msg") as MessageId),
@@ -1332,6 +1352,81 @@ export class InMemoryStore implements DurableStore {
     return this.activeHistory(agentId, Number.MAX_SAFE_INTEGER);
   }
 
+  contextStatus(lease: OwnerLease, agentId: AgentId, contextWindow: number): ContextStatus {
+    this.assertOwner(lease);
+    this.requireAgent(agentId);
+    if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
+      throw new TypeError("contextWindow must be a positive finite number");
+    }
+    const messages = this.contextMessages(lease, agentId);
+    const tokens = estimateMessageTokens(messages);
+    const record = this.contextCompactions.get(agentId);
+    const thresholdTokens = Math.max(0, Math.floor(contextWindow) - 16_384);
+    return {
+      tokens,
+      contextWindow: Math.floor(contextWindow),
+      percent: Math.round((tokens / contextWindow) * 100),
+      thresholdTokens,
+      estimated: true,
+      ...(record?.coveredThrough ? { coveredThrough: clone(record.coveredThrough) } : {}),
+    };
+  }
+
+  contextMessages(
+    lease: OwnerLease,
+    agentId: AgentId,
+    recentTokenBudget = 20_000,
+  ): readonly Message[] {
+    this.assertOwner(lease);
+    this.requireAgent(agentId);
+    if (!Number.isFinite(recentTokenBudget) || recentTokenBudget <= 0) {
+      throw new TypeError("recentTokenBudget must be a positive finite number");
+    }
+    const history = this.activeHistory(agentId, Number.MAX_SAFE_INTEGER);
+    const record = this.contextCompactions.get(agentId);
+    if (!record) return history;
+    const coveredIndex = record.coveredThrough
+      ? history.findIndex((message) => message.id === record.coveredThrough!.messageId)
+      : -1;
+    const suffix = coveredIndex >= 0 ? history.slice(coveredIndex + 1) : history;
+    const recent: Message[] = [];
+    let tokens = 0;
+    for (let index = suffix.length - 1; index >= 0; index -= 1) {
+      const message = suffix[index]!;
+      const messageTokens = estimateMessageTokens([message]);
+      if (recent.length > 0 && tokens + messageTokens > recentTokenBudget) break;
+      recent.unshift(message);
+      tokens += messageTokens;
+    }
+    const covered = record.coveredThrough
+      ? history.find((message) => message.id === record.coveredThrough!.messageId)
+      : undefined;
+    const summary: Message = {
+      id: `context-summary:${record.id}` as MessageId,
+      agentId,
+      runId: (covered?.runId ?? history.at(-1)?.runId ?? `context:${agentId}`) as RunId,
+      role: "assistant",
+      content: `[Context summary]\n\n${record.summary}`,
+      sequenceWithinRun: covered?.sequenceWithinRun ?? 0,
+      createdAt: record.createdAt,
+      metadata: { kind: "context_summary", compactionId: record.id },
+    };
+    return [summary, ...recent];
+  }
+
+  commitContextCompaction(lease: OwnerLease, record: ContextCompactionRecord): ContextCompactionRecord {
+    this.assertOwner(lease);
+    this.requireAgent(record.agentId);
+    if (record.id.trim().length === 0 || record.summary.trim().length === 0) {
+      throw new TypeError("context compaction id and summary must be non-empty");
+    }
+    const existing = this.contextCompactions.get(record.agentId);
+    if (existing?.id === record.id) return clone(existing);
+    const next = clone(record);
+    this.contextCompactions.set(record.agentId, next);
+    return clone(next);
+  }
+
   private activeHistory(agentId: AgentId, beforeSequence: number): readonly Message[] {
     return clone([
       ...(this.historySeeds.get(agentId) ?? []),
@@ -1428,6 +1523,15 @@ class MemoryOwnedStore implements OwnedStore {
   async compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult> {
     return this.store.compact(this.lease, input);
   }
+  async contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus> {
+    return this.store.contextStatus(this.lease, agentId, contextWindow);
+  }
+  async contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]> {
+    return this.store.contextMessages(this.lease, agentId, recentTokenBudget);
+  }
+  async commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> {
+    return this.store.commitContextCompaction(this.lease, record);
+  }
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
@@ -1481,6 +1585,33 @@ function userInputContent(input: UserInput): UserContent {
 
 function userInputMetadata(input: UserInput): Metadata | undefined {
   return typeof input === "string" ? undefined : input.metadata;
+}
+
+function isControlRun(run: RunRecord): boolean {
+  const rowan = run.metadata?.rowan;
+  return typeof rowan === "object" && rowan !== null && "kind" in rowan
+    && (rowan as { kind?: unknown }).kind === "compact";
+}
+
+function estimateMessageTokens(messages: readonly Message[]): number {
+  let characters = 0;
+  for (const message of messages) {
+    characters += messageContentText(message.content).length;
+    characters += 20;
+  }
+  return Math.ceil(characters / 4);
+}
+
+function messageContentText(content: Message["content"]): string {
+  if (typeof content === "string") return content;
+  return content.map((part) => {
+    if (part.type === "text") return part.text;
+    if (part.type === "thinking") return part.thinking;
+    if (part.type === "tool_use") return JSON.stringify(part.input);
+    if (part.type === "tool_result") return JSON.stringify(part.result);
+    if (part.type === "image") return `[image:${part.mimeType}]`;
+    return "";
+  }).join("\n");
 }
 
 function targetInput(input: UserInput, metadata: Metadata | undefined): UserInput {

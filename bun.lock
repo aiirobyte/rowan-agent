@@ -14,7 +14,7 @@
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.7.2",
+      "version": "0.9.9",
       "dependencies": {
         "@rowan-agent/models": "workspace:*",
         "jiti": "2.7.0",
@@ -27,7 +27,7 @@
     },
     "packages/cli": {
       "name": "@rowan-agent/cli",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "bin": {
         "rowan": "./src/cli.ts",
       },
@@ -40,7 +40,7 @@
     },
     "packages/logging": {
       "name": "@rowan-agent/logging",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "dependencies": {
         "@rowan-agent/agent": "workspace:*",
         "pino": "^10.3.1",
@@ -48,7 +48,7 @@
     },
     "packages/models": {
       "name": "@rowan-agent/models",
-      "version": "0.6.3",
+      "version": "0.6.5",
       "devDependencies": {
         "tsup": "^8.5.1",
       },

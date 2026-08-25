@@ -104,6 +104,22 @@ export type { PhaseInteraction, PhaseInteractionKind, PhaseInteractionState, Pha
 
 export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
 export type HistorySeed = readonly Message[];
+export type ContextStatus = Readonly<{
+  tokens: number;
+  contextWindow: number;
+  percent: number;
+  thresholdTokens: number;
+  estimated: boolean;
+  coveredThrough?: Readonly<{ messageId: MessageId; sequence: number }>;
+}>;
+export type ContextCompactionRecord = Readonly<{
+  id: string;
+  agentId: AgentId;
+  summary: string;
+  coveredThrough?: Readonly<{ messageId: MessageId; sequence: number }>;
+  instructions?: string;
+  createdAt: string;
+}>;
 
 const THINKING_LEVELS = [
   "off",
@@ -156,6 +172,8 @@ export type ToolInvocationContext = Readonly<{
 }>;
 export type Tool = Readonly<{
   name: string;
+  /** Rowan-owned Core Tool; Core Tools bypass Definition/Phase filtering. */
+  core?: boolean;
   description: string;
   parameters: Type.TSchema;
   execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
@@ -183,6 +201,16 @@ export type AgentResources = Readonly<{
   resourceView?: import("./resource-registry").ResourceView;
   resourceRefs?: readonly import("./resource-registry").ResourceRef[];
   resourceRevisions?: Readonly<Record<import("./resource-registry").ResourceKind, readonly string[]>>;
+}>;
+export type InvocationSource = "auto" | "implicit" | "external";
+export type InvocationCatalogEntry = Readonly<{
+  kind: "phase" | "skill";
+  name: string;
+  description: string;
+  core?: boolean;
+  disableAutoInvocation: boolean;
+  disableImplicitInvocation: boolean;
+  filePath: string;
 }>;
 export type ResolvedAgentContext = Readonly<{
   systemPrompt: string;
@@ -339,6 +367,9 @@ export interface OwnedStore {
     effectDigestConfirmation?: string;
   }): Promise<MessageRevisionResult>;
   compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
+  contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus>;
+  contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
+  commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
@@ -453,6 +484,9 @@ export interface AgentRuntime {
   compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
   start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
+  contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
+  compactContext(agentId: AgentId, options?: { instructions?: string; idempotencyKey?: string }): Promise<AgentRun>;
+  listInvocations(agentId: AgentId, options: { source: InvocationSource }): Promise<readonly InvocationCatalogEntry[]>;
   history(agentId: AgentId): Promise<readonly Message[]>;
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[]; after?: RunListCursor; limit?: number }): Promise<Page<RunSummary, RunListCursor>>;

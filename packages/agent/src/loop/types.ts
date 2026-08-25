@@ -8,7 +8,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput } from "../harness/phases/types";
+import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput, PhaseStatus } from "../harness/phases/types";
 import type { PhaseInteractionState } from "../harness/phases/interactions";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
@@ -90,6 +90,7 @@ export type AgentConfig = {
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
+  onPhaseStatus?: (phaseId: string, status: PhaseStatus) => void | Promise<void>;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onMessageDelta?: (event: MessageDeltaNotification) => void;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;

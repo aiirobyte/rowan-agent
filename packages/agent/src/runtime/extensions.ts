@@ -1,6 +1,6 @@
 import type { RegisteredTool } from "../extensions/types";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { DEFAULT_PHASE_ID } from "../harness/phases/default";
+import { COMPACT_PHASE_ID, createCorePhases, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/default";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import { buildContextDescription } from "../harness/context/resource-formatter";
 import type { AgentConfig, ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolInvocationContext, ToolExecutionResult } from "./contracts";
@@ -8,6 +8,7 @@ import type { JsonValue } from "../runtime-events";
 import { projectTool } from "./model-context";
 import type { BeforePhaseHook, AfterPhaseHook, BeforePromptHook } from "../loop/types";
 import type { AgentContext, ToolResult } from "../types";
+import { createRuntimeCoreTools } from "./core-tools";
 
 export type ExtensionAssembly = Readonly<{
   context: ResolvedAgentContext;
@@ -25,10 +26,19 @@ export type ExtensionAssembly = Readonly<{
 export function assembleRegisteredExtensions(
   config: AgentConfig,
   runner: import("../extensions").ExtensionRunner,
+  options: Readonly<{ toolArchiveDir?: string }> = {},
 ): ExtensionAssembly {
 
   const extensionTools = runner.getAllRegisteredTools().map(adaptExtensionTool);
-  const tools = [...config.resources.tools];
+  const coreTools = createRuntimeCoreTools({
+    root: config.cwd,
+    ...(options.toolArchiveDir ? { archiveDir: options.toolArchiveDir } : {}),
+  });
+  const coreNames = new Set(coreTools.map((tool) => tool.name));
+  const tools = [
+    ...config.resources.tools.filter((tool) => !coreNames.has(tool.name)),
+    ...coreTools,
+  ];
   const names = new Set(tools.map((tool) => tool.name));
   for (const tool of extensionTools) {
     if (names.has(tool.name)) throw new TypeError(`Extension Tool collides with Context Tool "${tool.name}"`);
@@ -64,11 +74,13 @@ function resolveDefinitionContext(
   config: AgentConfig,
   assembled: Readonly<{ tools?: readonly Tool[]; phases?: PhaseRegistry }> = {},
 ): ResolvedAgentContext {
-  const tools = selectNamedResources(
-    assembled.tools ?? config.resources.tools,
-    config.definition.tools,
-    "Tool",
-  );
+  const candidateTools = assembled.tools ?? config.resources.tools;
+  const coreTools = candidateTools.filter((tool) => tool.core);
+  const authoredTools = candidateTools.filter((tool) => !tool.core);
+  const tools = [
+    ...selectNamedResources(authoredTools, config.definition.tools, "Tool"),
+    ...coreTools,
+  ];
   const skills = mergeSkills(
     selectNamedResources(config.resources.skills, config.definition.skills, "Skill"),
     config.definition.bundledSkills,
@@ -79,11 +91,16 @@ function resolveDefinitionContext(
     "Context",
   );
   const candidateRegistry = assembled.phases ?? config.resources.phases;
-  const selectedPhases = selectNamedResources(
-    [...(candidateRegistry?.phases.values() ?? [])],
-    config.definition.phases?.phaseIds,
-    "Phase",
-  );
+  const phaseCandidates = [...(candidateRegistry?.phases.values() ?? [])];
+  const coreNames = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
+  const selectedPhases = [
+    ...phaseCandidates.filter((phase) => phase.core || coreNames.has(phase.name)),
+    ...selectNamedResources(
+      phaseCandidates.filter((phase) => !phase.core && !coreNames.has(phase.name)),
+      config.definition.phases?.phaseIds,
+      "Phase",
+    ),
+  ];
   const phases = new Map(selectedPhases.map((phase) => [phase.name, phase]));
   const requestedEntry = config.definition.phases
     ? config.definition.phases.entryPhaseId
@@ -107,15 +124,23 @@ function resolveDefinitionContext(
 }
 
 function mergePhases(base: PhaseRegistry | undefined, extension: PhaseRegistry): PhaseRegistry | undefined {
-  if (!base && extension.phases.size === 0) return undefined;
-  const phases = new Map(base?.phases ?? []);
+  const core = createCorePhases();
+  const coreNames = new Set(core.map(({ name }) => name));
+  const phases = new Map(core.map((phase) => [phase.name, phase] as const));
+  for (const [name, phase] of base?.phases ?? []) {
+    if (coreNames.has(name)) {
+      if (!phase.core) throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${name}".`);
+      continue;
+    }
+    phases.set(name, phase);
+  }
   for (const [name, phase] of extension.phases) {
     if (phases.has(name)) throw new TypeError(`Extension Phase collides with Context Phase "${name}"`);
     phases.set(name, phase);
   }
   return {
     phases,
-    entryPhaseId: base?.entryPhaseId ?? extension.entryPhaseId,
+    entryPhaseId: base?.entryPhaseId ?? extension.entryPhaseId ?? DEFAULT_PHASE_ID,
   };
 }
 

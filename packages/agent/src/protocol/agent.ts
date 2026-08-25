@@ -19,7 +19,12 @@ export type Skill = {
   baseDir: string;
   /** Full body content of the SKILL.md (after frontmatter) */
   content: string;
-  disableModelInvocation: boolean;
+  /** Do not automatically inject this Skill into the model Context. */
+  disableAutoInvocation?: boolean;
+  /** Do not expose this Skill to direct user invocation. */
+  disableImplicitInvocation?: boolean;
+  /** @deprecated Use disableAutoInvocation; kept only for old in-memory callers during cutover. */
+  disableModelInvocation?: boolean;
 };
 
 export type Outcome = {

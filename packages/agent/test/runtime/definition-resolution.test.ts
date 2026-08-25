@@ -30,7 +30,7 @@ test("Runtime resolves Definition names after selected Extension assembly", asyn
     model: { provider: "test", id: "model" },
     stream: async function* (request) {
       expect(request.tools?.map(({ name }) => name).filter((name) => name !== "route"))
-        .toEqual(["extension_lookup"]);
+        .toEqual(["read", "bash", "edit", "write", "extension_lookup"]);
       yield {
         type: "text_delta" as const,
         text: "done",
@@ -70,7 +70,7 @@ test("Runtime resolves Definition resource names and warns for missing candidate
   const stream: StreamFn = async function* (request) {
     modelCalls += 1;
     expect(request.system).toContain("Review only the selected resources.");
-    expect(request.tools?.map(({ name }) => name)).toEqual(["keep"]);
+    expect(request.tools?.map(({ name }) => name)).toEqual(["read", "bash", "edit", "write", "keep"]);
     yield { type: "done" };
   };
   const tool = (name: string) => ({
@@ -287,7 +287,7 @@ test("Phase restrictions use the shared warning-aware resolver", async () => {
     const agentId = await runtime.createAgent(config, { idempotencyKey: "phase-resource-selection-agent" });
     const run = await runtime.start(agentId, "review", { idempotencyKey: "phase-resource-selection-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
-    expect(visibleTools).toEqual(["keep"]);
+    expect(visibleTools).toEqual(["read", "bash", "edit", "write", "keep"]);
     expect(warnings.mock.calls.some(([message]) =>
       String(message).includes('Tool "phase-missing"'))).toBe(true);
   } finally {

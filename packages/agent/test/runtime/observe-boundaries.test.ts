@@ -61,6 +61,58 @@ test("AgentRun.observe rejects an Event cursor beyond the Store waterline", asyn
   }
 });
 
+test("AgentRun.observe drains final Phase.Status before the terminal Run event", async () => {
+  let releasePhase!: () => void;
+  const phaseReady = new Promise<void>((resolve) => { releasePhase = resolve; });
+  const phase: Phase = {
+    name: "status",
+    description: "Status",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Status",
+    isolated: false,
+    run: async (_context, execution) => {
+      await phaseReady;
+      await execution.reportStatus({ state: "completed", kind: "finished", message: "Finished." });
+      return { route: "stop", phase: "status" };
+    },
+  };
+  const stream: StreamFn = async function* () {
+    yield { type: "done", response: stopResponse("unused") };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent({
+      ...config(stream),
+      resources: { tools: [], skills: [], phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name } },
+    });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-status-terminal-run" });
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    await nextMatching(iterator, (event) =>
+      event.kind === "run_state_changed" && event.to === "running");
+
+    releasePhase();
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    const remaining: RunEvent[] = [];
+    for await (const event of { [Symbol.asyncIterator]: () => iterator }) remaining.push(event);
+
+    expect(remaining.map((event) => event.kind)).toEqual([
+      "phase_status",
+      "message_committed",
+      "run_state_changed",
+    ]);
+    expect(remaining).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "phase_status",
+        status: expect.objectContaining({ state: "completed", kind: "finished" }),
+      }),
+    ]));
+  } finally {
+    releasePhase();
+    await runtime.close();
+  }
+});
+
 test("AgentRun.observe keeps the next Execution Attempt's deltas across input_required", async () => {
   let releaseFirstAttempt!: () => void;
   const firstAttempt = new Promise<void>((resolve) => { releaseFirstAttempt = resolve; });

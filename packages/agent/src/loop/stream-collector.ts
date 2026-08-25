@@ -22,6 +22,7 @@ export type ModelInvokerInput = {
   message: PhaseMessageManager;
   request: LlmRequest;
   phaseId: string;
+  output?: "reply" | "internal";
 };
 
 export type ModelInvokerResult = ModelInvokeOutput & {
@@ -40,6 +41,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     message: input.message,
     events,
     metadataPhase: input.phaseId,
+    output: input.output,
   });
 
   const response: LlmResponse = result.doneResponse ?? {
@@ -77,7 +79,9 @@ async function collectStreamResult(input: {
   message: PhaseMessageManager;
   events: AsyncIterable<LlmStreamEvent>;
   metadataPhase: string;
+  output?: "reply" | "internal";
 }): Promise<StreamCollectionResult> {
+  const persistAssistant = input.output !== "internal";
   let activeMessageId: string | undefined;
   let lastPartial: AssistantMessagePartial | undefined;
   let stopReason: string | undefined;
@@ -105,7 +109,7 @@ async function collectStreamResult(input: {
       // Flush the partial assistant reply so it lands in the transcript as a
       // completed message. This keeps the user/assistant alternation intact
       // and lets the next durable Agent Input resume from this snapshot.
-      if (activeMessageId) {
+      if (persistAssistant && activeMessageId) {
         await input.message.end(activeMessageId);
         activeMessageId = undefined;
       }
@@ -118,25 +122,29 @@ async function collectStreamResult(input: {
 
     if (event.type === "start") {
       lastPartial = event.partial;
-      activeMessageId ??= input.message.reserve("assistant", {
-        phase: input.metadataPhase,
-      });
+      if (persistAssistant) {
+        activeMessageId ??= input.message.reserve("assistant", {
+          phase: input.metadataPhase,
+        });
+      }
     }
 
     if (event.type === "text_delta") {
       lastPartial = event.partial;
-      if (!activeMessageId) {
+      if (persistAssistant && !activeMessageId) {
         activeMessageId = input.message.reserve("assistant", {
           phase: input.metadataPhase,
         });
       }
-      await input.message.update(activeMessageId, event.text);
+      if (persistAssistant && activeMessageId) await input.message.update(activeMessageId, event.text);
     }
 
     if (event.type === "tool_call_start" || event.type === "tool_call_delta" || event.type === "tool_call_end") {
-      activeMessageId ??= input.message.reserve("assistant", {
-        phase: input.metadataPhase,
-      });
+      if (persistAssistant) {
+        activeMessageId ??= input.message.reserve("assistant", {
+          phase: input.metadataPhase,
+        });
+      }
       lastPartial = event.partial;
     }
 
@@ -154,11 +162,11 @@ async function collectStreamResult(input: {
         || (event.response?.toolCalls?.length ?? 0) > 0;
 
       const shouldStoreContentParts = contentBlocks.some((block) => block.type !== "text");
-      if (activeMessageId && hasContent && shouldStoreContentParts) {
+      if (persistAssistant && activeMessageId && hasContent && shouldStoreContentParts) {
         input.message.replaceContent(activeMessageId, contentBlocksToMessageContent(contentBlocks));
       }
 
-      if (activeMessageId) {
+      if (persistAssistant && activeMessageId) {
         if (hasContent) await input.message.end(activeMessageId);
         else input.message.discard(activeMessageId);
         activeMessageId = undefined;
@@ -168,14 +176,14 @@ async function collectStreamResult(input: {
 
   const abortResult = LoopGuard.checkAbort(input.config.signal);
   if (abortResult.stopReason !== "none") {
-    if (activeMessageId) {
+    if (persistAssistant && activeMessageId) {
       await input.message.end(activeMessageId);
       activeMessageId = undefined;
     }
     return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
   }
 
-  if (activeMessageId) {
+  if (persistAssistant && activeMessageId) {
     await input.message.end(activeMessageId);
   }
 

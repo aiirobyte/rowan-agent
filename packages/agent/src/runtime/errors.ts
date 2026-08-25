@@ -8,6 +8,8 @@ export type RuntimeErrorCode =
   | "agent_not_found"
   | "run_not_found"
   | "run_state_conflict"
+  | "context_busy"
+  | "message_history_compacted"
   | "message_revision_conflict"
   | "tool_effect_confirmation_required"
   | "input_request_conflict"
@@ -32,6 +34,8 @@ export type RuntimeErrorDetails = {
   agent_not_found: Readonly<{ agentId: AgentId }>;
   run_not_found: Readonly<{ runId: RunId }>;
   run_state_conflict: Readonly<{ runId: RunId; expected: readonly RunState[]; actual: RunState }>;
+  context_busy: Readonly<{ agentId: AgentId; runId?: RunId; actual: RunState }>;
+  message_history_compacted: Readonly<{ agentId: AgentId; messageId: MessageId }>;
   message_revision_conflict: Readonly<{ agentId: AgentId; messageId: MessageId; expected: number; actual: number }>;
   tool_effect_confirmation_required: Readonly<{
     agentId: AgentId;

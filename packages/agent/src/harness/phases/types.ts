@@ -4,9 +4,25 @@ import type { Tool } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
 
+export type PhaseStatusState = "running" | "completed";
+
+/** Normalized status event exposed to Runtime consumers. */
+export type PhaseStatus = Readonly<{
+  state: PhaseStatusState;
+  /** Stable consumer-facing status identifier, e.g. `compacting`. */
+  kind: string;
+  /** Optional human-readable detail for UI/status consumers. */
+  message?: string;
+  /** Structured status payload. */
+  payload?: unknown;
+}>;
+
 /** Unified phase output — model-driven routing is optional; programmatic phases may normalize omission to stop. */
 export type PhaseOutput = {
-  message: string;
+  /** User-visible assistant message. */
+  message?: string;
+  /** Final status update for non-conversational consumers. */
+  status?: PhaseStatus;
   /** Route to next phase, or "continue" to re-execute current phase, or "stop" to end. Undefined means no model route. */
   route?: string;
   /** Phase name that produced this output */
@@ -89,6 +105,10 @@ export interface PhaseFrontmatter {
   isolated?: boolean;
   /** Model override for this phase (e.g. "anthropic/claude-sonnet-4-20250514" or "gpt-4.1") */
   model?: string;
+  /** Do not automatically inject this Phase into the model route catalog/context. */
+  disableAutoInvocation?: boolean;
+  /** Do not expose this Phase to direct user invocation. */
+  disableImplicitInvocation?: boolean;
 }
 
 /**
@@ -103,6 +123,8 @@ export interface PhaseConfig {
   baseDir?: string;
   content: string;
   input?: Record<string, string>;
+  disableAutoInvocation?: boolean;
+  disableImplicitInvocation?: boolean;
 }
 
 /**
@@ -111,6 +133,8 @@ export interface PhaseConfig {
 export interface Phase {
   /** Unique phase identity and display name. */
   name: string;
+  /** Rowan-owned built-in Phase; built-ins are never filtered or disabled. */
+  core?: boolean;
   /** Description */
   description: string;
   /** Restricted tools (undefined = all tools available) */
@@ -131,6 +155,10 @@ export interface Phase {
   content: string;
   /** Model override for this phase (resolved from frontmatter) */
   model?: ModelRef;
+  /** Do not automatically inject this Phase into the model route catalog/context. */
+  disableAutoInvocation?: boolean;
+  /** Do not expose this Phase to direct user invocation. */
+  disableImplicitInvocation?: boolean;
   /** ExtensionAPI factory function (default export pattern) */
   factory?: (api: ExtensionAPI) => Promise<void>;
   /** Direct run function */

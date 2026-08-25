@@ -1,6 +1,7 @@
 /** Durable and transient DTOs owned by the event-driven Agent Runtime. */
 
 import type { PhaseInteraction } from "./harness/phases/interactions";
+import type { PhaseStatus } from "./harness/phases/types";
 
 declare const opaqueIdBrand: unique symbol;
 
@@ -264,4 +265,13 @@ export type ToolProgress = Readonly<{
   progress: JsonValue;
 }>;
 
-export type RunEvent = DurableRunEvent | MessageDelta | ToolProgress;
+export type PhaseStatusEvent = Readonly<{
+  kind: "phase_status";
+  durability: "transient";
+  runId: RunId;
+  executionId: ExecutionId;
+  phaseId: string;
+  status: PhaseStatus;
+}>;
+
+export type RunEvent = DurableRunEvent | MessageDelta | ToolProgress | PhaseStatusEvent;

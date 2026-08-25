@@ -20,7 +20,7 @@ import type {
   PhaseContextSnapshot,
 } from "./execution";
 import { invokeModel } from "./stream-collector";
-import type { PhaseOutput, PhaseContext } from "../harness/phases/types";
+import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
 import { createExtensionAPI } from "../extensions/api";
 
 // Phase system types
@@ -38,9 +38,9 @@ import { buildModelRequest } from "../harness/context/prompt-builder";
 import { LoopGuard } from "./errors";
 import { createOutcome } from "./outcomes";
 import { snapshotMessages } from "./state";
-import { compactMessages, needsCompaction } from "../harness/context/compaction";
 import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
+import { STOP_PHASE_ID } from "../harness/phases/default";
 
 // ============================================================================
 // Phase State Utilities
@@ -48,9 +48,7 @@ import type { LlmContentPart } from "@rowan-agent/models";
 
 /** Execute phase run and handle void/empty-message by auto-assembling PhaseOutput. */
 function resolvePhaseOutput(result: PhaseOutput | void): PhaseOutput {
-  return result
-    ? { ...result }
-    : { message: "Phase completed.", route: "stop" };
+  return result ?? { message: "Phase completed.", route: "stop" };
 }
 
 /** Remove a phase's context message from the conversation by id. */
@@ -116,7 +114,8 @@ function resolveRouteDecision(
   const hasStop = route.decision.some(({ phase }) => phase === "stop");
   if (hasStop) {
     // stop is terminal and must be the only original target, even if another
-    // target would later be filtered as invalid.
+    // target would later be filtered as invalid; the loop may run the
+    // built-in Stop Phase before completing when the reply is empty.
     if (requestedCount !== 1) return undefined;
     return { ...route, requestedCount };
   }
@@ -251,9 +250,15 @@ function createTerminalOutcome(
   output: PhaseOutput,
   transcript: AgentMessage[],
 ): Outcome {
-  return phase.run || phase.factory
+  const outcome = phase.run || phase.factory
     ? createOutcome.phase(output, transcript)
     : createOutcome.default(output, transcript);
+  return phase.name === "compact" ? { ...outcome, display: false } : outcome;
+}
+
+function shouldRunStopPhase(phase: Phase, output: PhaseOutput): boolean {
+  if (phase.run || phase.factory) return false;
+  return typeof output.message !== "string" || output.message.trim().length === 0;
 }
 
 // ============================================================================
@@ -262,15 +267,16 @@ function createTerminalOutcome(
 
 function buildToolsWithRouting(
   config: AgentConfig,
-  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
+  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation'>[],
 ) {
   // The Runtime Resource Registry keeps Rowan's reserved route Tool in the
   // implicit core source. Routing, however, is phase-registry-specific: build
   // a fresh schema for the visible phases and avoid exposing the empty core
   // placeholder or registering two Tools with the same name.
   const tools = config.context.tools.filter((tool) => tool.name !== PhaseRouteTool);
-  if (availablePhases.length > 0) {
-    tools.push(createRouteTool(availablePhases));
+  const autoInvocablePhases = availablePhases.filter((phase) => phase.disableAutoInvocation !== true);
+  if (autoInvocablePhases.length > 0) {
+    tools.push(createRouteTool(autoInvocablePhases));
   }
   return tools;
 }
@@ -549,9 +555,17 @@ async function runPhaseLoop(
 
   while (currentPhaseId) {
     // Build available phases list for route tool from the explicit registry.
-    const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[] = [];
+    const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation'>[] = [];
     for (const [, phase] of registry.phases) {
-      availablePhases.push({ name: phase.name, description: phase.description, tools: phase.tools, skills: phase.skills, input: phase.input, isolated: phase.isolated });
+      availablePhases.push({
+        name: phase.name,
+        description: phase.description,
+        tools: phase.tools,
+        skills: phase.skills,
+        input: phase.input,
+        isolated: phase.isolated,
+        disableAutoInvocation: phase.disableAutoInvocation,
+      });
     }
 
     const abortResult = LoopGuard.checkAbort(config.signal);
@@ -578,15 +592,6 @@ async function runPhaseLoop(
 
     state.attempt++;
     state.metrics.iterations++;
-
-    // Auto-compact when transcript grows too long
-    if (needsCompaction(config.context.messages)) {
-      const compacted = compactMessages(config.context.messages);
-      if (compacted.compacted) {
-        config.context.messages = compacted.messages;
-        state.metrics.compactionCount++;
-      }
-    }
 
     const phase = registry.phases.get(currentPhaseId);
     if (!phase) {
@@ -747,11 +752,25 @@ async function runPhaseLoop(
       }
     }
 
+    // A Phase's returned status is its final lifecycle update. Both returned
+    // statuses and explicit reportStatus calls are already normalized.
+    if (output.status) {
+      await execution.reportStatus(output.status);
+    }
+
+    if (phase.name === STOP_PHASE_ID) {
+      removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
+      previousPhaseMsgId = undefined;
+      previousPhaseInputMsgId = undefined;
+      return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+    }
+
     if (phase.run || phase.factory) {
       // Programmatic phases retain their existing implicit stop behavior.
       if (output.route === undefined && !routeDecision) output = { ...output, route: "stop" };
     } else if (!phase.target && output.route === undefined && !routeDecision) {
-      const input = await awaitInput(output.message, true);
+      const input = await awaitInput(output.message ?? `${output.phase ?? "Phase"} completed.`, true);
       if (input?.type === "completed") return input.result;
       if (input?.type === "continued") {
         isContinuing = true;
@@ -824,14 +843,20 @@ async function runPhaseLoop(
 
       // Determine entry phase: original phase's target > registry entry.
       // In parallel mode, the original phase's target field determines where to go after
-      // all parallel phases complete. If "stop", end the run.
+      // all parallel phases complete. If "stop", enter the built-in Stop
+      // Phase only when the current model response has no user-facing text.
       const entryPhaseId = phase.target ?? registry.entryPhaseId!;
       if (entryPhaseId === "stop") {
-        removePhaseMessage(config.context.messages, previousPhaseMsgId);
-        removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
-        previousPhaseMsgId = undefined;
-        previousPhaseInputMsgId = undefined;
-        return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+        if (!shouldRunStopPhase(phase, output)) {
+          removePhaseMessage(config.context.messages, previousPhaseMsgId);
+          removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
+          previousPhaseMsgId = undefined;
+          previousPhaseInputMsgId = undefined;
+          return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+        }
+        currentPhaseId = STOP_PHASE_ID;
+        previousPayload = undefined;
+        continue;
       }
       currentPhaseId = entryPhaseId;
       previousPayload = undefined; // payloads stashed in previousResults instead
@@ -848,13 +873,21 @@ async function runPhaseLoop(
       nextRoute = "stop";
     }
 
-    // Handle stop — end execution
+    // Give a model-driven phase without a reply one final model pass for the
+    // user-facing conclusion; existing replies and programmatic phases end as-is.
     if (nextRoute === "stop") {
-      removePhaseMessage(config.context.messages, previousPhaseMsgId);
-      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
-      previousPhaseMsgId = undefined;
-      previousPhaseInputMsgId = undefined;
-      return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+      if (!shouldRunStopPhase(phase, output)) {
+        removePhaseMessage(config.context.messages, previousPhaseMsgId);
+        removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
+        previousPhaseMsgId = undefined;
+        previousPhaseInputMsgId = undefined;
+        return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+      }
+      currentPhaseId = STOP_PHASE_ID;
+      previousPayload = output.payload;
+      previousResults = output.payload !== undefined ? [{ name: phase.name, output: output.payload }] : [];
+      pendingInstruction = phase.target ? undefined : routeDecision?.instruction;
+      continue;
     }
 
     // Validate route target exists
@@ -1111,7 +1144,7 @@ function createPhaseExecution(
       state.metrics.iterations = snapshot.turnNumber;
     },
 
-    async invokeModel(phaseContext: PhaseContext): Promise<ModelInvokeOutput> {
+    async invokeModel(phaseContext: PhaseContext, options: { output?: "reply" | "internal" } = {}): Promise<ModelInvokeOutput> {
       // Allow extensions to transform PhaseContext before building request
       if (config.beforePrompt) {
         phaseContext = await config.beforePrompt(phase.name, phaseContext);
@@ -1150,6 +1183,7 @@ function createPhaseExecution(
             message: messageManager,
             request,
             phaseId: phase.name,
+            output: options.output,
           }),
           {
             signal: config.signal,
@@ -1162,6 +1196,10 @@ function createPhaseExecution(
 
       await config.onModelTranscript?.(result.transcript, { phase: phase.name, model: phase.model ?? config.model });
       return result;
+    },
+
+    async reportStatus(status: PhaseStatus) {
+      await config.onPhaseStatus?.(phase.name, status);
     },
 
     async executeTool(phaseContext: AgentContext, toolCall: ToolCall): Promise<ToolResult> {
@@ -1300,7 +1338,7 @@ async function executeParallelPhase(
     ? normalizePayload(decision.decision[0].payload)
     : output.payload);
 
-  return { instanceId, phaseId: phase.name, payload: resultPayload, content: output.message };
+  return { instanceId, phaseId: phase.name, payload: resultPayload, content: output.message ?? `${phase.name} completed.` };
 }
 
 function selectPhaseTools(
@@ -1311,8 +1349,9 @@ function selectPhaseTools(
   const routing = includeRouting
     ? candidates.filter(({ name }) => name === PhaseRouteTool)
     : [];
-  const ordinary = candidates.filter(({ name }) => name !== PhaseRouteTool);
-  return [...selectNamedResources(ordinary, names, "Tool"), ...routing];
+  const core = candidates.filter(({ core }) => core);
+  const ordinary = candidates.filter(({ name, core }) => name !== PhaseRouteTool && !core);
+  return [...core, ...selectNamedResources(ordinary, names, "Tool"), ...routing];
 }
 
 async function waitForBackgroundTasks(

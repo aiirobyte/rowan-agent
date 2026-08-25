@@ -24,12 +24,14 @@ export function serializeSkills(skills: Skill[]): Array<{
   name: string;
   description: string;
   filePath: string;
+  disableAutoInvocation?: boolean;
   disableModelInvocation?: boolean;
 }> {
   return skills.map((skill) => ({
     name: skill.name,
     description: skill.description,
     filePath: skill.filePath,
+    disableAutoInvocation: skill.disableAutoInvocation,
     disableModelInvocation: skill.disableModelInvocation,
   }));
 }

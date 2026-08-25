@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfig, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
@@ -86,6 +86,163 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "run-1" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     await expect(run.snapshot()).resolves.toMatchObject({ state: "completed", outcome: { message: expect.any(String) } });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime compacts through the built-in Control Phase without appending a chat message", async () => {
+  let calls = 0;
+  const stream: StreamFn = async function* () {
+    calls += 1;
+    const text = calls === 1 ? "ordinary reply" : "durable summary";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse(text) };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "compact-agent" });
+    const ordinary = await runtime.start(agentId, "hello", { idempotencyKey: "compact-ordinary" });
+    await expect(ordinary.wait()).resolves.toMatchObject({ type: "completed" });
+    const before = await runtime.history(agentId);
+    const compact = await runtime.compactContext(agentId, { instructions: "Keep the architecture decisions." });
+    const observedPromise = (async () => {
+      const observed: RunEvent[] = [];
+      for await (const event of compact.observe()) {
+        observed.push(event);
+        if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) break;
+      }
+      return observed;
+    })();
+    await expect(compact.wait()).resolves.toMatchObject({ type: "completed" });
+    const observed = await observedPromise;
+    expect(observed.filter((event) => event.kind === "phase_status").map((event) => event.status)).toEqual([
+      expect.objectContaining({ state: "running", kind: "compacting" }),
+      expect.objectContaining({ state: "completed", kind: "compacted" }),
+    ]);
+    const after = await runtime.history(agentId);
+    expect(after).toHaveLength(before.length);
+    expect((await runtime.contextStatus(agentId)).coveredThrough?.messageId).toBe(after.at(-1)?.id);
+    const compactSnapshot = await compact.snapshot();
+    expect("output" in compactSnapshot ? compactSnapshot.output : undefined).toBeUndefined();
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime allows manual compaction while a Run waits for input", async () => {
+  const phases = new Map<string, Phase>([["plan", {
+    name: "plan",
+    description: "Plan",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Plan",
+    isolated: false,
+  }]]);
+  const stream: StreamFn = async function* () {
+    const text = "Which target?";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: { content: text, stopReason: "stop" } };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent({
+      ...simpleConfig(stream),
+      resources: { tools: [], skills: [], phases: { phases, entryPhaseId: "plan" } },
+    } as unknown as AgentConfig, { idempotencyKey: "input-compact-agent" });
+    const waiting = await runtime.start(agentId, "hello", { idempotencyKey: "input-compact-run" });
+    await expect(waiting.wait()).resolves.toMatchObject({ type: "input_required" });
+
+    const compact = await runtime.compactContext(agentId);
+    await expect(compact.wait()).resolves.toMatchObject({ type: "completed" });
+    expect((await runtime.contextStatus(agentId)).coveredThrough).toBeDefined();
+    expect((await waiting.snapshot()).state).toBe("input_required");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime routes an over-threshold queued Run through automatic compaction", async () => {
+  const calls: string[][] = [];
+  const stream: StreamFn = async function* (input) {
+    calls.push(input.messages.map((message) => typeof message.content === "string" ? message.content : "[parts]"));
+    const text = "done";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse(text) };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent({
+      ...simpleConfig(stream),
+      model: { provider: "test", id: "model", contextWindow: 20_000 },
+    } as AgentConfig, {
+      idempotencyKey: "auto-compact-agent",
+      historySeed: [{
+        id: "seed-user" as never,
+        agentId: "seed-agent" as never,
+        runId: "seed-run" as never,
+        role: "user",
+        content: "x".repeat(20_000),
+        sequenceWithinRun: 0,
+        createdAt: "2026-08-14T00:00:00.000Z",
+      }],
+    });
+    const run = await runtime.start(agentId, "next", { idempotencyKey: "auto-compact-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.some((message) => message.includes("x".repeat(100)))).toBe(true);
+    expect(calls[1]?.some((message) => message.includes("[Context summary]"))).toBe(true);
+    expect((await runtime.contextStatus(agentId)).coveredThrough).toBeDefined();
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime compacts once and retries after a provider context overflow", async () => {
+  let calls = 0;
+  const stream: StreamFn = async function* (input) {
+    calls += 1;
+    const isCompaction = input.messages.some((message) =>
+      typeof message.content === "string" && message.content.includes('<phase_content name="compact">'));
+    if (calls === 1) throw new Error("provider context window exceeded");
+    const text = isCompaction ? "overflow summary" : "retried reply";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse(text) };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "overflow-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "overflow-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(calls).toBe(3);
+    expect((await runtime.history(agentId)).filter(({ role }) => role === "assistant").map(({ content }) => content)).toEqual(["retried reply"]);
+    expect((await runtime.contextStatus(agentId)).coveredThrough).toBeDefined();
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("Message revisions stop at the covered context boundary", async () => {
+  const stream: StreamFn = async function* () {
+    const text = "summary";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse(text) };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "edit-boundary-agent" });
+    const run = await runtime.start(agentId, "original", { idempotencyKey: "edit-boundary-run" });
+    await run.wait();
+    const message = (await runtime.history(agentId)).find(({ role }) => role === "user");
+    expect(message).toBeDefined();
+    const compact = await runtime.compactContext(agentId);
+    await expect(compact.wait()).resolves.toMatchObject({ type: "completed" });
+    await expect(runtime.revise(agentId, {
+      messageId: message!.id,
+      expectedMessageRevision: 0,
+      content: "edited",
+      operationId: "edit-covered-message",
+    })).rejects.toMatchObject({ code: "message_history_compacted" });
   } finally {
     await runtime.close();
   }
@@ -272,6 +429,59 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
     expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
   } finally {
     await runtime.close();
+  }
+});
+
+test("AgentRuntime spills large custom Tool Results to the Agent archive", async () => {
+  let modelCalls = 0;
+  const payload = "custom-result\n" + "z".repeat(20_000);
+  const tool = {
+    name: "large_lookup",
+    description: "Return a large value.",
+    parameters: Type.Object({}),
+    async execute() {
+      return { ok: true as const, content: payload };
+    },
+  };
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const id = "call_large_lookup";
+      const args = "{}";
+      const partial = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args }] };
+      yield { type: "tool_call_start", id, name: tool.name, partial };
+      yield { type: "tool_call_end", id, name: tool.name, arguments: args, partial };
+      yield { type: "done" };
+      return;
+    }
+    const toolResult = request.messages.flatMap((message) => Array.isArray(message.content) ? message.content : [])
+      .find((part) => part.type === "tool_result");
+    expect(toolResult && "content" in toolResult ? toolResult.content : "").toContain("Full result:");
+    yield { type: "text_delta", text: "large lookup complete", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "large lookup complete" }] } };
+    yield { type: "done", response: stopResponse("large lookup complete") };
+  };
+  const directory = await mkdtemp(join(tmpdir(), "rowan-tool-archive-"));
+  const store = new SqliteStore(join(directory, "runtime.sqlite"));
+  const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent({
+      ...simpleConfig(stream),
+      resources: { tools: [tool], skills: [] },
+    } as unknown as AgentConfig, { idempotencyKey: "large-tool-agent" });
+    const run = await runtime.start(agentId, "use large lookup", { idempotencyKey: "large-tool-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    const toolMessage = (await runtime.history(agentId)).find((message) => message.role === "tool");
+    const content = toolMessage && Array.isArray(toolMessage.content)
+      ? toolMessage.content[0]?.result.content
+      : undefined;
+    const path = typeof content === "string"
+      ? content.match(/Full result: (.+)/)?.[1]?.split("\n")[0]
+      : undefined;
+    expect(path).toBeDefined();
+    expect(await readFile(path!, "utf8")).toBe(payload);
+  } finally {
+    await runtime.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

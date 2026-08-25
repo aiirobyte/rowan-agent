@@ -5,7 +5,7 @@ import type {
 } from "../harness/definitions";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import { DEFAULT_PHASE_ID } from "../harness/phases/default";
+import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/default";
 import type { ContextCandidate } from "./contracts";
 import { validateMaxAttempts } from "../loop/types";
 import {
@@ -169,7 +169,10 @@ function resolvePhases(
   candidates: readonly Phase[],
   selection: PhaseRegistrySelection | undefined,
 ): PhaseRegistry | undefined {
-  const selected = selectNamedResources(candidates, selection?.phaseIds, "Phase");
+  const coreNames = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
+  const core = candidates.filter((phase) => phase.core || coreNames.has(phase.name));
+  const authored = candidates.filter((phase) => !coreNames.has(phase.name) && !phase.core);
+  const selected = [...core, ...selectNamedResources(authored, selection?.phaseIds, "Phase")];
   const entryPhaseId = selection?.entryPhaseId ?? null;
   // The built-in default Phase is materialized by Runtime execution rather
   // than selected from a host source. It is therefore valid even when an

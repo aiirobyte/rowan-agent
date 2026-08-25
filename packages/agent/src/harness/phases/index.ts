@@ -3,6 +3,8 @@ export type {
   Phase,
   PhaseContext,
   PhaseInvocation,
+  PhaseStatusState,
+  PhaseStatus,
   PhaseRegistry,
 } from "./types";
 export type {
@@ -15,4 +17,12 @@ export type {
 export { PhaseInteractionBoundary, PhaseInteractionCancelledError } from "./interactions";
 
 export { loadPhase, loadPhases, reloadPhases, readPhaseContent } from "./loader";
-export { DEFAULT_PHASE_ID, createDefaultPhase } from "./default";
+export {
+  COMPACT_PHASE_ID,
+  DEFAULT_PHASE_ID,
+  STOP_PHASE_ID,
+  createCompactPhase,
+  createCorePhases,
+  createDefaultPhase,
+  createStopPhase,
+} from "./default";

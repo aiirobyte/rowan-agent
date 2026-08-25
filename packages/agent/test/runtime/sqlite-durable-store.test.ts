@@ -117,6 +117,27 @@ test("SQLite DurableStore lists materialized Events without hydrating aggregate 
   }
 });
 
+test("SQLite DurableStore mirrors semantic Events to an owner-only session archive", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-mirror-"));
+  const filename = join(directory, "runtime.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-mirror", leaseMs: 10_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent-mirror" });
+    const run = await owner.createRun({ agentId: agent.id, input: "hello", idempotencyKey: "run-mirror" });
+    await owner.claimRun({ runId: run.id, expectedRevision: run.revision, executionId: "exec-mirror" as ExecutionId });
+    const sessionPath = join(directory, "context-archives", String(agent.id), "session.jsonl");
+    const session = await readFile(sessionPath, "utf8");
+    expect(session).toContain('"kind":"rowan_event"');
+    expect(session).toContain('"message_committed"');
+    expect(session.split("\n").filter(Boolean).length).toBeGreaterThanOrEqual(2);
+    await owner.sealAndReleaseOwner();
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("SQLite DurableStore persists domain state and fences expired executions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
   const filename = join(directory, "restart.sqlite");

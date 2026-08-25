@@ -3,6 +3,7 @@ import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
 import type { Phase } from "../../src/harness/phases/types";
+import { createDefaultPhase, createStopPhase } from "../../src/harness/phases/default";
 import { createRouteTool } from "../../src/harness/tools/route-tool";
 import { routeResponse, stopResponse } from "./route-test-utils";
 
@@ -47,6 +48,60 @@ test("route(stop) completes even when the final response has no text", async () 
     const agentId = await runtime.createAgent(config(stream), { idempotencyKey: "route-empty-stop-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-empty-stop-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("Default and Stop Phases use concise, directive guidance", () => {
+  const defaultPhase = createDefaultPhase();
+  const stopPhase = createStopPhase();
+
+  expect(defaultPhase.description).toBe("Execute the current user request using the current context.");
+  expect(defaultPhase.content).toContain("Execute the current user request");
+  expect(defaultPhase.content).toContain("route(stop) as the only target");
+  expect(stopPhase.content).toContain("Return only a brief normal-exit explanation");
+  expect(stopPhase.content).toContain("Never invent Backlog, Task, Context");
+});
+
+test("route(stop) executes the Stop Phase with a concise model conclusion", async () => {
+  let modelCalls = 0;
+  let stopPrompt = "";
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      yield { type: "done", response: routeResponse([{ phase: "stop" }], "") };
+      return;
+    }
+    stopPrompt = request.messages
+      .map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content))
+      .join("\n");
+    yield {
+      type: "done",
+      response: { content: "任务已完成，相关结果已经整理好。", stopReason: "stop" },
+    };
+  };
+  const phases = new Map<string, Phase>([
+    ["work", workPhase()],
+    ["stop", createStopPhase()],
+  ]);
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(
+      config(stream, { phases, entryPhaseId: "work" }),
+      { idempotencyKey: "route-stop-phase-agent" },
+    );
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-stop-phase-run" });
+    await expect(run.wait()).resolves.toMatchObject({
+      type: "completed",
+      outcome: { message: "任务已完成，相关结果已经整理好。" },
+    });
+    expect(modelCalls).toBe(2);
+    expect(stopPrompt).toContain('<phase_content name="stop">');
+    expect(stopPrompt).toContain("user's language");
+    expect(stopPrompt).toContain("one or two sentences");
+    expect(stopPrompt).toContain("Never invent Backlog, Task, Context");
+    expect(stopPrompt).toContain("Do not greet, ask questions");
   } finally {
     await runtime.close();
   }
@@ -200,6 +255,7 @@ test("a route sharing a response with an ordinary Tool is ignored until the next
 test("serial route tool text documents optional routing and explicit stop semantics", () => {
   const tool = createRouteTool([workPhase()]);
   expect(tool.description).toContain("Route is optional");
+  expect(tool.description).toContain("final user-facing conclusion");
   expect(tool.description).toContain("no further user input is needed");
   expect(tool.description).toContain("current phase starts another iteration");
   expect(tool.promptSnippet).toContain("omit it");

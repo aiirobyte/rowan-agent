@@ -359,6 +359,8 @@ function snapshotResourceValue<T extends RegistryValue>(kind: ResourceKind, valu
   const phase = value as Phase;
   const snapshot: Phase = {
     ...phase,
+    disableAutoInvocation: phase.disableAutoInvocation ?? false,
+    disableImplicitInvocation: phase.disableImplicitInvocation ?? false,
     ...(phase.tools ? { tools: Object.freeze([...phase.tools]) as unknown as Phase["tools"] } : {}),
     skills: Object.freeze((phase.skills ?? []).map((skill) => Object.freeze({ ...skill }))) as unknown as Phase["skills"],
     ...(phase.input ? { input: Object.freeze({ ...phase.input }) as unknown as Phase["input"] } : {}),
@@ -391,7 +393,8 @@ function capitalize(value: string): string {
  * Tool is assembled by the loop, while the default Phase is materialized by
  * Runtime execution; neither can be shadowed by a host source. */
 function isImplicitCoreName(kind: ResourceKind, name: string): boolean {
-  return (kind === "tool" && name === "route") || (kind === "phase" && name === "default");
+  return (kind === "tool" && name === "route")
+    || (kind === "phase" && (name === "default" || name === "stop" || name === "compact"));
 }
 
 type DirectoryValues<T extends RegistryValue> = {

@@ -8,7 +8,7 @@ import type {
 } from "../extensions";
 import { loadExtensionsFromPath } from "../extensions/loader";
 import type { Phase } from "../harness/phases/types";
-import { createDefaultPhase } from "../harness/phases/default";
+import { createCorePhases } from "../harness/phases/default";
 import { createRouteTool } from "../harness/tools/route-tool";
 import { ResourceRegistry, type LoadInput, type ResourceDiagnostic } from "./resource-registry";
 
@@ -101,7 +101,7 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
   /** Install Rowan-owned implicit resources before any host source is read. */
   async ensureCoreResources(): Promise<void> {
     await this.replaceImplicit("tool", "rowan.core", [createRouteTool([]) as unknown as import("./contracts").Tool]);
-    await this.replaceImplicit("phase", "rowan.core", [createDefaultPhase()]);
+    await this.replaceImplicit("phase", "rowan.core", createCorePhases());
   }
 
   async loadExtensions(input: readonly LoadedExtension[] | ExtensionLoadInput): Promise<ExtensionActivationResult> {

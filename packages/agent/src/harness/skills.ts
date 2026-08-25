@@ -67,7 +67,12 @@ export async function loadSkill(path: string): Promise<Skill> {
     filePath: resolved,
     baseDir: dirname(resolved),
     content: body,
-    disableModelInvocation: metadata["disable-model-invocation"] === true,
+    disableAutoInvocation: metadata["disable-auto-invocation"] === true
+      || metadata["disable-model-invocation"] === true,
+    disableImplicitInvocation: metadata["disable-implicit-invocation"] === true,
+    ...(metadata["disable-model-invocation"] === true
+      ? { disableModelInvocation: true }
+      : {}),
   };
 }
 

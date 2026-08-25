@@ -6,7 +6,7 @@ import type {
 } from "../types";
 import type { LlmContentPart } from "@rowan-agent/models";
 import type { ContentBlock } from "@rowan-agent/models";
-import type { PhaseOutput, PhaseContext } from "../harness/phases/types";
+import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
 import type { PhaseInteractionDriver } from "../harness/phases/interactions";
 
 export type { PhaseOutput };
@@ -32,7 +32,8 @@ export type PhaseContextSnapshot = {
 export type PhaseExecution = {
   snapshot(): PhaseContextSnapshot;
   restore(snapshot: PhaseContextSnapshot): void;
-  invokeModel(context: PhaseContext): Promise<ModelInvokeOutput>;
+  invokeModel(context: PhaseContext, options?: { output?: "reply" | "internal" }): Promise<ModelInvokeOutput>;
+  reportStatus(status: PhaseStatus): Promise<void>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
   executeTools(context: AgentContext, toolCalls: readonly ToolCall[]): Promise<readonly ToolResult[]>;
   interaction: PhaseInteractionDriver;

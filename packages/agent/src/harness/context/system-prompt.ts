@@ -17,6 +17,7 @@ export interface SystemPromptOptions {
     name: string;
     description: string;
     filePath: string;
+    disableAutoInvocation?: boolean;
     disableModelInvocation?: boolean;
   }>;
 }
@@ -51,7 +52,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
   // Build skills — structured XML-like format. Skills flagged with
   // disableModelInvocation are excluded so their descriptions are not injected
   // into the system prompt (they remain invocable but not auto-suggested).
-  const visibleSkills = (skills ?? []).filter((s) => !s.disableModelInvocation);
+  const visibleSkills = (skills ?? []).filter((s) => !(s.disableAutoInvocation ?? s.disableModelInvocation));
   const skillsBlock = visibleSkills.length > 0
     ? buildSkillsDescription(visibleSkills)
     : "";

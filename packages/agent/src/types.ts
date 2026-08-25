@@ -36,6 +36,8 @@ export type ToolExecutionMode = "sequential" | "parallel";
 
 export type Tool<TArgs = unknown> = {
   name: string;
+  /** Rowan-owned Core Tool; Core Tools bypass Phase filtering. */
+  core?: boolean;
   description: string;
   parameters: Type.TSchema;
   /** One-line snippet shown in the system prompt tool list. */

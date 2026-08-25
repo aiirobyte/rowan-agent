@@ -1,5 +1,6 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import Type from "typebox";
 import Schema from "typebox/schema";
 import type { ToolCall, ToolResult } from "../../protocol";
@@ -12,7 +13,8 @@ import { normalizeRelativePath } from "../path";
 export { createRouteTool, extractRouteCall, PhaseRouteTool } from "./route-tool";
 export type { RouteToolArgs } from "./route-tool";
 
-const DEFAULT_MAX_READ_BYTES = 64_000;
+const DEFAULT_MAX_READ_BYTES = 50 * 1024;
+const DEFAULT_MAX_READ_LINES = 2_000;
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_BASH_OUTPUT_BYTES = 64_000;
 
@@ -22,7 +24,10 @@ const DEFAULT_MAX_BASH_OUTPUT_BYTES = 64_000;
  */
 export type CoreToolContext = {
   root?: string;
+  /** Directory for complete Tool Result spill files. */
+  archiveDir?: string;
   maxReadBytes?: number;
+  maxReadLines?: number;
   bashTimeoutMs?: number;
   maxBashOutputBytes?: number;
 };
@@ -130,7 +135,9 @@ function normalizeCoreToolInputPath(path = "."): string {
 function createCoreToolContext(input: CoreToolContext = {}): NormalizedCoreToolContext {
   return {
     root: resolve(input.root ?? process.cwd()),
+    archiveDir: resolve(input.archiveDir ?? `${tmpdir()}/rowan-tool-results`),
     maxReadBytes: input.maxReadBytes ?? DEFAULT_MAX_READ_BYTES,
+    maxReadLines: input.maxReadLines ?? DEFAULT_MAX_READ_LINES,
     bashTimeoutMs: input.bashTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS,
     maxBashOutputBytes: input.maxBashOutputBytes ?? DEFAULT_MAX_BASH_OUTPUT_BYTES,
   };
@@ -291,18 +298,9 @@ async function captureStream(stream: ReadableStream<Uint8Array>, maxBytes: numbe
       continue;
     }
 
-    const remainingBytes = maxBytes - totalBytes;
-    if (remainingBytes > 0) {
-      const kept = value.subarray(0, remainingBytes);
-      chunks.push(kept);
-      totalBytes += kept.byteLength;
-    }
-
-    if (value.byteLength > remainingBytes || totalBytes >= maxBytes) {
-      truncated = true;
-      await reader.cancel().catch(() => undefined);
-      break;
-    }
+    chunks.push(value);
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) truncated = true;
   }
 
   const bytes = new Uint8Array(totalBytes);
@@ -316,6 +314,21 @@ async function captureStream(stream: ReadableStream<Uint8Array>, maxBytes: numbe
     text: new TextDecoder().decode(bytes),
     truncated,
   };
+}
+
+async function spillResult(context: NormalizedCoreToolContext, toolName: string, content: string): Promise<string> {
+  await mkdir(context.archiveDir, { recursive: true, mode: 0o700 });
+  await chmod(context.archiveDir, 0o700).catch(() => undefined);
+  const path = `${context.archiveDir}/rowan-${toolName}-${Date.now()}-${crypto.randomUUID()}.log`;
+  await writeFile(path, content, { encoding: "utf8", mode: 0o600 });
+  await chmod(path, 0o600).catch(() => undefined);
+  return path;
+}
+
+function boundedPreview(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.byteLength <= maxBytes) return { text, truncated: false };
+  return { text: new TextDecoder().decode(bytes.subarray(0, maxBytes)), truncated: true };
 }
 
 export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArgs> {
@@ -365,10 +378,14 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
 
       const bytes = await readFile(resolved.absolutePath);
       const source = new TextDecoder().decode(bytes);
-      const selected = readTextLines(source, parsed.offset, parsed.limit);
-      const selectedBytes = new TextEncoder().encode(selected);
-      const sliced = selectedBytes.subarray(0, maxBytes);
-      const text = new TextDecoder().decode(sliced);
+      const sourceLines = source.split(/\r\n|\n|\r/);
+      const requestedOffset = parsed.offset ?? 1;
+      const requestedLimit = parsed.limit ?? context.maxReadLines;
+      const selected = readTextLines(source, requestedOffset, requestedLimit);
+      const preview = boundedPreview(selected, maxBytes);
+      const text = preview.text;
+      const shownLines = text.split(/\r\n|\n|\r/).length;
+      const selectedLineEnd = Math.min(sourceLines.length, requestedOffset + shownLines - 1);
 
       // Resolve resource type and name
       const resourceType: ResourceType = detectResourceType(resolved.absolutePath);
@@ -376,7 +393,7 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
       let baseDir: string | undefined;
 
       if (resourceType === "skill" || resourceType === "phase") {
-        const { frontmatter } = parseFrontmatter(text);
+        const { frontmatter } = parseFrontmatter(source);
         const marker = resourceType === "skill" ? "SKILL.md" : "PHASE.md";
         name = (frontmatter.name as string) ?? inferResourceName(resolved.absolutePath, marker);
         baseDir = dirname(resolved.absolutePath);
@@ -387,7 +404,17 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
       const formatted = resourceType === "skill" || resourceType === "phase"
         ? formatResourceOutput({ type: resourceType, name, location: resolved.absolutePath, content: text, baseDir })
         : text;
-      const content = selectedBytes.byteLength > maxBytes ? `${formatted}\n[truncated]` : formatted;
+      const fullFormatted = resourceType === "skill" || resourceType === "phase"
+        ? formatResourceOutput({ type: resourceType, name, location: resolved.absolutePath, content: source, baseDir })
+        : source;
+      const lineTruncated = parsed.limit === undefined && requestedOffset + requestedLimit - 1 < sourceLines.length;
+      const truncated = preview.truncated || lineTruncated;
+      let content = truncated ? `${formatted}\n[truncated]` : formatted;
+      const archivePath = await spillResult(context, "read", fullFormatted);
+      content += `\nFull result: ${archivePath}\nOffset: 0`;
+      if (lineTruncated) {
+        content += `\nShowing lines ${requestedOffset}-${selectedLineEnd} of ${sourceLines.length}. Use offset=${selectedLineEnd + 1} to continue.`;
+      }
 
       return toolResult({
         context: toolContext,
@@ -554,7 +581,10 @@ export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArg
         ]);
         const ok = exitCode === 0 && !timedOut && !aborted;
         const output = [stdout.text, stderr.text].filter(Boolean).join(stdout.text && stderr.text ? "\n" : "");
-        const content = stdout.truncated || stderr.truncated ? `${output}\n[truncated]` : output;
+        const preview = boundedPreview(output, maxOutputBytes);
+        let content = preview.truncated ? `${preview.text}\n[truncated]` : output;
+        const archivePath = await spillResult(context, "bash", output);
+        content += `\nFull result: ${archivePath}\nOffset: 0`;
 
         return toolResult({
           context: toolContext,

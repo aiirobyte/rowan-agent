@@ -1,3 +1,6 @@
+import { mkdir, chmod, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { createModelStream } from "@rowan-agent/models";
 import type { AgentMessage, ModelRef } from "../protocol";
 import type { StreamFn } from "@rowan-agent/models";
@@ -26,6 +29,11 @@ import type {
   HistorySeed,
   Tool as DurableTool,
   UserInput,
+  InvocationCatalogEntry,
+  InvocationSource,
+  ContextCompactionRecord,
+  ContextStatus,
+  Metadata,
 } from "./contracts";
 import {
   assertToolExecutionResult,
@@ -38,7 +46,7 @@ import { pageAgents, pageRuns } from "./read-models";
 import { projectAssistantMessage, projectModelContext } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
-import { createDefaultPhase, DEFAULT_PHASE_ID } from "../harness/phases/default";
+import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/default";
 import type { PhaseRegistry } from "../harness/phases/types";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
@@ -60,6 +68,7 @@ const DEFAULT_POLL_MS = 25;
 const MAX_CONSUMER_IDLE_POLL_MS = 250;
 const OWNER_LEASE_MS = 30_000;
 const OWNER_RENEWAL_MS = 10_000;
+const MAX_INLINE_TOOL_RESULT_BYTES = 16 * 1024;
 
 type Deferred<T = void> = {
   promise: Promise<T>;
@@ -90,6 +99,37 @@ type ExecutionToolConfig = Readonly<{
   afterToolCall?: AgentConfig["afterToolCall"];
 }>;
 
+/** Keep large custom Tool Results out of the model transcript while retaining
+ * the complete payload in the per-Agent durable archive. Core read/bash Tools
+ * already provide their own richer spill format and are left untouched. */
+async function spillLargeToolResult(
+  result: import("./contracts").ToolExecutionResult,
+  archiveDir: string | undefined,
+  toolName: string,
+): Promise<import("./contracts").ToolExecutionResult> {
+  if (!archiveDir) return result;
+  const serialized = typeof result.content === "string"
+    ? result.content
+    : JSON.stringify(result.content, null, 2);
+  if (serialized === undefined) return result;
+  const bytes = new TextEncoder().encode(serialized);
+  if (bytes.byteLength <= MAX_INLINE_TOOL_RESULT_BYTES || /\nFull result:\s+\S+/.test(serialized)) {
+    return result;
+  }
+  const toolDir = archiveDir;
+  await mkdir(toolDir, { recursive: true, mode: 0o700 });
+  await chmod(toolDir, 0o700).catch(() => undefined);
+  const safeToolName = toolName.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  const path = join(toolDir, `rowan-${safeToolName}-${Date.now()}-${randomUUID()}.log`);
+  await writeFile(path, serialized, { encoding: "utf8", mode: 0o600 });
+  await chmod(path, 0o600).catch(() => undefined);
+  const preview = new TextDecoder().decode(bytes.subarray(0, MAX_INLINE_TOOL_RESULT_BYTES));
+  return {
+    ...result,
+    content: `${preview}\n[truncated]\nFull result: ${path}\nOffset: 0`,
+  };
+}
+
 export class AgentRuntime implements AgentRuntimeContract {
   private readonly concurrency: number;
   private readonly owned: import("./contracts").OwnedStore;
@@ -100,6 +140,7 @@ export class AgentRuntime implements AgentRuntimeContract {
   private readonly executionDone = new Map<RunId, Promise<void>>();
   private readonly cancellationRequested = new Set<RunId>();
   private readonly cancellationReasons = new Map<RunId, string>();
+  private readonly autoCompactionRuns = new Set<RunId>();
   private readonly consumers = new Map<string, ConsumerSubscription>();
   private readonly transientEvents = new TransientRunEventHub();
   private readonly resources: RuntimeBootstrapRegistry;
@@ -215,6 +256,42 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.owned.compact(input);
   }
 
+  async contextStatus(agentId: AgentId, options: { contextWindow?: number } = {}): Promise<ContextStatus> {
+    this.assertOpen();
+    const agent = await this.requireAgent(agentId);
+    const contextWindow = options.contextWindow ?? await this.resolveContextWindow(agent);
+    return this.owned.contextStatus(agentId, contextWindow);
+  }
+
+  async compactContext(agentId: AgentId, options: { instructions?: string; idempotencyKey?: string } = {}): Promise<AgentRun> {
+    this.assertOpen();
+    const agent = await this.requireAgent(agentId);
+    if (!agent.activatedAt || !agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
+    const active = (await this.owned.listRuns({ agentId }))
+      .filter((run) => ["queued", "running", "input_required"].includes(run.state));
+    const existing = active.find((run) => controlRunKind(run) === "compact");
+    if (existing) return new DurableRun(this, existing.id);
+    // An input-required Run is paused and does not consume the execution
+    // slot; manual compaction is explicitly allowed while it waits for the
+    // next user input. Only queued/running work blocks a Control Run.
+    const blocking = active.find((run) => run.state === "queued" || run.state === "running");
+    if (blocking) throw new RuntimeError("context_busy", { agentId, runId: blocking.id, actual: blocking.state });
+    const metadata: Metadata = {
+      rowan: {
+        kind: "compact",
+        ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
+      },
+    };
+    const run = await this.owned.createRun({
+      agentId,
+      input: "",
+      metadata,
+      idempotencyKey: options.idempotencyKey ?? createId("compact"),
+    });
+    void this.pump();
+    return new DurableRun(this, run.id);
+  }
+
   async start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: import("../runtime-events").Metadata }): Promise<AgentRun> {
     this.assertOpen();
     const agent = await this.requireAgent(agentId);
@@ -236,6 +313,56 @@ export class AgentRuntime implements AgentRuntimeContract {
   async listRuns(input: { agentId?: AgentId; states?: readonly RunState[]; after?: import("../runtime-events").RunListCursor; limit?: number } = {}): Promise<Page<RunSummary, import("../runtime-events").RunListCursor>> {
     this.assertOpen();
     return pageRuns(await this.owned.listRuns(input), { ...input, storeIncarnation: this.storeIncarnation });
+  }
+
+  async listInvocations(agentId: AgentId, options: { source: InvocationSource }): Promise<readonly InvocationCatalogEntry[]> {
+    this.assertOpen();
+    if (!options || !["auto", "implicit", "external"].includes(options.source)) {
+      throw new TypeError("options.source must be auto, implicit, or external");
+    }
+    const agent = await this.requireAgent(agentId);
+    if (!agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
+    const resolution = await this.commands.resolve({ agent, token: agent.currentConfigToken });
+    if (resolution.kind !== "available") {
+      throw new RuntimeError("configuration_unavailable", {
+        agentId,
+        retryable: resolution.kind === "deferred",
+        reason: resolution.kind === "deferred" ? "Configuration is deferred." : resolution.reason,
+      });
+    }
+    const config = isAgentConfiguration(resolution.config)
+      ? this.materializeConfig(resolution.config)
+      : resolution.config;
+    const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
+      toolArchiveDir: this.archiveDirFor(agentId),
+    });
+    const phases = [...(assembly.context.phases?.phases.values() ?? [])]
+      .filter((phase) => options.source === "external"
+        || (options.source === "auto" ? !phase.disableAutoInvocation : !phase.disableImplicitInvocation))
+      .filter((phase) => options.source !== "implicit" || phase.name !== DEFAULT_PHASE_ID);
+    const skills = assembly.context.skills.filter((skill) => options.source === "external"
+      || (options.source === "auto"
+        ? !(skill.disableAutoInvocation ?? skill.disableModelInvocation)
+        : !skill.disableImplicitInvocation));
+    return [
+      ...phases.map((phase) => ({
+        kind: "phase" as const,
+        name: phase.name,
+        description: phase.description,
+        ...(phase.core ? { core: true } : {}),
+        disableAutoInvocation: phase.disableAutoInvocation ?? false,
+        disableImplicitInvocation: phase.disableImplicitInvocation ?? false,
+        filePath: phase.filePath,
+      })),
+      ...skills.map((skill) => ({
+        kind: "skill" as const,
+        name: skill.name,
+        description: skill.description,
+        disableAutoInvocation: skill.disableAutoInvocation ?? skill.disableModelInvocation ?? false,
+        disableImplicitInvocation: skill.disableImplicitInvocation ?? false,
+        filePath: skill.filePath,
+      })),
+    ];
   }
 
   async consume(input: { consumerId: string; signal: AbortSignal; onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void> }): Promise<DurableConsumer> {
@@ -324,16 +451,21 @@ export class AgentRuntime implements AgentRuntimeContract {
     try {
       while (!this.closed && this.executions.size < this.concurrency) {
         const queued = await this.owned.listRuns({ states: ["queued"] });
-        const next = queued.find((run) => !this.activeAgents.has(run.agentId));
+        const next = queued
+          .filter((run) => !this.activeAgents.has(run.agentId))
+          .sort((left, right) => Number(controlRunKind(right) === "compact") - Number(controlRunKind(left) === "compact"))[0];
         if (!next) return;
         this.activeAgents.add(next.agentId);
         const task = this.execute(next).finally(() => {
           const execution = this.executions.get(next.id);
-          if (execution) this.transientEvents.clear(next.id, execution.executionId);
+          if (execution) this.transientEvents.clear(next.id, execution.executionId, true);
           this.activeAgents.delete(next.agentId);
           this.executions.delete(next.id);
           this.cancellationRequested.delete(next.id);
           this.cancellationReasons.delete(next.id);
+          void this.owned.snapshotRun(next.id).then((snapshot) => {
+            if (snapshot.state !== "queued") this.autoCompactionRuns.delete(next.id);
+          }).catch(() => undefined);
           this.executionDone.delete(next.id);
           void this.pump();
         });
@@ -391,53 +523,111 @@ export class AgentRuntime implements AgentRuntimeContract {
           return;
         }
       }
+      const config = resolvedConfig as AgentConfig;
+      const controlKind = controlRunKind(run);
+      if (!controlKind && !this.autoCompactionRuns.has(run.id)) {
+        const contextWindow = await resolveContextWindowForConfig(config);
+        const status = await this.owned.contextStatus(run.agentId, contextWindow);
+        const inputTokens = estimateRunInputTokens(run.input);
+        if (status.thresholdTokens > 0 && status.tokens + inputTokens >= status.thresholdTokens) {
+          this.autoCompactionRuns.add(run.id);
+          await this.owned.createRun({
+            agentId: run.agentId,
+            input: "",
+            metadata: {
+              rowan: {
+                kind: "compact",
+                trigger: "auto",
+                sourceRunId: String(run.id),
+              },
+            },
+            idempotencyKey: `auto-compact:${run.id}`,
+          });
+          return;
+        }
+      }
       const executionId = createId("exec") as import("../runtime-events").ExecutionId;
       claim = await this.owned.claimRun({ runId: run.id, expectedRevision: run.revision, executionId, configToken: token });
       executionRevision = claim.run.revision;
       const controller = new AbortController();
       this.executions.set(run.id, { controller, executionId });
       if (this.cancellationRequested.has(run.id)) controller.abort();
-      const config = resolvedConfig as AgentConfig;
-      const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner);
+      const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
+        toolArchiveDir: this.archiveDirFor(run.agentId),
+      });
       let toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream
         ? config.model as ModelRef
         : { provider: config.model.provider, id: config.model.id } satisfies ModelRef;
       const stream = "stream" in config && config.stream ? config.stream as StreamFn : createModelStream(config.model as never);
-      const executionContext = projectModelContext({
-        context: {
-          ...assembly.context,
-          phases: normalizePhaseRegistry(assembly.context.phases),
-        },
-        messages: claim.history,
-        agentId: run.agentId,
-        runId: run.id,
-      });
+      const phaseRegistry = normalizePhaseRegistry(assembly.context.phases);
+      let modelMessages = await this.owned.contextMessages(run.agentId);
+      const buildExecutionContext = (messages: readonly import("../runtime-events").Message[], phaseId?: string) => {
+        const executionContext = projectModelContext({
+          context: {
+            ...assembly.context,
+            phases: phaseRegistry,
+          },
+          messages,
+          agentId: run.agentId,
+          runId: run.id,
+        });
+        if (phaseId === COMPACT_PHASE_ID || controlKind === "compact") {
+          executionContext.phases = {
+            ...executionContext.phases!,
+            entryPhaseId: COMPACT_PHASE_ID,
+          };
+          const instructions = controlKind === "compact" ? compactInstructions(run) : undefined;
+          if (instructions) {
+            executionContext.messages.push({
+              id: createId("msg"),
+              role: "user",
+              content: `Additional compaction instructions:\n${instructions}`,
+              createdAt: new Date().toISOString(),
+              metadata: { kind: "phase_input", phase: COMPACT_PHASE_ID },
+            });
+          }
+        }
+        return executionContext;
+      };
+      let executionContext = buildExecutionContext(modelMessages);
       const executionTools: ExecutionToolConfig = {
         tools: assembly.context.tools,
         beforeToolCall: assembly.beforeToolCall ?? config.beforeToolCall,
         afterToolCall: assembly.afterToolCall ?? config.afterToolCall,
       };
-      const result = await executeOnce({
-        canonicalMessages: executionContext.messages,
-        context: executionContext,
+      const executeModel = (context: ReturnType<typeof buildExecutionContext>) => executeOnce({
+        canonicalMessages: context.messages,
+        context,
         execution: {
           agentId: run.agentId,
           runId: run.id,
-          executionId: claim.execution.executionId,
+          executionId: claim!.execution.executionId,
           ...(agent.metadata === undefined ? {} : { agentMetadata: agent.metadata }),
           ...(run.metadata === undefined ? {} : { runMetadata: run.metadata }),
         },
         model,
-        thinkingLevel: thinkingLevelFromMessages(executionContext.messages),
+        thinkingLevel: thinkingLevelFromMessages(context.messages),
         stream,
         maxAttempts: config.maxAttempts,
-        checkpoint: claim.run.checkpoint,
-        interactionAnswers: claim.run.interactionAnswers,
+        checkpoint: claim!.run.checkpoint,
+        interactionAnswers: claim!.run.interactionAnswers,
         signal: controller.signal,
         beforePhase: assembly.beforePhase,
         afterPhase: assembly.afterPhase,
         beforePrompt: assembly.beforePrompt,
+        onPhaseStatus: (phaseId, status) => {
+          const active = this.executions.get(run.id);
+          if (active?.executionId !== claim!.execution.executionId) return;
+          this.transientEvents.publish({
+            kind: "phase_status",
+            durability: "transient",
+            runId: run.id,
+            executionId: claim!.execution.executionId,
+            phaseId,
+            status,
+          });
+        },
         onMessageDelta: (event) => {
           const active = this.executions.get(run.id);
           if (
@@ -493,8 +683,27 @@ export class AgentRuntime implements AgentRuntimeContract {
           },
         } satisfies AgentRuntimePort,
       });
+      let result = await executeModel(executionContext);
+      if (!controlKind && result.type === "failed" && isContextOverflowError(result.error)) {
+        const compactContext = buildExecutionContext(await this.owned.contextMessages(run.agentId), COMPACT_PHASE_ID);
+        const compactResult = await executeModel(compactContext);
+        const summary = compactResult.type === "completed" ? compactSummary(compactResult.outcome.payload) : undefined;
+        if (summary) {
+          const covered = claim.history.at(-1);
+          await this.owned.commitContextCompaction({
+            id: createId("compact"),
+            agentId: run.agentId,
+            summary,
+            ...(covered ? { coveredThrough: { messageId: covered.id, sequence: covered.sequenceWithinRun } } : {}),
+            createdAt: new Date().toISOString(),
+          });
+          modelMessages = await this.owned.contextMessages(run.agentId);
+          executionContext = buildExecutionContext(modelMessages);
+          result = await executeModel(executionContext);
+        }
+      }
       if (this.cancellationRequested.has(run.id) || controller.signal.aborted) {
-        const output = latestAssistant(run, result.messages, claim.history.length, true);
+        const output = latestAssistant(run, result.messages, modelMessages.length, true);
         const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
         await this.owned.cancelRun({
           runId: run.id,
@@ -522,9 +731,24 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "completed") {
-        const output = latestAssistant(run, result.messages, claim.history.length);
+        const output = latestAssistant(run, result.messages.slice(modelMessages.length), modelMessages.length);
+        if (controlKind === "compact" || isCompactionOutcome(result.outcome.payload)) {
+          const summary = compactSummary(result.outcome.payload);
+          if (summary) {
+            const covered = claim.history.at(-1);
+            const record: ContextCompactionRecord = {
+              id: createId("compact"),
+              agentId: run.agentId,
+              summary,
+              ...(covered ? { coveredThrough: { messageId: covered.id, sequence: covered.sequenceWithinRun } } : {}),
+              ...(compactInstructions(run) ? { instructions: compactInstructions(run) } : {}),
+              createdAt: new Date().toISOString(),
+            };
+            await this.owned.commitContextCompaction(record);
+          }
+        }
         await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, outcome: durableOutcome(result.outcome), ...(output ? { output } : {}) });
-        this.transientEvents.clear(run.id, claim.execution.executionId);
+        this.transientEvents.clear(run.id, claim.execution.executionId, true);
         return;
       }
       const failure: RunFailure = { code: "execution_failed", message: result.error instanceof Error ? result.error.message : "Execution failed." };
@@ -557,6 +781,16 @@ export class AgentRuntime implements AgentRuntimeContract {
     await this.owned.failQueuedRun({ runId: run.id, expectedRevision: run.revision, failure: { code: "configuration_unavailable", message } }).catch((error) => {
       if (!(error instanceof RuntimeError) || !["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) throw error;
     });
+  }
+
+  private async resolveContextWindow(agent: AgentRecord): Promise<number> {
+    if (!agent.currentConfigToken) return 128_000;
+    const resolution = await this.commands.resolve({ agent, token: agent.currentConfigToken });
+    if (resolution.kind !== "available") return 128_000;
+    const config = isAgentConfiguration(resolution.config)
+      ? this.materializeConfig(resolution.config)
+      : resolution.config;
+    return resolveContextWindowForConfig(config);
   }
 
   private async executeTool(input: {
@@ -684,6 +918,11 @@ export class AgentRuntime implements AgentRuntimeContract {
       assertToolExecutionResult(result);
       if (input.toolConfig.afterToolCall) result = await input.toolConfig.afterToolCall({ tool: durableTool, result, context, signal: input.signal });
       assertToolExecutionResult(result);
+      result = await spillLargeToolResult(
+        result,
+        this.archiveDirFor(input.run.agentId),
+        input.toolCall.name,
+      );
       const committed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: result.ok ? "completed" : "failed", result });
       return {
         result: { toolCallId: providerToolCallId, toolName: input.toolCall.name, ...result },
@@ -703,6 +942,12 @@ export class AgentRuntime implements AgentRuntimeContract {
     const agent = (await this.owned.listAgents()).find((candidate) => candidate.id === agentId);
     if (!agent) throw new RuntimeError("agent_not_found", { agentId });
     return agent;
+  }
+
+  private archiveDirFor(agentId: AgentId): string | undefined {
+    const store = this.owned as unknown as { contextArchiveDir?: (id: AgentId) => string };
+    const archiveDir = store.contextArchiveDir?.(agentId);
+    return archiveDir ? join(archiveDir, "tool-results") : undefined;
   }
 
   private async runConsumer(subscription: ConsumerSubscription): Promise<void> {
@@ -749,10 +994,11 @@ export class AgentRuntime implements AgentRuntimeContract {
     const subscription = this.transientEvents.subscribe(runId);
     try {
       while (true) {
-        if (options.signal?.aborted) throw abortError();
         const observationVersion = subscription.checkpoint();
         const snapshot = await this.owned.snapshotRun(runId);
-        if (["completed", "failed", "cancelled"].includes(snapshot.state)) {
+        const terminal = ["completed", "failed", "cancelled"].includes(snapshot.state);
+        if (options.signal?.aborted && !terminal) throw abortError();
+        if (terminal) {
           const pending = await this.owned.listEvents(cursor ? { after: cursor } : {});
           if (!pending.some((event) => event.runId === runId)) return;
         }
@@ -765,8 +1011,21 @@ export class AgentRuntime implements AgentRuntimeContract {
           } else if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
             subscription.clearTool(event.toolCall.id);
           }
+          if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) {
+            // Phase.Status and other live progress facts are transient, so
+            // they are not present in the durable event list above. Drain
+            // the queue before closing on the terminal durable event; this
+            // preserves a final status published immediately before Run
+            // completion for observers and host status bars.
+            while (true) {
+              const transient = subscription.shift();
+              if (!transient) break;
+              yield transient;
+            }
+            yield event;
+            return;
+          }
           yield event;
-          if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) return;
         }
         const transient = subscription.shift();
         if (transient) {
@@ -861,19 +1120,79 @@ function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
 }
 
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function controlRunKind(run: RunRecord): string | undefined {
+  const rowan = run.metadata?.rowan;
+  if (typeof rowan !== "object" || rowan === null || !("kind" in rowan)) return undefined;
+  const kind = (rowan as { kind?: unknown }).kind;
+  return typeof kind === "string" ? kind : undefined;
+}
+
+function compactInstructions(run: RunRecord): string | undefined {
+  const rowan = run.metadata?.rowan;
+  if (typeof rowan !== "object" || rowan === null || !("instructions" in rowan)) return undefined;
+  const instructions = (rowan as { instructions?: unknown }).instructions;
+  return typeof instructions === "string" && instructions.trim().length > 0 ? instructions : undefined;
+}
+
+function compactSummary(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null || !("summary" in payload)) return undefined;
+  const summary = (payload as { summary?: unknown }).summary;
+  return typeof summary === "string" && summary.trim().length > 0 ? summary : undefined;
+}
+
+function isCompactionOutcome(payload: unknown): boolean {
+  return typeof payload === "object"
+    && payload !== null
+    && "kind" in payload
+    && (payload as { kind?: unknown }).kind === "context_compaction";
+}
+
+async function resolveContextWindowForConfig(config: AgentConfig): Promise<number> {
+  if ("contextWindow" in config.model && typeof config.model.contextWindow === "number") {
+    return config.model.contextWindow;
+  }
+  return 128_000;
+}
+
+function estimateRunInputTokens(input: UserInput): number {
+  const content = typeof input === "string" ? input : input.content;
+  const text = typeof content === "string"
+    ? content
+    : content.map((part) => part.type === "text" ? part.text : part.data).join("\n");
+  return Math.ceil(text.length / 4) + 20;
+}
+
+function isContextOverflowError(error: unknown): boolean {
+  const message = error instanceof Error
+    ? `${error.name} ${error.message}`
+    : typeof error === "string"
+      ? error
+      : (() => {
+          try { return JSON.stringify(error); } catch { return String(error); }
+        })();
+  return /context(?:\s|_|-)?(?:length|window|limit|overflow|exceed)|(?:maximum|max).{0,24}tokens|too many tokens|prompt.{0,24}(?:too large|exceed|limit)/i.test(message);
+}
+
 function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegistry {
-  if (registry?.phases.has(DEFAULT_PHASE_ID) && registry.phases.get(DEFAULT_PHASE_ID)?.filePath !== "") {
-    throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${DEFAULT_PHASE_ID}".`);
+  const core = createCorePhases();
+  const coreNames = new Set(core.map(({ name }) => name));
+  for (const [name, phase] of registry?.phases ?? []) {
+    if (coreNames.has(name) && !phase.core) {
+      throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${name}".`);
+    }
   }
   for (const [name] of registry?.phases ?? []) {
-    if (name === "stop" || name === "continue") {
+    if (name === "continue") {
       throw new TypeError(`Configured Phase name "${name}" is reserved by Rowan routing controls.`);
     }
   }
+  const authored = [...(registry?.phases ?? [])]
+    .filter(([name, phase]) => !coreNames.has(name) || phase.core === false);
   return {
     phases: new Map([
-      [DEFAULT_PHASE_ID, createDefaultPhase()],
-      ...(registry?.phases ?? []),
+      ...core.map((phase) => [phase.name, phase] as const),
+      ...authored,
     ]),
     entryPhaseId: registry?.entryPhaseId ?? DEFAULT_PHASE_ID,
   };
