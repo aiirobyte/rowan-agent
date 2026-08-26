@@ -150,6 +150,86 @@ test("Responses applies the configured thinking level and honors a request overr
   expect(requestBodies[1]?.reasoning).toBeUndefined();
 });
 
+test("Responses preserves streamed reasoning summaries as thinking content", async () => {
+  const stream = createOpenAIResponsesStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    reasoningEffort: "high",
+    fetch: async () => sseResponse([
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { type: "reasoning", id: "rs_123" },
+      },
+      {
+        type: "response.reasoning_summary_part.added",
+        output_index: 0,
+        summary_index: 0,
+        item_id: "rs_123",
+        part: { type: "summary_text", text: "" },
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 0,
+        summary_index: 0,
+        item_id: "rs_123",
+        delta: "First thought. ",
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 0,
+        summary_index: 0,
+        item_id: "rs_123",
+        delta: "Second thought.",
+      },
+      {
+        type: "response.reasoning_summary_text.done",
+        output_index: 0,
+        summary_index: 0,
+        item_id: "rs_123",
+        text: "First thought. Second thought.",
+      },
+      {
+        type: "response.output_text.delta",
+        output_index: 1,
+        content_index: 0,
+        delta: "Answer.",
+      },
+      {
+        type: "response.completed",
+        response: { usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 } },
+      },
+    ]),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "openai", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(events.map((event) => event.type)).toEqual([
+    "model_requested",
+    "start",
+    "thinking_delta",
+    "thinking_delta",
+    "text_delta",
+    "done",
+  ]);
+  const thinkingEvents = events.filter((event) => event.type === "thinking_delta");
+  expect(thinkingEvents.at(-1)?.partial.contentBlocks).toContainEqual({
+    type: "thinking",
+    thinking: "First thought. Second thought.",
+  });
+
+  const done = events.find((event) => event.type === "done");
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.response?.thinking).toBe("First thought. Second thought.");
+    expect(done.response?.content).toBe("Answer.");
+  }
+});
+
 test("Responses forwards user images as input_image content", async () => {
   let requestBody: Record<string, unknown> | undefined;
   const stream = createOpenAIResponsesStream({

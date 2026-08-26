@@ -3,10 +3,11 @@ import type {
   MessageDelta,
   PhaseStatusEvent,
   RunId,
+  ThinkingDelta,
   ToolProgress,
 } from "../runtime-events";
 
-export type TransientRunEvent = MessageDelta | ToolProgress | PhaseStatusEvent;
+export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolProgress | PhaseStatusEvent;
 
 const MAX_BUFFERED_EVENTS = 128;
 const MAX_BUFFERED_TEXT = 64 * 1024;
@@ -36,6 +37,18 @@ export class TransientRunEventSubscription {
       && event.kind === "message_delta"
       && previous.executionId === event.executionId
       && previous.messageId === event.messageId
+      && previous.offset + previous.text.length === event.offset
+    ) {
+      this.queue[this.queue.length - 1] = {
+        ...previous,
+        text: previous.text + event.text,
+      };
+    } else if (
+      previous?.kind === "thinking_delta"
+      && event.kind === "thinking_delta"
+      && previous.executionId === event.executionId
+      && previous.messageId === event.messageId
+      && previous.blockIndex === event.blockIndex
       && previous.offset + previous.text.length === event.offset
     ) {
       this.queue[this.queue.length - 1] = {
@@ -75,7 +88,10 @@ export class TransientRunEventSubscription {
   clearMessage(messageId: MessageDelta["messageId"]): void {
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {
       const event = this.queue[index];
-      if (event?.kind === "message_delta" && event.messageId === messageId) this.queue.splice(index, 1);
+      if (
+        (event?.kind === "message_delta" || event?.kind === "thinking_delta")
+        && event.messageId === messageId
+      ) this.queue.splice(index, 1);
     }
     this.notify();
   }
@@ -113,13 +129,18 @@ export class TransientRunEventSubscription {
 
   private trimText(): void {
     let buffered = this.queue.reduce(
-      (length, event) => length + (event.kind === "message_delta" ? event.text.length : 0),
+      (length, event) => length + (
+        event.kind === "message_delta" || event.kind === "thinking_delta"
+          ? event.text.length
+          : 0
+      ),
       0,
     );
     while (buffered > MAX_BUFFERED_TEXT) {
-      const index = this.queue.findIndex((event) => event.kind === "message_delta");
+      const index = this.queue.findIndex((event) =>
+        event.kind === "message_delta" || event.kind === "thinking_delta");
       if (index < 0) return;
-      const event = this.queue[index] as MessageDelta;
+      const event = this.queue[index] as MessageDelta | ThinkingDelta;
       const overflow = buffered - MAX_BUFFERED_TEXT;
       if (event.text.length <= overflow) {
         this.queue.splice(index, 1);

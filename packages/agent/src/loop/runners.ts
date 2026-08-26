@@ -1184,6 +1184,7 @@ function createPhaseExecution(
             request,
             phaseId: phase.name,
             output: options.output,
+            onThinkingDelta: config.onThinkingDelta,
           }),
           {
             signal: config.signal,

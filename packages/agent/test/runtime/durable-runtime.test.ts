@@ -162,6 +162,50 @@ test("AgentRuntime allows manual compaction while a Run waits for input", async 
   }
 });
 
+test("input_required preserves the current assistant thinking parts", async () => {
+  const thinking = "Reasoning before asking for the next input.";
+  const text = "Which target?";
+  const stream: StreamFn = async function* () {
+    yield { type: "start", partial: { role: "assistant", contentBlocks: [] } };
+    yield {
+      type: "thinking_delta",
+      thinking,
+      partial: {
+        role: "assistant",
+        contentBlocks: [{ type: "thinking", thinking }],
+      },
+    };
+    yield {
+      type: "text_delta",
+      text,
+      partial: {
+        role: "assistant",
+        contentBlocks: [
+          { type: "thinking", thinking },
+          { type: "text", text },
+        ],
+      },
+    };
+    yield { type: "done", response: { content: text, thinking, stopReason: "stop" } };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(simpleConfig(stream), {
+      idempotencyKey: "input-thinking-agent",
+    });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "input-thinking-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "input_required" });
+
+    const assistant = (await runtime.history(agentId)).find(({ role }) => role === "assistant");
+    expect(assistant?.content).toEqual([
+      { type: "thinking", thinking },
+      { type: "text", text },
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("AgentRuntime routes an over-threshold queued Run through automatic compaction", async () => {
   const calls: string[][] = [];
   const stream: StreamFn = async function* (input) {
@@ -374,6 +418,102 @@ test("AgentRun.observe streams message deltas before the durable boundary", asyn
     });
   } finally {
     releaseFirstDelta();
+    releaseCompletion();
+    await runtime.close();
+  }
+});
+
+test("AgentRun.observe streams ThinkingBlock deltas before the durable boundary", async () => {
+  let releaseThinking!: () => void;
+  const thinkingReady = new Promise<void>((resolve) => { releaseThinking = resolve; });
+  let releaseSecondThinking!: () => void;
+  const secondThinkingReady = new Promise<void>((resolve) => { releaseSecondThinking = resolve; });
+  let releaseCompletion!: () => void;
+  const completion = new Promise<void>((resolve) => { releaseCompletion = resolve; });
+  const thinking = "First thought. Second thought.";
+  const stream: StreamFn = async function* () {
+    yield { type: "start", partial: { role: "assistant", contentBlocks: [] } };
+    await thinkingReady;
+    yield {
+      type: "thinking_delta",
+      thinking: "First thought. ",
+      partial: {
+        role: "assistant",
+        contentBlocks: [{ type: "thinking", thinking: "First thought. " }],
+      },
+    };
+    yield {
+      type: "thinking_delta",
+      thinking: "Second thought.",
+      partial: {
+        role: "assistant",
+        contentBlocks: [{ type: "thinking", thinking }],
+      },
+    };
+    await secondThinkingReady;
+    yield {
+      type: "text_delta",
+      text: "Done",
+      partial: {
+        role: "assistant",
+        contentBlocks: [
+          { type: "thinking", thinking },
+          { type: "text", text: "Done" },
+        ],
+      },
+    };
+    await completion;
+    yield { type: "done", response: stopResponse("Done") };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(simpleConfig(stream), {
+      idempotencyKey: "agent-thinking-observe",
+    });
+    const run = await runtime.start(agentId, "hello", {
+      idempotencyKey: "run-thinking-observe",
+    });
+    const observed: RunEvent[] = [];
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    const next = async () => {
+      const result = await iterator.next();
+      if (!result.done) observed.push(result.value);
+      return result;
+    };
+    while (true) {
+      const result = await next();
+      if (result.done || (result.value.kind === "run_state_changed" && result.value.to === "running")) break;
+    }
+
+    const boundary = run.wait();
+    const firstThinking = next();
+    releaseThinking();
+    await expect(firstThinking).resolves.toMatchObject({
+      done: false,
+      value: { kind: "thinking_delta", blockIndex: 0, offset: 0, text: "First thought. " },
+    });
+    const secondThinking = next();
+    releaseSecondThinking();
+    await expect(secondThinking).resolves.toMatchObject({
+      done: false,
+      value: { kind: "thinking_delta", blockIndex: 0, offset: 15, text: "Second thought." },
+    });
+    releaseCompletion();
+    await boundary;
+    while (!(await next()).done) {}
+
+    const deltas = observed.filter((event) => event.kind === "thinking_delta");
+    expect(deltas.map((event) => ({
+      blockIndex: event.blockIndex,
+      offset: event.offset,
+      text: event.text,
+    }))).toEqual([
+      { blockIndex: 0, offset: 0, text: "First thought. " },
+      { blockIndex: 0, offset: 15, text: "Second thought." },
+    ]);
+  } finally {
+    releaseThinking();
+    releaseSecondThinking();
     releaseCompletion();
     await runtime.close();
   }

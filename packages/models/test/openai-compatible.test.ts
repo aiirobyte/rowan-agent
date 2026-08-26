@@ -198,6 +198,28 @@ test("callOpenAICompletions posts chat completions request", async () => {
   expect(result.content).toBe("{\"ok\":true}");
 });
 
+test("callOpenAICompletions preserves reasoning_content", async () => {
+  const fetchMock: ProviderFetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: "Answer.", reasoning_content: "Thoughts." } }],
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
+  const result = await callOpenAICompletions(
+    {
+      baseUrl: "https://api.example/v1/",
+      apiKey: "test-key",
+      model: "test-model",
+      fetch: fetchMock,
+    },
+    { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
+  );
+
+  expect(result.thinking).toBe("Thoughts.");
+  expect(result.content).toBe("Answer.");
+});
+
 test("callOpenAICompletions returns provider token usage", async () => {
   const fetchMock: ProviderFetch = async () =>
     jsonResponse("{\"ok\":true}", {
@@ -502,6 +524,69 @@ test("createOpenAICompletionsStream yields SSE streaming events", async () => {
     expect(done.response?.usage?.outputTokens).toBe(5);
     expect(done.response?.usage?.totalTokens).toBe(15);
     expect(done.response?.stopReason).toBe("end_turn");
+  }
+});
+
+test("createOpenAICompletionsStream preserves reasoning_content as thinking deltas", async () => {
+  const fetchMock: ProviderFetch = async () =>
+    sseResponse([
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: { role: "assistant", reasoning_content: "First thought. " },
+            finish_reason: null,
+          }],
+        },
+      },
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: { reasoning_content: "Second thought." },
+            finish_reason: null,
+          }],
+        },
+      },
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: { content: "Answer." },
+            finish_reason: "stop",
+          }],
+        },
+      },
+    ]);
+
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+  const events = await collect(stream(
+    { model: { provider: "openai-compatible", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(events
+    .filter((event) => event.type === "thinking_delta")
+    .map((event) => event.type === "thinking_delta" ? event.thinking : ""))
+    .toEqual(["First thought. ", "Second thought."]);
+
+  const thinkingEvents = events.filter((event) => event.type === "thinking_delta");
+  const thinkingEvent = thinkingEvents[thinkingEvents.length - 1];
+  expect(thinkingEvent?.partial.contentBlocks).toContainEqual({
+    type: "thinking",
+    thinking: "First thought. Second thought.",
+  });
+
+  const done = events.find((event) => event.type === "done");
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.response?.thinking).toBe("First thought. Second thought.");
+    expect(done.response?.content).toBe("Answer.");
   }
 });
 

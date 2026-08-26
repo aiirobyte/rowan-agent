@@ -86,6 +86,7 @@ export type {
   MessageCommitted,
   MessageContent,
   MessageDelta,
+  ThinkingDelta,
   MessageId,
   MessageRevisionResult,
   MessageRevised,

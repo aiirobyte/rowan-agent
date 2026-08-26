@@ -36,6 +36,7 @@ export type {
   InputRequiredCommit,
   Message,
   MessageDelta,
+  ThinkingDelta,
   MessageRevisionResult,
   MessageRevised,
   RetentionResult,

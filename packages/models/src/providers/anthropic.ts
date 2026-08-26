@@ -267,6 +267,11 @@ async function* streamAnthropicMessages(
         contentBlocks: [],
       };
 
+      // Anthropic emits thinking before any text/tool block. Start the
+      // assistant message before consuming content so a thinking-only or
+      // interrupted response can still be persisted by the loop collector.
+      yield { type: "start", partial: { ...partial, contentBlocks: [] } };
+
       function rebuildPartial(): void {
         partial.contentBlocks = [];
         if (thinking) {

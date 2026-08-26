@@ -120,13 +120,86 @@ test("Anthropic preserves successful stream events", async () => {
     {},
   ));
 
-  expect(events.map((event) => event.type)).toEqual(["model_requested", "text_delta", "done"]);
+  expect(events.map((event) => event.type)).toEqual(["model_requested", "start", "text_delta", "done"]);
   const done = events.find((event) => event.type === "done");
   expect(done?.type === "done" ? done.response : undefined).toEqual({
     content: "hello",
     stopReason: "end_turn",
     usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
   });
+});
+
+test("Anthropic preserves streamed thinking content", async () => {
+  const stream = createAnthropicStream({
+    baseUrl: "https://api.example",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: async () => anthropicSseResponse([
+      {
+        event: "message_start",
+        data: { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 2, output_tokens: 0 } } },
+      },
+      {
+        event: "content_block_start",
+        data: { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+      },
+      {
+        event: "content_block_delta",
+        data: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "First thought. " } },
+      },
+      {
+        event: "content_block_delta",
+        data: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Second thought." } },
+      },
+      {
+        event: "content_block_stop",
+        data: { type: "content_block_stop", index: 0 },
+      },
+      {
+        event: "content_block_start",
+        data: { type: "content_block_start", index: 1, content_block: { type: "text" } },
+      },
+      {
+        event: "content_block_delta",
+        data: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Answer." } },
+      },
+      {
+        event: "content_block_stop",
+        data: { type: "content_block_stop", index: 1 },
+      },
+      {
+        event: "message_delta",
+        data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+      },
+      { event: "message_stop", data: { type: "message_stop" } },
+    ]),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "anthropic", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(events.map((event) => event.type)).toEqual([
+    "model_requested",
+    "start",
+    "thinking_delta",
+    "thinking_delta",
+    "text_delta",
+    "done",
+  ]);
+  const thinkingEvents = events.filter((event) => event.type === "thinking_delta");
+  expect(thinkingEvents.at(-1)?.partial.contentBlocks).toContainEqual({
+    type: "thinking",
+    thinking: "First thought. Second thought.",
+  });
+
+  const done = events.find((event) => event.type === "done");
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.response?.thinking).toBe("First thought. Second thought.");
+    expect(done.response?.content).toBe("Answer.");
+  }
 });
 
 test("Anthropic converts the configured thinking level to a token budget", async () => {

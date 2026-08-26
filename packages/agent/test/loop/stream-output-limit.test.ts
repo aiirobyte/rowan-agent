@@ -47,3 +47,50 @@ test("model collection rejects an unbounded streamed response before it exhausts
   });
   expect(content.length).toBe(1024 * 1024);
 });
+
+test("model collection persists a thinking-only response", async () => {
+  const stream: StreamFn = async function* () {
+    yield {
+      type: "start",
+      partial: { role: "assistant", contentBlocks: [] },
+    };
+    yield {
+      type: "thinking_delta",
+      thinking: "Reasoning content",
+      partial: {
+        role: "assistant",
+        contentBlocks: [{ type: "thinking", thinking: "Reasoning content" }],
+      },
+    };
+    yield { type: "done", response: { content: "", thinking: "Reasoning content", stopReason: "max_tokens" } };
+  };
+  let replaced: unknown;
+  const message: PhaseMessageManager = {
+    visible: () => [],
+    reserve: () => "msg_thinking",
+    start: () => "msg_thinking",
+    update: async () => undefined,
+    replaceContent: (_messageId, content) => { replaced = content; },
+    end: async () => undefined,
+    discard: () => undefined,
+  };
+  const config = {
+    model: { provider: "test", id: "model" },
+    stream,
+    context: { systemPrompt: "Test", messages: [], tools: [], skills: [] },
+    execution: { agentId: "agt_test", runId: "run_test", executionId: "exec_test" },
+  } as AgentConfig;
+
+  const result = await invokeModel({
+    config,
+    message,
+    request: {
+      model: config.model,
+      messages: [{ role: "user", content: "hello" }],
+    },
+    phaseId: "default",
+  });
+
+  expect(result.contentBlocks).toEqual([{ type: "thinking", thinking: "Reasoning content" }]);
+  expect(replaced).toEqual([{ type: "thinking", thinking: "Reasoning content" }]);
+});

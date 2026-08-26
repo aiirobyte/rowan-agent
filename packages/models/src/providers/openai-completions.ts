@@ -191,6 +191,7 @@ type ChatCompletionChunk = {
     delta?: {
       role?: string;
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -207,6 +208,7 @@ type ChatCompletionResponse = {
   choices?: Array<{
     message?: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         id?: string;
         type?: "function";
@@ -250,12 +252,18 @@ async function* streamChatCompletions(
         const choice = data.choices?.[0];
         const message = choice?.message;
         const content = message?.content ?? "";
+        const thinking = message?.reasoning_content ?? "";
         const partial: AssistantMessagePartial = {
           role: "assistant",
           contentBlocks: [],
         };
 
         yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+
+        if (thinking) {
+          partial.contentBlocks.push({ type: "thinking", thinking });
+          yield { type: "thinking_delta", thinking, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+        }
 
         if (content) {
           partial.contentBlocks.push({ type: "text", text: content });
@@ -280,6 +288,7 @@ async function* streamChatCompletions(
           type: "done",
           response: {
             content,
+            ...(thinking ? { thinking } : {}),
             stopReason: mapFinishReason(choice?.finish_reason),
             ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
             ...(usage ? { usage } : {}),
@@ -289,6 +298,7 @@ async function* streamChatCompletions(
       }
 
       let content = "";
+      let thinking = "";
       let finishReason: string | null = null;
       let usage: LlmTokenUsage | undefined;
       const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
@@ -300,6 +310,9 @@ async function* streamChatCompletions(
 
       function rebuildPartial(): void {
         partial.contentBlocks = [];
+        if (thinking) {
+          partial.contentBlocks.push({ type: "thinking", thinking });
+        }
         if (content) {
           partial.contentBlocks.push({ type: "text", text: content });
         }
@@ -328,6 +341,11 @@ async function* streamChatCompletions(
         const delta = choice.delta;
 
         if (delta) {
+          if (delta.reasoning_content) {
+            thinking += delta.reasoning_content;
+            rebuildPartial();
+            yield { type: "thinking_delta", thinking: delta.reasoning_content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+          }
           if (delta.content) {
             content += delta.content;
             rebuildPartial();
@@ -377,6 +395,7 @@ async function* streamChatCompletions(
         type: "done",
         response: {
           content,
+          ...(thinking ? { thinking } : {}),
           stopReason: mapFinishReason(finishReason),
           ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
           ...(usage ? { usage } : {}),
@@ -418,7 +437,7 @@ export async function callOpenAICompletions(
   config: OpenAICompletionsConfig,
   request: LlmRequest,
   options: LlmStreamOptions = {},
-): Promise<{ content: string; usage?: LlmTokenUsage }> {
+): Promise<{ content: string; thinking?: string; usage?: LlmTokenUsage }> {
   const body = buildRequestBody(config, request, false);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
 
@@ -436,9 +455,15 @@ export async function callOpenAICompletions(
     }),
   }, async (response) => {
     const data = await response.json<{
-      choices?: Array<{ message?: { content?: string | null } }>;
+      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
     }>();
-    return { content: data.choices?.[0]?.message?.content ?? "", usage: normalizeUsage(data.usage) };
+    const message = data.choices?.[0]?.message;
+    const thinking = message?.reasoning_content ?? "";
+    return {
+      content: message?.content ?? "",
+      ...(thinking ? { thinking } : {}),
+      usage: normalizeUsage(data.usage),
+    };
   });
 }

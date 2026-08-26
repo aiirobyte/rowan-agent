@@ -734,7 +734,7 @@ async function promptWithLog(input: {
           }
           continue;
         }
-        if (event.kind === "tool_progress" || event.kind === "phase_status") continue;
+        if (event.kind === "tool_progress" || event.kind === "thinking_delta" || event.kind === "phase_status") continue;
         runEventLogger(event);
         if (event.kind === "message_committed" && event.message.role === "assistant") {
           const content = formatMessageContent(event.message.content);

@@ -12,6 +12,7 @@ import type {
   LlmResponse,
 } from "@rowan-agent/models";
 import type { ModelInvokeOutput, PhaseMessageManager } from "./execution";
+import type { ThinkingDeltaNotification } from "./types";
 import type { ModelTranscript } from "../protocol/turn";
 import { LoopGuard, EmptyResponseError, ModelOutputLimitError } from "./errors";
 
@@ -23,6 +24,7 @@ export type ModelInvokerInput = {
   request: LlmRequest;
   phaseId: string;
   output?: "reply" | "internal";
+  onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
 };
 
 export type ModelInvokerResult = ModelInvokeOutput & {
@@ -42,6 +44,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     events,
     metadataPhase: input.phaseId,
     output: input.output,
+    onThinkingDelta: input.onThinkingDelta,
   });
 
   const response: LlmResponse = result.doneResponse ?? {
@@ -80,6 +83,7 @@ async function collectStreamResult(input: {
   events: AsyncIterable<LlmStreamEvent>;
   metadataPhase: string;
   output?: "reply" | "internal";
+  onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
 }): Promise<StreamCollectionResult> {
   const persistAssistant = input.output !== "internal";
   let activeMessageId: string | undefined;
@@ -88,6 +92,7 @@ async function collectStreamResult(input: {
   let doneResponse: LlmResponse | undefined;
   let streamedOutputCharacters = 0;
   const toolCallsWithDeltas = new Set<string>();
+  const thinkingOffsets = new Map<number, number>();
 
   for await (const event of input.events) {
     if (event.type === "text_delta") {
@@ -149,7 +154,29 @@ async function collectStreamResult(input: {
     }
 
     if (event.type === "thinking_delta") {
+      if (persistAssistant && !activeMessageId) {
+        activeMessageId = input.message.reserve("assistant", {
+          phase: input.metadataPhase,
+        });
+      }
       lastPartial = event.partial;
+      if (persistAssistant && activeMessageId) {
+        let blockIndex = 0;
+        for (let index = event.partial.contentBlocks.length - 1; index >= 0; index -= 1) {
+          if (event.partial.contentBlocks[index]?.type === "thinking") {
+            blockIndex = index;
+            break;
+          }
+        }
+        const offset = thinkingOffsets.get(blockIndex) ?? 0;
+        input.onThinkingDelta?.({
+          messageId: activeMessageId,
+          blockIndex,
+          offset,
+          text: event.thinking,
+        });
+        thinkingOffsets.set(blockIndex, offset + event.thinking.length);
+      }
     }
 
     if (event.type === "done") {

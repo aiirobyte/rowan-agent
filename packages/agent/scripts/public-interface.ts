@@ -96,6 +96,7 @@ export const publicTypeExports = [
   "MessageCommitted",
   "MessageContent",
   "MessageDelta",
+  "ThinkingDelta",
   "MessageId",
   "MessageRevised",
   "MessageRevisionResult",

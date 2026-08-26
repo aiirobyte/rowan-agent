@@ -38,6 +38,13 @@ export type MessageDeltaNotification = Readonly<{
   text: string;
 }>;
 
+export type ThinkingDeltaNotification = Readonly<{
+  messageId: string;
+  blockIndex: number;
+  offset: number;
+  text: string;
+}>;
+
 export type LoopMetrics = {
   /** Number of phase iterations executed. */
   iterations: number;
@@ -93,6 +100,7 @@ export type AgentConfig = {
   onPhaseStatus?: (phaseId: string, status: PhaseStatus) => void | Promise<void>;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onMessageDelta?: (event: MessageDeltaNotification) => void;
+  onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */
   waitForInput?: (state?: ExecutionState, inputRequest?: InputRequestPrompt) => Promise<AgentMessage[]>;

@@ -16,6 +16,7 @@ import type {
   BeforePromptHook,
   ExecutionState,
   MessageDeltaNotification,
+  ThinkingDeltaNotification,
 } from "../loop/types";
 import { PhaseInteractionBoundary, type PhaseInteraction, type PhaseInteractionState } from "../harness/phases/interactions";
 import type { PhaseExecutionIdentity, PhaseRegistry, PhaseStatus } from "../harness/phases/types";
@@ -62,6 +63,7 @@ export type OneShotExecutionInput = Readonly<{
   beforePrompt?: BeforePromptHook;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onMessageDelta?: (event: MessageDeltaNotification) => void;
+  onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
   onPhaseStatus?: (phaseId: string, status: PhaseStatus) => void | Promise<void>;
@@ -261,6 +263,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     beforePrompt: input.beforePrompt,
     onMessage: input.onMessage,
     onMessageDelta: input.onMessageDelta,
+    onThinkingDelta: input.onThinkingDelta,
     onOutcome: input.onOutcome,
     onModelTranscript: input.onModelTranscript,
     onPhaseStatus: input.onPhaseStatus,

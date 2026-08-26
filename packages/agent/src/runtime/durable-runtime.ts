@@ -645,6 +645,24 @@ export class AgentRuntime implements AgentRuntimeContract {
             text: event.text,
           });
         },
+        onThinkingDelta: (event) => {
+          const active = this.executions.get(run.id);
+          if (
+            this.closed
+            || controller.signal.aborted
+            || active?.executionId !== claim!.execution.executionId
+          ) return;
+          this.transientEvents.publish({
+            kind: "thinking_delta",
+            durability: "transient",
+            runId: run.id,
+            executionId: claim!.execution.executionId,
+            messageId: event.messageId as MessageId,
+            blockIndex: event.blockIndex,
+            offset: event.offset,
+            text: event.text,
+          });
+        },
         onContext: assembly.setContext,
         runtime: {
           tools: ({ toolCall }: { config: import("../loop/types").AgentConfig; toolCall: ToolCall }) => {
@@ -715,7 +733,12 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "input_required") {
-        const prompt = promptMessage(run, result.request.prompt, result.messages.length);
+        const output = latestAssistant(
+          run,
+          result.messages.slice(modelMessages.length),
+          modelMessages.length,
+        );
+        const prompt = output ?? promptMessage(run, result.request.prompt, result.messages.length);
         await this.owned.commitInputRequired({
           runId: run.id,
           execution: claim.execution,

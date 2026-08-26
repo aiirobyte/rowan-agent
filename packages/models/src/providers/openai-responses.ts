@@ -194,11 +194,17 @@ type ResponsesStreamEvent =
   | { type: "response.created"; response: { id: string } }
   | { type: "response.output_item.added"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string } }
   | { type: "response.content_part.added"; output_index: number; content_index: number; part: { type: string } }
+  | { type: "response.reasoning_summary_part.added"; item_id: string; output_index: number; summary_index: number; part: { type: "summary_text"; text: string } }
+  | { type: "response.reasoning_summary_part.done"; item_id: string; output_index: number; summary_index: number; part: { type: "summary_text"; text: string } }
+  | { type: "response.reasoning_summary_text.delta"; item_id: string; output_index: number; summary_index: number; delta: string }
+  | { type: "response.reasoning_summary_text.done"; item_id: string; output_index: number; summary_index: number; text: string }
+  | { type: "response.reasoning_text.delta"; item_id: string; output_index: number; content_index: number; delta: string }
+  | { type: "response.reasoning_text.done"; item_id: string; output_index: number; content_index: number; text: string }
   | { type: "response.output_text.delta"; output_index: number; content_index: number; delta: string }
   | { type: "response.output_text.done"; output_index: number; content_index: number; text: string }
   | { type: "response.function_call_arguments.delta"; output_index: number; item_id: string; call_id?: string; delta: string }
   | { type: "response.function_call_arguments.done"; output_index: number; item_id: string; call_id?: string; name?: string; arguments: string }
-  | { type: "response.output_item.done"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string; arguments?: string } }
+  | { type: "response.output_item.done"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string; arguments?: string; summary?: Array<{ type: string; text?: string }>; content?: Array<{ type: string; text?: string }> } }
   | { type: "response.completed"; response: { usage?: { input_tokens: number; output_tokens: number; total_tokens: number } } }
   | { type: "response.incomplete"; response: { usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; incomplete_details?: { reason: string } } }
   | { type: "error"; error: { message: string; type?: string } };
@@ -230,6 +236,8 @@ async function* streamResponses(
     }),
   }, async function* (response) {
       let content = "";
+      let thinking = "";
+      const reasoningParts = new Map<string, string>();
       let stopReason: string | null = null;
       let usage: LlmTokenUsage | undefined;
       // Map output_index -> tool call state
@@ -242,6 +250,9 @@ async function* streamResponses(
 
       function rebuildPartial(): void {
         partial.contentBlocks = [];
+        if (thinking) {
+          partial.contentBlocks.push({ type: "thinking", thinking });
+        }
         if (content) {
           partial.contentBlocks.push({ type: "text", text: content });
         }
@@ -255,6 +266,19 @@ async function* streamResponses(
         }
       }
 
+      function updateReasoningPart(key: string, text: string, append: boolean): string {
+        const previous = reasoningParts.get(key) ?? "";
+        const next = append ? previous + text : text;
+        reasoningParts.set(key, next);
+        thinking = [...reasoningParts.values()].join("");
+        if (append) return text;
+        return next.startsWith(previous) ? next.slice(previous.length) : next;
+      }
+
+      function reasoningPartKey(outputIndex: number, kind: "summary" | "text", index: number): string {
+        return `${outputIndex}:${kind}:${index}`;
+      }
+
       yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
 
       for await (const sse of response.sse()) {
@@ -262,6 +286,78 @@ async function* streamResponses(
         try { event = JSON.parse(sse.data) as ResponsesStreamEvent; } catch { continue; }
 
         switch (event.type) {
+          case "response.reasoning_summary_part.added": {
+            const delta = updateReasoningPart(
+              reasoningPartKey(event.output_index, "summary", event.summary_index),
+              event.part.text,
+              false,
+            );
+            rebuildPartial();
+            if (delta) {
+              yield { type: "thinking_delta", thinking: delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+            }
+            break;
+          }
+
+          case "response.reasoning_summary_part.done": {
+            const delta = updateReasoningPart(
+              reasoningPartKey(event.output_index, "summary", event.summary_index),
+              event.part.text,
+              false,
+            );
+            rebuildPartial();
+            if (delta) {
+              yield { type: "thinking_delta", thinking: delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+            }
+            break;
+          }
+
+          case "response.reasoning_summary_text.delta":
+            updateReasoningPart(
+              reasoningPartKey(event.output_index, "summary", event.summary_index),
+              event.delta,
+              true,
+            );
+            rebuildPartial();
+            yield { type: "thinking_delta", thinking: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+            break;
+
+          case "response.reasoning_summary_text.done": {
+            const delta = updateReasoningPart(
+              reasoningPartKey(event.output_index, "summary", event.summary_index),
+              event.text,
+              false,
+            );
+            rebuildPartial();
+            if (delta) {
+              yield { type: "thinking_delta", thinking: delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+            }
+            break;
+          }
+
+          case "response.reasoning_text.delta":
+            updateReasoningPart(
+              reasoningPartKey(event.output_index, "text", event.content_index),
+              event.delta,
+              true,
+            );
+            rebuildPartial();
+            yield { type: "thinking_delta", thinking: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+            break;
+
+          case "response.reasoning_text.done": {
+            const delta = updateReasoningPart(
+              reasoningPartKey(event.output_index, "text", event.content_index),
+              event.text,
+              false,
+            );
+            rebuildPartial();
+            if (delta) {
+              yield { type: "thinking_delta", thinking: delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+            }
+            break;
+          }
+
           case "response.output_text.delta":
             content += event.delta;
             rebuildPartial();
@@ -299,6 +395,32 @@ async function* streamResponses(
           }
 
           case "response.output_item.done": {
+            if (event.item.type === "reasoning") {
+              for (const [index, part] of (event.item.summary ?? []).entries()) {
+                if (part.type !== "summary_text" || !part.text) continue;
+                const delta = updateReasoningPart(
+                  reasoningPartKey(event.output_index, "summary", index),
+                  part.text,
+                  false,
+                );
+                rebuildPartial();
+                if (delta) {
+                  yield { type: "thinking_delta", thinking: delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+                }
+              }
+              for (const [index, part] of (event.item.content ?? []).entries()) {
+                if (part.type !== "reasoning_text" || !part.text) continue;
+                const delta = updateReasoningPart(
+                  reasoningPartKey(event.output_index, "text", index),
+                  part.text,
+                  false,
+                );
+                rebuildPartial();
+                if (delta) {
+                  yield { type: "thinking_delta", thinking: delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+                }
+              }
+            }
             if (event.item.type === "function_call") {
               const tc = toolCalls.get(event.output_index);
               if (tc) {
@@ -354,6 +476,7 @@ async function* streamResponses(
         type: "done",
         response: {
           content,
+          ...(thinking ? { thinking } : {}),
           stopReason: mapStopReason(stopReason),
           ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
           ...(usage ? { usage } : {}),
