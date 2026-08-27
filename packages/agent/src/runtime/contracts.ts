@@ -486,7 +486,7 @@ export interface AgentRuntime {
   start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
   contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
-  compactContext(agentId: AgentId, options?: { instructions?: string; idempotencyKey?: string }): Promise<AgentRun>;
+  compactContext(agentId: AgentId, options?: { input?: UserInput; instructions?: string; idempotencyKey?: string }): Promise<AgentRun>;
   listInvocations(agentId: AgentId, options: { source: InvocationSource }): Promise<readonly InvocationCatalogEntry[]>;
   history(agentId: AgentId): Promise<readonly Message[]>;
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
@@ -655,6 +655,10 @@ export function assertAgentConfigRequest(config: AgentConfigRequest): void {
   for (const context of config.contexts ?? []) {
     if (typeof context.name !== "string" || context.name.trim() === "") throw new TypeError("Context candidate name must be non-empty");
     assertJsonValue(context.value, `Context candidate "${context.name}" value`);
+  }
+  for (const context of config.additionalContexts ?? []) {
+    if (typeof context.name !== "string" || context.name.trim() === "") throw new TypeError("Additional Context candidate name must be non-empty");
+    assertJsonValue(context.value, `Additional Context candidate "${context.name}" value`);
   }
 }
 export function assertToolExecutionResult(value: unknown): asserts value is ToolExecutionResult {

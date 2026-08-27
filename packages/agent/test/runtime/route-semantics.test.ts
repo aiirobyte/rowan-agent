@@ -3,7 +3,7 @@ import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
 import type { Phase } from "../../src/harness/phases/types";
-import { createDefaultPhase, createStopPhase } from "../../src/harness/phases/default";
+import { createDefaultPhase, createStopPhase } from "../../src/harness/phases/core-phases";
 import { createRouteTool } from "../../src/harness/tools/route-tool";
 import { routeResponse, stopResponse } from "./route-test-utils";
 

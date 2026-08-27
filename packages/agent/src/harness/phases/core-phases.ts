@@ -1,4 +1,4 @@
-import type { Phase } from "./types";
+import type { Phase, PhaseContext } from "./types";
 import { contentBlocksToMessageContent, createMessage } from "../../types";
 
 export const DEFAULT_PHASE_ID = "default";
@@ -66,6 +66,13 @@ export function createCompactPhase(): Phase {
       const tools = context.tools.filter((tool) =>
         tool.core && (tool.name === "read" || tool.name === "bash"));
       const working = { ...context, tools, skills: [...context.skills], messages: [...context.messages] };
+      const instructions = compactInstructions(context);
+      if (instructions) {
+        working.messages.push(createMessage("user", `Additional compaction instructions:\n${instructions}`, {
+          kind: "phase_input",
+          phase: COMPACT_PHASE_ID,
+        }));
+      }
       let result = await execution.invokeModel(working, { output: "internal" });
       for (let attempt = 0; attempt < 8 && result.toolCalls.length > 0; attempt += 1) {
         const calls = result.toolCalls.filter((call) => tools.some((tool) => tool.name === call.name));
@@ -117,7 +124,11 @@ export function createCompactPhase(): Phase {
       return {
         route: "stop",
         phase: COMPACT_PHASE_ID,
-        payload: { kind: "context_compaction", summary: result.text },
+        payload: {
+          kind: "context_compaction",
+          summary: result.text,
+          ...(instructions ? { instructions } : {}),
+        },
         status: {
           state: "completed",
           kind: "compacted",
@@ -126,6 +137,28 @@ export function createCompactPhase(): Phase {
       };
     },
   };
+}
+
+function compactInstructions(context: PhaseContext): string | undefined {
+  const rowan = context.execution.runMetadata?.rowan;
+  if (typeof rowan === "object" && rowan !== null && !Array.isArray(rowan)) {
+    const configured = (rowan as { instructions?: unknown }).instructions;
+    if (typeof configured === "string" && configured.trim().length > 0) {
+      return configured.trim();
+    }
+  }
+
+  const input = context.execution.input;
+  if (input === undefined) return undefined;
+  const text = typeof input === "string"
+    ? input
+    : input
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("");
+  const match = text.match(/^\/compact(?:\s+([\s\S]*))?$/i);
+  const instructions = match?.[1]?.trim();
+  return instructions || undefined;
 }
 
 export function createCorePhases(): Phase[] {

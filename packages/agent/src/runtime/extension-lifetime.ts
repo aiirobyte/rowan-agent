@@ -8,7 +8,7 @@ import type {
 } from "../extensions";
 import { loadExtensionsFromPath } from "../extensions/loader";
 import type { Phase } from "../harness/phases/types";
-import { createCorePhases } from "../harness/phases/default";
+import { createCorePhases } from "../harness/phases/core-phases";
 import { createRouteTool } from "../harness/tools/route-tool";
 import { ResourceRegistry, type LoadInput, type ResourceDiagnostic } from "./resource-registry";
 

@@ -1,5 +1,6 @@
 import type { ModelRef } from "@rowan-agent/models";
 import type { AgentMessage, Skill } from "../../protocol";
+import type { UserContent } from "../../runtime-events";
 import type { Tool } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
@@ -62,6 +63,8 @@ export type PhaseExecutionIdentity = Readonly<{
   agentId: string;
   runId: string;
   executionId: string;
+  /** Original durable Run input, before any Phase-local interpretation. */
+  input?: UserContent;
   /** Opaque metadata captured at the durable boundary; Rowan does not decode it. */
   agentMetadata?: Readonly<Record<string, unknown>>;
   runMetadata?: Readonly<Record<string, unknown>>;

@@ -5,6 +5,7 @@ import {
   type ResourceView,
 } from "../../src/runtime/resource-registry";
 import {
+  materializeConfigurationSnapshot,
   resolveConfigurationSnapshot,
   type AgentConfiguration,
 } from "../../src/runtime/configuration-snapshot";
@@ -92,6 +93,50 @@ test("snapshot resolution applies Definition, Layer, and Phase narrowing monoton
     expect(snapshot.resources.phases!.entryPhaseId).toBe("review");
     expect(snapshot.contexts).toEqual([{ name: "project", value: { id: "p1" } }]);
     expect(snapshot.resources.refs.tool).toEqual([{ kind: "tool", sourceId: "project-tools", name: "keep" }]);
+  } finally {
+    warnings.mockRestore();
+  }
+});
+
+test("preserves Host additional Contexts without widening ordinary Definition selection", async () => {
+  const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    const registry = new ResourceRegistry();
+    await registry.loadAgents({
+      sourceId: "definitions",
+      values: [{
+        name: "base",
+        description: "Base",
+        prompt: "Base body.",
+        contexts: ["project"],
+      }],
+    });
+    await registry.loadTools({ sourceId: "project-tools", values: [] });
+    await registry.loadSkills({ sourceId: "project-skills", values: [] });
+    await registry.loadPhases({ sourceId: "project-phases", values: [] });
+
+    const input: AgentConfiguration = {
+      identity: "additional-context-v1",
+      definition: { name: "base" },
+      resourceView: view,
+      contexts: [
+        { name: "project", value: { id: "p1" } },
+        { name: "unused", value: { secret: "no" } },
+      ],
+      additionalContexts: [
+        { name: "explicit_skill:review", value: { content: "Review guidance" } },
+      ],
+      model: { provider: "test", id: "model" },
+    };
+
+    const snapshot = resolveConfigurationSnapshot(registry, input);
+
+    expect(snapshot.contexts).toEqual([
+      { name: "project", value: { id: "p1" } },
+      { name: "explicit_skill:review", value: { content: "Review guidance" } },
+    ]);
+    expect(snapshot.definition.contexts).toEqual(["project", "explicit_skill:review"]);
+    expect(materializeConfigurationSnapshot(snapshot).resources.contexts).toEqual(snapshot.contexts);
   } finally {
     warnings.mockRestore();
   }

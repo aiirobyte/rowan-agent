@@ -1,6 +1,6 @@
 import type { RegisteredTool } from "../extensions/types";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { COMPACT_PHASE_ID, createCorePhases, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/default";
+import { COMPACT_PHASE_ID, createCorePhases, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/core-phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import { buildContextDescription } from "../harness/context/resource-formatter";
 import type { AgentConfig, ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolInvocationContext, ToolExecutionResult } from "./contracts";

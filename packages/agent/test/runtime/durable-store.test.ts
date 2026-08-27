@@ -35,6 +35,45 @@ test("Memory DurableStore keeps queued input out of canonical history until clai
   ]);
 });
 
+test("Memory DurableStore keeps manual input for every Control Run and skips empty system input", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-control", leaseMs: 10_000 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-control" });
+  await owner.activateAgent(agent.id);
+  await owner.updateAgentConfigToken({ agentId: agent.id, token, idempotencyKey: "config-control" });
+
+  const manual = await owner.createRun({
+    agentId: agent.id,
+    input: "manual control input",
+    metadata: { rowan: { kind: "custom-control" } },
+    idempotencyKey: "run-manual-control",
+  });
+  const claimed = await owner.claimRun({ runId: manual.id, expectedRevision: manual.revision });
+  expect(claimed.history.at(-1)).toMatchObject({
+    role: "user",
+    content: "manual control input",
+  });
+  await owner.commitOutcome({
+    runId: manual.id,
+    execution: claimed.execution,
+    expectedRevision: claimed.run.revision,
+    outcome: { id: "outcome-control" as never, message: "done" },
+  });
+
+  const system = await owner.createRun({
+    agentId: agent.id,
+    input: "",
+    metadata: { rowan: { kind: "custom-control" } },
+    idempotencyKey: "run-system-control",
+  });
+  const systemClaim = await owner.claimRun({ runId: system.id, expectedRevision: system.revision });
+  expect((await owner.snapshotRun(system.id)).messageCount).toBe(0);
+  expect(systemClaim.history.at(-1)).toMatchObject({
+    role: "user",
+    content: "manual control input",
+  });
+});
+
 test("Memory DurableStore replays a claim without duplicating the canonical input or events", async () => {
   const store = new InMemoryStore();
   const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });

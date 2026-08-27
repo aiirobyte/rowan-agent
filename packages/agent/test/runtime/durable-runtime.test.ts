@@ -91,10 +91,15 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
   }
 });
 
-test("AgentRuntime compacts through the built-in Control Phase without appending a chat message", async () => {
+test("AgentRuntime preserves manual Control Run input while keeping system compaction non-conversational", async () => {
   let calls = 0;
-  const stream: StreamFn = async function* () {
+  const requests: string[][] = [];
+  const stream: StreamFn = async function* (input) {
     calls += 1;
+    requests.push(input.messages.map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map((part) => part.type === "text" ? part.text : "[part]").join("")));
     const text = calls === 1 ? "ordinary reply" : "durable summary";
     yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
     yield { type: "done", response: stopResponse(text) };
@@ -105,7 +110,9 @@ test("AgentRuntime compacts through the built-in Control Phase without appending
     const ordinary = await runtime.start(agentId, "hello", { idempotencyKey: "compact-ordinary" });
     await expect(ordinary.wait()).resolves.toMatchObject({ type: "completed" });
     const before = await runtime.history(agentId);
-    const compact = await runtime.compactContext(agentId, { instructions: "Keep the architecture decisions." });
+    const compact = await runtime.compactContext(agentId, {
+      input: "/compact Keep the architecture decisions.",
+    });
     const observedPromise = (async () => {
       const observed: RunEvent[] = [];
       for await (const event of compact.observe()) {
@@ -121,10 +128,20 @@ test("AgentRuntime compacts through the built-in Control Phase without appending
       expect.objectContaining({ state: "completed", kind: "compacted" }),
     ]);
     const after = await runtime.history(agentId);
-    expect(after).toHaveLength(before.length);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.at(-1)).toMatchObject({
+      role: "user",
+      content: "/compact Keep the architecture decisions.",
+    });
+    expect(requests[1]).toContain("Additional compaction instructions:\nKeep the architecture decisions.");
     expect((await runtime.contextStatus(agentId)).coveredThrough?.messageId).toBe(after.at(-1)?.id);
     const compactSnapshot = await compact.snapshot();
     expect("output" in compactSnapshot ? compactSnapshot.output : undefined).toBeUndefined();
+
+    const systemCompact = await runtime.compactContext(agentId);
+    await expect(systemCompact.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(requests[2]).not.toContain("Additional compaction instructions:");
+    await expect(runtime.history(agentId)).resolves.toHaveLength(after.length);
   } finally {
     await runtime.close();
   }

@@ -25,4 +25,4 @@ export {
   createCorePhases,
   createDefaultPhase,
   createStopPhase,
-} from "./default";
+} from "./core-phases";

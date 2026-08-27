@@ -190,6 +190,12 @@ function snapshotConfiguration(config: AgentConfiguration): AgentConfiguration {
         value: snapshotJsonValue(context.value),
       }))),
     } : {}),
+    ...(config.additionalContexts ? {
+      additionalContexts: Object.freeze(config.additionalContexts.map((context) => Object.freeze({
+        name: context.name,
+        value: snapshotJsonValue(context.value),
+      }))),
+    } : {}),
   });
 }
 

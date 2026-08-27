@@ -33,7 +33,7 @@ export {
   createCorePhases,
   createDefaultPhase,
   createStopPhase,
-} from "./harness/phases/default";
+} from "./harness/phases/core-phases";
 export { loadExtensionsFromPath as loadExtensions } from "./extensions/loader";
 export { parseAgentDefinition } from "./harness/definitions";
 export { parseFrontmatter } from "./harness/loader";

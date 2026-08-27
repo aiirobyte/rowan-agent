@@ -40,7 +40,7 @@ import { createOutcome } from "./outcomes";
 import { snapshotMessages } from "./state";
 import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
-import { STOP_PHASE_ID } from "../harness/phases/default";
+import { STOP_PHASE_ID } from "../harness/phases/core-phases";
 
 // ============================================================================
 // Phase State Utilities

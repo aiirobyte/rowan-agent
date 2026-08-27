@@ -5,7 +5,7 @@ import type {
 } from "../harness/definitions";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/default";
+import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/core-phases";
 import type { ContextCandidate } from "./contracts";
 import { validateMaxAttempts } from "../loop/types";
 import {
@@ -30,6 +30,8 @@ export type AgentConfiguration = Readonly<{
   definition: Readonly<{ name: string; layer?: DefinitionLayer }>;
   resourceView: ResourceView;
   contexts?: readonly ContextCandidate[];
+  /** Trusted Host-owned Contexts appended after Definition selection. */
+  additionalContexts?: readonly ContextCandidate[];
   cwd?: string;
   maxAttempts?: number;
   model: ModelConfig | ModelRef;
@@ -66,14 +68,18 @@ export function resolveConfigurationSnapshot(
     throw new Error(`Agent Definition "${input.definition.name}" is not available in the Resource View.`);
   }
   const layer = input.definition.layer;
-  const definition = applyDefinitionLayer(base, layer);
+  const selectedContexts = selectNamedResources(input.contexts ?? [], base.contexts, "Context");
+  const contexts = appendAdditionalContexts(selectedContexts, input.additionalContexts ?? []);
+  const definition = addAdditionalContextNames(
+    applyDefinitionLayer(base, layer),
+    contexts.slice(selectedContexts.length).map(({ name }) => name),
+  );
   const tools = selectNamedResources(resolved.tools, definition.tools, "Tool");
   const skills = mergeSkills(
     selectNamedResources(resolved.skills, definition.skills, "Skill"),
     definition.bundledSkills,
   );
   const phases = resolvePhases(resolved.phases, definition.phases);
-  const contexts = selectNamedResources(input.contexts ?? [], base.contexts, "Context");
   return {
     identity: input.identity,
     definition,
@@ -139,6 +145,32 @@ function applyDefinitionLayer(base: AgentDefinition, layer: DefinitionLayer | un
     ...(layer.skills === undefined ? {} : { skills: intersectNames(base.skills, layer.skills, "Skill") }),
     ...(layer.phases === undefined ? {} : { phases: intersectPhaseSelection(base.phases, layer.phases) }),
   };
+}
+
+function appendAdditionalContexts(
+  selected: readonly ContextCandidate[],
+  additional: readonly ContextCandidate[],
+): ContextCandidate[] {
+  const contexts = [...selected];
+  const seen = new Set(contexts.map(({ name }) => name));
+  for (const context of additional) {
+    if (seen.has(context.name)) continue;
+    seen.add(context.name);
+    contexts.push(context);
+  }
+  return contexts;
+}
+
+function addAdditionalContextNames(
+  definition: AgentDefinition,
+  names: readonly string[],
+): AgentDefinition {
+  if (definition.contexts === undefined || names.length === 0) return definition;
+  const existing = new Set(definition.contexts);
+  const additions = names.filter((name) => !existing.has(name));
+  return additions.length === 0
+    ? definition
+    : { ...definition, contexts: [...definition.contexts, ...additions] };
 }
 
 function intersectNames(parent: readonly string[] | undefined, layer: readonly string[], kind: "Tool" | "Skill"): readonly string[] {

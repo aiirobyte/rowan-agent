@@ -46,7 +46,7 @@ import { pageAgents, pageRuns } from "./read-models";
 import { projectAssistantMessage, projectModelContext } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
-import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/default";
+import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
 import type { PhaseRegistry } from "../harness/phases/types";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
@@ -263,7 +263,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.owned.contextStatus(agentId, contextWindow);
   }
 
-  async compactContext(agentId: AgentId, options: { instructions?: string; idempotencyKey?: string } = {}): Promise<AgentRun> {
+  async compactContext(agentId: AgentId, options: { input?: UserInput; instructions?: string; idempotencyKey?: string } = {}): Promise<AgentRun> {
     this.assertOpen();
     const agent = await this.requireAgent(agentId);
     if (!agent.activatedAt || !agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
@@ -284,7 +284,9 @@ export class AgentRuntime implements AgentRuntimeContract {
     };
     const run = await this.owned.createRun({
       agentId,
-      input: "",
+      // An empty input is a system-triggered Control Run. A non-empty input
+      // represents a user invocation and is committed by the Durable Store.
+      input: options.input ?? "",
       metadata,
       idempotencyKey: options.idempotencyKey ?? createId("compact"),
     });
@@ -577,16 +579,6 @@ export class AgentRuntime implements AgentRuntimeContract {
             ...executionContext.phases!,
             entryPhaseId: COMPACT_PHASE_ID,
           };
-          const instructions = controlKind === "compact" ? compactInstructions(run) : undefined;
-          if (instructions) {
-            executionContext.messages.push({
-              id: createId("msg"),
-              role: "user",
-              content: `Additional compaction instructions:\n${instructions}`,
-              createdAt: new Date().toISOString(),
-              metadata: { kind: "phase_input", phase: COMPACT_PHASE_ID },
-            });
-          }
         }
         return executionContext;
       };
@@ -603,6 +595,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           agentId: run.agentId,
           runId: run.id,
           executionId: claim!.execution.executionId,
+          input: typeof run.input === "string" ? run.input : run.input.content,
           ...(agent.metadata === undefined ? {} : { agentMetadata: agent.metadata }),
           ...(run.metadata === undefined ? {} : { runMetadata: run.metadata }),
         },
@@ -757,6 +750,8 @@ export class AgentRuntime implements AgentRuntimeContract {
         const output = latestAssistant(run, result.messages.slice(modelMessages.length), modelMessages.length);
         if (controlKind === "compact" || isCompactionOutcome(result.outcome.payload)) {
           const summary = compactSummary(result.outcome.payload);
+          const instructions = compactInstructions(run)
+            ?? compactOutputInstructions(result.outcome.payload);
           if (summary) {
             const covered = claim.history.at(-1);
             const record: ContextCompactionRecord = {
@@ -764,7 +759,7 @@ export class AgentRuntime implements AgentRuntimeContract {
               agentId: run.agentId,
               summary,
               ...(covered ? { coveredThrough: { messageId: covered.id, sequence: covered.sequenceWithinRun } } : {}),
-              ...(compactInstructions(run) ? { instructions: compactInstructions(run) } : {}),
+              ...(instructions ? { instructions } : {}),
               createdAt: new Date().toISOString(),
             };
             await this.owned.commitContextCompaction(record);
@@ -1162,6 +1157,14 @@ function compactSummary(payload: unknown): string | undefined {
   if (typeof payload !== "object" || payload === null || !("summary" in payload)) return undefined;
   const summary = (payload as { summary?: unknown }).summary;
   return typeof summary === "string" && summary.trim().length > 0 ? summary : undefined;
+}
+
+function compactOutputInstructions(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null || !("instructions" in payload)) return undefined;
+  const instructions = (payload as { instructions?: unknown }).instructions;
+  return typeof instructions === "string" && instructions.trim().length > 0
+    ? instructions.trim()
+    : undefined;
 }
 
 function isCompactionOutcome(payload: unknown): boolean {

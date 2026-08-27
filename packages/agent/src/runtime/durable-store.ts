@@ -560,7 +560,7 @@ export class InMemoryStore implements DurableStore {
     }
     if (!run.pinnedConfigToken && input.configToken) run.pinnedConfigToken = input.configToken;
     let message: Message | undefined;
-    if (!run.checkpoint && !run.initialMessageId && !isControlRun(run)) {
+    if (!run.checkpoint && !run.initialMessageId && (!isControlRun(run) || hasUserInput(run.input))) {
       const userInput = normalizeUserInput(run.input);
       message = {
         id: input.messageId ?? (createId("msg") as MessageId),
@@ -1583,14 +1583,21 @@ function userInputContent(input: UserInput): UserContent {
   return typeof input === "string" ? input : input.content;
 }
 
+function hasUserInput(input: UserInput): boolean {
+  const content = userInputContent(input);
+  return content.length > 0;
+}
+
 function userInputMetadata(input: UserInput): Metadata | undefined {
   return typeof input === "string" ? undefined : input.metadata;
 }
 
 function isControlRun(run: RunRecord): boolean {
   const rowan = run.metadata?.rowan;
-  return typeof rowan === "object" && rowan !== null && "kind" in rowan
-    && (rowan as { kind?: unknown }).kind === "compact";
+  return typeof rowan === "object"
+    && rowan !== null
+    && typeof (rowan as { kind?: unknown }).kind === "string"
+    && (rowan as { kind: string }).kind.length > 0;
 }
 
 function estimateMessageTokens(messages: readonly Message[]): number {
