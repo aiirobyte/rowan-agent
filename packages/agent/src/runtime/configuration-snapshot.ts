@@ -30,7 +30,7 @@ export type AgentConfiguration = Readonly<{
   definition: Readonly<{ name: string; layer?: DefinitionLayer }>;
   resourceView: ResourceView;
   contexts?: readonly ContextCandidate[];
-  /** Trusted Host-owned Contexts appended after Definition selection. */
+  /** Trusted Host-owned Contexts rendered as durable user messages. */
   additionalContexts?: readonly ContextCandidate[];
   cwd?: string;
   maxAttempts?: number;
@@ -49,6 +49,7 @@ export type ConfigurationSnapshot = Readonly<{
     refs: Readonly<Record<ResourceKind, readonly ResourceRef[]>>;
   }>;
   contexts: readonly ContextCandidate[];
+  additionalContexts: readonly ContextCandidate[];
   resourceView: ResourceView;
   cwd?: string;
   maxAttempts?: number;
@@ -69,11 +70,8 @@ export function resolveConfigurationSnapshot(
   }
   const layer = input.definition.layer;
   const selectedContexts = selectNamedResources(input.contexts ?? [], base.contexts, "Context");
-  const contexts = appendAdditionalContexts(selectedContexts, input.additionalContexts ?? []);
-  const definition = addAdditionalContextNames(
-    applyDefinitionLayer(base, layer),
-    contexts.slice(selectedContexts.length).map(({ name }) => name),
-  );
+  const additionalContexts = deduplicateContexts(input.additionalContexts ?? [], selectedContexts);
+  const definition = applyDefinitionLayer(base, layer);
   const tools = selectNamedResources(resolved.tools, definition.tools, "Tool");
   const skills = mergeSkills(
     selectNamedResources(resolved.skills, definition.skills, "Skill"),
@@ -95,7 +93,8 @@ export function resolveConfigurationSnapshot(
         phase: selectedRefs(resolved.refs.phase, [...(phases?.phases.keys() ?? [])]),
       },
     },
-    contexts,
+    contexts: selectedContexts,
+    additionalContexts,
     resourceView: input.resourceView,
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
@@ -126,6 +125,9 @@ export function materializeConfigurationSnapshot(snapshot: ConfigurationSnapshot
       ],
       resourceRevisions: snapshot.resources.revisions,
     },
+    ...(snapshot.additionalContexts.length > 0
+      ? { additionalContexts: snapshot.additionalContexts }
+      : {}),
     ...(snapshot.cwd === undefined ? {} : { cwd: snapshot.cwd }),
     ...(snapshot.maxAttempts === undefined ? {} : { maxAttempts: snapshot.maxAttempts }),
     ...("stream" in snapshot && snapshot.stream
@@ -147,30 +149,18 @@ function applyDefinitionLayer(base: AgentDefinition, layer: DefinitionLayer | un
   };
 }
 
-function appendAdditionalContexts(
-  selected: readonly ContextCandidate[],
+function deduplicateContexts(
   additional: readonly ContextCandidate[],
+  existing: readonly ContextCandidate[] = [],
 ): ContextCandidate[] {
-  const contexts = [...selected];
-  const seen = new Set(contexts.map(({ name }) => name));
+  const contexts: ContextCandidate[] = [];
+  const seen = new Set(existing.map(({ name }) => name));
   for (const context of additional) {
     if (seen.has(context.name)) continue;
     seen.add(context.name);
     contexts.push(context);
   }
   return contexts;
-}
-
-function addAdditionalContextNames(
-  definition: AgentDefinition,
-  names: readonly string[],
-): AgentDefinition {
-  if (definition.contexts === undefined || names.length === 0) return definition;
-  const existing = new Set(definition.contexts);
-  const additions = names.filter((name) => !existing.has(name));
-  return additions.length === 0
-    ? definition
-    : { ...definition, contexts: [...definition.contexts, ...additions] };
 }
 
 function intersectNames(parent: readonly string[] | undefined, layer: readonly string[], kind: "Tool" | "Skill"): readonly string[] {

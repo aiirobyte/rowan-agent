@@ -133,10 +133,13 @@ test("preserves Host additional Contexts without widening ordinary Definition se
 
     expect(snapshot.contexts).toEqual([
       { name: "project", value: { id: "p1" } },
+    ]);
+    expect(snapshot.additionalContexts).toEqual([
       { name: "explicit_skill:review", value: { content: "Review guidance" } },
     ]);
-    expect(snapshot.definition.contexts).toEqual(["project", "explicit_skill:review"]);
+    expect(snapshot.definition.contexts).toEqual(["project"]);
     expect(materializeConfigurationSnapshot(snapshot).resources.contexts).toEqual(snapshot.contexts);
+    expect(materializeConfigurationSnapshot(snapshot).additionalContexts).toEqual(snapshot.additionalContexts);
   } finally {
     warnings.mockRestore();
   }

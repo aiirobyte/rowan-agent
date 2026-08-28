@@ -39,7 +39,10 @@ export function serializeSkills(skills: Skill[]): Array<{
 export function latestUserInput(messages: AgentMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.role === "user" && message.metadata?.kind !== "phase_prompt") {
+    if (message.role === "user"
+      && message.metadata?.kind !== "phase_prompt"
+      && message.metadata?.kind !== "phase_input"
+      && message.metadata?.kind !== "host_context") {
       return messageContentText(message.content);
     }
   }

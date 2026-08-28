@@ -37,6 +37,7 @@ import type {
 } from "./contracts";
 import {
   assertToolExecutionResult,
+  HOST_CONTEXT_MESSAGE_KIND,
   isAgentConfiguration,
   thinkingLevelFromMessages,
 } from "./contracts";
@@ -62,6 +63,7 @@ import type { AgentDefinition } from "../harness/definitions";
 import type { Phase } from "../harness/phases/types";
 import type { Skill } from "../protocol";
 import { materializeConfigurationSnapshot, resolveConfigurationSnapshot } from "./configuration-snapshot";
+import { buildAdditionalContextMessage } from "../harness/context/resource-formatter";
 
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_POLL_MS = 25;
@@ -549,7 +551,13 @@ export class AgentRuntime implements AgentRuntimeContract {
         }
       }
       const executionId = createId("exec") as import("../runtime-events").ExecutionId;
-      claim = await this.owned.claimRun({ runId: run.id, expectedRevision: run.revision, executionId, configToken: token });
+      claim = await this.owned.claimRun({
+        runId: run.id,
+        expectedRevision: run.revision,
+        executionId,
+        configToken: token,
+        ...(controlKind ? {} : { inputContext: additionalContextInput(config) }),
+      });
       executionRevision = claim.run.revision;
       const controller = new AbortController();
       this.executions.set(run.id, { controller, executionId });
@@ -1083,6 +1091,15 @@ export class AgentRuntime implements AgentRuntimeContract {
     }, OWNER_RENEWAL_MS);
     this.heartbeat.unref?.();
   }
+}
+
+function additionalContextInput(config: AgentConfig): UserInput | undefined {
+  const contexts = config.additionalContexts ?? [];
+  if (contexts.length === 0) return undefined;
+  const content = buildAdditionalContextMessage(contexts);
+  return content.length === 0
+    ? undefined
+    : { content, metadata: { kind: HOST_CONTEXT_MESSAGE_KIND } };
 }
 
 class DurableRun implements AgentRun {

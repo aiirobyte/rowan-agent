@@ -62,7 +62,10 @@ function findLatestUserInputMessage(messages: AgentMessage[]): AgentMessage | un
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     const kind = message.metadata?.kind;
-    if (message.role === "user" && kind !== "phase_prompt" && kind !== "phase_input") {
+    if (message.role === "user"
+      && kind !== "phase_prompt"
+      && kind !== "phase_input"
+      && kind !== "host_context") {
       return message;
     }
   }

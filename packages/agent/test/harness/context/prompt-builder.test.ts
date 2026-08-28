@@ -138,6 +138,13 @@ test("latestUserInput ignores phase context messages", () => {
       kind: "phase_prompt",
       phase: "review",
     }),
+    createMessage("user", "Review this code.", {
+      kind: "phase_input",
+      phase: "review",
+    }),
+    createMessage("user", "<agent_context>host context</agent_context>", {
+      kind: "host_context",
+    }),
   ];
 
   expect(latestUserInput(messages)).toBe("Review this code.");

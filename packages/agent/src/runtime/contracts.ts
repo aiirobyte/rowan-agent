@@ -105,6 +105,7 @@ export type { PhaseInteraction, PhaseInteractionKind, PhaseInteractionState, Pha
 
 export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
 export type HistorySeed = readonly Message[];
+export const HOST_CONTEXT_MESSAGE_KIND = "host_context" as const;
 export type ContextStatus = Readonly<{
   tokens: number;
   contextWindow: number;
@@ -156,7 +157,7 @@ export function thinkingLevelFromMessages(
     const kind = isRecord(metadata) && typeof metadata.kind === "string"
       ? metadata.kind
       : undefined;
-    if (kind === "phase_prompt" || kind === "phase_input") continue;
+    if (kind === "phase_prompt" || kind === "phase_input" || kind === HOST_CONTEXT_MESSAGE_KIND) continue;
     return thinkingLevelFromMetadata(metadata);
   }
   return undefined;
@@ -223,6 +224,8 @@ export type AgentConfig = Readonly<{
   identity: string;
   definition: AgentDefinition;
   resources: AgentResources;
+  /** Host-owned Contexts are rendered as durable user messages for a Run. */
+  additionalContexts?: readonly ContextCandidate[];
   cwd?: string;
   maxAttempts?: number;
   beforeToolCall?: BeforeToolCall;
@@ -372,7 +375,7 @@ export interface OwnedStore {
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord>;
-  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
+  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitInputRequired(input: {
     runId: RunId;
@@ -628,6 +631,12 @@ export function assertAgentConfig(config: AgentConfig): void {
     if (names.has(context.name)) throw new TypeError(`Duplicate Context candidate "${context.name}".`);
     names.add(context.name);
     assertJsonValue(context.value, `Context candidate "${context.name}" value`);
+  }
+  for (const context of config.additionalContexts ?? []) {
+    if (typeof context.name !== "string" || context.name.trim() === "") {
+      throw new TypeError("Additional Context candidate name must be non-empty");
+    }
+    assertJsonValue(context.value, `Additional Context candidate "${context.name}" value`);
   }
 }
 export function assertAgentConfigRequest(config: AgentConfigRequest): void {

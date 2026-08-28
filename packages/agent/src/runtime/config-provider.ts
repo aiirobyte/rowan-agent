@@ -137,7 +137,17 @@ function snapshotConfig(config: AgentConfigRequest): AgentConfigRequest {
       }))),
     } : {}),
   });
-  return Object.freeze({ ...config, definition, resources });
+  return Object.freeze({
+    ...config,
+    definition,
+    resources,
+    ...(config.additionalContexts ? {
+      additionalContexts: Object.freeze(config.additionalContexts.map((context) => Object.freeze({
+        name: context.name,
+        value: snapshotJsonValue(context.value),
+      }))),
+    } : {}),
+  });
 }
 
 function snapshotPhaseRegistry(registry: PhaseRegistry): PhaseRegistry {

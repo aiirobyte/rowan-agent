@@ -91,6 +91,43 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
   }
 });
 
+test("AgentRuntime persists additional Contexts as hidden host user messages", async () => {
+  const requests: Parameters<StreamFn>[0][] = [];
+  const stream: StreamFn = async function* (input) {
+    requests.push(input);
+    yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
+    yield { type: "done", response: stopResponse("done") };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent({
+      ...simpleConfig(stream),
+      additionalContexts: [{ name: "explicit", value: { instruction: "Review carefully." } }],
+    }, { idempotencyKey: "host-context-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "host-context-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+
+    const history = await runtime.history(agentId);
+    expect(history.filter(({ role }) => role === "user").map((message) => message.metadata?.kind)).toEqual([
+      "host_context",
+      undefined,
+    ]);
+    expect(history[0]).toMatchObject({
+      role: "user",
+      content: expect.stringContaining('<context name="explicit">'),
+      metadata: { kind: "host_context" },
+    });
+    expect(requests[0]?.system).not.toContain("Review carefully.");
+    const userMessages = requests[0]?.messages.filter((message) => message.role === "user") ?? [];
+    const hostIndex = userMessages.findIndex((message) => String(message.content).includes("Review carefully."));
+    const manualIndex = userMessages.findIndex((message) => message.content === "hello");
+    expect(hostIndex).toBeGreaterThanOrEqual(0);
+    expect(manualIndex).toBeGreaterThan(hostIndex);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("AgentRuntime preserves manual Control Run input while keeping system compaction non-conversational", async () => {
   let calls = 0;
   const requests: string[][] = [];

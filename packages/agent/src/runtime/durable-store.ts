@@ -40,7 +40,12 @@ import type {
   UserInput,
 } from "./contracts";
 import type { DurableStore, OwnedStore } from "./contracts";
-import { assertToolExecutionResult, isAssistantMessage } from "./contracts";
+import {
+  assertToolExecutionResult,
+  canonicalUserInput,
+  HOST_CONTEXT_MESSAGE_KIND,
+  isAssistantMessage,
+} from "./contracts";
 import { RuntimeError } from "./errors";
 import { createIdempotencyScope, encodeIdempotencyScope, canonicalStartRunRequest } from "./idempotency";
 import { TOOL_VALUE_JSON_BYTES } from "./idempotency";
@@ -536,11 +541,18 @@ export class InMemoryStore implements DurableStore {
     return clone(run);
   }
 
-  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): RunClaim {
+  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): RunClaim {
     this.assertOwner(lease);
     const executionId = input.executionId ?? (createId("exec") as ExecutionId);
     const operationKey = `claim:${executionId}`;
-    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.messageId ?? null, input.configToken ?? null] as never);
+    const inputContext = input.inputContext === undefined ? undefined : normalizeUserInput(input.inputContext);
+    const operationPayload = canonicalJson([
+      input.runId,
+      input.expectedRevision,
+      input.messageId ?? null,
+      input.configToken ?? null,
+      inputContext ?? null,
+    ] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as RunClaim);
     const run = this.requireRun(input.runId);
@@ -559,10 +571,31 @@ export class InMemoryStore implements DurableStore {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["queued"], actual: run.state });
     }
     if (!run.pinnedConfigToken && input.configToken) run.pinnedConfigToken = input.configToken;
-    let message: Message | undefined;
+    const committedMessages: Message[] = [];
+    const existingMessages = this.messagesForRun(run.id);
+    if (inputContext
+      && hasUserInput(inputContext)
+      && !isControlRun(run)
+      && !existingMessages.some((message) =>
+        message.role === "user"
+        && message.metadata?.kind === HOST_CONTEXT_MESSAGE_KIND
+        && canonicalUserInput({ content: message.content, metadata: message.metadata }) === canonicalUserInput(inputContext))) {
+      const contextMessage: Message = {
+        id: createId("msg") as MessageId,
+        agentId: run.agentId,
+        runId: run.id,
+        role: "user",
+        content: userInputContent(inputContext),
+        ...(userInputMetadata(inputContext) ? { metadata: clone(userInputMetadata(inputContext)!) } : {}),
+        sequenceWithinRun: this.nextMessageSequence(run.id),
+        createdAt: createTimestamp(),
+      };
+      this.messages.set(contextMessage.id, contextMessage);
+      committedMessages.push(contextMessage);
+    }
     if (!run.checkpoint && !run.initialMessageId && (!isControlRun(run) || hasUserInput(run.input))) {
       const userInput = normalizeUserInput(run.input);
-      message = {
+      const message: Message = {
         id: input.messageId ?? (createId("msg") as MessageId),
         agentId: run.agentId,
         runId: run.id,
@@ -573,6 +606,7 @@ export class InMemoryStore implements DurableStore {
         createdAt: createTimestamp(),
       };
       this.messages.set(message.id, message);
+      committedMessages.push(message);
     }
     const execution: ExecutionToken = {
       runId: run.id,
@@ -583,7 +617,7 @@ export class InMemoryStore implements DurableStore {
     run.execution = execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
-    if (message) this.appendMessage(run, message);
+    for (const message of committedMessages) this.appendMessage(run, message);
     this.appendTransition(run, "queued", "running");
     const result = { run: clone(run), execution: clone(execution), history: this.activeHistory(run.agentId, run.agentSequence) };
     this.writeOperationReceipt(operationKey, operationPayload, result);
@@ -1533,7 +1567,7 @@ class MemoryOwnedStore implements OwnedStore {
     return this.store.commitContextCompaction(this.lease, record);
   }
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
-  async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
+  async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly PhaseInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>> }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
   async answerInput(input: { runId: RunId; requestId: InputRequestId; expectedRevision: number; input: UserInput; messageId?: MessageId }): Promise<RunRecord> { return this.store.answerInput(this.lease, input); }
