@@ -220,6 +220,28 @@ test("callOpenAICompletions preserves reasoning_content", async () => {
   expect(result.content).toBe("Answer.");
 });
 
+test("callOpenAICompletions preserves reasoning as thinking when reasoning_content is absent", async () => {
+  const fetchMock: ProviderFetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: "Answer.", reasoning: "Thoughts." } }],
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
+  const result = await callOpenAICompletions(
+    {
+      baseUrl: "https://api.example/v1/",
+      apiKey: "test-key",
+      model: "test-model",
+      fetch: fetchMock,
+    },
+    { model: { provider: "test", id: "test" }, messages: [{ role: "user", content: "hello" }] },
+  );
+
+  expect(result.thinking).toBe("Thoughts.");
+  expect(result.content).toBe("Answer.");
+});
+
 test("callOpenAICompletions returns provider token usage", async () => {
   const fetchMock: ProviderFetch = async () =>
     jsonResponse("{\"ok\":true}", {
@@ -581,6 +603,62 @@ test("createOpenAICompletionsStream preserves reasoning_content as thinking delt
     type: "thinking",
     thinking: "First thought. Second thought.",
   });
+
+  const done = events.find((event) => event.type === "done");
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.response?.thinking).toBe("First thought. Second thought.");
+    expect(done.response?.content).toBe("Answer.");
+  }
+});
+
+test("createOpenAICompletionsStream preserves reasoning as thinking deltas", async () => {
+  const fetchMock: ProviderFetch = async () =>
+    sseResponse([
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: { role: "assistant", reasoning: "First thought. " },
+            finish_reason: null,
+          }],
+        },
+      },
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: { reasoning: "Second thought." },
+            finish_reason: null,
+          }],
+        },
+      },
+      {
+        data: {
+          choices: [{
+            index: 0,
+            delta: { content: "Answer." },
+            finish_reason: "stop",
+          }],
+        },
+      },
+    ]);
+
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    fetch: fetchMock,
+  });
+  const events = await collect(stream(
+    { model: { provider: "openai-compatible", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+
+  expect(events
+    .filter((event) => event.type === "thinking_delta")
+    .map((event) => event.type === "thinking_delta" ? event.thinking : ""))
+    .toEqual(["First thought. ", "Second thought."]);
 
   const done = events.find((event) => event.type === "done");
   expect(done?.type).toBe("done");

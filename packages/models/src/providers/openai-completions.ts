@@ -192,6 +192,7 @@ type ChatCompletionChunk = {
       role?: string;
       content?: string | null;
       reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -209,6 +210,7 @@ type ChatCompletionResponse = {
     message?: {
       content?: string | null;
       reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: Array<{
         id?: string;
         type?: "function";
@@ -252,7 +254,7 @@ async function* streamChatCompletions(
         const choice = data.choices?.[0];
         const message = choice?.message;
         const content = message?.content ?? "";
-        const thinking = message?.reasoning_content ?? "";
+        const thinking = message?.reasoning_content ?? message?.reasoning ?? "";
         const partial: AssistantMessagePartial = {
           role: "assistant",
           contentBlocks: [],
@@ -341,10 +343,11 @@ async function* streamChatCompletions(
         const delta = choice.delta;
 
         if (delta) {
-          if (delta.reasoning_content) {
-            thinking += delta.reasoning_content;
+          const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
+          if (reasoningDelta) {
+            thinking += reasoningDelta;
             rebuildPartial();
-            yield { type: "thinking_delta", thinking: delta.reasoning_content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+            yield { type: "thinking_delta", thinking: reasoningDelta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           }
           if (delta.content) {
             content += delta.content;
@@ -455,11 +458,11 @@ export async function callOpenAICompletions(
     }),
   }, async (response) => {
     const data = await response.json<{
-      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
+      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null; reasoning?: string | null } }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
     }>();
     const message = data.choices?.[0]?.message;
-    const thinking = message?.reasoning_content ?? "";
+    const thinking = message?.reasoning_content ?? message?.reasoning ?? "";
     return {
       content: message?.content ?? "",
       ...(thinking ? { thinking } : {}),
