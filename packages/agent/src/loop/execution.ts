@@ -37,6 +37,8 @@ export type PhaseExecution = {
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
   executeTools(context: AgentContext, toolCalls: readonly ToolCall[]): Promise<readonly ToolResult[]>;
   interaction: PhaseInteractionDriver;
+  /** Message lifecycle manager for streaming updates from programmatic phases */
+  messages: PhaseMessageManager;
 };
 
 /** Message lifecycle manager for streaming updates */

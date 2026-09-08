@@ -1129,6 +1129,7 @@ function createPhaseExecution(
   const interaction = createPhaseInteractionDriver(state, phase.name, config.signal);
   return {
     interaction,
+    messages: messageManager,
     snapshot(): PhaseContextSnapshot {
       return {
         systemPrompt: config.context.systemPrompt,

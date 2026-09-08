@@ -183,7 +183,7 @@ export type {
   PhaseRegistry,
   PhaseState,
 } from "./harness/phases/types";
-export type { PhaseExecution } from "./loop/execution";
+export type { PhaseExecution, PhaseMessageManager } from "./loop/execution";
 export type {
   PhaseInteraction,
   PhaseInteractionDriver,

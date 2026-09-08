@@ -114,6 +114,7 @@ export const publicTypeExports = [
   "PhaseContext",
   "PhaseExecution",
   "PhaseExecutionIdentity",
+  "PhaseMessageManager",
   "PhaseInteraction",
   "PhaseInteractionDriver",
   "PhaseInteractionKind",
