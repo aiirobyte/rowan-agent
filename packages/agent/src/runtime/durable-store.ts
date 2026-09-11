@@ -42,8 +42,6 @@ import type {
 import type { DurableStore, OwnedStore } from "./contracts";
 import {
   assertToolExecutionResult,
-  canonicalUserInput,
-  HOST_CONTEXT_MESSAGE_KIND,
   isAssistantMessage,
 } from "./contracts";
 import { RuntimeError } from "./errors";
@@ -541,17 +539,15 @@ export class InMemoryStore implements DurableStore {
     return clone(run);
   }
 
-  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): RunClaim {
+  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): RunClaim {
     this.assertOwner(lease);
     const executionId = input.executionId ?? (createId("exec") as ExecutionId);
     const operationKey = `claim:${executionId}`;
-    const inputContext = input.inputContext === undefined ? undefined : normalizeUserInput(input.inputContext);
     const operationPayload = canonicalJson([
       input.runId,
       input.expectedRevision,
       input.messageId ?? null,
       input.configToken ?? null,
-      inputContext ?? null,
     ] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as RunClaim);
@@ -572,27 +568,6 @@ export class InMemoryStore implements DurableStore {
     }
     if (!run.pinnedConfigToken && input.configToken) run.pinnedConfigToken = input.configToken;
     const committedMessages: Message[] = [];
-    const existingMessages = this.messagesForRun(run.id);
-    if (inputContext
-      && hasUserInput(inputContext)
-      && !isControlRun(run)
-      && !existingMessages.some((message) =>
-        message.role === "user"
-        && message.metadata?.kind === HOST_CONTEXT_MESSAGE_KIND
-        && canonicalUserInput({ content: message.content, metadata: message.metadata }) === canonicalUserInput(inputContext))) {
-      const contextMessage: Message = {
-        id: createId("msg") as MessageId,
-        agentId: run.agentId,
-        runId: run.id,
-        role: "user",
-        content: userInputContent(inputContext),
-        ...(userInputMetadata(inputContext) ? { metadata: clone(userInputMetadata(inputContext)!) } : {}),
-        sequenceWithinRun: this.nextMessageSequence(run.id),
-        createdAt: createTimestamp(),
-      };
-      this.messages.set(contextMessage.id, contextMessage);
-      committedMessages.push(contextMessage);
-    }
     if (!run.checkpoint && !run.initialMessageId && (!isControlRun(run) || hasUserInput(run.input))) {
       const userInput = normalizeUserInput(run.input);
       const message: Message = {

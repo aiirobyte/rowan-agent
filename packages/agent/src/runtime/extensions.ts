@@ -85,11 +85,17 @@ function resolveDefinitionContext(
     selectNamedResources(config.resources.skills, config.definition.skills, "Skill"),
     config.definition.bundledSkills,
   );
-  const contexts = selectNamedResources(
-    config.resources.contexts ?? [],
-    config.definition.contexts,
-    "Context",
-  );
+  // Host-supplied Context is part of the same System Prompt Context block as
+  // the Definition's declared Context. It is never a separate message, so the
+  // System Prompt remains the single Context injection seam.
+  const contexts = [
+    ...selectNamedResources(
+      config.resources.contexts ?? [],
+      config.definition.contexts,
+      "Context",
+    ),
+    ...(config.additionalContexts ?? []),
+  ];
   const candidateRegistry = assembled.phases ?? config.resources.phases;
   const phaseCandidates = [...(candidateRegistry?.phases.values() ?? [])];
   const coreNames = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);

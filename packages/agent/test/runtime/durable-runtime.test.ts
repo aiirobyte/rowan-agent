@@ -91,7 +91,7 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
   }
 });
 
-test("AgentRuntime persists additional Contexts as hidden host user messages", async () => {
+test("AgentRuntime injects additional Contexts into the System Prompt", async () => {
   const requests: Parameters<StreamFn>[0][] = [];
   const stream: StreamFn = async function* (input) {
     requests.push(input);
@@ -108,21 +108,12 @@ test("AgentRuntime persists additional Contexts as hidden host user messages", a
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
 
     const history = await runtime.history(agentId);
-    expect(history.filter(({ role }) => role === "user").map((message) => message.metadata?.kind)).toEqual([
-      "host_context",
-      undefined,
-    ]);
-    expect(history[0]).toMatchObject({
-      role: "user",
-      content: expect.stringContaining('<context name="explicit">'),
-      metadata: { kind: "host_context" },
-    });
-    expect(requests[0]?.system).not.toContain("Review carefully.");
+    expect(history.filter(({ role }) => role === "user")).toHaveLength(1);
+    expect(history[0]).toMatchObject({ role: "user", content: "hello" });
+    expect(requests[0]?.system).toContain('<context name="explicit">');
+    expect(requests[0]?.system).toContain("Review carefully.");
     const userMessages = requests[0]?.messages.filter((message) => message.role === "user") ?? [];
-    const hostIndex = userMessages.findIndex((message) => String(message.content).includes("Review carefully."));
-    const manualIndex = userMessages.findIndex((message) => message.content === "hello");
-    expect(hostIndex).toBeGreaterThanOrEqual(0);
-    expect(manualIndex).toBeGreaterThan(hostIndex);
+    expect(userMessages.some((message) => String(message.content).includes("Review carefully."))).toBe(false);
   } finally {
     await runtime.close();
   }

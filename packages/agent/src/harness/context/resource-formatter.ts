@@ -67,13 +67,6 @@ export function buildContextDescription(
   return lines.join("\n");
 }
 
-/** Build the same structured Context payload for a durable user message. */
-export function buildAdditionalContextMessage(
-  contexts: readonly { name: string; value: unknown }[],
-): string {
-  return buildContextDescription(contexts);
-}
-
 // ---------------------------------------------------------------------------
 // Unified resource output formatting
 // ---------------------------------------------------------------------------

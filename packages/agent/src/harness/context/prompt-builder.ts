@@ -41,8 +41,7 @@ export function latestUserInput(messages: AgentMessage[]): string {
     const message = messages[index];
     if (message.role === "user"
       && message.metadata?.kind !== "phase_prompt"
-      && message.metadata?.kind !== "phase_input"
-      && message.metadata?.kind !== "host_context") {
+      && message.metadata?.kind !== "phase_input") {
       return messageContentText(message.content);
     }
   }

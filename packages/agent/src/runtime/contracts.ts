@@ -105,7 +105,6 @@ export type { PhaseInteraction, PhaseInteractionKind, PhaseInteractionState, Pha
 
 export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
 export type HistorySeed = readonly Message[];
-export const HOST_CONTEXT_MESSAGE_KIND = "host_context" as const;
 export type ContextStatus = Readonly<{
   tokens: number;
   contextWindow: number;
@@ -157,7 +156,7 @@ export function thinkingLevelFromMessages(
     const kind = isRecord(metadata) && typeof metadata.kind === "string"
       ? metadata.kind
       : undefined;
-    if (kind === "phase_prompt" || kind === "phase_input" || kind === HOST_CONTEXT_MESSAGE_KIND) continue;
+    if (kind === "phase_prompt" || kind === "phase_input") continue;
     return thinkingLevelFromMetadata(metadata);
   }
   return undefined;
@@ -376,7 +375,7 @@ export interface OwnedStore {
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord>;
-  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim>;
+  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitInputRequired(input: {
     runId: RunId;

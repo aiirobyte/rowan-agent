@@ -152,13 +152,8 @@ test("SQLite DurableStore persists domain state and fences expired executions", 
       runId: run.id,
       expectedRevision: 0,
       executionId: "exec-1" as ExecutionId,
-      inputContext: {
-        content: "<agent_context>persist this</agent_context>",
-        metadata: { kind: "host_context" },
-      },
     });
     await expect(first.history(agent.id)).resolves.toMatchObject([
-      { role: "user", content: "<agent_context>persist this</agent_context>", metadata: { kind: "host_context" } },
       { role: "user", content: "hello" },
     ]);
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -169,7 +164,6 @@ test("SQLite DurableStore persists domain state and fences expired executions", 
       expect(second.lease.epoch).toBe(first.lease.epoch + 1);
       expect(await second.listAgents()).toHaveLength(1);
       await expect(second.history(agent.id)).resolves.toMatchObject([
-        { role: "user", content: "<agent_context>persist this</agent_context>", metadata: { kind: "host_context" } },
         { role: "user", content: "hello" },
       ]);
       expect(await second.snapshotRun(run.id)).toMatchObject({ state: "failed", failure: { code: "runtime_interrupted" } });
