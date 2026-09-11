@@ -159,7 +159,7 @@ name: my-phase              # Should match the directory name; omitted = directo
 description: What it does   # Required, max 1024 characters
 tools: [read, write, bash]  # Restrict available tools (omit = all tools)
 target: next-phase           # Force next phase name (overrides route tool)
-input:                       # Expected input fields (shown to LLM in route tool)
+input:                       # JSON-safe structural defaults shown in route tool
   task: "The task to perform"
   context: "Additional context"
 isolated: true               # Fresh context when executed in parallel
@@ -173,7 +173,7 @@ isolated: true               # Fresh context when executed in parallel
 | `tools` | string[] | No | Tool names allowed in this phase. `undefined` = all tools |
 | direct child Skill directories | `SKILL.md` Bundles | No | Skills available after entering this Phase; nested markers are invalid |
 | `target` | string | No | Forced next phase name. Overrides route tool |
-| `input` | Record<string, string> | No | Expected payload fields with descriptions |
+| `input` | JSON-safe mapping | No | Structural payload shape and defaults; omitted fields use these defaults |
 | `isolated` | boolean | No | Fresh message context in parallel execution |
 
 ### Body Content
@@ -476,7 +476,11 @@ export async function run(context) {
 }
 ```
 
-The LLM also sees payload data in the route tool's `input` field descriptions, so it can pass relevant structured data between phases.
+The `input` mapping in `PHASE.md` is both the structural payload definition and
+the source of defaults. Rowan exposes the inferred shape in the route tool,
+validates the Model-generated payload at the route boundary, and fills only
+omitted fields. A route to another Phase starts a fresh invocation; it does not
+inherit the previous payload unless the route explicitly includes it.
 
 ### State
 
@@ -514,7 +518,7 @@ interface Phase {
   tools?: string[];                    // restricted tools (undefined = all)
   skills?: Skill[];                    // direct child Skill Bundle values
   target?: string;                     // forced next phase
-  input?: Record<string, string>;      // expected input fields
+  input?: Record<string, JsonValue>;   // structural defaults and payload shape
   isolated?: boolean;                  // fresh context in parallel
   filePath: string;                    // path to PHASE.md
   baseDir: string;                     // phase directory

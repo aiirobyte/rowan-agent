@@ -1,6 +1,7 @@
 import Type from "typebox";
 import type { Tool } from "../../types";
 import type { Phase } from "../../harness/phases/types";
+import { phaseInputSchema } from "../../harness/phases/input";
 import { buildStructuredSection } from "../context/resource-formatter";
 
 export const PhaseRouteTool = "route";
@@ -15,10 +16,10 @@ function buildPhaseEntry(p: Pick<Phase, 'name' | 'description' | 'tools' | 'skil
   if (p.tools && p.tools.length > 0) {
     entry.available_tools = p.tools.join(", ");
   }
-  if (p.input && Object.keys(p.input).length > 0) {
-    entry.required_input = Object.entries(p.input)
-      .map(([key, desc]) => `- ${key}: ${desc}`)
-      .join("\n");
+  if (p.input !== undefined) {
+    entry.payload_schema = JSON.stringify(phaseInputSchema(p.input));
+  } else {
+    entry.payload_schema = "any JSON-safe value";
   }
   return entry;
 }
@@ -60,14 +61,22 @@ function buildRouteDescription(availablePhases: Pick<Phase, 'name' | 'descriptio
  */
 export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[]): Tool<RouteToolArgs> {
   const routablePhases = availablePhases.filter(({ name }) => name !== "stop");
-  const DecisionTarget = Type.Object({
-    phase: Type.Union([
-      ...routablePhases.map(p => Type.Literal(p.name)),
-      Type.Literal("stop"),
-    ]),
-    reason: Type.Optional(Type.String({ description: "Brief reason for this decision" })),
-    payload: Type.Optional(Type.Unknown({ description: "Structured input for the target phase" })),
-  });
+  const decisionTargets = [
+    ...routablePhases.map((phase) => Type.Object({
+      phase: Type.Literal(phase.name),
+      reason: Type.Optional(Type.String({ description: "Brief reason for this decision" })),
+      payload: Type.Optional(
+        phase.input === undefined
+          ? Type.Unknown({ description: "Any JSON-safe value for the target phase" })
+          : phaseInputSchema(phase.input),
+      ),
+    })),
+    Type.Object({
+      phase: Type.Literal("stop"),
+      reason: Type.Optional(Type.String({ description: "Brief reason for this decision" })),
+      payload: Type.Optional(Type.Unknown({ description: "Optional stop payload" })),
+    }),
+  ];
 
   return {
     name: PhaseRouteTool,
@@ -78,7 +87,7 @@ export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'descripti
       "Use route(stop) only when the current user request or task is complete; the Stop Phase will provide the final user-facing conclusion.",
     ],
     parameters: Type.Object({
-      decision: Type.Array(DecisionTarget, { description: "Phase executions to start", minItems: 1 }),
+      decision: Type.Array(Type.Union(decisionTargets), { description: "Phase executions to start", minItems: 1 }),
       instruction: Type.Optional(Type.String({ description: "Overall instruction, passed as context" })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution

@@ -1,6 +1,6 @@
 import type { ModelRef } from "@rowan-agent/models";
 import type { AgentMessage, Skill } from "../../protocol";
-import type { UserContent } from "../../runtime-events";
+import type { JsonValue, UserContent } from "../../runtime-events";
 import type { Tool } from "../../types";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
@@ -89,6 +89,9 @@ export interface PhaseContext {
   /** Text to append after the system prompt */
   appendSystemPrompt?: string;
 }
+
+/** JSON-safe structural defaults declared by a Phase's `input` mapping. */
+export type PhaseInput = Readonly<Record<string, JsonValue>>;
 
 /** JSON-safe option metadata exposed by a Phase to a host Settings surface. */
 export interface PhaseSettingsOption {
@@ -194,8 +197,8 @@ export interface PhaseFrontmatter {
   tools?: string[];
   /** Forced next phase name */
   target?: string;
-  /** Expected input fields (key → description) */
-  input?: Record<string, string>;
+  /** Structural JSON-safe input defaults */
+  input?: PhaseInput;
   /** If true, phase gets a fresh context (empty messages) when executed in parallel */
   isolated?: boolean;
   /** Model override for this phase (e.g. "anthropic/claude-sonnet-4-20250514" or "gpt-4.1") */
@@ -217,7 +220,7 @@ export interface PhaseConfig {
   filePath?: string;
   baseDir?: string;
   content: string;
-  input?: Record<string, string>;
+  input?: PhaseInput;
   disableAutoInvocation?: boolean;
   disableImplicitInvocation?: boolean;
 }
@@ -238,8 +241,8 @@ export interface Phase {
   skills?: Skill[];
   /** Forced next phase */
   target?: string;
-  /** Expected input fields (key → description) */
-  input?: Record<string, string>;
+  /** Structural JSON-safe input defaults */
+  input?: PhaseInput;
   /** If true, phase gets a fresh context when executed in parallel */
   isolated?: boolean;
   /** Path to PHASE.md file */

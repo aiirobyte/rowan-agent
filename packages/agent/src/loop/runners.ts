@@ -30,6 +30,7 @@ import type {
 } from "../harness/phases";
 import { createPhaseInteractionDriver } from "../harness/phases/interactions";
 import { readPhaseContent } from "../harness/phases";
+import { preparePhasePayload } from "../harness/phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
@@ -123,9 +124,21 @@ function resolveRouteDecision(
     return { ...route, requestedCount };
   }
 
-  const decision = route.decision.filter(({ phase }) => registry.phases.has(phase));
+  const decision = route.decision.flatMap((candidate) => {
+    const target = registry.phases.get(candidate.phase);
+    if (!target) return [];
+    try {
+      const payload = preparePhasePayload(target.input, normalizePayload(candidate.payload));
+      return [{
+        ...candidate,
+        ...(payload === undefined ? {} : { payload }),
+      }];
+    } catch {
+      return [];
+    }
+  });
   if (decision.length === 0) return undefined;
-  return { ...route, decision, requestedCount };
+  return { ...route, decision, requestedCount: decision.length };
 }
 
 function resolveModelRouteDecision(
@@ -157,7 +170,7 @@ function resolveHookRouteDecision(
  */
 function injectPhaseContent(
   phase: Phase,
-  output: { instruction?: string; results: Array<{ name: string; output?: unknown }> },
+  output: { instruction?: string; payload?: unknown; results: Array<{ name: string; output?: unknown }> },
   messages: AgentMessage[],
   mirror?: AgentMessage[],
 ): string | undefined {
@@ -484,7 +497,12 @@ async function runPhaseLoop(
   if (resumingSuspendedRun) {
     state.status = "running";
   }
-  let previousPayload: unknown = resumingSuspendedRun ? state.continuation?.previousPayload : undefined;
+  const initialPayload = !resumingSuspendedRun
+    ? config.execution.runMetadata?.phasePayload
+    : undefined;
+  let previousPayload: unknown = resumingSuspendedRun
+    ? state.continuation?.previousPayload
+    : initialPayload;
   let previousPhaseMsgId: string | undefined = resumingSuspendedRun
     ? state.continuation?.previousPhaseMessageId
     : undefined;
@@ -601,6 +619,10 @@ async function runPhaseLoop(
       throw new Error(`Phase "${currentPhaseId}" not found`);
     }
 
+    if (previousPayload !== undefined || phase.input !== undefined) {
+      previousPayload = preparePhasePayload(phase.input, previousPayload);
+    }
+
     state.currentPhase = currentPhaseId;
 
     const allTools = buildToolsWithRouting(config, availablePhases);
@@ -685,7 +707,7 @@ async function runPhaseLoop(
       const lastMessageBeforePhase = config.context.messages.at(-1);
       previousPhaseMsgId = injectPhaseContent(
         phase,
-        { results: previousResults, instruction: pendingInstruction },
+        { results: previousResults, instruction: pendingInstruction, payload: previousPayload },
         config.context.messages,
         phaseContext.messages,
       );
@@ -741,6 +763,7 @@ async function runPhaseLoop(
           // A Hook route is authoritative and cancels a model fan-out. The
           // special programmatic continue sentinel remains handled below.
           routeDecision = resolveHookRouteDecision(output, registry);
+          if (routeDecision) applyFirstDecision(routeDecision, output);
         } else if (phase.run || phase.factory) {
           // Programmatic Phase output omission retains its historical stop
           // fallback, including when an after hook replaces the output.
@@ -888,7 +911,7 @@ async function runPhaseLoop(
       }
       currentPhaseId = STOP_PHASE_ID;
       previousPayload = output.payload;
-      previousResults = output.payload !== undefined ? [{ name: phase.name, output: output.payload }] : [];
+      previousResults = [];
       pendingInstruction = phase.target ? undefined : routeDecision?.instruction;
       continue;
     }
@@ -909,9 +932,13 @@ async function runPhaseLoop(
       ts: createTimestamp(),
     });
 
-    // Pass payload to next phase (also surfaced as previousResults for entry injection)
-    previousPayload = output.payload;
-    previousResults = output.payload !== undefined ? [{ name: phase.name, output: output.payload }] : [];
+    // Prepare the fresh invocation payload for the next phase.
+    const targetPhase = registry.phases.get(targetPhaseId);
+    const targetPayload = !phase.target && routeDecision
+      ? routeDecision.decision[0]?.payload
+      : output.payload;
+    previousPayload = preparePhasePayload(targetPhase?.input, targetPayload);
+    previousResults = [];
     pendingInstruction = phase.target ? undefined : routeDecision?.instruction;
 
     currentPhaseId = targetPhaseId;
@@ -1282,6 +1309,7 @@ async function executeParallelPhase(
   sourcePhaseId: string,
 ): Promise<ParallelResult> {
   const messages = [...context];
+  const effectivePayload = preparePhasePayload(phase.input, payload);
 
   const allTools = buildToolsWithRouting(config, availablePhases);
   // Parallel workers are one-shot executions; they return a result to the
@@ -1311,7 +1339,7 @@ async function executeParallelPhase(
       current: phase.name,
       available: Array.from(registry.phases.keys()),
       iterations: 0,
-      payload,
+      payload: effectivePayload,
     },
   };
 
@@ -1323,7 +1351,8 @@ async function executeParallelPhase(
     phase,
     {
       instruction,
-      results: payload !== undefined ? [{ name: sourcePhaseId, output: payload }] : [],
+      payload: effectivePayload,
+      results: [],
     },
     messages,
   );

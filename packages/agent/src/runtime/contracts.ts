@@ -38,7 +38,7 @@ import type {
   UserMessage,
 } from "../runtime-events";
 import type { Skill } from "../protocol";
-import type { PhaseRegistry } from "../harness/phases/types";
+import type { Phase, PhaseRegistry } from "../harness/phases/types";
 import type { PhaseInteraction } from "../harness/phases/interactions";
 import type { AgentDefinition } from "../harness/definitions";
 import { assertAgentDefinition } from "../harness/definitions";
@@ -209,6 +209,7 @@ export type InvocationCatalogEntry = Readonly<{
   kind: "phase" | "skill";
   name: string;
   description: string;
+  input?: Phase["input"];
   core?: boolean;
   disableAutoInvocation: boolean;
   disableImplicitInvocation: boolean;

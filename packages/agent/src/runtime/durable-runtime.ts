@@ -353,6 +353,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         kind: "phase" as const,
         name: phase.name,
         description: phase.description,
+        ...(phase.input === undefined ? {} : { input: phase.input }),
         ...(phase.core ? { core: true } : {}),
         disableAutoInvocation: phase.disableAutoInvocation ?? false,
         disableImplicitInvocation: phase.disableImplicitInvocation ?? false,

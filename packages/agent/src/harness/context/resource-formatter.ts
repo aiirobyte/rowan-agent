@@ -164,6 +164,7 @@ export function jsonToXml(value: unknown, depth: number): string {
  * Output structure:
  *   <phase_content name="{name}">
  *     {content}
+ *     [<phase_input>{payload}</phase_input> (when payload exists)]
  *     [<prev_phase_outputs>                       (when results or instruction exists)
  *        [<instruction>...</instruction>]         (only when instruction set)
  *        <phase name="{source}">{payload xml}</phase>
@@ -172,11 +173,18 @@ export function jsonToXml(value: unknown, depth: number): string {
  */
 export function buildPhaseDirectiveMessage(
   phase: { name: string; content: string },
-  output: { instruction?: string; results?: Array<{ name: string; output?: unknown }> },
+  output: { instruction?: string; payload?: unknown; results?: Array<{ name: string; output?: unknown }> },
 ): string {
   const parts: string[] = [];
   parts.push(`<phase_content name="${escapeXml(phase.name)}">`);
   parts.push(phase.content);
+  if (output.payload !== undefined) {
+    const payload = jsonToXml(output.payload, 2);
+    parts.push("  <phase_input>");
+    if (payload) parts.push(payload);
+    else if (output.payload === null) parts.push("    null");
+    parts.push("  </phase_input>");
+  }
   if ((output.results && output.results.length > 0) || output.instruction) {
     parts.push(`  <prev_phase_outputs>`);
     if (output.instruction) {

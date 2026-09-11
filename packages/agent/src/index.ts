@@ -176,6 +176,7 @@ export type {
 export type {
   Phase,
   PhaseContext,
+  PhaseInput,
   PhaseExecutionIdentity,
   PhaseInvocation,
   PhaseStatusState,

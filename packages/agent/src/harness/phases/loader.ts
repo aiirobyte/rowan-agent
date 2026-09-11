@@ -4,11 +4,13 @@ import { dirname, join, resolve } from "node:path";
 import type {
   Phase,
   PhaseFrontmatter,
+  PhaseInput,
   PhaseRegistry,
   PhaseSettingsContext,
   PhaseSettingsDefinition,
   PhaseSettingsProvider,
 } from "./types";
+import { parsePhaseInput } from "./input";
 import type { PhaseOutput } from "./types";
 import type { PhaseContext } from "./types";
 import type { PhaseExecution } from "../../loop/execution";
@@ -87,13 +89,21 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
 
   const baseDir = dirname(resolved);
   const skills = await loadPhaseSkills(baseDir);
+  let input: PhaseInput | undefined;
+  try {
+    input = parsePhaseInput(metadata.input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    warnResourceDiagnostics("phase", resolved, [message]);
+    throw new ResourceMetadataError("invalid_metadata", message);
+  }
   const phase: Phase = {
     name,
     description: description.description!,
     tools: definition.tools ? [...definition.tools] : undefined,
     skills,
     target: metadata.target as string | undefined,
-    input: metadata.input as Record<string, string> | undefined,
+    ...(input === undefined ? {} : { input }),
     isolated: metadata.isolated as boolean | undefined,
     filePath: resolved,
     baseDir,

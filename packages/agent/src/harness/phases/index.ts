@@ -2,6 +2,7 @@ export type {
   PhaseFrontmatter,
   Phase,
   PhaseContext,
+  PhaseInput,
   PhaseInvocation,
   PhaseStatusState,
   PhaseStatus,
@@ -15,6 +16,8 @@ export type {
   PhaseSettingsProvider,
   PhaseSettingsSection,
 } from "./types";
+export { parsePhaseInput, phaseInputSchema, preparePhasePayload } from "./input";
+export type { PhaseInputValue } from "./input";
 export type {
   PhaseInteraction,
   PhaseInteractionDriver,
