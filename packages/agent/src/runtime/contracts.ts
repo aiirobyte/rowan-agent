@@ -224,7 +224,7 @@ export type AgentConfig = Readonly<{
   identity: string;
   definition: AgentDefinition;
   resources: AgentResources;
-  /** Host-owned Contexts are rendered as durable user messages for a Run. */
+  /** Host-owned Contexts rendered in the System Prompt with the selected Contexts. */
   additionalContexts?: readonly ContextCandidate[];
   cwd?: string;
   maxAttempts?: number;
