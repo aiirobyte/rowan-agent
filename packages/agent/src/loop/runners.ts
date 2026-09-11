@@ -1010,8 +1010,17 @@ interface PhaseRuntime {
 async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
   const { phase, config, execution, registry, context } = ctx;
 
+  if (phase.run) {
+    const output = resolvePhaseOutput(await phase.run(context, execution));
+    output.phase = phase.name;
+    if (output.message === "Phase completed.") {
+      output.message = `${phase.name} phase completed.`;
+    }
+    return output;
+  }
+
   if (phase.factory) {
-      const api = createExtensionAPI(undefined, {
+    const api = createExtensionAPI(undefined, {
       registerPhase: async () => {},
       registerProvider: () => {},
       unregisterProvider: () => {},
@@ -1040,15 +1049,6 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
       phase: phase.name,
       payload: api.phase.getPayload(),
     };
-  }
-
-  if (phase.run) {
-    const output = resolvePhaseOutput(await phase.run(context, execution));
-    output.phase = phase.name;
-    if (output.message === "Phase completed.") {
-      output.message = `${phase.name} phase completed.`;
-    }
-    return output;
   }
 
   // LLM-driven fallback

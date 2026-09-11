@@ -150,6 +150,13 @@ and observes cancellation. It is protocol-neutral and does not know Providers,
 processes, or host business domains.
 _Avoid_: ACP Client, Provider Adapter, Tool Registry
 
+**Phase Settings Definition**:
+A JSON-safe, host-neutral declaration registered by a Phase bundle through the
+`ExtensionAPI.phase.settings` namespace. Rowan collects the provider registered
+with `api.phase.settings.register(provider)` but does not render the definition
+or interpret its domain fields; the host owns presentation and persistence.
+_Avoid_: ACP Settings page, host-specific configuration model
+
 **Phase Suspension**:
 A durable execution boundary produced by a Phase when it cannot continue until
 one or more Phase Interactions are resolved. It stores JSON-safe continuation

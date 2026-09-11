@@ -6,7 +6,10 @@ import type {
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
-import type { PhaseContext } from "../harness/phases/types";
+import type {
+  PhaseContext,
+  PhaseSettingsProvider,
+} from "../harness/phases/types";
 import type { ExtensionContext, ExtensionUtils } from "./context";
 
 // ---------------------------------------------------------------------------
@@ -75,6 +78,10 @@ export interface ExtensionAPI {
     getNextPhase(): string | undefined;
     /** Get the message set by setMessage */
     getMessage(): string | undefined;
+    /** Phase Settings contributions registered by the Phase extension. */
+    settings: {
+      register(provider: PhaseSettingsProvider): void;
+    };
   };
 }
 
@@ -106,6 +113,7 @@ export function createExtensionAPI(
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
     unregisterProvider?: (name: string) => void;
     registerTool?: (tool: ToolDefinition) => void;
+    registerSettings?: (provider: PhaseSettingsProvider) => void;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
@@ -146,6 +154,7 @@ export function createExtensionAPI(
   let outputPayload: unknown = phaseIn?.state?.payload;
   let nextPhase: string | undefined;
   let outputMessage: string | undefined;
+  let settingsProvider: PhaseSettingsProvider | undefined;
 
   return {
     on: (eventType, handler) => {
@@ -201,6 +210,19 @@ export function createExtensionAPI(
       setNextPhase: (id) => { nextPhase = id; },
       getNextPhase: () => nextPhase,
       getMessage: () => outputMessage,
+      settings: {
+        register: (provider) => {
+          assertActive();
+          if (typeof provider !== "function") {
+            throw new Error("Phase Settings registration requires a provider function.");
+          }
+          if (settingsProvider) {
+            throw new Error("A Phase may register only one Settings provider.");
+          }
+          settingsProvider = provider;
+          options?.registerSettings?.(provider);
+        },
+      },
     },
   };
 }

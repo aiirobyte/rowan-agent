@@ -1,11 +1,18 @@
 import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { Phase, PhaseFrontmatter, PhaseRegistry } from "./types";
+import type {
+  Phase,
+  PhaseFrontmatter,
+  PhaseRegistry,
+  PhaseSettingsContext,
+  PhaseSettingsDefinition,
+  PhaseSettingsProvider,
+} from "./types";
 import type { PhaseOutput } from "./types";
 import type { PhaseContext } from "./types";
 import type { PhaseExecution } from "../../loop/execution";
-import type { ExtensionAPI } from "../../extensions/api";
+import { createExtensionAPI, type ExtensionAPI } from "../../extensions/api";
 import type { Skill } from "../../protocol";
 import {
   FrontmatterParseError,
@@ -102,12 +109,34 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
     const code = await loadPhaseCode(codePath);
     if (code.factory) {
       phase.factory = code.factory;
-    } else if (code.run) {
+    }
+    if (code.run) {
       phase.run = code.run;
     }
   }
 
   return phase;
+}
+
+/**
+ * Collect and evaluate the Settings provider registered through the Phase's
+ * ExtensionAPI namespace. Settings discovery never reads a direct module
+ * export; the Phase contributes through `api.phase.settings.register()`.
+ */
+export async function loadPhaseSettings(
+  phase: Phase,
+  context: PhaseSettingsContext,
+): Promise<PhaseSettingsDefinition | undefined> {
+  if (!phase.factory) return undefined;
+
+  let provider: PhaseSettingsProvider | undefined;
+  const api = createExtensionAPI(undefined, {
+    registerSettings: (candidate) => {
+      provider = candidate;
+    },
+  });
+  await phase.factory(api);
+  return provider ? provider(context) : undefined;
 }
 
 /**
@@ -262,7 +291,10 @@ async function discoverPhaseCode(baseDir: string): Promise<string | null> {
  */
 async function loadPhaseCode(
   codePath: string,
-): Promise<{ factory?: (api: ExtensionAPI) => Promise<void>; run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> }> {
+): Promise<{
+  factory?: (api: ExtensionAPI) => Promise<void>;
+  run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
+}> {
   const { createJiti } = await import("jiti");
   const jiti = createJiti(import.meta.url, {
     fsCache: false,
@@ -270,18 +302,22 @@ async function loadPhaseCode(
     tryNative: false,
   });
 
-  const mod = await jiti.import(codePath, { default: true }) as unknown;
+  const mod = await jiti.import(codePath) as unknown;
+  const namespace = mod && typeof mod === "object" ? mod as Record<string, unknown> : {};
 
   // Pattern 1: export default function(api) { ... }
-  // jiti with { default: true } may return the function directly
-  const fn = typeof mod === "function" ? mod : (mod as any)?.default;
-  if (typeof fn === "function") {
-    return { factory: fn as (api: ExtensionAPI) => Promise<void> };
-  }
-
-  // Pattern 2: export async function run(context, execution) { ... }
-  if (typeof (mod as any)?.run === "function") {
-    return { run: (mod as any).run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> };
+  // jiti may expose the default export directly or under namespace.default
+  const fn = typeof mod === "function" ? mod : namespace.default;
+  const run = namespace.run;
+  if (typeof fn === "function" || typeof run === "function") {
+    return {
+      ...(typeof fn === "function"
+        ? { factory: fn as (api: ExtensionAPI) => Promise<void> }
+        : {}),
+      ...(typeof run === "function"
+        ? { run: run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> }
+        : {}),
+    };
   }
 
   throw new Error(`Phase code at "${codePath}" must export a default function or a run() function.`);

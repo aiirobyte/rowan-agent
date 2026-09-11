@@ -6,6 +6,14 @@ export type {
   PhaseStatusState,
   PhaseStatus,
   PhaseRegistry,
+  PhaseSettingsBadge,
+  PhaseSettingsContext,
+  PhaseSettingsControl,
+  PhaseSettingsDefinition,
+  PhaseSettingsItem,
+  PhaseSettingsOption,
+  PhaseSettingsProvider,
+  PhaseSettingsSection,
 } from "./types";
 export type {
   PhaseInteraction,
@@ -16,7 +24,7 @@ export type {
 } from "./interactions";
 export { PhaseInteractionBoundary, PhaseInteractionCancelledError } from "./interactions";
 
-export { loadPhase, loadPhases, reloadPhases, readPhaseContent } from "./loader";
+export { loadPhase, loadPhaseSettings, loadPhases, reloadPhases, readPhaseContent } from "./loader";
 export {
   COMPACT_PHASE_ID,
   DEFAULT_PHASE_ID,

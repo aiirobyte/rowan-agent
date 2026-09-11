@@ -24,6 +24,7 @@ export { InMemoryConfigProvider, brandConfigToken } from "./runtime/config-provi
 export { RuntimeError, isRuntimeError } from "./runtime/errors";
 export { loadSkill, loadSkills } from "./harness/skills";
 export { loadPhase } from "./harness/phases/loader";
+export { loadPhaseSettings } from "./harness/phases/loader";
 export { loadPhases } from "./harness/phases/loader";
 export {
   COMPACT_PHASE_ID,
@@ -182,6 +183,14 @@ export type {
   PhaseStatus,
   PhaseRegistry,
   PhaseState,
+  PhaseSettingsBadge,
+  PhaseSettingsContext,
+  PhaseSettingsControl,
+  PhaseSettingsDefinition,
+  PhaseSettingsItem,
+  PhaseSettingsOption,
+  PhaseSettingsProvider,
+  PhaseSettingsSection,
 } from "./harness/phases/types";
 export type { PhaseExecution, PhaseMessageManager } from "./loop/execution";
 export type {

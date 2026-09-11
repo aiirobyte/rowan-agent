@@ -90,6 +90,98 @@ export interface PhaseContext {
   appendSystemPrompt?: string;
 }
 
+/** JSON-safe option metadata exposed by a Phase to a host Settings surface. */
+export interface PhaseSettingsOption {
+  value: string;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+}
+
+export interface PhaseSettingsBadge {
+  label: string;
+  tone?: "neutral" | "success" | "review" | "danger";
+}
+
+export interface PhaseSettingsItem {
+  id: string;
+  title: string;
+  description?: string;
+  badges?: readonly PhaseSettingsBadge[];
+}
+
+export type PhaseSettingsControl =
+  | {
+      type: "boolean";
+      path: string;
+      label: string;
+      description?: string;
+    }
+  | {
+      type: "number";
+      path: string;
+      label: string;
+      description?: string;
+      min?: number;
+      max?: number;
+      step?: number;
+      unit?: string;
+      scale?: number;
+    }
+  | {
+      type: "select";
+      path: string;
+      label: string;
+      description?: string;
+      options: readonly PhaseSettingsOption[];
+    }
+  | {
+      type: "text";
+      path: string;
+      label: string;
+      description?: string;
+      placeholder?: string;
+      format?: "string" | "string-array" | "key-value";
+      multiline?: boolean;
+    }
+  | {
+      type: "collection";
+      path: string;
+      label: string;
+      description?: string;
+      items: readonly PhaseSettingsItem[];
+      fields: readonly PhaseSettingsControl[];
+      add?: {
+        label: string;
+        idLabel?: string;
+        fields: readonly PhaseSettingsControl[];
+      };
+      removeLabel?: string;
+    };
+
+export interface PhaseSettingsSection {
+  id: string;
+  title: string;
+  description?: string;
+  controls: readonly PhaseSettingsControl[];
+}
+
+/** Declarative, host-neutral Settings surface contributed by a Phase. */
+export interface PhaseSettingsDefinition {
+  description?: string;
+  sections: readonly PhaseSettingsSection[];
+}
+
+/** Host context is intentionally opaque beyond the effective configuration. */
+export interface PhaseSettingsContext {
+  configuration: Readonly<Record<string, unknown>>;
+  metadata?: Readonly<Record<string, unknown>>;
+}
+
+export type PhaseSettingsProvider = (
+  context: PhaseSettingsContext,
+) => PhaseSettingsDefinition | Promise<PhaseSettingsDefinition>;
+
 /**
  * Frontmatter properties parsed from PHASE.md
  */
@@ -162,7 +254,7 @@ export interface Phase {
   disableAutoInvocation?: boolean;
   /** Do not expose this Phase to direct user invocation. */
   disableImplicitInvocation?: boolean;
-  /** ExtensionAPI factory function (default export pattern) */
+  /** ExtensionAPI factory function used for registration or programmatic execution. */
   factory?: (api: ExtensionAPI) => Promise<void>;
   /** Direct run function */
   run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;

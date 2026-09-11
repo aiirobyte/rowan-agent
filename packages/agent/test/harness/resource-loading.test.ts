@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSkill, loadSkills } from "../../src/harness/skills";
-import { loadPhase, loadPhases } from "../../src/harness/phases";
+import { loadPhase, loadPhaseSettings, loadPhases } from "../../src/harness/phases";
 
 async function createResourceDir(prefix: string, resource: string, id: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
@@ -154,6 +154,56 @@ Review code.
 
     const phase = await loadPhase(phaseDir);
     expect((phase.skills ?? []).map((skill) => skill.name)).toEqual(["code-review"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Phase Settings are registered through the ExtensionAPI namespace", async () => {
+  const root = await createResourceDir("rowan-phase-settings-", "PHASE.md", "configured-phase");
+  try {
+    const phaseDir = join(root, "configured-phase");
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: configured-phase
+description: A configurable phase.
+---
+Configure the phase.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+export default function configure(api) {
+  api.phase.settings.register(() => ({
+    sections: [{ id: "general", title: "General", controls: [{ type: "boolean", path: "enabled", label: "Enabled" }] }],
+  }));
+}
+`);
+
+    const phase = await loadPhase(phaseDir);
+    expect("settings" in phase).toBe(false);
+    expect(await loadPhaseSettings(phase, { configuration: {} })).toEqual({
+      sections: [{ id: "general", title: "General", controls: [{ type: "boolean", path: "enabled", label: "Enabled" }] }],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Phase Settings direct exports are not treated as a Phase contract", async () => {
+  const root = await createResourceDir("rowan-phase-settings-export-", "PHASE.md", "configured-phase");
+  try {
+    const phaseDir = join(root, "configured-phase");
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: configured-phase
+description: A configurable phase.
+---
+Configure the phase.
+`);
+    await writeFile(join(phaseDir, "index.ts"), `
+export function settings() {
+  return { sections: [] };
+}
+`);
+
+    await expect(loadPhase(phaseDir)).rejects.toThrow("must export a default function or a run() function");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
