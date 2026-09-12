@@ -309,7 +309,10 @@ async function loadPhaseCode(
   const jiti = createJiti(import.meta.url, {
     fsCache: false,
     moduleCache: false,
-    tryNative: false,
+    // Phase code ships as authored, including TypeScript. Native loading lets a
+    // host that supports it run that code without a transpile step, and jiti
+    // still transforms whatever the host cannot load itself.
+    tryNative: true,
   });
 
   const mod = await jiti.import(codePath) as unknown;
