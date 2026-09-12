@@ -61,7 +61,10 @@ function getJiti(): ReturnType<typeof createJiti> {
   sharedJiti ??= createJiti(import.meta.url || process.cwd(), {
     fsCache: false,
     moduleCache: false,
-    tryNative: false,
+    // Extensions ship as authored, including TypeScript. Native loading lets a
+    // host that supports it run them without a transpile step; an import that
+    // only the alias map can resolve still falls back to jiti's transform.
+    tryNative: true,
     alias: jitiAliases(),
   });
   return sharedJiti;
