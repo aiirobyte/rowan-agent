@@ -225,7 +225,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     const runs = await this.owned.listRuns({ agentId: input.agentId });
     for (const run of runs) {
       if (["queued", "running", "input_required"].includes(run.state)) {
-        await this.cancel(run.id, "Conversation deleted.");
+        await this.cancel(run.id, "Agent deleted.");
       }
     }
     await this.owned.deleteAgent(input);

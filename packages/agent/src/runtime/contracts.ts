@@ -252,7 +252,7 @@ export type AgentRecord = Readonly<{
 export type AgentDeletionRequest = Readonly<{
   agentId: AgentId;
   expectedRunIds: readonly RunId[];
-  confirmation: "conversation-delete-v1";
+  confirmation: "agent-delete-v1";
 }>;
 export type ExecutionToken = Readonly<{ runId: RunId; ownerEpoch: number; executionId: ExecutionId }>;
 export type ExecutionCheckpoint = Readonly<{ codec: string; version: number; data: JsonValue }>;

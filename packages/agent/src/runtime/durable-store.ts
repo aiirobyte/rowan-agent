@@ -303,8 +303,8 @@ export class InMemoryStore implements DurableStore {
 
   deleteAgent(lease: OwnerLease, input: AgentDeletionRequest): void {
     this.assertOwner(lease);
-    if (input.confirmation !== "conversation-delete-v1") {
-      throw new TypeError("Agent deletion requires the conversation deletion confirmation token");
+    if (input.confirmation !== "agent-delete-v1") {
+      throw new TypeError("Agent deletion requires the agent-delete-v1 confirmation token");
     }
     const agent = this.requireAgent(input.agentId);
     const runs = [...this.runs.values()].filter((run) => run.agentId === agent.id);
@@ -1188,7 +1188,7 @@ export class InMemoryStore implements DurableStore {
       if (sequence < this.retentionFloor) continue;
       if (sequence > consumerFloor) break;
       if (Date.parse(event.createdAt) > cutoff || blockedRunIds.has(event.runId)) break;
-      // Keep events that still back the active Conversation projection. Only
+      // Keep events that still back the active Agent projection. Only
       // an invalidated, terminal suffix is disposable; deleting events from
       // a live Run would erase its tool/activity history before deletion.
       const eventRun = this.runs.get(event.runId);

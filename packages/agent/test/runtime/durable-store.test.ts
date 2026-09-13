@@ -113,7 +113,7 @@ test("Memory DurableStore physically deletes an Agent and all owned Run data", a
   await owner.deleteAgent({
     agentId: agent.id,
     expectedRunIds: [run.id],
-    confirmation: "conversation-delete-v1",
+    confirmation: "agent-delete-v1",
   });
 
   expect(await owner.listAgents()).toEqual([]);
