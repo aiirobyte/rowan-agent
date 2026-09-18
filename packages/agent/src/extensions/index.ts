@@ -14,7 +14,7 @@
  *     return { allow: true };
  *   });
  *
- *   await api.registerPhase("./phase");
+ *   await api.phase.register("./phase");
  * }
  * ```
  */

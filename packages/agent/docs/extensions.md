@@ -10,7 +10,7 @@ Run persistence, or lifecycle state.
 import type { ExtensionFactory } from "@rowan-agent/agent";
 
 const extension: ExtensionFactory = async (api) => {
-  api.registerTool({
+  api.tool.register({
     name: "search_docs",
     description: "Search project documentation.",
     parameters: {
@@ -23,7 +23,7 @@ const extension: ExtensionFactory = async (api) => {
     }),
   });
 
-  await api.registerPhase("./review-phase");
+  await api.phase.register("./review-phase");
 
   api.on("before_tool_call", ({ tool, args }) => {
     if (tool.name === "search_docs" && !args) {
@@ -38,8 +38,8 @@ export default extension;
 
 ## API
 
-- `registerTool(tool)`: Register a tool that the LLM can call.
-- `registerPhase(path)`: Load and register a Phase directory Bundle. The
+- `tool.register(tool)` / `tool.unregister(toolName)`: Register or remove a tool that the LLM can call.
+- `phase.register(path | Phase)` / `phase.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
   directory contains `PHASE.md` and may contain direct child Skill Bundles.
 - `registerProvider(provider)` / `unregisterProvider(id)`: Register or remove
   a model provider configuration.

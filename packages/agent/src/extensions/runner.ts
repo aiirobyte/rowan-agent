@@ -551,9 +551,12 @@ export class ExtensionRunner {
     return createExtensionAPI(this.hooks, {
       registerPhase: (registration) =>
         this.registerPhase(extension, registration),
+      unregisterPhase: (phaseName) =>
+        this.unregisterPhase(extension, phaseName),
       registerProvider: (config) => this.registerProvider(config),
       unregisterProvider: (name) => this.unregisterProvider(name),
       registerTool: (tool) => this.registerTool(extension, tool),
+      unregisterTool: (toolName) => this.unregisterTool(extension, toolName),
       context: extContext,
       manifest,
       trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
@@ -584,15 +587,51 @@ export class ExtensionRunner {
     });
   }
 
-  private registerPhase(
+  private unregisterTool(extension: Extension, toolName: string): void {
+    if (extension.tools.has(toolName)) {
+      extension.tools.delete(toolName);
+    }
+  }
+
+  private async registerPhase(
     extension: Extension,
     registration: PhaseRegistration,
   ): Promise<void> {
-    if (typeof registration !== "string" || registration.length === 0) {
-      throw new Error(`Phase registration requires a directory path.`);
+    if (typeof registration === "string") {
+      if (registration.length === 0) {
+        throw new Error(`Phase registration requires a directory path.`);
+      }
+      return this.loadRegisteredPhase(extension, registration);
+    }
+    if (typeof registration === "object" && registration !== null && "name" in registration) {
+      return this.registerPhaseDefinition(extension, registration as import("../harness/phases/types").Phase);
+    }
+    throw new Error(`Phase registration requires a directory path or Phase object.`);
+  }
+
+  private registerPhaseDefinition(extension: Extension, phase: import("../harness/phases/types").Phase): void {
+    const name = phase.name;
+    if (this.phases.has(name)) {
+      throw new Error(`Duplicate phase name: ${name}`);
     }
 
-    return this.loadRegisteredPhase(extension, registration);
+    const registered: RegisteredPhase = {
+      definition: phase,
+      source: { extensionPath: extension.path },
+    };
+
+    this.phases.set(name, registered);
+    extension.phases.add(name);
+    this._phaseCache = null;
+  }
+
+  private unregisterPhase(extension: Extension, phaseName: string): void {
+    const registered = this.phases.get(phaseName);
+    if (registered && registered.source.extensionPath === extension.path) {
+      this.phases.delete(phaseName);
+      extension.phases.delete(phaseName);
+      this._phaseCache = null;
+    }
   }
 
   private async loadRegisteredPhase(extension: Extension, registration: string): Promise<void> {

@@ -7,7 +7,7 @@
 import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default function databaseExtension(api: ExtensionAPI) {
-  api.registerTool({
+  api.tool.register({
     name: "query_db",
     description: "Execute a read-only SQL query against the project database",
     parameters: {

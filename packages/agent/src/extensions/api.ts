@@ -38,11 +38,13 @@ export interface ExtensionAPI {
   /** Unsubscribe from a hook event. */
   off<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
 
-  /** Register a custom LLM-callable tool. */
-  registerTool(tool: ToolDefinition): void;
-
-  /** Register a Phase directory bundle. */
-  registerPhase(path: string): Promise<void>;
+  /** Tool capabilities — register and unregister custom tools. */
+  tool: {
+    /** Register a custom LLM-callable tool. */
+    register(tool: ToolDefinition): void;
+    /** Unregister a previously registered tool by name. */
+    unregister(toolName: string): void;
+  };
 
   /** Register a model provider. */
   registerProvider(config: import("@rowan-agent/models").ProviderConfig): void;
@@ -62,8 +64,12 @@ export interface ExtensionAPI {
   /** Shared event bus for inter-extension communication. */
   events: EventBus;
 
-  /** Phase execution capabilities — rovides Phase In/Out, phase identity, and phase routing. */
+  /** Phase execution capabilities — provides Phase In/Out, phase identity, phase routing, and registration. */
   phase: {
+    /** Register a Phase directory bundle or Phase object. */
+    register(phase: PhaseRegistration): Promise<void>;
+    /** Unregister a previously registered phase by name. */
+    unregister(phaseName: string): void;
     /** Phase In: get payload from previous phase */
     getPayload(): unknown;
     /** Phase Out: set payload for next phase */
@@ -110,9 +116,11 @@ export function createExtensionAPI(
   hooks?: HooksManager,
   options?: {
     registerPhase?: (registration: PhaseRegistration) => Promise<void>;
+    unregisterPhase?: (phaseName: string) => void;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
     unregisterProvider?: (name: string) => void;
     registerTool?: (tool: ToolDefinition) => void;
+    unregisterTool?: (toolName: string) => void;
     registerSettings?: (provider: PhaseSettingsProvider) => void;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
@@ -166,13 +174,15 @@ export function createExtensionAPI(
       assertActive();
       hooks?.off(eventType, handler);
     },
-    registerTool: (tool) => {
-      assertActive();
-      options?.registerTool?.(tool);
-    },
-    registerPhase: async (registration) => {
-      assertActive();
-      await options?.registerPhase?.(registration);
+    tool: {
+      register: (tool) => {
+        assertActive();
+        options?.registerTool?.(tool);
+      },
+      unregister: (toolName) => {
+        assertActive();
+        options?.unregisterTool?.(toolName);
+      },
     },
     registerProvider: (config) => {
       assertActive();
@@ -203,6 +213,14 @@ export function createExtensionAPI(
       }
       : { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
     phase: {
+      register: async (registration) => {
+        assertActive();
+        await options?.registerPhase?.(registration);
+      },
+      unregister: (phaseName) => {
+        assertActive();
+        options?.unregisterPhase?.(phaseName);
+      },
       getPayload: () => outputPayload,
       setPayload: (p) => { outputPayload = p; },
       setMessage: (msg) => { outputMessage = msg; },

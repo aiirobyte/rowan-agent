@@ -44,8 +44,8 @@ export type PhaseRun = (context: PhaseContext, execution: PhaseExecution) => Pro
 /** A loaded directory Bundle used by an extension. */
 export type PhaseDefinition = Phase;
 
-/** Register a Phase by directory; PHASE.md and direct child Skills are loaded atomically. */
-export type PhaseRegistration = string;
+/** Register a Phase by directory path or Phase object; PHASE.md and direct child Skills are loaded atomically when a path is supplied. */
+export type PhaseRegistration = string | Phase;
 
 export type RegisteredPhase = {
   definition: PhaseDefinition;
@@ -69,11 +69,11 @@ export type ExtensionPackageManifest = {
 // ---------------------------------------------------------------------------
 
 /**
- * Tool definition for registering LLM-callable tools via `api.registerTool()`.
+ * Tool definition for registering LLM-callable tools via `api.tool.register()`.
  *
  * @example
  * ```typescript
- * api.registerTool({
+ * api.tool.register({
  *   name: "search_docs",
  *   description: "Search documentation",
  *   parameters: { type: "object", properties: { query: { type: "string" } } },

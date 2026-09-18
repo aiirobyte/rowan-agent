@@ -844,7 +844,7 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
   let afterCalls = 0;
   let contextMessages = 0;
   const extension = loadExtensionFromFactory((api) => {
-    api.registerTool({
+    api.tool.register({
       name: "extension_lookup",
       description: "Look up a value from an extension.",
       parameters: { type: "object", properties: { query: { type: "string" } } },

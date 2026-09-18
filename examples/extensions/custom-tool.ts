@@ -7,7 +7,7 @@
 import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default function customTool(api: ExtensionAPI) {
-  api.registerTool({
+  api.tool.register({
     name: "read_changelog",
     description: "Read the project CHANGELOG.md and return its contents",
     parameters: {

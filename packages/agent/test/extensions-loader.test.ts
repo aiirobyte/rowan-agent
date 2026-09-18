@@ -15,7 +15,7 @@ const phaseFixture = (name: string): string => `${process.cwd()}/packages/agent/
 
 test("loadExtensionFromFactory creates a LoadedExtension object", () => {
   const extension = loadExtensionFromFactory(async (ctx) => {
-    await ctx.registerPhase(phaseFixture("custom"));
+    await ctx.phase.register(phaseFixture("custom"));
   }, process.cwd(), "<test:factory>");
 
   expect(extension.path).toBe("<test:factory>");
@@ -29,7 +29,7 @@ test("ExtensionRunner loads extensions and registers phases", async () => {
     path: "<test>",
     name: "test",
     factory: async (ctx) => {
-      await ctx.registerPhase(phaseFixture("test-phase"));
+      await ctx.phase.register(phaseFixture("test-phase"));
     },
   };
 
@@ -72,7 +72,7 @@ test("loadExtensionsFromPath loads TypeScript extensions from a directory", asyn
     await writeFile(join(extDir, "index.ts"), `
       import type { ExtensionFactory } from "@rowan-agent/agent";
       const extension: ExtensionFactory = async (ctx) => {
-        await ctx.registerPhase("./phase");
+        await ctx.phase.register("./phase");
       };
       export default extension;
     `);
@@ -148,14 +148,14 @@ test("before_tool_call hook can block tool execution", async () => {
   expect(result.reason).toBe("Not allowed");
 });
 
-test("ExtensionAPI registerTool registers LLM-callable tools", async () => {
+test("ExtensionAPI tool.register registers LLM-callable tools", async () => {
   const runner = createExtensionRunner();
 
   const ext: LoadedExtension = {
     path: "<test:tool>",
     name: "test-tool",
     factory: (ctx) => {
-      ctx.registerTool({
+      ctx.tool.register({
         name: "search_docs",
         description: "Search documentation",
         parameters: { type: "object", properties: { query: { type: "string" } } },
@@ -292,3 +292,54 @@ test("ExtensionRunner.onError collects structured errors", async () => {
   expect(errors[0]!.event).toBe("test_event");
   expect(errors[0]!.error).toBe("Something went wrong");
 });
+
+test("ExtensionAPI tool namespace registers and unregisters LLM-callable tools", async () => {
+  const runner = createExtensionRunner();
+  let capturedApi: ExtensionAPI | null = null;
+  const ext: LoadedExtension = {
+    path: "<test:dynamic-tool>",
+    name: "dynamic-tool",
+    factory: (api) => {
+      capturedApi = api;
+      api.tool.register({
+        name: "test_dynamic_tool",
+        description: "Dynamic test tool",
+        parameters: Type.Object({ text: Type.String() }) as unknown as Record<string, unknown>,
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      });
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(runner.getToolDefinition("test_dynamic_tool")).toBeDefined();
+  expect(runner.getAllRegisteredTools().map((t) => t.definition.name)).toContain("test_dynamic_tool");
+
+  capturedApi!.tool.unregister("test_dynamic_tool");
+  expect(runner.getToolDefinition("test_dynamic_tool")).toBeUndefined();
+  expect(runner.getAllRegisteredTools().map((t) => t.definition.name)).not.toContain("test_dynamic_tool");
+});
+
+test("ExtensionAPI phase namespace registers and unregisters programmatic Phase objects", async () => {
+  const runner = createExtensionRunner();
+  let capturedApi: ExtensionAPI | null = null;
+  const ext: LoadedExtension = {
+    path: "<test:dynamic-phase>",
+    name: "dynamic-phase",
+    factory: async (api) => {
+      capturedApi = api;
+      await api.phase.register({
+        name: "custom-programmatic-phase",
+        description: "A programmatic phase",
+        run: async () => {},
+      } as any);
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(runner.getPhase("custom-programmatic-phase")).toBeDefined();
+  expect(runner.getPhase("custom-programmatic-phase")?.name).toBe("custom-programmatic-phase");
+
+  capturedApi!.phase.unregister("custom-programmatic-phase");
+  expect(runner.getPhase("custom-programmatic-phase")).toBeUndefined();
+});
+

@@ -82,8 +82,8 @@ export async function run(context, execution) {
 import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default function(api: ExtensionAPI) {
-  // Use api.on(), api.registerTool(), etc.
-  api.registerTool({
+  // Use api.on(), api.tool.register(), etc.
+  api.tool.register({
     name: "fetch_api",
     description: "Fetch data from external API",
     parameters: { type: "object", properties: { url: { type: "string" } } },
@@ -258,7 +258,7 @@ import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default async function(api: ExtensionAPI) {
   // Register a phase-specific tool
-  api.registerTool({
+  api.tool.register({
     name: "code_edit",
     description: "Edit a file with structured changes",
     parameters: {

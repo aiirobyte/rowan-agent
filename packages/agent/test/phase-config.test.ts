@@ -30,7 +30,7 @@ test("ExtensionRunner loads phases from extensions", async () => {
     path: "<test>",
     name: "test",
     factory: async (ctx) => {
-      await ctx.registerPhase(phaseFixture("custom"));
+      await ctx.phase.register(phaseFixture("custom"));
     },
   };
 
@@ -54,7 +54,7 @@ test("ExtensionRunner rejects duplicate phase names", async () => {
     path: "<test1>",
     name: "test1",
     factory: async (ctx) => {
-      await ctx.registerPhase(phaseFixture("dup"));
+      await ctx.phase.register(phaseFixture("dup"));
     },
   };
 
@@ -62,7 +62,7 @@ test("ExtensionRunner rejects duplicate phase names", async () => {
     path: "<test2>",
     name: "test2",
     factory: async (ctx) => {
-      await ctx.registerPhase(phaseFixture("dup"));
+      await ctx.phase.register(phaseFixture("dup"));
     },
   };
 
@@ -81,7 +81,7 @@ test("ExtensionRunner rejects a missing phase bundle", async () => {
     path: "<invalid>",
     name: "invalid",
     factory: async (ctx) => {
-      await ctx.registerPhase(phaseFixture("missing"));
+      await ctx.phase.register(phaseFixture("missing"));
     },
   };
 
@@ -94,7 +94,7 @@ test("ExtensionRunner requires a phase directory path", async () => {
     path: "<default-name>",
     name: "default-name",
     factory: async (ctx) => {
-      await ctx.registerPhase("");
+      await ctx.phase.register("");
     },
   };
 
