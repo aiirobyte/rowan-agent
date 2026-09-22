@@ -66,6 +66,7 @@ import { materializeConfigurationSnapshot, resolveConfigurationSnapshot } from "
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_POLL_MS = 25;
 const MAX_CONSUMER_IDLE_POLL_MS = 250;
+const RUN_STATE_CHECK_INTERVAL_MS = 1_000;
 const OWNER_LEASE_MS = 30_000;
 const OWNER_RENEWAL_MS = 10_000;
 const MAX_INLINE_TOOL_RESULT_BYTES = 16 * 1024;
@@ -1016,15 +1017,32 @@ export class AgentRuntime implements AgentRuntimeContract {
   async *observe(runId: RunId, options: { after?: EventCursor; signal?: AbortSignal } = {}): AsyncIterable<RunEvent> {
     let cursor = options.after;
     const subscription = this.transientEvents.subscribe(runId);
+    let nextRunStateCheckAtMs = 0;
     try {
       while (true) {
+        // A live delta is already in memory: publish it before reading the
+        // durable log, so a streaming Run neither waits on a store read to
+        // reach the observer nor costs one read per chunk.
+        const published = subscription.shift();
+        if (published) {
+          yield published;
+          continue;
+        }
         const observationVersion = subscription.checkpoint();
-        const snapshot = await this.owned.snapshotRun(runId);
-        const terminal = ["completed", "failed", "cancelled"].includes(snapshot.state);
-        if (options.signal?.aborted && !terminal) throw abortError();
-        if (terminal) {
-          const pending = await this.owned.listEvents(cursor ? { after: cursor } : {});
-          if (!pending.some((event) => event.runId === runId)) return;
+        const aborted = options.signal?.aborted === true;
+        // A Run snapshot is the expensive read of this loop and it only covers
+        // a terminal state whose durable event was missed, while the durable
+        // event log below is read every turn. A streaming Run therefore costs
+        // one snapshot per interval instead of one per delta and poll turn.
+        if (aborted || Date.now() >= nextRunStateCheckAtMs) {
+          nextRunStateCheckAtMs = Date.now() + RUN_STATE_CHECK_INTERVAL_MS;
+          const snapshot = await this.owned.snapshotRun(runId);
+          const terminal = ["completed", "failed", "cancelled"].includes(snapshot.state);
+          if (aborted && !terminal) throw abortError();
+          if (terminal) {
+            const pending = await this.owned.listEvents(cursor ? { after: cursor } : {});
+            if (!pending.some((event) => event.runId === runId)) return;
+          }
         }
         const events = await this.owned.listEvents(cursor ? { after: cursor } : {});
         for (const event of events) {

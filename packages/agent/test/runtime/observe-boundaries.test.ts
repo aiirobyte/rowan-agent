@@ -379,6 +379,65 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
   }
 });
 
+test("AgentRun.observe does not read a Run snapshot per streamed delta", async () => {
+  const deltas = 60;
+  const stream: StreamFn = async function* () {
+    for (let index = 0; index < deltas; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const text = "x".repeat(index + 1);
+      yield {
+        type: "text_delta" as const,
+        text: "x",
+        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text }] },
+      };
+    }
+    yield { type: "done", response: stopResponse("x".repeat(deltas)) };
+  };
+  const counted = countingStore();
+  const runtime = await AgentRuntime.init({ store: counted.store, concurrency: 1 });
+  try {
+    const agentId = await runtime.createAgent(config(stream), { idempotencyKey: "streaming-observer-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "streaming-observer-run" });
+
+    let observedDeltas = 0;
+    for await (const event of run.observe()) {
+      if (event.kind === "message_delta") observedDeltas += 1;
+    }
+
+    expect(observedDeltas).toBe(deltas);
+    // A Run snapshot is the expensive read of the observation loop. Reading it
+    // per delta and per poll turn cost one snapshot every few milliseconds of a
+    // streaming Run; the durable event log covers delivery instead.
+    expect(counted.snapshotRuns()).toBeLessThan(10);
+  } finally {
+    await runtime.close();
+  }
+});
+
+function countingStore(): {
+  store: InMemoryStore;
+  snapshotRuns: () => number;
+} {
+  const base = new InMemoryStore();
+  let snapshotRuns = 0;
+  const store = {
+    async openOwner(input: { ownerId: string; leaseMs: number }) {
+      const owner = await base.openOwner(input);
+      return new Proxy(owner, {
+        get(target, property, receiver) {
+          const value: unknown = Reflect.get(target, property, receiver);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (property === "snapshotRun") snapshotRuns += 1;
+            return Reflect.apply(value, target, args);
+          };
+        },
+      });
+    },
+  } as InMemoryStore;
+  return { store, snapshotRuns: () => snapshotRuns };
+}
+
 async function nextMatching(
   iterator: AsyncIterator<RunEvent>,
   predicate: (event: RunEvent) => boolean,
