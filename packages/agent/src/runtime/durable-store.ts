@@ -193,6 +193,7 @@ export class InMemoryStore implements DurableStore {
         : { code: "runtime_interrupted", message, ownerEpoch };
       run.state = "failed";
       run.failure = failure;
+      this.dropClaimReceipt(run.execution);
       delete run.execution;
       run.revision += 1;
       run.updatedAt = createTimestamp();
@@ -460,6 +461,7 @@ export class InMemoryStore implements DurableStore {
           delete run.openInputRequest;
           delete run.checkpoint;
         }
+        this.dropClaimReceipt(run.execution);
         delete run.execution;
         run.state = "cancelled";
         run.cancellationReason = "Run superseded by Message revision.";
@@ -662,6 +664,7 @@ export class InMemoryStore implements DurableStore {
       delete run.openInteractions;
       delete run.interactionAnswers;
     }
+    this.dropClaimReceipt(run.execution);
     delete run.execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
@@ -956,6 +959,7 @@ export class InMemoryStore implements DurableStore {
       };
       run.state = "failed";
       run.failure = failure;
+      this.dropClaimReceipt(run.execution);
       delete run.execution;
       run.revision += 1;
       run.updatedAt = createTimestamp();
@@ -996,6 +1000,7 @@ export class InMemoryStore implements DurableStore {
     run.state = nextState;
     if (input.outcome) run.outcome = clone(input.outcome);
     if (input.failure) run.failure = clone(input.failure);
+    this.dropClaimReceipt(run.execution);
     delete run.execution;
     delete run.openInteractions;
     delete run.interactionAnswers;
@@ -1047,6 +1052,7 @@ export class InMemoryStore implements DurableStore {
       run.state = "failed";
       run.failure = failure;
       delete run.cancellationReason;
+      this.dropClaimReceipt(run.execution);
       delete run.execution;
       delete run.openInputRequest;
       delete run.openInteractions;
@@ -1060,6 +1066,7 @@ export class InMemoryStore implements DurableStore {
     }
     run.state = "cancelled";
     run.cancellationReason = input.reason;
+    this.dropClaimReceipt(run.execution);
     delete run.execution;
     delete run.openInputRequest;
     delete run.openInteractions;
@@ -1268,6 +1275,15 @@ export class InMemoryStore implements DurableStore {
 
   private writeOperationReceipt(key: string, payload: string, result: unknown): void {
     this.operationReceipts.set(key, { payload, result: clone(result) });
+  }
+
+  /**
+   * A Claim receipt exists for idempotent replay of one live Execution Attempt
+   * and carries that Attempt's history. Dropping it when the Attempt ends keeps
+   * one history snapshot per Agent instead of one per Attempt.
+   */
+  private dropClaimReceipt(execution: ExecutionToken | undefined): void {
+    if (execution) this.operationReceipts.delete(`claim:${execution.executionId}`);
   }
 
   private requireAgent(agentId: AgentId): StoredAgent {

@@ -202,6 +202,75 @@ test("Memory DurableStore commits input boundaries and terminal outcomes atomica
   expect((await owner.snapshotRun(run.id)).state).toBe("completed");
 });
 
+test("Memory DurableStore drops a Claim receipt when its Execution Attempt ends", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-claim-receipts", leaseMs: 10_000 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-claim-receipts" });
+  await owner.activateAgent(agent.id);
+  await owner.updateAgentConfigToken({ agentId: agent.id, token, idempotencyKey: "config-claim-receipts" });
+  const run = await owner.createRun({ agentId: agent.id, input: "deploy", idempotencyKey: "run-claim-receipts" });
+  const claimReceiptKeys = () => store.exportState().operationReceipts
+    .map(([key]) => key)
+    .filter((key) => key.startsWith("claim:"));
+
+  const claimed = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
+  expect(claimReceiptKeys()).toEqual([`claim:${claimed.execution.executionId}`]);
+
+  const waiting = await owner.commitInputRequired({
+    runId: run.id,
+    execution: claimed.execution,
+    expectedRevision: claimed.run.revision,
+    requestId: "request-claim-receipts" as InputRequestId,
+    phase: "plan",
+    prompt: {
+      id: "prompt-claim-receipts" as MessageId,
+      agentId: agent.id,
+      runId: run.id,
+      role: "assistant",
+      content: "Which target?",
+      sequenceWithinRun: 1,
+      createdAt: "2026-07-23T00:00:00.000Z",
+    },
+    checkpoint: { codec: "rowan.agent.execution", version: 1, data: { phase: "plan" } },
+  });
+  expect(claimReceiptKeys()).toEqual([]);
+
+  const queued = await owner.answerInput({
+    runId: run.id,
+    requestId: waiting.request.id,
+    expectedRevision: waiting.run.revision,
+    input: "production",
+  });
+  const resumed = await owner.claimRun({ runId: run.id, expectedRevision: queued.revision });
+  expect(claimReceiptKeys()).toEqual([`claim:${resumed.execution.executionId}`]);
+
+  await owner.commitOutcome({
+    runId: run.id,
+    execution: resumed.execution,
+    expectedRevision: resumed.run.revision,
+    outcome: { id: "outcome-claim-receipts" as never, message: "done" },
+  });
+  expect(claimReceiptKeys()).toEqual([]);
+});
+
+test("Memory DurableStore drops a Claim receipt for an interrupted Execution Attempt", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-interrupt", leaseMs: 1 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-interrupt" });
+  const run = await owner.createRun({ agentId: agent.id, input: "deploy", idempotencyKey: "run-interrupt" });
+  const claimed = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
+  expect(store.exportState().operationReceipts.map(([key]) => key))
+    .toContain(`claim:${claimed.execution.executionId}`);
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await store.openOwner({ ownerId: "owner-interrupt-next", leaseMs: 10_000 });
+
+  const state = store.exportState();
+  expect(state.operationReceipts.map(([key]) => key))
+    .not.toContain(`claim:${claimed.execution.executionId}`);
+  expect(state.runs.find((candidate) => candidate.id === run.id)?.state).toBe("failed");
+});
+
 test("Memory DurableStore fences an owner after release", async () => {
   const store = new InMemoryStore();
   const first = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
