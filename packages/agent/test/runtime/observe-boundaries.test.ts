@@ -381,17 +381,17 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
 
 test("AgentRun.observe does not read a Run snapshot per streamed delta", async () => {
   const deltas = 60;
+  const output = "x".repeat(deltas);
   const stream: StreamFn = async function* () {
     for (let index = 0; index < deltas; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
-      const text = "x".repeat(index + 1);
       yield {
         type: "text_delta" as const,
         text: "x",
-        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text }] },
+        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: output.slice(0, index + 1) }] },
       };
     }
-    yield { type: "done", response: stopResponse("x".repeat(deltas)) };
+    yield { type: "done", response: stopResponse(output) };
   };
   const counted = countingStore();
   const runtime = await AgentRuntime.init({ store: counted.store, concurrency: 1 });
@@ -399,12 +399,14 @@ test("AgentRun.observe does not read a Run snapshot per streamed delta", async (
     const agentId = await runtime.createAgent(config(stream), { idempotencyKey: "streaming-observer-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "streaming-observer-run" });
 
-    let observedDeltas = 0;
+    // A queued delta may coalesce with the previous one, so the observation is
+    // checked for the text it published rather than for one event per delta.
+    let published = "";
     for await (const event of run.observe()) {
-      if (event.kind === "message_delta") observedDeltas += 1;
+      if (event.kind === "message_delta") published += event.text;
     }
 
-    expect(observedDeltas).toBe(deltas);
+    expect(published).toBe(output);
     // A Run snapshot is the expensive read of the observation loop. Reading it
     // per delta and per poll turn cost one snapshot every few milliseconds of a
     // streaming Run; the durable event log covers delivery instead.

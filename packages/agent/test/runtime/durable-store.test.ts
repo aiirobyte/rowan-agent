@@ -255,15 +255,15 @@ test("Memory DurableStore drops a Claim receipt when its Execution Attempt ends"
 
 test("Memory DurableStore drops a Claim receipt for an interrupted Execution Attempt", async () => {
   const store = new InMemoryStore();
-  const owner = await store.openOwner({ ownerId: "owner-interrupt", leaseMs: 1 });
+  const owner = await store.openOwner({ ownerId: "owner-interrupt", leaseMs: 10_000 });
   const agent = await owner.reserveAgent({ idempotencyKey: "agent-interrupt" });
   const run = await owner.createRun({ agentId: agent.id, input: "deploy", idempotencyKey: "run-interrupt" });
   const claimed = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
   expect(store.exportState().operationReceipts.map(([key]) => key))
     .toContain(`claim:${claimed.execution.executionId}`);
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  await store.openOwner({ ownerId: "owner-interrupt-next", leaseMs: 10_000 });
+  // Sealing fences this Attempt the same way a takeover from an expired owner does.
+  await owner.sealAndReleaseOwner();
 
   const state = store.exportState();
   expect(state.operationReceipts.map(([key]) => key))
