@@ -271,6 +271,37 @@ test("Memory DurableStore drops a Claim receipt for an interrupted Execution Att
   expect(state.runs.find((candidate) => candidate.id === run.id)?.state).toBe("failed");
 });
 
+test("Memory DurableStore drops Claim receipts left by a previous owner", async () => {
+  const seededStore = new InMemoryStore();
+  const seeded = await seededStore.openOwner({ ownerId: "owner-before", leaseMs: 10_000 });
+  const agent = await seeded.reserveAgent({ idempotencyKey: "agent-before" });
+  await seeded.activateAgent(agent.id);
+  await seeded.updateAgentConfigToken({ agentId: agent.id, token, idempotencyKey: "config-before" });
+  const run = await seeded.createRun({ agentId: agent.id, input: "deploy", idempotencyKey: "run-before" });
+  const claimed = await seeded.claimRun({ runId: run.id, expectedRevision: run.revision });
+  await seeded.commitOutcome({
+    runId: run.id,
+    execution: claimed.execution,
+    expectedRevision: claimed.run.revision,
+    outcome: { id: "outcome-before" as never, message: "done" },
+  });
+  // An earlier Rowan release left the settled Attempt's receipt behind.
+  const claimKey = `claim:${claimed.execution.executionId}`;
+  const seededState = seededStore.exportState();
+  const store = InMemoryStore.fromState({
+    ...seededState,
+    operationReceipts: [
+      ...seededState.operationReceipts,
+      [claimKey, { payload: "{}", result: null }],
+    ],
+  });
+  expect(store.exportState().operationReceipts.map(([key]) => key)).toContain(claimKey);
+
+  await store.openOwner({ ownerId: "owner-after", leaseMs: 10_000 });
+
+  expect(store.exportState().operationReceipts.map(([key]) => key)).not.toContain(claimKey);
+});
+
 test("Memory DurableStore fences an owner after release", async () => {
   const store = new InMemoryStore();
   const first = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });

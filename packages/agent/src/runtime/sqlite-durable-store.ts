@@ -217,6 +217,7 @@ export class SqliteStore implements DurableStore {
         released_epoch: row.released_epoch,
       };
       this.writeOwner(next);
+      memory.dropSettledClaimReceipts();
       this.persistState(memory.exportState());
       return {
         ownerId: input.ownerId,

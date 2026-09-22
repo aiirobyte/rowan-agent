@@ -216,6 +216,7 @@ export class InMemoryStore implements DurableStore {
     }
 
     if (this.owner) this.interruptOwner(this.owner.epoch);
+    this.dropSettledClaimReceipts();
     this.ownerEpoch += 1;
     this.owner = {
       ownerId: input.ownerId,
@@ -1284,6 +1285,24 @@ export class InMemoryStore implements DurableStore {
    */
   private dropClaimReceipt(execution: ExecutionToken | undefined): void {
     if (execution) this.operationReceipts.delete(`claim:${execution.executionId}`);
+  }
+
+  /**
+   * A new owner fences the Execution Attempts of the previous one, so no Claim
+   * receipt from before the takeover can be replayed. Sweeping them reclaims
+   * the history snapshots a store accumulated while no Attempt ended under
+   * this Runtime.
+   */
+  dropSettledClaimReceipts(): void {
+    const liveExecutions = new Set<string>();
+    for (const run of this.runs.values()) {
+      if (run.state === "running" && run.execution) liveExecutions.add(String(run.execution.executionId));
+    }
+    for (const key of [...this.operationReceipts.keys()]) {
+      if (key.startsWith("claim:") && !liveExecutions.has(key.slice("claim:".length))) {
+        this.operationReceipts.delete(key);
+      }
+    }
   }
 
   private requireAgent(agentId: AgentId): StoredAgent {
