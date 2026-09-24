@@ -1,37 +1,17 @@
 import { expect, test } from "bun:test";
 import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore } from "../../src/runtime";
-import type { AgentDefinition } from "../../src/harness/definitions";
 import type { Phase } from "../../src/harness/phases/types";
-import { configuration, seedResources } from "../fixtures/configuration";
+import { createPhaseAgent } from "../fixtures/configuration";
 import { routeResponse, stopResponse } from "./route-test-utils";
 
-/** One Agent whose Definition selects the given Phase as its entry. */
-function definitionFor(phases: readonly Phase[], entryPhaseId: string): AgentDefinition {
-  return {
-    name: "test",
-    description: "Test Agent.",
-    prompt: "Test",
-    phases: { entryPhaseId, phaseIds: phases.map(({ name }) => name) },
-  };
-}
-
-async function agentWithPhase(
+function agentWithPhase(
   runtime: AgentRuntime,
   stream: StreamFn,
   phases: { phases: Map<string, Phase>; entryPhaseId: string },
   options: { idempotencyKey?: string } = {},
 ) {
-  const values = [...phases.phases.values()];
-  const definition = definitionFor(values, phases.entryPhaseId);
-  const view = await seedResources(runtime, { agents: [definition], phases: values, core: true });
-  return runtime.createAgent(configuration({
-    identity: "phase-payload-v1",
-    definition: definition.name,
-    view,
-    model: { provider: "test", id: "model" },
-    stream,
-  }), options);
+  return createPhaseAgent(runtime, { identity: "phase-payload-v1", stream, phases, options });
 }
 
 test("direct run Phases receive their effective input defaults", async () => {

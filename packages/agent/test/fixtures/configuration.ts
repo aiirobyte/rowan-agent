@@ -81,3 +81,38 @@ export function configuration(input: ConfigurationInput): AgentConfiguration {
     ...rest,
   } as AgentConfiguration;
 }
+
+/**
+ * Create one Agent whose Definition selects the given Phases as its entry, with
+ * the Phases and the core resources registered the Host way.
+ */
+export async function createPhaseAgent(
+  runtime: AgentRuntime,
+  input: Readonly<{
+    identity: string;
+    stream: StreamFn;
+    phases: Readonly<{ phases: Map<string, Phase>; entryPhaseId: string | null }>;
+    maxAttempts?: number;
+    options?: Readonly<{ idempotencyKey?: string }>;
+  }>,
+): ReturnType<AgentRuntime["createAgent"]> {
+  const values = [...input.phases.phases.values()];
+  const definition: AgentDefinition = {
+    name: "test",
+    description: "Test Agent.",
+    prompt: "Test",
+    phases: {
+      entryPhaseId: input.phases.entryPhaseId,
+      phaseIds: values.map(({ name }) => name),
+    },
+  };
+  const view = await seedResources(runtime, { agents: [definition], phases: values, core: true });
+  return runtime.createAgent(configuration({
+    identity: input.identity,
+    definition: definition.name,
+    view,
+    model: { provider: "test", id: "model" },
+    stream: input.stream,
+    ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
+  }), input.options ?? {});
+}

@@ -1,16 +1,16 @@
 import { expect, test } from "bun:test";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime";
 import type { Phase } from "../../src/harness/phases/types";
+import { createPhaseAgent } from "../fixtures/configuration";
 
-function config(stream: StreamFn, phases: { phases: Map<string, Phase>; entryPhaseId: string }): AgentConfig {
-  return {
-    identity: "phase-streaming-v1",
-    model: { provider: "test", id: "model" },
-    stream,
-    definition: { name: "test", description: "Test Agent.", prompt: "Test" },
-    resources: { tools: [], skills: [], phases },
-  } as unknown as AgentConfig;
+function agent(
+  runtime: AgentRuntime,
+  stream: StreamFn,
+  phases: { phases: Map<string, Phase>; entryPhaseId: string },
+  options: { idempotencyKey?: string } = {},
+) {
+  return createPhaseAgent(runtime, { identity: "phase-streaming-v1", stream, phases, options });
 }
 
 test("a programmatic Phase can stream assistant message deltas via execution.messages", async () => {
@@ -39,8 +39,9 @@ test("a programmatic Phase can stream assistant message deltas via execution.mes
   };
 
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
-  const agentId = await runtime.createAgent(
-    config(stream, { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name }),
+  const agentId = await agent(
+    runtime,
+    stream, { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name },
     { idempotencyKey: "streaming-agent" },
   );
 
