@@ -37,6 +37,26 @@ searches, two already hold: "shared Tool/Phase Invocation Outcome" has no hits, 
 a Definition/Phase `extensions` field is rejected at parse time rather than
 supported.
 
+A collapse attempt on 2026-09-24 mapped what the removal really touches, and was
+reverted rather than left half-done. Findings worth keeping:
+
+- The surface is bigger than the type checker shows. `AgentConfiguration` has no
+  `resources`, but a plain object literal assigned to a variable is not
+  excess-property-checked, so a test that passes `{ identity, definition,
+  resources, model }` still compiles and fails only at run time. The real work
+  list is "every test that creates an Agent", not "every file with a type error".
+- Two seams must move together: the provider's snapshotter needs a branch per
+  shape (a resolved snapshot must be frozen, not rebuilt from `definition.name` —
+  rebuilding it drops `prompt`, and the resumed Execution Attempt then fails in
+  the System Prompt assembly), and the registry reserves the core Phase and Tool
+  names, so a test that registers its own `stop` or `default` Phase now fails at
+  registration instead of at execution.
+- What worked, and is the template for the rest: register the Definition and the
+  resources through `runtime.loadAgents/loadSkills/loadPhases/loadTools`, list
+  those sources in the view, put the Phase selection on the Definition
+  (`phases: { entryPhaseId, phaseIds }`), and list `rowan.core` when the Agent
+  needs the route Tool or the core Phases.
+
 The expand half of the removal is in the tree, so the rest can land file by file:
 `packages/agent/test/fixtures/configuration.ts` registers a test's resources the
 way a Host does (`runtime.loadAgents/loadSkills/loadPhases/loadTools`) and returns
