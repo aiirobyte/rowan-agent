@@ -1,12 +1,25 @@
 # Structured Context Agent Definitions issue slices
 
-Status: Approved local execution plan. No GitHub Issues have been created.
+Status: Implemented locally; every slice has a seam and a pinning test. Do not
+publish to GitHub without a separate request.
 
 Source: [PRD-0005](../prd/0005-structured-context-agent-definitions.md)
 
 Decision: [ADR-0006](../adr/0006-structured-context-agent-definitions.md)
 
 Each slice follows one red → green cycle through a public Rowan seam.
+
+## Progress (recorded after the fact, 2026-09-24)
+
+Seam-level audit: the Definition parser and its phase-registry selection
+(`harness/definitions.ts`), structured Context resolution into prompt assembly
+(`harness/context/resource-formatter.ts` fed by `runtime/extensions.ts`), Phase
+resolution after Extensions (`runtime/configuration-snapshot.ts`), and the public
+configuration and snapshot contract (`runtime/contracts.ts`,
+`runtime/config-provider.ts`).
+Tests: `test/agent-definition.test.ts`, `test/harness/context/*.test.ts`,
+`test/runtime/{definition-resolution,configuration-snapshot,config-provider}.test.ts`,
+`test/public-exports.test.ts`.
 
 ## Slice 1: Parse Context and PhaseRegistry Definition fields
 

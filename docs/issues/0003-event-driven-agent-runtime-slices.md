@@ -1,6 +1,7 @@
 # Event-driven Agent Runtime issue slices
 
-Status: In Progress
+Status: Implemented locally through Slice 11; Slice 12 is downstream. Do not
+publish to GitHub without a separate request.
 
 Progress: Rowan 0.8 has completed the event-driven public cutover and the
 EverYield consumer migration. Slice 9 now atomically reserves all Tool Calls
@@ -23,6 +24,25 @@ Source: [PRD-0003](../prd/0003-event-driven-agent-runtime.md)
 Decision: [ADR-0004](../adr/0004-event-driven-agent-runtime.md)
 
 These slices are ordered to keep one coherent implementation and one authoritative test surface. Temporary adapters may keep the branch compiling between slices, but no compatibility facade ships.
+
+## Progress (recorded after the fact, 2026-09-24)
+
+Seam-level audit of every slice against this tree: Slice 1 `runtime/contracts.ts`
+(the snapshot/input assertions) with `state-machine.ts`, `runtime-events.ts`;
+Slice 2 `runtime/execution.ts` (`executeOnce`, the execution checkpoint);
+Slices 3-4 `runtime/durable-store.ts` and `sqlite-durable-store.ts` (version gate,
+lease/takeover, seal); Slices 5-7 `runtime/config-provider.ts`,
+`config-commands.ts`, `read-models.ts`, `durable-runtime.ts` (pump, claim,
+`respond`); Slices 8-9 the consumer/observation and Tool lifecycle seams in
+`durable-runtime.ts` with `transient-run-events.ts`; Slices 10-11 the cutover
+(public interface frozen by `scripts/public-interface.ts`, CLI manifest and
+restart, the JSONL logging sink).
+Tests: `test/runtime/*.test.ts` (`contract`, `execution`, `durable-store`,
+`sqlite-durable-store`, `durable-runtime`, `config-provider`, `observe-boundaries`,
+`tool-lifecycle`, `phase-interactions`), `test/public-exports.test.ts`, and the CLI
+and logging suites.
+Slice 12 (EverYield migration, outbox, fault injection) has no seam here: the
+only in-repo enabler is the execution identity the Phase callbacks carry.
 
 ## Slice 1: Freeze the executable specification
 

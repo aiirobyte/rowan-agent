@@ -1,12 +1,26 @@
 # Issue drafts: Direct Skill Bundles for File Phases
 
-Status: Approved local execution plan. No GitHub Issue has been created.
+Status: Implemented locally through Slice 4; Slice 5 is a cross-repository
+handoff. Do not publish to GitHub without a separate request.
 
 Source: [PRD-0007](../prd/0007-phase-skill-bundles.md)
 
 Decision: [ADR-0008](../adr/0008-phase-skill-bundles.md)
 
 Each slice follows one red → green cycle through a public Rowan seam.
+
+## Progress (recorded after the fact, 2026-09-24)
+
+Seam-level audit: Slices 1-4 landed — `harness/phases/loader.ts` (`loadPhase` /
+`loadPhaseSkills` reading a Phase as a bundle), the serial and parallel loop paths
+merging `phase.skills` (`loop/runners.ts`), Directory Extension Phase
+registration (`extensions/runner.ts`, `extensions/types.ts`), and the frozen
+bundle in the configuration snapshot (`config-provider.ts:snapshotPhase`).
+Tests: `test/harness/resource-loading.test.ts`,
+`test/runtime/phase-normalization.test.ts`, `test/phase-config.test.ts`,
+`test/extensions-loader.test.ts`.
+Slice 5 is the pack-and-verify handoff to EverYield, which is outside this
+repository; its stated 0.9.0 target has moved on since.
 
 ## Dependency map
 

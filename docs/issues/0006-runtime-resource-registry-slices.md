@@ -1,6 +1,7 @@
 # Scoped Runtime Resource Registry issue slices
 
-Status: Approved local execution plan. No GitHub Issues have been created.
+Status: Partially implemented locally; Slice 7's removal is not done. Do not
+publish to GitHub without a separate request.
 
 Source: [PRD-0006](../prd/0006-runtime-resource-registry.md)
 
@@ -8,6 +9,25 @@ Decision: [ADR-0007](../adr/0007-runtime-resource-registry.md)
 
 Each slice follows one red → green cycle through a public Rowan seam. Host
 migration may consume a slice only after all prerequisites named below land.
+
+## Progress (recorded after the fact, 2026-09-24)
+
+Seam-level audit: Slices 1-6 landed — `runtime/resource-registry.ts` (contracts
+and atomic Source Transactions), `runtime/extension-lifetime.ts` (bootstrap and
+global Extension gating), the declarative Agent/Skill/Phase and Tool/Phase
+registration paths, `runtime/configuration-snapshot.ts` (Resource Views into
+snapshots), and the runtime's bootstrap-before-scheduler ordering with the
+execution identity carried on Tool and Phase contexts.
+Tests: `test/runtime/{resource-registry,core-resources,tool-lifecycle,phase-normalization,configuration-snapshot,extension-lifetime,runtime-bootstrap}.test.ts`,
+`test/harness/resource-loading.test.ts`.
+
+Not landed: Slice 7, the removal it names. `AgentConfig.resources` /
+`AgentResources` are still exported and accepted, the per-Agent assembly
+(`runtime/extensions.ts:assembleRegisteredExtensions`) is still called from
+`durable-runtime.ts`, `loadSkills`/`loadPhases` are still public, and the README
+and `docs/phases.md` still document the concrete `resources` shape. Slice 5
+landed additively, so this is the piece that would make the registry the only
+authority.
 
 ## Dependency graph
 

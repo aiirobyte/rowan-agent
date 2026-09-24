@@ -1,6 +1,7 @@
 # Issue drafts: Suspendable Phase Interactions
 
-Status: Accepted local implementation plan. Do not publish to GitHub without a
+Status: Implemented locally for the interaction boundary; the Channel and
+deadline slices belong to the host by design. Do not publish to GitHub without a
 separate request.
 
 Source: [PRD-0009](../prd/0009-suspendable-phase-interactions.md)
@@ -15,6 +16,17 @@ The shipped local boundary is typed Interaction request/answer, durable
 suspension and checkpoint recovery, and cancellation. Activity streams,
 Session/Channel grouping, and deadline policy remain host-owned; EverYield
 implements those concerns for ACP Session Groups.
+
+## Progress (recorded after the fact, 2026-09-24)
+
+Seam-level audit: the interaction boundary landed — `harness/phases/interactions.ts`
+(the driver, boundary, cancellation), the durable store's open/answer interaction
+records, and `AgentRun.respondInteraction` with the run-state change carrying
+interactions and answers; documented in `docs/phase-interactions.md` and pinned by
+`test/runtime/phase-interactions.test.ts`.
+Slices 4 (Opaque Channel lifecycle) and 6 (deadlines) have no seam here by
+design: ADR-0010 scopes Channel grouping and deadline policy to the host, and no
+Channel or deadline primitive exists in `packages/*/src`.
 
 ## Dependency map
 
