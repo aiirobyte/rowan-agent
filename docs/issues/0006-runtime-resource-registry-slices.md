@@ -21,7 +21,19 @@ execution identity carried on Tool and Phase contexts.
 Tests: `test/runtime/{resource-registry,core-resources,tool-lifecycle,phase-normalization,configuration-snapshot,extension-lifetime,runtime-bootstrap}.test.ts`,
 `test/harness/resource-loading.test.ts`.
 
-Not landed: Slice 7, the removal it names. `AgentConfig.resources` /
+Not landed: Slice 7, the removal it names. What it takes, measured on this tree:
+four production files (`runtime/contracts.ts`'s `AgentResources` and the
+`resources` field, `runtime/configuration-snapshot.ts`, the two
+`assembleRegisteredExtensions` call sites in `runtime/durable-runtime.ts`, and
+`cli/src/cli.ts`) plus eleven test files, each of which builds its own
+`AgentConfig` with a local helper, so their resources have to arrive through the
+registry rather than a rewrite. It is also a host contract change, not only a
+deletion: `isAgentConfiguration(config)` is `!("resources" in config)`, so removing
+the field collapses the concrete config and the resolved snapshot into one shape —
+and Mori builds concrete configs today (`packages/core/src/runtime/config-provider.ts`,
+`loadMergedAgentConfig`), so the upstream removal and the Mori migration belong to
+one piece of work with both suites as its gate. Of the acceptance's four
+searches, "shared Tool/Phase Invocation Outcome" already holds (no hits). `AgentConfig.resources` /
 `AgentResources` are still exported and accepted, the per-Agent assembly
 (`runtime/extensions.ts:assembleRegisteredExtensions`) is still called from
 `durable-runtime.ts`, `loadSkills`/`loadPhases` are still public, and the README
