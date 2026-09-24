@@ -33,7 +33,25 @@ the field collapses the concrete config and the resolved snapshot into one shape
 and Mori builds concrete configs today (`packages/core/src/runtime/config-provider.ts`,
 `loadMergedAgentConfig`), so the upstream removal and the Mori migration belong to
 one piece of work with both suites as its gate. Of the acceptance's four
-searches, "shared Tool/Phase Invocation Outcome" already holds (no hits). `AgentConfig.resources` /
+searches, two already hold: "shared Tool/Phase Invocation Outcome" has no hits, and
+a Definition/Phase `extensions` field is rejected at parse time rather than
+supported.
+
+The expand half of the removal is in the tree, so the rest can land file by file:
+`packages/agent/test/fixtures/configuration.ts` registers a test's resources the
+way a Host does (`runtime.loadAgents/loadSkills/loadPhases/loadTools`) and returns
+the view that reads them, and `phase-payload.test.ts` is migrated onto it as the
+worked example — nine tests green on the registry path, including the two moves
+the migration has to know about: the entry Phase selection belongs to the
+Definition (`definition.phases`), and a view that needs the route Tool or the core
+Phases lists `rowan.core`. What remains: the other eleven test files, the CLI, then
+the source collapse itself (`contracts.ts`'s `AgentResources`/`AgentConfig`/
+`AgentConfigRequest`/`isAgentConfiguration`/`assertAgentConfig`,
+`configuration-snapshot.ts`'s `materializeConfigurationSnapshot`, the assembly's
+`config.resources` reads, `config-commands.ts`, the index exports), the hook
+fallback in `durable-runtime.ts` that no Host supplies, docs/examples, and the
+public-interface baseline. Then Mori, whose config provider builds concrete
+configs. `AgentConfig.resources` /
 `AgentResources` are still exported and accepted, the per-Agent assembly
 (`runtime/extensions.ts:assembleRegisteredExtensions`) is still called from
 `durable-runtime.ts`, `loadSkills`/`loadPhases` are still public, and the README

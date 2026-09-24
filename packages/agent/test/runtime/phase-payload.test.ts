@@ -1,20 +1,37 @@
 import { expect, test } from "bun:test";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import type { AgentDefinition } from "../../src/harness/definitions";
 import type { Phase } from "../../src/harness/phases/types";
+import { configuration, seedResources } from "../fixtures/configuration";
 import { routeResponse, stopResponse } from "./route-test-utils";
 
-function config(
+/** One Agent whose Definition selects the given Phase as its entry. */
+function definitionFor(phases: readonly Phase[], entryPhaseId: string): AgentDefinition {
+  return {
+    name: "test",
+    description: "Test Agent.",
+    prompt: "Test",
+    phases: { entryPhaseId, phaseIds: phases.map(({ name }) => name) },
+  };
+}
+
+async function agentWithPhase(
+  runtime: AgentRuntime,
   stream: StreamFn,
   phases: { phases: Map<string, Phase>; entryPhaseId: string },
-): AgentConfig {
-  return {
+  options: { idempotencyKey?: string } = {},
+) {
+  const values = [...phases.phases.values()];
+  const definition = definitionFor(values, phases.entryPhaseId);
+  const view = await seedResources(runtime, { agents: [definition], phases: values, core: true });
+  return runtime.createAgent(configuration({
     identity: "phase-payload-v1",
+    definition: definition.name,
+    view,
     model: { provider: "test", id: "model" },
     stream,
-    definition: { name: "test", description: "Test Agent.", prompt: "Test" },
-    resources: { tools: [], skills: [], phases },
-  } as unknown as AgentConfig;
+  }), options);
 }
 
 test("direct run Phases receive their effective input defaults", async () => {
@@ -33,11 +50,13 @@ test("direct run Phases receive their effective input defaults", async () => {
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(async function* () { yield { type: "done", response: stopResponse() }; }, {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* () { yield { type: "done", response: stopResponse() }; },
+      {
         phases: new Map([[phase.name, phase]]),
         entryPhaseId: phase.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-direct-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-direct-run" });
@@ -65,11 +84,12 @@ test("direct run Phases merge the host-provided initial payload", async () => {
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(async function* () { yield { type: "done", response: stopResponse() }; }, {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* () { yield { type: "done", response: stopResponse() }; }, {
         phases: new Map([[phase.name, phase]]),
         entryPhaseId: phase.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-host-agent" },
     );
     const run = await runtime.start(agentId, "hello", {
@@ -101,11 +121,12 @@ test("Extension Phases read the same effective payload through the generic API",
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(async function* () { yield { type: "done" }; }, {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* () { yield { type: "done" }; }, {
         phases: new Map([[phase.name, phase]]),
         entryPhaseId: phase.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-extension-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-extension-run" });
@@ -150,11 +171,12 @@ test("a serial Model route prepares the target payload before transition", async
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, {
+    const agentId = await agentWithPhase(
+      runtime,
+      stream, {
         phases: new Map([[source.name, source], [target.name, target]]),
         entryPhaseId: source.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-serial-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-serial-run" });
@@ -196,11 +218,12 @@ test("a Model Phase receives one prepared payload context message", async () => 
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, {
+    const agentId = await agentWithPhase(
+      runtime,
+      stream, {
         phases: new Map([[source.name, source], [target.name, target]]),
         entryPhaseId: source.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-model-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-model-run" });
@@ -248,11 +271,12 @@ test("an invalid Model payload does not enter the target Phase", async () => {
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, {
+    const agentId = await agentWithPhase(
+      runtime,
+      stream, {
         phases: new Map([[source.name, source], [target.name, target]]),
         entryPhaseId: source.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-invalid-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-invalid-run" });
@@ -290,11 +314,12 @@ test("a new serial route uses target defaults instead of inheriting payload", as
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(async function* () { yield { type: "done" }; }, {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* () { yield { type: "done" }; }, {
         phases: new Map([[source.name, source], [target.name, target]]),
         entryPhaseId: source.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-fresh-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-fresh-run" });
@@ -324,11 +349,12 @@ test("continue retains the current invocation payload", async () => {
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(async function* () { yield { type: "done" }; }, {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* () { yield { type: "done" }; }, {
         phases: new Map([[phase.name, phase]]),
         entryPhaseId: phase.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-continue-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-continue-run" });
@@ -381,8 +407,9 @@ test("parallel routes prepare each target payload independently", async () => {
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 2 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, {
+    const agentId = await agentWithPhase(
+      runtime,
+      stream, {
         phases: new Map([
           [source.name, source],
           ["left", worker("left", "left-default")],
@@ -390,7 +417,7 @@ test("parallel routes prepare each target payload independently", async () => {
           [join.name, join],
         ]),
         entryPhaseId: source.name,
-      }),
+      },
       { idempotencyKey: "phase-payload-parallel-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-parallel-run" });
