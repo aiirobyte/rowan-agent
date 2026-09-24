@@ -15,7 +15,7 @@ export const TEST_SOURCE = "test.source";
 export const CORE_SOURCE = "rowan.core";
 
 type Loaded<T extends (input: never) => unknown> =
-  Parameters<T>[0] extends { values: readonly (infer Value)[] } ? Value : never;
+  NonNullable<Parameters<T>[0]["values"]>[number];
 type SeededResources = Readonly<{
   agents?: readonly AgentDefinition[];
   skills?: readonly Loaded<AgentRuntime["loadSkills"]>[];

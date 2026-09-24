@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import {
   RUN_STATES,
-  assertAgentConfig,
+  assertAgentConfigRequest,
   assertJsonValue,
   assertToolExecutionResult,
   assertValidRunSnapshot,
@@ -15,12 +15,12 @@ import {
   normalizeUserInput,
   projectToolDefinition,
   RuntimeError,
-  type AgentConfig,
   type RunSnapshot,
   type RuntimeErrorCode,
   type UserInput,
 } from "../../src/runtime";
 import type { AgentId, EventCursor, Message, RunId, ToolExecutionResult, ToolUseContent } from "../../src/runtime-events";
+import { configuration } from "../fixtures/configuration";
 
 const agentId = "agent-1" as AgentId;
 const runId = "run-1" as RunId;
@@ -132,29 +132,25 @@ test("input-required and terminal snapshots require valid committed Assistant me
 });
 
 test("Tool schemas retain TypeBox and project only JSON-safe provider data", () => {
-  const config = {
-    identity: "config-1",
-    model: { provider: "test", id: "model" },
-    definition: { name: "test", description: "Test Agent.", prompt: "system" },
-    resources: {
-      tools: [{
-        name: "lookup",
-        description: "Look something up",
-        parameters: Type.Object({ query: Type.String() }),
-        execute: async () => ({ ok: true as const, content: { answer: "yes" } }),
-      }],
-      skills: [],
-    },
-    stream: async function* () {},
-  } satisfies AgentConfig;
-  expect(projectToolDefinition(config.resources.tools[0]!)).toEqual({
+  const tool = {
+    name: "lookup",
+    description: "Look something up",
+    parameters: Type.Object({ query: Type.String() }),
+    execute: async () => ({ ok: true as const, content: { answer: "yes" } }),
+  };
+  expect(projectToolDefinition(tool)).toEqual({
     name: "lookup",
     description: "Look something up",
     parameters: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
   });
-  expect(() => projectToolDefinition({ ...config.resources.tools[0]!, parameters: { execute: () => undefined } as never })).toThrow();
+  expect(() => projectToolDefinition({ ...tool, parameters: { execute: () => undefined } as never })).toThrow();
   expect(() => assertToolExecutionResult({ ok: true, content: null, toolCallId: "provider-id" })).toThrow();
-  expect(() => assertAgentConfig({ ...config, identity: "" })).toThrow();
+  expect(() => assertAgentConfigRequest(configuration({
+    identity: "",
+    definition: "test",
+    view: { agents: [], tools: [], skills: [], phases: [] },
+    model: { provider: "test", id: "model" },
+  }))).toThrow();
   // @ts-expect-error Provider correlation IDs are not durable ToolCall IDs.
   const invalidToolUse: ToolUseContent = { type: "tool_use", id: "provider-id", name: "lookup", input: null };
   // @ts-expect-error Tool results cannot choose a Runtime ToolCall ID.

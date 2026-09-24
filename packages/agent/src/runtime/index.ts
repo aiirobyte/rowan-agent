@@ -85,6 +85,7 @@ export type {
 export { materializeConfigurationSnapshot } from "./configuration-snapshot";
 export {
   assertAgentConfig,
+  assertAgentConfigRequest,
   assertToolExecutionResult,
   assertValidRunSnapshot,
   canonicalUserInput,

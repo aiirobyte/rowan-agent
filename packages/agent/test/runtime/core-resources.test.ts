@@ -11,7 +11,9 @@ import {
   loadSkill,
 } from "../../src";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import type { AgentDefinition } from "../../src/harness/definitions";
+import { configuration, seedResources } from "../fixtures/configuration";
 import type { Phase } from "../../src/harness/phases/types";
 import { RuntimeBootstrapRegistry } from "../../src/runtime/extension-lifetime";
 
@@ -97,22 +99,25 @@ test("Runtime invocation catalog applies policy after authored selection and kee
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
+    const definition: AgentDefinition = {
+      name: "test",
+      description: "Test",
+      prompt: "Test",
+      phases: { entryPhaseId: null, phaseIds: ["review"] },
+    };
+    const view = await seedResources(runtime, {
+      agents: [definition],
+      skills: [skill],
+      phases: [authored],
+      core: true,
+    });
+    const agentId = await runtime.createAgent(configuration({
       identity: "core-invocation-catalog-v1",
+      definition: definition.name,
+      view,
       model: { provider: "test", id: "model" },
       stream,
-      definition: {
-        name: "test",
-        description: "Test",
-        prompt: "Test",
-        phases: { entryPhaseId: null, phaseIds: ["review"] },
-      },
-      resources: {
-        tools: [],
-        skills: [skill],
-        phases: { phases: new Map([[authored.name, authored]]), entryPhaseId: null },
-      },
-    } as AgentConfig, { idempotencyKey: "core-invocation-catalog-agent" });
+    }), { idempotencyKey: "core-invocation-catalog-agent" });
     const implicit = await runtime.listInvocations(agentId, { source: "implicit" });
     expect(implicit.filter((entry) => entry.kind === "phase").map(({ name }) => name)).toEqual(["stop", "compact", "review"]);
     expect(implicit.some((entry) => entry.name === "private")).toBe(false);
