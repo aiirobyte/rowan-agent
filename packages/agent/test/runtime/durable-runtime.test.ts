@@ -659,10 +659,13 @@ test("AgentRuntime spills large custom Tool Results to the Agent archive", async
   const store = new SqliteStore(join(directory, "runtime.sqlite"));
   const runtime = await AgentRuntime.init({ store, concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
-      resources: { tools: [tool], skills: [] },
-    } as unknown as AgentConfig, { idempotencyKey: "large-tool-agent" });
+    const agentId = await createAgentWith(runtime, {
+      identity: "runtime-test-v1",
+      stream,
+      core: true,
+      tools: [tool],
+      options: { idempotencyKey: "large-tool-agent" },
+    });
     const run = await runtime.start(agentId, "use large lookup", { idempotencyKey: "large-tool-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     const toolMessage = (await runtime.history(agentId)).find((message) => message.role === "tool");

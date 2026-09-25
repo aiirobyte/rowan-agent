@@ -113,7 +113,9 @@ export async function createAgentWith(
     core?: boolean;
     maxAttempts?: number;
     contexts?: AgentConfiguration["contexts"];
-    options?: Readonly<{ idempotencyKey?: string }>;
+    additionalContexts?: AgentConfiguration["additionalContexts"];
+    model?: NonNullable<AgentConfiguration["model"]>;
+    options?: NonNullable<Parameters<AgentRuntime["createAgent"]>[1]>;
   }>,
 ): ReturnType<AgentRuntime["createAgent"]> {
   const definition = testDefinition(input.definition);
@@ -132,6 +134,8 @@ export async function createAgentWith(
     stream: input.stream,
     ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
     ...(input.contexts === undefined ? {} : { contexts: input.contexts }),
+    ...(input.additionalContexts === undefined ? {} : { additionalContexts: input.additionalContexts }),
+    ...(input.model === undefined ? {} : { model: input.model }),
   }), input.options ?? {});
 }
 
