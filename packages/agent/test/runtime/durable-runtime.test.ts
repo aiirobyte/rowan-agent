@@ -8,7 +8,17 @@ import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
+import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
+
+/** The same Agent as `simpleConfig`, with its Definition registered as a source. */
+function simpleAgent(
+  runtime: AgentRuntime,
+  stream: StreamFn,
+  options: NonNullable<Parameters<AgentRuntime["createAgent"]>[1]> = {},
+) {
+  return createAgentWith(runtime, { identity: "runtime-test-v1", stream, core: true, options });
+}
 
 function simpleConfig(stream: StreamFn): AgentConfig {
   return {
@@ -45,8 +55,8 @@ test("AgentRuntime generates a unique idempotency key for ordinary Agent creatio
   const stream: StreamFn = async function* () { yield { type: "done" }; };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
   try {
-    const first = await runtime.createAgent(simpleConfig(stream));
-    const second = await runtime.createAgent(simpleConfig(stream), { metadata: { source: "test" } });
+    const first = await simpleAgent(runtime, stream);
+    const second = await simpleAgent(runtime, stream, { metadata: { source: "test" } });
 
     expect(second).not.toBe(first);
     const agents = (await runtime.listAgents()).items;
@@ -82,7 +92,7 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
   const store = new InMemoryStore();
   const runtime = await AgentRuntime.init({ store, concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "agent-1" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "agent-1" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "run-1" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     await expect(run.snapshot()).resolves.toMatchObject({ state: "completed", outcome: { message: expect.any(String) } });
@@ -134,7 +144,7 @@ test("AgentRuntime preserves manual Control Run input while keeping system compa
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "compact-agent" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "compact-agent" });
     const ordinary = await runtime.start(agentId, "hello", { idempotencyKey: "compact-ordinary" });
     await expect(ordinary.wait()).resolves.toMatchObject({ type: "completed" });
     const before = await runtime.history(agentId);
@@ -235,7 +245,7 @@ test("input_required preserves the current assistant thinking parts", async () =
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), {
+    const agentId = await simpleAgent(runtime, stream, {
       idempotencyKey: "input-thinking-agent",
     });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "input-thinking-run" });
@@ -300,7 +310,7 @@ test("AgentRuntime compacts once and retries after a provider context overflow",
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "overflow-agent" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "overflow-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "overflow-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(calls).toBe(3);
@@ -319,7 +329,7 @@ test("Message revisions stop at the covered context boundary", async () => {
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "edit-boundary-agent" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "edit-boundary-agent" });
     const run = await runtime.start(agentId, "original", { idempotencyKey: "edit-boundary-run" });
     await run.wait();
     const message = (await runtime.history(agentId)).find(({ role }) => role === "user");
@@ -347,7 +357,7 @@ test("AgentRuntime forwards the user ThinkingLevel on the LLM Request", async ()
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "thinking-level-agent" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "thinking-level-agent" });
     const run = await runtime.start(agentId, {
       content: "Think carefully",
       metadata: { everyield: { thinkingLevel: "high" } },
@@ -410,7 +420,7 @@ test("AgentRun.observe streams message deltas before the durable boundary", asyn
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "agent-live-observe" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "agent-live-observe" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "run-live-observe" });
     const observed: RunEvent[] = [];
     const iterator = run.observe()[Symbol.asyncIterator]();
@@ -512,7 +522,7 @@ test("AgentRun.observe streams ThinkingBlock deltas before the durable boundary"
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), {
+    const agentId = await simpleAgent(runtime, stream, {
       idempotencyKey: "agent-thinking-observe",
     });
     const run = await runtime.start(agentId, "hello", {
@@ -1073,7 +1083,7 @@ test("AgentRuntime retries the same Event before advancing live delivery", async
   const controller = new AbortController();
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
   try {
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "consumer-agent" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "consumer-agent" });
     const attempts: string[] = [];
     let failFirst = true;
     const consumer = await runtime.consume({
@@ -1158,7 +1168,7 @@ test("AgentRuntime consumer receives Run metadata on terminal durable events", a
       },
     });
     await consumer.caughtUp;
-    const agentId = await runtime.createAgent(simpleConfig(stream), { idempotencyKey: "metadata-agent" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "metadata-agent" });
     const run = await runtime.start(agentId, "hello", {
       idempotencyKey: "metadata-run",
       metadata: { kind: "workflow", invocationId: "invocation-1" },
