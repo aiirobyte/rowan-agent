@@ -44,7 +44,13 @@ Breaking for every embedding host. What a host must change:
    host used to pass inline is registered like every other resource.
 5. A Config Provider must pass `AgentConfiguration | ConfigurationSnapshot`
    through and must not re-resolve a stored snapshot.
-6. `@rowan-agent/cli` is migrated in this release and is the worked example.
+6. A Config Provider that rehydrates a Config Token a Run already pinned must
+   answer with a `ConfigurationSnapshot`, not a request. A Run may only be
+   claimed with the token it pinned, and only a request is re-resolved into a
+   new one — answering with a request makes every claim conflict with the pin,
+   and the Run spins instead of progressing. Rebuilding the snapshot with
+   `resolveConfigurationSnapshot` over the same sources is the way to do it.
+7. `@rowan-agent/cli` is migrated in this release and is the worked example.
 
 Behaviour that does not change: the Runtime supplies the core
 `read`/`bash`/`edit`/`write`/`route` Tools, `rowan.core` stays implicit in every

@@ -55,10 +55,16 @@ outside the dated design docs, no Definition/Phase `extensions` field, no
 Runtime-global ordinary resource collision rule, no shared Tool/Phase Invocation
 Outcome.
 
-Still open, and deliberately not part of this slice: the host migration. Mori
-builds concrete configs today (`packages/core/src/runtime/config-provider.ts`,
-`loadMergedAgentConfig`), so it moves to `resourceView` sources before it can
-adopt the release that carries this change.
+The host migration followed in the same piece of work. Mori was closer than it
+looked: it already compiled Definition requests and registered its Scoped
+Sources, so taking the release meant rebuilding its executable-config path
+instead of moving to `resourceView`. One finding belongs to this contract: a
+Config Provider that answers a Config Token a Run already pinned with a
+*request* makes every claim conflict. That conflict is raised before the claim,
+where the pump treats it as a retry, so the Run spins silently instead of
+failing. Rehydrating a pinned token has to answer with a
+`ConfigurationSnapshot` — `resolveConfigurationSnapshot` over the same sources
+rebuilds one — and both `@rowan-agent/cli` and Mori do.
 
 ## Progress (recorded after the fact, 2026-09-24)
 
