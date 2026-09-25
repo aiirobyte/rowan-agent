@@ -25,6 +25,32 @@ Decision: [ADR-0004](../adr/0004-event-driven-agent-runtime.md)
 
 These slices are ordered to keep one coherent implementation and one authoritative test surface. Temporary adapters may keep the branch compiling between slices, but no compatibility facade ships.
 
+## Progress: Slice 12 coverage (recorded after the fact, 2026-09-25)
+
+Rowan's half of Slice 12 is the durable Agent/Run/Execution identity Phase
+callbacks carry, and it holds at `v0.10.1`. The downstream half was audited
+against Mori in this workspace:
+
+- Workflow launch replay. A launch derives its `launchId` from the durable
+  execution identity — parent Run, Workflow, iteration, invocation — and passes
+  `${launchId}:agent` and `${launchId}:run` to Rowan, so replaying a launch
+  after a crash before the parent commits produces exactly one Agent and one
+  Run. Pinned by
+  `packages/core/src/__tests__/direct-workflow-invocation.test.ts`.
+- Config Tokens after restart. A rehydrating Config Provider answers with a
+  `ConfigurationSnapshot`, so a pinned Run resumes on the snapshot that created
+  it (see issues-0026 and the 0.10.0/0.10.1 releases).
+- Result delivery, pending-input notification, and paged Run listing have their
+  own Mori suites.
+
+Still open, and left to a host decision rather than to this slice: fault
+injection *after* Rowan Agent creation but *before* the host binding. Rowan's
+`createAgent` is idempotent only on a caller-supplied key, and a fresh Team or
+Project Agent has no host row yet, so the key has to come from a host command
+row persisted before the cross-Store call. In Mori that means a new table, and
+its single-baseline schema policy turns a new table into a rebuild for existing
+Team databases — a product trade-off for the host to make.
+
 ## Progress (recorded after the fact, 2026-09-24)
 
 Seam-level audit of every slice against this tree: Slice 1 `runtime/contracts.ts`

@@ -1,13 +1,31 @@
 # Issue drafts: Direct Skill Bundles for File Phases
 
-Status: Implemented locally through Slice 4; Slice 5 is a cross-repository
-handoff. Do not publish to GitHub without a separate request.
+Status: Implemented locally through Slice 4; Slice 5 verified at `v0.10.1` (see
+the progress note below). Do not publish to GitHub without a separate request.
 
 Source: [PRD-0007](../prd/0007-phase-skill-bundles.md)
 
 Decision: [ADR-0008](../adr/0008-phase-skill-bundles.md)
 
 Each slice follows one red → green cycle through a public Rowan seam.
+
+## Progress: Slice 5 verified at v0.10.1 (recorded after the fact, 2026-09-25)
+
+The cross-repository handoff ran against the host in this workspace, at the
+artifact the release pipeline produces:
+
+- Packing both packages the way `scripts/publish.ts` does — rewrite
+  `workspace:*` to the released versions, then `npm pack` — and installing the
+  agent tarball into a clean project resolves `@rowan-agent/models` from the
+  registry. The artifact carries no absolute or cross-repository path.
+- The packed artifact exposes the intended loader and types: `loadPhase`
+  returns a Phase whose direct child `SKILL.md` directories arrive as
+  `phase.skills`, `loadPhases` resolves the registry, and `loadSkill` and
+  `loadPhaseSettings` behave as documented.
+- A plain `npm pack` of the working tree is *not* installable: it keeps
+  `workspace:*` dependencies and npm rejects them with `EUNSUPPORTEDPROTOCOL`.
+  The rewrite in the publish script is what makes the handoff artifact
+  consumable, and the pack step does not do it.
 
 ## Progress (recorded after the fact, 2026-09-24)
 

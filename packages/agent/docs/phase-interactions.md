@@ -7,7 +7,7 @@ Shipped additive Rowan Runtime API. See
 [PRD-0009](../../../docs/prd/0009-suspendable-phase-interactions.md), and the
 [implementation slices](../../../docs/issues/0009-suspendable-phase-interaction-slices.md).
 
-The current Rowan baseline is `v0.9.7`. The contract is generic and does not
+The current Rowan baseline is `v0.10.1`. The contract is generic and does not
 define ACP or any other host protocol.
 
 ## Purpose

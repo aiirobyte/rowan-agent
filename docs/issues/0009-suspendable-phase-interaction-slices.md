@@ -8,7 +8,7 @@ Source: [PRD-0009](../prd/0009-suspendable-phase-interactions.md)
 
 Decision: [ADR-0010](../adr/0010-suspendable-phase-interaction-driver.md)
 
-The current Rowan baseline is `v0.9.7`. Each slice is one red → green cycle
+The current Rowan baseline is `v0.10.1`. Each slice is one red → green cycle
 through a public Runtime seam. Host-specific ACP or Provider work is outside
 these Rowan slices.
 
@@ -16,6 +16,25 @@ The shipped local boundary is typed Interaction request/answer, durable
 suspension and checkpoint recovery, and cancellation. Activity streams,
 Session/Channel grouping, and deadline policy remain host-owned; Mori
 implements those concerns for ACP Session Groups.
+
+## Progress: Slice 7 verified at v0.10.1 (recorded after the fact, 2026-09-25)
+
+Slice 7 is the verification and delivery slice, and it holds at `v0.10.1`:
+
+- `test/runtime/phase-interactions.test.ts`,
+  `test/runtime/durable-store.test.ts`,
+  `test/runtime/sqlite-durable-store.test.ts` and
+  `test/public-exports.test.ts` pass (26 tests), together with the complete
+  package suite, `tsc`, `bun run build:packages` and `git diff --check`.
+- The public package exports the generic API only:
+  `PhaseInteractionBoundary`, `PhaseInteractionCancelledError`, and the
+  `PhaseInteraction*` types; no Channel, Session, or deadline primitive exists in
+  `packages/*/src`.
+- `packages/agent/docs/phase-interactions.md` matches the shipped contract, and
+  its baseline now names this release.
+- The host consumes the seam without Rowan-specific protocol dependencies: Mori
+  answers Interactions through the generic `PhaseInteractionDriver` and keeps
+  ACP Session grouping on its own side.
 
 ## Progress (recorded after the fact, 2026-09-24)
 
