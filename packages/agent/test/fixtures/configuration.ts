@@ -11,12 +11,6 @@ export const EMPTY_VIEW: ResourceView = { agents: [], tools: [], skills: [], pha
 /** The source a test's own resources are registered under. */
 export const TEST_SOURCE = "test.source";
 
-/**
- * The source the Runtime registers its core Tool and Phases under. A view that
- * needs the route Tool or the core Phases must list it.
- */
-export const CORE_SOURCE = "rowan.core";
-
 type Loaded<T extends (input: never) => unknown> =
   NonNullable<Parameters<T>[0]["values"]>[number];
 type SeededResources = Readonly<{
@@ -37,7 +31,7 @@ type SeededResources = Readonly<{
  */
 export async function seedResources(
   runtime: AgentRuntime,
-  input: SeededResources & Readonly<{ core?: boolean }> = {},
+  input: SeededResources = {},
 ): Promise<ResourceView> {
   const seeded: Array<keyof SeededResources> = [];
   if (input.agents?.length) {
@@ -57,11 +51,11 @@ export async function seedResources(
     seeded.push("tools");
   }
   // A view may only name sources that exist for a kind. The Runtime's own
-  // assembly supplies the core Tools; the core source is listed for its Phases.
-  const ids = (kind: keyof SeededResources): readonly string[] => {
-    const fromCore = input.core && kind === "phases" ? [CORE_SOURCE] : [];
-    return seeded.includes(kind) ? [...fromCore, TEST_SOURCE] : fromCore;
-  };
+  // sources — `rowan.core` with the core Phases, `rowan.extensions` with an
+  // Extension's contributions — are implicit in every view, so a view never
+  // names them.
+  const ids = (kind: keyof SeededResources): readonly string[] =>
+    seeded.includes(kind) ? [TEST_SOURCE] : [];
   return { agents: ids("agents"), tools: ids("tools"), skills: ids("skills"), phases: ids("phases") };
 }
 
@@ -109,8 +103,6 @@ export async function createAgentWith(
     skills?: readonly Loaded<AgentRuntime["loadSkills"]>[];
     phases?: readonly Phase[];
     tools?: readonly Loaded<AgentRuntime["loadTools"]>[];
-    /** List the Runtime's core Tool and Phase source in the view. */
-    core?: boolean;
     maxAttempts?: number;
     contexts?: AgentConfiguration["contexts"];
     additionalContexts?: AgentConfiguration["additionalContexts"];
@@ -121,7 +113,6 @@ export async function createAgentWith(
   const definition = testDefinition(input.definition);
   const view = await seedResources(runtime, {
     agents: [definition],
-    core: input.core === true,
     ...(input.skills ? { skills: input.skills } : {}),
     ...(input.phases ? { phases: input.phases } : {}),
     ...(input.tools ? { tools: input.tools } : {}),
@@ -158,7 +149,6 @@ export function createPhaseAgent(
     identity: input.identity,
     stream: input.stream,
     phases: values,
-    core: true,
     definition: { phases: { entryPhaseId: input.phases.entryPhaseId, phaseIds: values.map(({ name }) => name) } },
     ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
     ...(input.options === undefined ? {} : { options: input.options }),

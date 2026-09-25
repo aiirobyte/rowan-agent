@@ -23,7 +23,6 @@ function phaseAgent(
   return createAgentWith(runtime, {
     identity: input.identity,
     stream: input.stream,
-    core: true,
     ...(map ? { phases: values } : {}),
     ...(input.skills ? { skills: input.skills } : {}),
     ...(map ? {

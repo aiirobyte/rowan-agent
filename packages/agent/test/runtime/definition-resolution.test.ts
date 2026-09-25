@@ -28,7 +28,6 @@ test("Runtime resolves Definition names after selected Extension assembly", asyn
   try {
     const agentId = await createAgentWith(runtime, {
       identity: "definition-extension-selection-v1",
-      core: true,
       definition: {
         name: "extension-agent",
         description: "Use one selected Extension Tool.",
@@ -82,7 +81,6 @@ test("Runtime resolves Definition resource names and warns for missing candidate
     const agentId = await createAgentWith(runtime, {
       identity: "definition-resource-selection-v1",
       stream,
-      core: true,
       definition: {
         name: "reviewer",
         description: "Review the current change.",
@@ -120,7 +118,6 @@ test("Definition Bundle Skills override same-name Scope Skills", async () => {
   try {
     const agentId = await createAgentWith(runtime, {
       identity: "definition-bundle-skills-v1",
-      core: true,
       definition: {
         name: "bundle-agent",
         description: "Use Scope and parent Bundle guidance.",
@@ -191,7 +188,6 @@ test("Runtime selects structured Context Candidates for the System Prompt", asyn
   try {
     const agentId = await createAgentWith(runtime, {
       identity: "definition-context-selection-v1",
-      core: true,
       definition: {
         name: "context-agent",
         description: "Use selected structured Context.",
@@ -245,7 +241,6 @@ test("Phase restrictions use the shared warning-aware resolver", async () => {
   try {
     const agentId = await createAgentWith(runtime, {
       identity: "phase-resource-selection-v1",
-      core: true,
       definition: {
         name: "reviewer",
         description: "Review the current change.",
@@ -291,7 +286,6 @@ test("Definition may explicitly select Rowan's built-in default Phase", async ()
     const agentId = await createAgentWith(runtime, {
       identity: "built-in-default-entry-v1",
       definition,
-      core: true,
       stream: async function* () {
         yield {
           type: "text_delta" as const,
@@ -327,7 +321,6 @@ test("Runtime warns and falls back when selected resources and entry Phase names
     const agentId = await createAgentWith(runtime, {
       identity: "definition-missing-selection-v1",
       definition,
-      core: true,
       stream: async function* () {
         modelCalls += 1;
         yield {
@@ -393,7 +386,6 @@ test("Runtime rejects a Phase name contributed by both the host and an Extension
   try {
     const agentId = await createAgentWith(runtime, {
       identity: "definition-duplicate-phase-v1",
-      core: true,
       definition: {
         name: "duplicate-phase-agent",
         description: "Reject ambiguous Phases.",
@@ -451,7 +443,6 @@ test("an Input Request continuation remains pinned after the Agent Configuration
         phases: { entryPhaseId: "question", phaseIds: ["question"] },
       }],
       phases: [phase],
-      core: true,
     });
     return configuration({
       identity: `definition-snapshot-${revision}`,

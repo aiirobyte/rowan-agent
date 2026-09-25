@@ -109,7 +109,6 @@ test("Runtime invocation catalog applies policy after authored selection and kee
       agents: [definition],
       skills: [skill],
       phases: [authored],
-      core: true,
     });
     const agentId = await runtime.createAgent(configuration({
       identity: "core-invocation-catalog-v1",

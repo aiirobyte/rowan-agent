@@ -23,7 +23,6 @@ function observeAgent(
   return createAgentWith(runtime, {
     identity: "observe-boundaries-v1",
     stream,
-    core: true,
     ...(input.phases ? { phases } : {}),
     ...(input.tools ? { tools: input.tools } : {}),
     ...(input.phases ? {

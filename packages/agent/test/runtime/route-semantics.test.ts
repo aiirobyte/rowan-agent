@@ -20,7 +20,6 @@ function routeAgent(
   return createAgentWith(runtime, {
     identity: "route-semantics-v1",
     stream,
-    core: true,
     ...(phases ? {
       phases: values,
       definition: {

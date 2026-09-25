@@ -23,7 +23,7 @@ function simpleAgent(
   options: NonNullable<Parameters<AgentRuntime["createAgent"]>[1]> = {},
   overrides: SimpleAgentOverrides = {},
 ) {
-  return createAgentWith(runtime, { identity: "runtime-test-v1", stream, core: true, options, ...overrides });
+  return createAgentWith(runtime, { identity: "runtime-test-v1", stream, options, ...overrides });
 }
 
 test("AgentRuntime contains expired ownership at the background pump boundary", async () => {
@@ -68,7 +68,7 @@ test("AgentRuntime replays Agent creation when the caller supplies a stable idem
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
   try {
     const definition = testDefinition();
-    const view = await seedResources(runtime, { agents: [definition], core: true });
+    const view = await seedResources(runtime, { agents: [definition] });
     const config = configuration({
       identity: "runtime-test-v1",
       definition: definition.name,
@@ -661,7 +661,6 @@ test("AgentRuntime spills large custom Tool Results to the Agent archive", async
     const agentId = await createAgentWith(runtime, {
       identity: "runtime-test-v1",
       stream,
-      core: true,
       tools: [tool],
       options: { idempotencyKey: "large-tool-agent" },
     });
