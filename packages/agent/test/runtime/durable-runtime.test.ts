@@ -8,26 +8,22 @@ import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
-import { createAgentWith } from "../fixtures/configuration";
+import { configuration, createAgentWith, createPhaseAgent, seedResources, testDefinition } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
 
-/** The same Agent as `simpleConfig`, with its Definition registered as a source. */
+type SimpleAgentOverrides = Readonly<Pick<
+  NonNullable<Parameters<typeof createAgentWith>[1]>,
+  "definition" | "model" | "tools" | "skills" | "phases" | "contexts" | "additionalContexts"
+>>;
+
+/** The Agent every test in this file creates unless it says otherwise. */
 function simpleAgent(
   runtime: AgentRuntime,
   stream: StreamFn,
   options: NonNullable<Parameters<AgentRuntime["createAgent"]>[1]> = {},
+  overrides: SimpleAgentOverrides = {},
 ) {
-  return createAgentWith(runtime, { identity: "runtime-test-v1", stream, core: true, options });
-}
-
-function simpleConfig(stream: StreamFn): AgentConfig {
-  return {
-    identity: "runtime-test-v1",
-    model: { provider: "test", id: "model" },
-    stream,
-    definition: { name: "test", description: "Test Agent.", prompt: "Test" },
-    resources: { tools: [], skills: [] },
-  } as AgentConfig;
+  return createAgentWith(runtime, { identity: "runtime-test-v1", stream, core: true, options, ...overrides });
 }
 
 test("AgentRuntime contains expired ownership at the background pump boundary", async () => {
@@ -71,7 +67,15 @@ test("AgentRuntime replays Agent creation when the caller supplies a stable idem
   const stream: StreamFn = async function* () { yield { type: "done" }; };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
   try {
-    const config = simpleConfig(stream);
+    const definition = testDefinition();
+    const view = await seedResources(runtime, { agents: [definition], core: true });
+    const config = configuration({
+      identity: "runtime-test-v1",
+      definition: definition.name,
+      view,
+      model: { provider: "test", id: "model" },
+      stream,
+    });
     const first = await runtime.createAgent(config, { idempotencyKey: "create-request-1" });
     const replay = await runtime.createAgent(config, { idempotencyKey: "create-request-1" });
 
@@ -110,10 +114,9 @@ test("AgentRuntime injects additional Contexts into the System Prompt", async ()
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "host-context-agent" }, {
       additionalContexts: [{ name: "explicit", value: { instruction: "Review carefully." } }],
-    }, { idempotencyKey: "host-context-agent" });
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "host-context-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
 
@@ -201,10 +204,12 @@ test("AgentRuntime allows manual compaction while a Run waits for input", async 
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
-      resources: { tools: [], skills: [], phases: { phases, entryPhaseId: "plan" } },
-    } as unknown as AgentConfig, { idempotencyKey: "input-compact-agent" });
+    const agentId = await createPhaseAgent(runtime, {
+      identity: "runtime-test-v1",
+      stream,
+      phases: { phases, entryPhaseId: "plan" },
+      options: { idempotencyKey: "input-compact-agent" },
+    });
     const waiting = await runtime.start(agentId, "hello", { idempotencyKey: "input-compact-run" });
     await expect(waiting.wait()).resolves.toMatchObject({ type: "input_required" });
 
@@ -271,10 +276,7 @@ test("AgentRuntime routes an over-threshold queued Run through automatic compact
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
-      model: { provider: "test", id: "model", contextWindow: 20_000 },
-    } as AgentConfig, {
+    const agentId = await simpleAgent(runtime, stream, {
       idempotencyKey: "auto-compact-agent",
       historySeed: [{
         id: "seed-user" as never,
@@ -285,7 +287,7 @@ test("AgentRuntime routes an over-threshold queued Run through automatic compact
         sequenceWithinRun: 0,
         createdAt: "2026-08-14T00:00:00.000Z",
       }],
-    });
+    }, { model: { provider: "test", id: "model", contextWindow: 20_000 } });
     const run = await runtime.start(agentId, "next", { idempotencyKey: "auto-compact-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(calls).toHaveLength(2);
@@ -606,12 +608,9 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
-      resources: { tools: [tool], skills: [] },
-    } as unknown as AgentConfig, {
+    const agentId = await simpleAgent(runtime, stream, {
       idempotencyKey: "agent-tool-lifecycle",
-    });
+    }, { tools: [tool] });
     const run = await runtime.start(agentId, "use lookup", { idempotencyKey: "run-tool-lifecycle" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(modelCalls).toBe(2);
@@ -754,10 +753,7 @@ test("AgentRuntime atomically commits one assistant Tool-use Message for a multi
 
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
-      resources: { tools, skills: [] },
-    } as unknown as AgentConfig, { idempotencyKey: "agent-multi-tool" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "agent-multi-tool" }, { tools });
     const run = await runtime.start(agentId, "use both", { idempotencyKey: "run-multi-tool" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(modelCalls).toBe(2);
@@ -816,10 +812,7 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
-      resources: { tools: [tool], skills: [] },
-    } as unknown as AgentConfig, { idempotencyKey: "agent-tool-progress" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "agent-tool-progress" }, { tools: [tool] });
     const run = await runtime.start(agentId, "use lookup", { idempotencyKey: "run-tool-progress" });
     const observed: RunEvent[] = [];
     const iterator = run.observe()[Symbol.asyncIterator]();
@@ -899,10 +892,17 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
     bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
   });
   try {
+    // This site cannot take the Resource View yet: an Extension's Tool is
+    // implicit in every view while the assembly still appends its own copy of it,
+    // so the two collide. It moves once the assemblies collapse and the view
+    // becomes the only source.
     const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
+      identity: "runtime-test-v1",
+      model: { provider: "test", id: "model" },
+      stream,
+      definition: { name: "test", description: "Test Agent.", prompt: "Test" },
       resources: { tools: [], skills: [] },
-    }, { idempotencyKey: "agent-extension-assembly" });
+    } as unknown as AgentConfig, { idempotencyKey: "agent-extension-assembly" });
     const run = await runtime.start(agentId, "use extension", { idempotencyKey: "run-extension-assembly" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(beforeCalls).toBe(1);
@@ -954,11 +954,12 @@ test("AgentRuntime resumes an input-required Run without replaying its original 
   const store = new InMemoryStore();
   const runtime = await AgentRuntime.init({ store, concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(stream),
+    const agentId = await createPhaseAgent(runtime, {
       identity: "runtime-input-v1",
-      resources: { tools: [], skills: [], phases: { phases, entryPhaseId: "plan" } },
-    } as unknown as AgentConfig, { idempotencyKey: "agent-input" });
+      stream,
+      phases: { phases, entryPhaseId: "plan" },
+      options: { idempotencyKey: "agent-input" },
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "run-input" });
     const first = await run.wait();
     expect(first.type).toBe("input_required");
@@ -1007,15 +1008,12 @@ test("input-required Phase survives Runtime restart and remains visible at the p
     const firstStore = new SqliteStore(filename);
     const firstRuntime = await AgentRuntime.init({ store: firstStore, concurrency: 1 });
     try {
-      const agentId = await firstRuntime.createAgent({
-        ...simpleConfig(stream),
+      const agentId = await createPhaseAgent(firstRuntime, {
         identity: "phase-boundary-v1",
-        resources: {
-          tools: [],
-          skills: [],
-          phases: { phases, entryPhaseId: "task-planning" },
-        },
-      } as unknown as AgentConfig, { idempotencyKey: "phase-boundary-agent" });
+        stream,
+        phases: { phases, entryPhaseId: "task-planning" },
+        options: { idempotencyKey: "phase-boundary-agent" },
+      });
       const run = await firstRuntime.start(agentId, "hello", { idempotencyKey: "phase-boundary-run" });
       runId = run.id;
       const boundary = await run.wait();
@@ -1064,11 +1062,12 @@ test("Phase callbacks receive the durable Run execution identity", async () => {
   }]]);
   const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
   try {
-    const agentId = await runtime.createAgent({
-      ...simpleConfig(async function* () { yield { type: "done", response: { content: "unused", stopReason: "stop" } }; }),
+    const agentId = await createPhaseAgent(runtime, {
       identity: "phase-execution-identity",
-      resources: { tools: [], skills: [], phases: { phases, entryPhaseId: "work" } },
-    } as unknown as AgentConfig, { idempotencyKey: "phase-execution-agent" });
+      stream: async function* () { yield { type: "done", response: { content: "unused", stopReason: "stop" } }; },
+      phases: { phases, entryPhaseId: "work" },
+      options: { idempotencyKey: "phase-execution-agent" },
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-execution-run" });
     expect((await run.wait()).type).toBe("completed");
     expect(observed).toMatchObject({ agentId, runId: run.id });
