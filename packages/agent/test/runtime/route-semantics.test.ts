@@ -1,30 +1,36 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, type Tool } from "../../src/runtime";
 import type { Phase } from "../../src/harness/phases/types";
 import { createDefaultPhase, createStopPhase } from "../../src/harness/phases/core-phases";
 import { createRouteTool } from "../../src/harness/tools/route-tool";
+import { createAgentWith } from "../fixtures/configuration";
 import { routeResponse, stopResponse } from "./route-test-utils";
 
-function config(
+function routeAgent(
+  runtime: AgentRuntime,
   stream: StreamFn,
   phases?: { phases: Map<string, Phase>; entryPhaseId: string | null },
   maxAttempts?: number,
-  tools: AgentConfig["resources"]["tools"] = [],
-): AgentConfig {
-  return {
+  tools: readonly Tool[] = [],
+  options: { idempotencyKey?: string } = {},
+) {
+  const values = phases ? [...phases.phases.values()] : [];
+  return createAgentWith(runtime, {
     identity: "route-semantics-v1",
-    model: { provider: "test", id: "model" },
     stream,
-    definition: { name: "test", description: "Test Agent.", prompt: "Test" },
-    resources: {
-      tools,
-      skills: [],
-      ...(phases ? { phases } : {}),
-    },
+    core: true,
+    ...(phases ? {
+      phases: values,
+      definition: {
+        phases: { entryPhaseId: phases.entryPhaseId, phaseIds: values.map(({ name }) => name) },
+      },
+    } : {}),
+    ...(tools.length > 0 ? { tools } : {}),
     ...(maxAttempts === undefined ? {} : { maxAttempts }),
-  } as unknown as AgentConfig;
+    options,
+  });
 }
 
 function workPhase(overrides: Partial<Phase> = {}): Phase {
@@ -45,7 +51,7 @@ test("route(stop) completes even when the final response has no text", async () 
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config(stream), { idempotencyKey: "route-empty-stop-agent" });
+    const agentId = await routeAgent(runtime, stream, undefined, undefined, [], { idempotencyKey: "route-empty-stop-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-empty-stop-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
   } finally {
@@ -81,14 +87,14 @@ test("route(stop) executes the Stop Phase with a concise model conclusion", asyn
       response: { content: "任务已完成，相关结果已经整理好。", stopReason: "stop" },
     };
   };
-  const phases = new Map<string, Phase>([
-    ["work", workPhase()],
-    ["stop", createStopPhase()],
-  ]);
+  // The Stop Phase is Rowan core's; a source cannot claim its name.
+  const phases = new Map<string, Phase>([["work", workPhase()]]);
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, { phases, entryPhaseId: "work" }),
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "work" },
+      undefined, [],
       { idempotencyKey: "route-stop-phase-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-stop-phase-run" });
@@ -121,8 +127,10 @@ test("route to the current non-default Phase performs one self-loop iteration", 
   const phases = new Map([["work", workPhase()]]) as Map<string, Phase>;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, { phases, entryPhaseId: "work" }),
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "work" },
+      undefined, [],
       { idempotencyKey: "route-self-loop-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-self-loop-run" });
@@ -147,8 +155,10 @@ test("route(default) is available from every Phase", async () => {
   const phases = new Map([["work", workPhase()]]) as Map<string, Phase>;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, { phases, entryPhaseId: "work" }),
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "work" },
+      undefined, [],
       { idempotencyKey: "route-default-from-work-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-default-from-work-run" });
@@ -171,8 +181,10 @@ test("a mixed stop route is invalid and leaves the current Phase waiting for inp
   const phases = new Map([["work", workPhase()]]) as Map<string, Phase>;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, { phases, entryPhaseId: "work" }),
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "work" },
+      undefined, [],
       { idempotencyKey: "route-invalid-mixed-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-invalid-mixed-run" });
@@ -195,8 +207,10 @@ test("invalid ordinary route targets are ignored when no valid target remains", 
   const phases = new Map([["work", workPhase()]]) as Map<string, Phase>;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, { phases, entryPhaseId: "work" }),
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "work" },
+      undefined, [],
       { idempotencyKey: "route-invalid-target-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-invalid-target-run" });
@@ -239,8 +253,9 @@ test("a route sharing a response with an ordinary Tool is ignored until the next
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(stream, undefined, undefined, [lookup]),
+    const agentId = await routeAgent(
+      runtime,
+      stream, undefined, undefined, [lookup],
       { idempotencyKey: "route-mixed-tool-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-mixed-tool-run" });
@@ -268,8 +283,9 @@ test("maxAttempts suspends an autonomous self-loop instead of implicitly stoppin
   const phases = new Map([["work", phase]]) as Map<string, Phase>;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(
-      config(async function* () { yield { type: "done" }; }, { phases, entryPhaseId: "work" }, 2),
+    const agentId = await routeAgent(
+      runtime,
+      async function* () { yield { type: "done" }; }, { phases, entryPhaseId: "work" }, 2, [],
       { idempotencyKey: "route-max-attempts-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-max-attempts-run" });

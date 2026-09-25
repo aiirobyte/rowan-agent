@@ -5,21 +5,34 @@ import Type from "typebox";
 import {
   AgentRuntime,
   InMemoryStore,
-  type AgentConfig,
   type EventCursor,
   type RunEvent,
+  type Tool,
   type ToolInvocationContext,
 } from "../../src";
+import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
 
-function config(stream: StreamFn): AgentConfig {
-  return {
+function observeAgent(
+  runtime: AgentRuntime,
+  stream: StreamFn,
+  input: Readonly<{ phases?: Map<string, Phase>; entryPhaseId?: string | null; tools?: readonly Tool[] }> = {},
+  options: { idempotencyKey?: string } = {},
+) {
+  const phases = input.phases ? [...input.phases.values()] : [];
+  return createAgentWith(runtime, {
     identity: "observe-boundaries-v1",
-    model: { provider: "test", id: "model" },
     stream,
-    definition: { name: "test", description: "Test Agent.", prompt: "Test" },
-    resources: { tools: [], skills: [] },
-  };
+    core: true,
+    ...(input.phases ? { phases } : {}),
+    ...(input.tools ? { tools: input.tools } : {}),
+    ...(input.phases ? {
+      definition: {
+        phases: { entryPhaseId: input.entryPhaseId ?? null, phaseIds: phases.map(({ name }) => name) },
+      },
+    } : {}),
+    options,
+  });
 }
 
 function cursorAfter(cursor: EventCursor): EventCursor {
@@ -39,7 +52,7 @@ test("AgentRun.observe rejects an Event cursor beyond the Store waterline", asyn
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config(stream), { idempotencyKey: "cursor-agent" });
+    const agentId = await observeAgent(runtime, stream, {}, { idempotencyKey: "cursor-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "cursor-run" });
     await run.wait();
 
@@ -82,9 +95,9 @@ test("AgentRun.observe drains final Phase.Status before the terminal Run event",
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...config(stream),
-      resources: { tools: [], skills: [], phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name } },
+    const agentId = await observeAgent(runtime, stream, {
+      phases: new Map([[phase.name, phase]]),
+      entryPhaseId: phase.name,
     });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-status-terminal-run" });
     const iterator = run.observe()[Symbol.asyncIterator]();
@@ -178,14 +191,12 @@ test("AgentRun.observe keeps the next Execution Attempt's deltas across input_re
   ]);
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...config(stream),
-      resources: {
-        tools: [],
-        skills: [],
-        phases: { phases, entryPhaseId: "plan" },
-      },
-    }, { idempotencyKey: "attempt-agent" });
+    const agentId = await observeAgent(
+      runtime,
+      stream,
+      { phases, entryPhaseId: "plan" },
+      { idempotencyKey: "attempt-agent" },
+    );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "attempt-run" });
     const iterator = run.observe()[Symbol.asyncIterator]();
 
@@ -284,10 +295,7 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent({
-      ...config(stream),
-      resources: { tools: [tool], skills: [] },
-    }, { idempotencyKey: "reporter-agent" });
+    const agentId = await observeAgent(runtime, stream, { tools: [tool] }, { idempotencyKey: "reporter-agent" });
     const run = await runtime.start(agentId, "use lookup", { idempotencyKey: "reporter-run" });
     const iterator = run.observe()[Symbol.asyncIterator]();
 
@@ -348,7 +356,7 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config(stream), { idempotencyKey: "slow-agent" });
+    const agentId = await observeAgent(runtime, stream, {}, { idempotencyKey: "slow-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "slow-run" });
     const iterator = run.observe()[Symbol.asyncIterator]();
 
@@ -396,7 +404,7 @@ test("AgentRun.observe does not read a Run snapshot per streamed delta", async (
   const counted = countingStore();
   const runtime = await AgentRuntime.init({ store: counted.store, concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config(stream), { idempotencyKey: "streaming-observer-agent" });
+    const agentId = await observeAgent(runtime, stream, {}, { idempotencyKey: "streaming-observer-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "streaming-observer-run" });
 
     // A queued delta may coalesce with the previous one, so the observation is

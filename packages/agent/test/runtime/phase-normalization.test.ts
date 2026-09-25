@@ -1,7 +1,39 @@
 import { expect, test } from "bun:test";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type AgentConfig } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime";
 import type { Phase, PhaseRegistry } from "../../src/harness/phases/types";
+import { createAgentWith } from "../fixtures/configuration";
+
+/** An Agent whose Phases are registered the Host way, with core in the view. */
+function phaseAgent(
+  runtime: AgentRuntime,
+  input: Readonly<{
+    identity: string;
+    stream: StreamFn;
+    phases?: Map<string, Phase> | Readonly<{ phases: Map<string, Phase>; entryPhaseId: string | null }>;
+    skills?: readonly Parameters<typeof createAgentWith>[1]["skills"] extends readonly (infer Skill)[] | undefined ? Skill : never;
+    entryPhaseId?: string | null;
+    options?: Readonly<{ idempotencyKey?: string }>;
+  }>,
+) {
+  const registry = input.phases;
+  const map = registry instanceof Map ? registry : registry?.phases;
+  const values = map ? [...map.values()] : [];
+  const entry = input.entryPhaseId ?? (registry instanceof Map ? null : registry?.entryPhaseId ?? null);
+  return createAgentWith(runtime, {
+    identity: input.identity,
+    stream: input.stream,
+    core: true,
+    ...(map ? { phases: values } : {}),
+    ...(input.skills ? { skills: input.skills } : {}),
+    ...(map ? {
+      definition: {
+        phases: { entryPhaseId: entry, phaseIds: values.map(({ name }) => name) },
+      },
+    } : {}),
+    ...(input.options === undefined ? {} : { options: input.options }),
+  });
+}
 
 const customPhase: Phase = {
   name: "custom",
@@ -42,23 +74,11 @@ test("Runtime falls back to its built-in default when a custom Phase registry ha
     concurrency: 1,
   });
   try {
-    const config = {
+    const agentId = await phaseAgent(runtime, {
       identity: "phase-normalization-default-v1",
-      model: { provider: "test", id: "model" },
       stream,
-      definition: {
-        name: "test",
-        description: "Test Agent.",
-        prompt: "Test",
-      },
-      resources: {
-        tools: [],
-        skills: [],
-        phases,
-      },
-    } as unknown as AgentConfig;
-    const agentId = await runtime.createAgent(config, {
-      idempotencyKey: "phase-normalization-default-agent",
+      phases,
+      options: { idempotencyKey: "phase-normalization-default-agent" },
     });
     const run = await runtime.start(agentId, "hello", {
       idempotencyKey: "phase-normalization-default-run",
@@ -93,26 +113,12 @@ test("Runtime preserves an explicit custom Phase entry", async () => {
     concurrency: 1,
   });
   try {
-    const config = {
+    const agentId = await phaseAgent(runtime, {
       identity: "phase-normalization-custom-v1",
-      model: { provider: "test", id: "model" },
       stream,
-      definition: {
-        name: "test",
-        description: "Test Agent.",
-        prompt: "Test",
-      },
-      resources: {
-        tools: [],
-        skills: [],
-        phases: {
-          phases: new Map([[phase.name, phase]]),
-          entryPhaseId: phase.name,
-        },
-      },
-    } as unknown as AgentConfig;
-    const agentId = await runtime.createAgent(config, {
-      idempotencyKey: "phase-normalization-custom-agent",
+      phases: new Map([[phase.name, phase]]),
+      entryPhaseId: phase.name,
+      options: { idempotencyKey: "phase-normalization-custom-agent" },
     });
     const run = await runtime.start(agentId, "hello", {
       idempotencyKey: "phase-normalization-custom-run",
@@ -177,26 +183,13 @@ test("default keeps root Skills while a file Phase adds its Bundle Skills", asyn
     concurrency: 1,
   });
   try {
-    const config = {
+    const agentId = await phaseAgent(runtime, {
       identity: "phase-normalization-skill-scope-v1",
-      model: { provider: "test", id: "model" },
       stream,
-      definition: {
-        name: "test",
-        description: "Test Agent.",
-        prompt: "Test",
-      },
-      resources: {
-        tools: [],
-        skills: [rootSkill],
-        phases: {
-          phases: new Map([[phase.name, phase]]),
-          entryPhaseId: phase.name,
-        },
-      },
-    } as unknown as AgentConfig;
-    const agentId = await runtime.createAgent(config, {
-      idempotencyKey: "phase-normalization-skill-scope-agent",
+      skills: [rootSkill],
+      phases: new Map([[phase.name, phase]]),
+      entryPhaseId: phase.name,
+      options: { idempotencyKey: "phase-normalization-skill-scope-agent" },
     });
     const run = await runtime.start(agentId, "hello", {
       idempotencyKey: "phase-normalization-skill-scope-run",
@@ -288,23 +281,12 @@ test("parallel file Phases add their Bundle Skills to root Skills", async () => 
     concurrency: 1,
   });
   try {
-    const config = {
+    const agentId = await phaseAgent(runtime, {
       identity: "phase-normalization-parallel-skills-v1",
-      model: { provider: "test", id: "model" },
       stream: async function* () { yield { type: "done" }; },
-      definition: {
-        name: "test",
-        description: "Test Agent.",
-        prompt: "Test",
-      },
-      resources: {
-        tools: [],
-        skills: [rootSkill],
-        phases,
-      },
-    } as unknown as AgentConfig;
-    const agentId = await runtime.createAgent(config, {
-      idempotencyKey: "phase-normalization-parallel-skills-agent",
+      skills: [rootSkill],
+      phases,
+      options: { idempotencyKey: "phase-normalization-parallel-skills-agent" },
     });
     const run = await runtime.start(agentId, "hello", {
       idempotencyKey: "phase-normalization-parallel-skills-run",
@@ -322,9 +304,7 @@ test("parallel file Phases add their Bundle Skills to root Skills", async () => 
 });
 
 test("Runtime rejects a Context Phase that collides with its built-in default", async () => {
-  let modelCalls = 0;
   const stream: StreamFn = async function* () {
-    modelCalls += 1;
     yield { type: "done" };
   };
   const phase: Phase = {
@@ -336,39 +316,14 @@ test("Runtime rejects a Context Phase that collides with its built-in default", 
     concurrency: 1,
   });
   try {
-    const config = {
+    // The registry refuses the reserved name at registration, before a Run exists.
+    await expect(phaseAgent(runtime, {
       identity: "phase-normalization-collision-v1",
-      model: { provider: "test", id: "model" },
       stream,
-      definition: {
-        name: "test",
-        description: "Test Agent.",
-        prompt: "Test",
-      },
-      resources: {
-        tools: [],
-        skills: [],
-        phases: {
-          phases: new Map([[phase.name, phase]]),
-          entryPhaseId: null,
-        },
-      },
-    } as unknown as AgentConfig;
-    const agentId = await runtime.createAgent(config, {
-      idempotencyKey: "phase-normalization-collision-agent",
-    });
-    const run = await runtime.start(agentId, "hello", {
-      idempotencyKey: "phase-normalization-collision-run",
-    });
-
-    await expect(run.wait()).resolves.toMatchObject({
-      type: "failed",
-      failure: {
-        code: "execution_failed",
-        message: "Configured Phase collides with Rowan built-in Phase \"default\".",
-      },
-    });
-    expect(modelCalls).toBe(0);
+      phases: new Map([[phase.name, phase]]),
+      entryPhaseId: null,
+      options: { idempotencyKey: "phase-normalization-collision-agent" },
+    })).rejects.toThrow(/reserved by Rowan core/);
   } finally {
     await runtime.close();
   }

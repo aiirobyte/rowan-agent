@@ -8,18 +8,20 @@ import {
   pageAgents,
   pageRuns,
 } from "../../src/runtime";
-import type { AgentConfig, AgentRecord, RunRecord } from "../../src/runtime/contracts";
+import type { AgentRecord, RunRecord } from "../../src/runtime/contracts";
+import type { AgentConfiguration } from "../../src/runtime/configuration-snapshot";
+import { EMPTY_VIEW, configuration } from "../fixtures/configuration";
 import type { ContextCandidate } from "../../src/runtime/contracts";
 import type { AgentId, RunId } from "../../src/runtime-events";
 
-function config(identity: string): AgentConfig {
-  return {
+function config(identity: string): AgentConfiguration {
+  return configuration({
     identity,
+    definition: "test",
+    view: EMPTY_VIEW,
     model: { provider: "test", id: "model" },
     stream: async function* () {},
-    definition: { name: "test", description: "Test Agent.", prompt: "system" },
-    resources: { tools: [], skills: [] },
-  } as unknown as AgentConfig;
+  });
 }
 
 test("InMemoryConfigProvider retains immutable Tokens and replays operation IDs", async () => {
@@ -39,25 +41,21 @@ test("InMemoryConfigProvider snapshots structured Context Candidates", async () 
   const agentId = "agent-context" as AgentId;
   const value = { title: "before" };
   const contexts: readonly ContextCandidate[] = [{ name: "project_context", value }];
-  const input: AgentConfig = {
+  const input = configuration({
     identity: "context-v1",
+    definition: "test",
+    view: EMPTY_VIEW,
     model: { provider: "test", id: "model" },
     stream: async function* () {},
-    definition: {
-      name: "test",
-      description: "Test Agent.",
-      prompt: "system",
-      contexts: ["project_context"],
-    },
-    resources: { tools: [], skills: [], contexts },
-  };
+    contexts,
+  });
   const stored = await provider.put({ agentId, config: input, operationId: "context-op", signal: new AbortController().signal });
   value.title = "after";
   const token = brandConfigToken((stored as { kind: "stored"; token: string }).token);
   const resolution = await provider.resolve({ agentId, token, signal: new AbortController().signal });
   expect(resolution).toMatchObject({
     kind: "available",
-    config: { resources: { contexts: [{ name: "project_context", value: { title: "before" } }] } },
+    config: { contexts: [{ name: "project_context", value: { title: "before" } }] },
   });
 });
 

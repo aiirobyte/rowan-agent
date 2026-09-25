@@ -5,6 +5,9 @@ import type { ResourceView } from "../../src/runtime/resource-registry";
 import type { AgentConfiguration } from "../../src/runtime/configuration-snapshot";
 import type { AgentRuntime, LoadInput } from "../../src/runtime";
 
+/** A view that reads no source. */
+export const EMPTY_VIEW: ResourceView = { agents: [], tools: [], skills: [], phases: [] };
+
 /** The source a test's own resources are registered under. */
 export const TEST_SOURCE = "test.source";
 
@@ -69,6 +72,8 @@ type ConfigurationInput = Readonly<{
   stream?: StreamFn;
   cwd?: string;
   maxAttempts?: number;
+  contexts?: AgentConfiguration["contexts"];
+  additionalContexts?: AgentConfiguration["additionalContexts"];
 }>;
 
 /** Build the configuration request shape the public Runtime seam takes. */
@@ -82,11 +87,57 @@ export function configuration(input: ConfigurationInput): AgentConfiguration {
   } as AgentConfiguration;
 }
 
+/** The Definition a test Agent runs as, unless it says otherwise. */
+export function testDefinition(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
+  return {
+    name: "test",
+    description: "Test Agent.",
+    prompt: "Test",
+    ...overrides,
+  };
+}
+
+/** Create one Agent from resources registered the Host way. */
+export async function createAgentWith(
+  runtime: AgentRuntime,
+  input: Readonly<{
+    identity: string;
+    stream: StreamFn;
+    definition?: Partial<AgentDefinition>;
+    skills?: readonly Loaded<AgentRuntime["loadSkills"]>[];
+    phases?: readonly Phase[];
+    tools?: readonly Loaded<AgentRuntime["loadTools"]>[];
+    /** List the Runtime's core Tool and Phase source in the view. */
+    core?: boolean;
+    maxAttempts?: number;
+    contexts?: AgentConfiguration["contexts"];
+    options?: Readonly<{ idempotencyKey?: string }>;
+  }>,
+): ReturnType<AgentRuntime["createAgent"]> {
+  const definition = testDefinition(input.definition);
+  const view = await seedResources(runtime, {
+    agents: [definition],
+    core: input.core === true,
+    ...(input.skills ? { skills: input.skills } : {}),
+    ...(input.phases ? { phases: input.phases } : {}),
+    ...(input.tools ? { tools: input.tools } : {}),
+  });
+  return runtime.createAgent(configuration({
+    identity: input.identity,
+    definition: definition.name,
+    view,
+    model: { provider: "test", id: "model" },
+    stream: input.stream,
+    ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
+    ...(input.contexts === undefined ? {} : { contexts: input.contexts }),
+  }), input.options ?? {});
+}
+
 /**
  * Create one Agent whose Definition selects the given Phases as its entry, with
- * the Phases and the core resources registered the Host way.
+ * the core resources in the view.
  */
-export async function createPhaseAgent(
+export function createPhaseAgent(
   runtime: AgentRuntime,
   input: Readonly<{
     identity: string;
@@ -97,22 +148,13 @@ export async function createPhaseAgent(
   }>,
 ): ReturnType<AgentRuntime["createAgent"]> {
   const values = [...input.phases.phases.values()];
-  const definition: AgentDefinition = {
-    name: "test",
-    description: "Test Agent.",
-    prompt: "Test",
-    phases: {
-      entryPhaseId: input.phases.entryPhaseId,
-      phaseIds: values.map(({ name }) => name),
-    },
-  };
-  const view = await seedResources(runtime, { agents: [definition], phases: values, core: true });
-  return runtime.createAgent(configuration({
+  return createAgentWith(runtime, {
     identity: input.identity,
-    definition: definition.name,
-    view,
-    model: { provider: "test", id: "model" },
     stream: input.stream,
+    phases: values,
+    core: true,
+    definition: { phases: { entryPhaseId: input.phases.entryPhaseId, phaseIds: values.map(({ name }) => name) } },
     ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
-  }), input.options ?? {});
+    ...(input.options === undefined ? {} : { options: input.options }),
+  });
 }
