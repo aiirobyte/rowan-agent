@@ -2,6 +2,8 @@ import { expect, spyOn, test } from "bun:test";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore, type AgentConfig, type ContextCandidate } from "../../src/runtime";
+import type { AgentDefinition } from "../../src/harness/definitions";
+import { createAgentWith } from "../fixtures/configuration";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { stopResponse } from "./route-test-utils";
@@ -298,28 +300,28 @@ test("Phase restrictions use the shared warning-aware resolver", async () => {
 
 test("Definition may explicitly select Rowan's built-in default Phase", async () => {
   const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
-  const config = {
-    identity: "built-in-default-entry-v1",
-    definition: {
-      name: "default-agent",
-      description: "Use Rowan's default Phase.",
-      prompt: "Respond normally.",
-      phases: { entryPhaseId: "default", phaseIds: [] },
-    },
-    resources: { tools: [], skills: [] },
-    model: { provider: "test", id: "model" },
-    stream: async function* () {
-      yield {
-        type: "text_delta" as const,
-        text: "done",
-        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
-      };
-      yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
-    },
-  } satisfies AgentConfig;
+  const definition: AgentDefinition = {
+    name: "default-agent",
+    description: "Use Rowan's default Phase.",
+    prompt: "Respond normally.",
+    phases: { entryPhaseId: "default", phaseIds: [] },
+  };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config, { idempotencyKey: "built-in-default-entry-agent" });
+    const agentId = await createAgentWith(runtime, {
+      identity: "built-in-default-entry-v1",
+      definition,
+      core: true,
+      stream: async function* () {
+        yield {
+          type: "text_delta" as const,
+          text: "done",
+          partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
+        };
+        yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
+      },
+      options: { idempotencyKey: "built-in-default-entry-agent" },
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "built-in-default-entry-run" });
     await run.wait();
     expect(warnings.mock.calls.some(([message]) =>
@@ -333,30 +335,30 @@ test("Definition may explicitly select Rowan's built-in default Phase", async ()
 test("Runtime warns and falls back when selected resources and entry Phase names are missing", async () => {
   const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
   let modelCalls = 0;
-  const config = {
-    identity: "definition-missing-selection-v1",
-    definition: {
-      name: "fallback-agent",
-      description: "Fall back after missing references.",
-      prompt: "Use Rowan's default Phase.",
-      tools: ["missing-tool"],
-      phases: { entryPhaseId: "missing-entry", phaseIds: [] },
-    },
-    resources: { tools: [], skills: [] },
-    model: { provider: "test", id: "model" },
-    stream: async function* () {
-      modelCalls += 1;
-      yield {
-        type: "text_delta" as const,
-        text: "done",
-        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
-      };
-      yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
-    },
-  } satisfies AgentConfig;
+  const definition: AgentDefinition = {
+    name: "fallback-agent",
+    description: "Fall back after missing references.",
+    prompt: "Use Rowan's default Phase.",
+    tools: ["missing-tool"],
+    phases: { entryPhaseId: "missing-entry", phaseIds: [] },
+  };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-missing-selection-agent" });
+    const agentId = await createAgentWith(runtime, {
+      identity: "definition-missing-selection-v1",
+      definition,
+      core: true,
+      stream: async function* () {
+        modelCalls += 1;
+        yield {
+          type: "text_delta" as const,
+          text: "done",
+          partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
+        };
+        yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
+      },
+      options: { idempotencyKey: "definition-missing-selection-agent" },
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-missing-selection-run" });
     await run.wait();
     expect(modelCalls).toBe(1);

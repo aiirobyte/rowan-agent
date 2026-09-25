@@ -39,28 +39,28 @@ export async function seedResources(
   runtime: AgentRuntime,
   input: SeededResources & Readonly<{ core?: boolean }> = {},
 ): Promise<ResourceView> {
-  const sources: Array<keyof SeededResources> = [];
+  const seeded: Array<keyof SeededResources> = [];
   if (input.agents?.length) {
     await runtime.loadAgents({ sourceId: TEST_SOURCE, values: input.agents } satisfies LoadInput<AgentDefinition>);
-    sources.push("agents");
+    seeded.push("agents");
   }
   if (input.skills?.length) {
     await runtime.loadSkills({ sourceId: TEST_SOURCE, values: input.skills });
-    sources.push("skills");
+    seeded.push("skills");
   }
   if (input.phases?.length) {
     await runtime.loadPhases({ sourceId: TEST_SOURCE, values: input.phases } satisfies LoadInput<Phase>);
-    sources.push("phases");
+    seeded.push("phases");
   }
   if (input.tools?.length) {
     await runtime.loadTools({ sourceId: TEST_SOURCE, values: input.tools });
-    sources.push("tools");
+    seeded.push("tools");
   }
-  // The Runtime's own assembly supplies the core Tools; a view that lists the core
-  // source lists it for its Phases.
+  // A view may only name sources that exist for a kind. The Runtime's own
+  // assembly supplies the core Tools; the core source is listed for its Phases.
   const ids = (kind: keyof SeededResources): readonly string[] => {
     const fromCore = input.core && kind === "phases" ? [CORE_SOURCE] : [];
-    return sources.includes(kind) ? [...fromCore, TEST_SOURCE] : fromCore;
+    return seeded.includes(kind) ? [...fromCore, TEST_SOURCE] : fromCore;
   };
   return { agents: ids("agents"), tools: ids("tools"), skills: ids("skills"), phases: ids("phases") };
 }
