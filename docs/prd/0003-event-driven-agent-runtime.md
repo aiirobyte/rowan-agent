@@ -24,7 +24,7 @@ This is a breaking, from-scratch Runtime:
 - no compatibility facade;
 - no old Runtime data migration;
 - no `node_modules` changes;
-- no EverYield Project Agent recovery layer;
+- no Mori Project Agent recovery layer;
 - no public process-local `Agent`, Binding, Reconstruction, Session, Mailbox, Runtime Message, or per-Run Lease.
 
 ## Design invariants

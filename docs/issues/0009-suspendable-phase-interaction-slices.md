@@ -14,7 +14,7 @@ these Rowan slices.
 
 The shipped local boundary is typed Interaction request/answer, durable
 suspension and checkpoint recovery, and cancellation. Activity streams,
-Session/Channel grouping, and deadline policy remain host-owned; EverYield
+Session/Channel grouping, and deadline policy remain host-owned; Mori
 implements those concerns for ACP Session Groups.
 
 ## Progress (recorded after the fact, 2026-09-24)

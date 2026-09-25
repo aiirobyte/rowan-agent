@@ -4,13 +4,13 @@ Status: Implemented locally through Slice 11; Slice 12 is downstream. Do not
 publish to GitHub without a separate request.
 
 Progress: Rowan 0.8 has completed the event-driven public cutover and the
-EverYield consumer migration. Slice 9 now atomically reserves all Tool Calls
+Mori consumer migration. Slice 9 now atomically reserves all Tool Calls
 from one model response in one Assistant Tool-use Message and preserves
 provider correlation IDs for restart-safe Model Context projection. Slice 11
 now hardens JSONL append/recovery behavior, paginates CLI read models, and
 reports actionable old-database recovery guidance. Slice 12 now exposes the
-durable Agent/Run/Execution identity to Phase callbacks, and EverYield derives
-retry-stable Workflow Agent/Run idempotency keys from that identity. EverYield
+durable Agent/Run/Execution identity to Phase callbacks, and Mori derives
+retry-stable Workflow Agent/Run idempotency keys from that identity. Mori
 also persists a Team-scoped Workflow launch outbox and replays unfinished
 launches during Runtime startup. Input Request Phase provenance is now
 persisted and exposed consistently through snapshots, boundaries, and durable
@@ -41,7 +41,7 @@ Tests: `test/runtime/*.test.ts` (`contract`, `execution`, `durable-store`,
 `sqlite-durable-store`, `durable-runtime`, `config-provider`, `observe-boundaries`,
 `tool-lifecycle`, `phase-interactions`), `test/public-exports.test.ts`, and the CLI
 and logging suites.
-Slice 12 (EverYield migration, outbox, fault injection) has no seam here: the
+Slice 12 (Mori migration, outbox, fault injection) has no seam here: the
 only in-repo enabler is the execution identity the Phase callbacks carry.
 
 ## Slice 1: Freeze the executable specification
@@ -340,7 +340,7 @@ Acceptance:
 
 Depends on: Slices 8, 10.
 
-## Slice 12: Migrate EverYield and complete rollout
+## Slice 12: Migrate Mori and complete rollout
 
 Implement a metadata-aware Config Provider adapter and migrate Runtime startup,
 Team/Project/Workflow Agent creation, resource loading/validation, Run input,
@@ -349,7 +349,7 @@ tests.
 
 Acceptance:
 
-- EverYield configuration builders resolve Config Tokens after restart;
+- Mori configuration builders resolve Config Tokens after restart;
 - Provider reconstruction uses Agent metadata plus persisted immutable
   descriptors and captured values; executable closures never read mutable
   `parentAgentId` or active-Task variables, Tools use
@@ -385,6 +385,6 @@ Acceptance:
   already-pinned Run;
 - old Rowan Agent and Session references are invalidated or rebuilt explicitly;
 - downstream source contains no `Agent`, `reconstructAgent`, Session authority, Mailbox, Lease, or `RuntimeEventDisposition` usage;
-- Rowan and EverYield full build/test suites pass.
+- Rowan and Mori full build/test suites pass.
 
 Depends on: Slices 5, 8, 10–11.

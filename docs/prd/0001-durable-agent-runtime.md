@@ -4,7 +4,7 @@ Status: Superseded by PRD-0003
 
 ## Problem Statement
 
-Rowan currently exposes an in-memory `Agent` whose caller directly constructs the loop, supplies persistence callbacks, and manages `LocalJsonlSessionManager` separately. Embedders therefore need host objects such as EverYield's `AgentHost` to restore Session context, append messages and outcomes, continue suspended input, observe failures, and coordinate cancellation.
+Rowan currently exposes an in-memory `Agent` whose caller directly constructs the loop, supplies persistence callbacks, and manages `LocalJsonlSessionManager` separately. Embedders therefore need host objects such as Mori's `AgentHost` to restore Session context, append messages and outcomes, continue suspended input, observe failures, and coordinate cancellation.
 
 Runtime work is currently coupled to the host process. Embedders need durable Agent lifecycle, scheduling, suspension, recovery, and Tool control without introducing a second orchestration model.
 
@@ -183,4 +183,4 @@ The host chooses the Runtime Store location. A typical embedder may use one glob
 
 This work is released as a breaking Rowan SDK version. Rowan CLI migrates to explicit Runtime startup and the new Agent lifecycle. Existing low-level loop code remains internal to Agent Runtime, while embedders use `runtime.createAgent()` / `runtime.reconstructAgent()` and never own Session persistence callbacks.
 
-EverYield migration is a downstream project: it will replace `AgentHost` and Session-ID-based runtime addressing with the new Rowan public seams while keeping EverYield Workflow and business state in EverYield.
+Mori migration is a downstream project: it will replace `AgentHost` and Session-ID-based runtime addressing with the new Rowan public seams while keeping Mori Workflow and business state in Mori.

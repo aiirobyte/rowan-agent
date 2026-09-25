@@ -130,9 +130,9 @@ const THINKING_LEVELS = [
 
 function thinkingLevelFromMetadata(metadata: unknown): ThinkingLevel | undefined {
   const record = isRecord(metadata) ? metadata : undefined;
-  const everyield = record?.everyield;
-  if (!isRecord(everyield)) return undefined;
-  const level = everyield.thinkingLevel;
+  const mori = record?.mori;
+  if (!isRecord(mori)) return undefined;
+  const level = mori.thinkingLevel;
   return typeof level === "string" && THINKING_LEVELS.includes(level as ThinkingLevel)
     ? level as ThinkingLevel
     : undefined;

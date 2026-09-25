@@ -362,13 +362,13 @@ test("AgentRuntime forwards the user ThinkingLevel on the LLM Request", async ()
     const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "thinking-level-agent" });
     const run = await runtime.start(agentId, {
       content: "Think carefully",
-      metadata: { everyield: { thinkingLevel: "high" } },
+      metadata: { mori: { thinkingLevel: "high" } },
     }, { idempotencyKey: "thinking-level-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
 
     const offRun = await runtime.start(agentId, {
       content: "Do not reason",
-      metadata: { everyield: { thinkingLevel: "off" } },
+      metadata: { mori: { thinkingLevel: "off" } },
     }, { idempotencyKey: "thinking-level-off-run" });
     await expect(offRun.wait()).resolves.toMatchObject({ type: "completed" });
 

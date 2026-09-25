@@ -1,6 +1,6 @@
 # Rowan Agent 0.9.3 — interruptible Conversations and physical Agent deletion
 
-This release adds the durable primitives required by Everyield's Conversation
+This release adds the durable primitives required by Mori's Conversation
 stop/resume and independent Conversation deletion flow.
 
 Status: staged and package-built locally; npm publication requires explicit

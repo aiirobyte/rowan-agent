@@ -19,7 +19,7 @@ bundle in the configuration snapshot (`config-provider.ts:snapshotPhase`).
 Tests: `test/harness/resource-loading.test.ts`,
 `test/runtime/phase-normalization.test.ts`, `test/phase-config.test.ts`,
 `test/extensions-loader.test.ts`.
-Slice 5 is the pack-and-verify handoff to EverYield, which is outside this
+Slice 5 is the pack-and-verify handoff to Mori, which is outside this
 repository; its stated 0.9.0 target has moved on since.
 
 ## Dependency map
@@ -83,8 +83,8 @@ Acceptance:
 
 ## Slice 5: Cross-repository verification handoff
 
-Pack Rowan locally, point a clean EverYield install check at the packed
-artifact, and verify the new Phase Bundle contract before EverYield changes.
+Pack Rowan locally, point a clean Mori install check at the packed
+artifact, and verify the new Phase Bundle contract before Mori changes.
 
 Acceptance:
 
