@@ -3,7 +3,7 @@ import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore, type AgentConfig, type ContextCandidate } from "../../src/runtime";
 import type { AgentDefinition } from "../../src/harness/definitions";
-import { createAgentWith } from "../fixtures/configuration";
+import { configuration, createAgentWith, seedResources, TEST_SOURCE } from "../fixtures/configuration";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { stopResponse } from "./route-test-utils";
@@ -81,16 +81,19 @@ test("Runtime resolves Definition resource names and warns for missing candidate
     parameters: Type.Object({}),
     execute: async () => ({ ok: true as const, content: null }),
   });
-  const config = {
-    identity: "definition-resource-selection-v1",
-    definition: {
-      name: "reviewer",
-      description: "Review the current change.",
-      prompt: "Review only the selected resources.",
-      tools: ["keep", "missing"],
-      skills: [],
-    },
-    resources: {
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "definition-resource-selection-v1",
+      stream,
+      core: true,
+      definition: {
+        name: "reviewer",
+        description: "Review the current change.",
+        prompt: "Review only the selected resources.",
+        tools: ["keep", "missing"],
+        skills: [],
+      },
       tools: [tool("keep"), tool("drop")],
       skills: [{
         name: "unused",
@@ -100,15 +103,7 @@ test("Runtime resolves Definition resource names and warns for missing candidate
         baseDir: "<test>",
         disableModelInvocation: false,
       }],
-    },
-    model: { provider: "test", id: "model" },
-    stream,
-  } satisfies AgentConfig;
-
-  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
-  try {
-    const agentId = await runtime.createAgent(config, {
-      idempotencyKey: "definition-resource-selection-agent",
+      options: { idempotencyKey: "definition-resource-selection-agent" },
     });
     const run = await runtime.start(agentId, "review", {
       idempotencyKey: "definition-resource-selection-run",
@@ -125,31 +120,32 @@ test("Runtime resolves Definition resource names and warns for missing candidate
 });
 
 test("Definition Bundle Skills override same-name Scope Skills", async () => {
-  const config = {
-    identity: "definition-bundle-skills-v1",
-    definition: {
-      name: "bundle-agent",
-      description: "Use Scope and parent Bundle guidance.",
-      prompt: "Use the available guidance.",
-      skills: ["root-skill", "shared-skill"],
-      bundledSkills: [{
-        name: "parent-skill",
-        description: "Parent Skill",
-        filePath: "<parent>",
-        baseDir: "<parent>",
-        content: "Parent guidance",
-        disableModelInvocation: false,
-      }, {
-        name: "shared-skill",
-        description: "Parent replacement Skill",
-        filePath: "<parent-shared>",
-        baseDir: "<parent-shared>",
-        content: "Parent replacement guidance",
-        disableModelInvocation: false,
-      }],
-    },
-    resources: {
-      tools: [],
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "definition-bundle-skills-v1",
+      core: true,
+      definition: {
+        name: "bundle-agent",
+        description: "Use Scope and parent Bundle guidance.",
+        prompt: "Use the available guidance.",
+        skills: ["root-skill", "shared-skill"],
+        bundledSkills: [{
+          name: "parent-skill",
+          description: "Parent Skill",
+          filePath: "<parent>",
+          baseDir: "<parent>",
+          content: "Parent guidance",
+          disableModelInvocation: false,
+        }, {
+          name: "shared-skill",
+          description: "Parent replacement Skill",
+          filePath: "<parent-shared>",
+          baseDir: "<parent-shared>",
+          content: "Parent replacement guidance",
+          disableModelInvocation: false,
+        }],
+      },
       skills: [{
         name: "root-skill",
         description: "Root Skill",
@@ -172,20 +168,16 @@ test("Definition Bundle Skills override same-name Scope Skills", async () => {
         content: "Unused guidance",
         disableModelInvocation: false,
       }],
-    },
-    model: { provider: "test", id: "model" },
-    stream: async function* (request: Parameters<StreamFn>[0]) {
-      expect(request.system).toContain('<name>root-skill</name>');
-      expect(request.system).toContain('<name>parent-skill</name>');
-      expect(request.system).toContain("Parent replacement Skill");
-      expect(request.system).not.toContain("Scope Skill");
-      expect(request.system).not.toContain('<name>unused-skill</name>');
-      yield { type: "done" as const, response: stopResponse("done") };
-    },
-  } as unknown as AgentConfig;
-  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
-  try {
-    const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-bundle-skills-agent" });
+      stream: async function* (request: Parameters<StreamFn>[0]) {
+        expect(request.system).toContain('<name>root-skill</name>');
+        expect(request.system).toContain('<name>parent-skill</name>');
+        expect(request.system).toContain("Parent replacement Skill");
+        expect(request.system).not.toContain("Scope Skill");
+        expect(request.system).not.toContain('<name>unused-skill</name>');
+        yield { type: "done" as const, response: stopResponse("done") };
+      },
+      options: { idempotencyKey: "definition-bundle-skills-agent" },
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-bundle-skills-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
   } finally {
@@ -199,38 +191,34 @@ test("Runtime selects structured Context Candidates for the System Prompt", asyn
     { name: "project_context", value: { name: "Example <Project>", enabled: true } },
     { name: "drop_context", value: { secret: "must not appear" } },
   ];
-  const config = {
-    identity: "definition-context-selection-v1",
-    definition: {
-      name: "context-agent",
-      description: "Use selected structured Context.",
-      prompt: "Use the selected context only.",
-      contexts: ["project_context", "missing_context"],
-    },
-    resources: {
-      tools: [],
-      skills: [],
-      contexts,
-    },
-    model: { provider: "test", id: "model" },
-    stream: async function* (request) {
-      expect(request.system).toContain("Use the selected context only.");
-      expect(request.system).toContain("<agent_context>");
-      expect(request.system).toContain('<context name="project_context">');
-      expect(request.system).toContain("Example &lt;Project&gt;");
-      expect(request.system).not.toContain("drop_context");
-      expect(request.system).not.toContain("must not appear");
-      yield {
-        type: "text_delta" as const,
-        text: "done",
-        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
-      };
-      yield { type: "done" as const, response: stopResponse("done") };
-    },
-  } satisfies AgentConfig;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-context-selection-agent" });
+    const agentId = await createAgentWith(runtime, {
+      identity: "definition-context-selection-v1",
+      core: true,
+      definition: {
+        name: "context-agent",
+        description: "Use selected structured Context.",
+        prompt: "Use the selected context only.",
+        contexts: ["project_context", "missing_context"],
+      },
+      contexts,
+      stream: async function* (request) {
+        expect(request.system).toContain("Use the selected context only.");
+        expect(request.system).toContain("<agent_context>");
+        expect(request.system).toContain('<context name="project_context">');
+        expect(request.system).toContain("Example &lt;Project&gt;");
+        expect(request.system).not.toContain("drop_context");
+        expect(request.system).not.toContain("must not appear");
+        yield {
+          type: "text_delta" as const,
+          text: "done",
+          partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
+        };
+        yield { type: "done" as const, response: stopResponse("done") };
+      },
+      options: { idempotencyKey: "definition-context-selection-agent" },
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-context-selection-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(warnings.mock.calls.some(([message]) =>
@@ -257,36 +245,32 @@ test("Phase restrictions use the shared warning-aware resolver", async () => {
       return { message: "done", route: "stop" };
     },
   };
-  const config = {
-    identity: "phase-resource-selection-v1",
-    definition: {
-      name: "reviewer",
-      description: "Review the current change.",
-      prompt: "Review.",
-      phases: { entryPhaseId: "review", phaseIds: ["review"] },
-    },
-    resources: {
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "phase-resource-selection-v1",
+      core: true,
+      definition: {
+        name: "reviewer",
+        description: "Review the current change.",
+        prompt: "Review.",
+        phases: { entryPhaseId: "review", phaseIds: ["review"] },
+      },
+      phases: [phase],
       tools: [
         { name: "keep", description: "Keep", parameters: Type.Object({}), execute: async () => ({ ok: true as const, content: null }) },
         { name: "drop", description: "Drop", parameters: Type.Object({}), execute: async () => ({ ok: true as const, content: null }) },
       ],
-      skills: [],
-      phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: null },
-    },
-    model: { provider: "test", id: "model" },
-    stream: async function* () {
-      yield {
-        type: "text_delta" as const,
-        text: "done",
-        partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
-      };
-      yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
-    },
-  } satisfies AgentConfig;
-
-  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
-  try {
-    const agentId = await runtime.createAgent(config, { idempotencyKey: "phase-resource-selection-agent" });
+      stream: async function* () {
+        yield {
+          type: "text_delta" as const,
+          text: "done",
+          partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text: "done" }] },
+        };
+        yield { type: "done" as const, response: { content: "done", stopReason: "stop" as const } };
+      },
+      options: { idempotencyKey: "phase-resource-selection-agent" },
+    });
     const run = await runtime.start(agentId, "review", { idempotencyKey: "phase-resource-selection-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(visibleTools).toEqual(["read", "bash", "edit", "write", "keep"]);
@@ -372,43 +356,19 @@ test("Runtime warns and falls back when selected resources and entry Phase names
   }
 });
 
-test("Runtime rejects duplicate executable Tool candidates before model work", async () => {
-  let modelCalls = 0;
+test("Runtime rejects duplicate executable Tool candidates at registration", async () => {
   const duplicate = (description: string) => ({
     name: "duplicate",
     description,
     parameters: Type.Object({}),
     execute: async () => ({ ok: true as const, content: null }),
   });
-  const config = {
-    identity: "definition-duplicate-tool-v1",
-    definition: {
-      name: "duplicate-tool-agent",
-      description: "Reject ambiguous Tools.",
-      prompt: "Do not invoke the model.",
-    },
-    resources: {
-      tools: [duplicate("First"), duplicate("Second")],
-      skills: [],
-    },
-    model: { provider: "test", id: "model" },
-    stream: async function* () {
-      modelCalls += 1;
-      yield { type: "done" as const };
-    },
-  } satisfies AgentConfig;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
   try {
-    const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-duplicate-tool-agent" });
-    const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-duplicate-tool-run" });
-    await expect(run.wait()).resolves.toMatchObject({
-      type: "failed",
-      failure: {
-        code: "execution_failed",
-        message: 'Duplicate Tool candidate "duplicate".',
-      },
-    });
-    expect(modelCalls).toBe(0);
+    await expect(runtime.loadTools({
+      sourceId: TEST_SOURCE,
+      values: [duplicate("First"), duplicate("Second")],
+    })).rejects.toThrow(/Duplicate Tool resource "duplicate" in source "test\.source"/);
   } finally {
     await runtime.close();
   }
@@ -429,37 +389,34 @@ test("Runtime rejects a Phase name contributed by both the host and an Extension
     }, process.cwd()),
     name: "duplicate-phase",
   };
-  const config = {
-    identity: "definition-duplicate-phase-v1",
-    definition: {
-      name: "duplicate-phase-agent",
-      description: "Reject ambiguous Phases.",
-      prompt: "Do not invoke the model.",
-    },
-    resources: {
-      tools: [],
-      skills: [],
-      phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: null },
-    },
-    model: { provider: "test", id: "model" },
-    stream: async function* () {
-      modelCalls += 1;
-      yield { type: "done" as const };
-    },
-  } satisfies AgentConfig;
   const runtime = await AgentRuntime.init({
     store: new InMemoryStore(),
     concurrency: 1,
     bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
   });
   try {
-    const agentId = await runtime.createAgent(config, { idempotencyKey: "definition-duplicate-phase-agent" });
+    const agentId = await createAgentWith(runtime, {
+      identity: "definition-duplicate-phase-v1",
+      core: true,
+      definition: {
+        name: "duplicate-phase-agent",
+        description: "Reject ambiguous Phases.",
+        prompt: "Do not invoke the model.",
+        phases: { entryPhaseId: "review", phaseIds: ["review"] },
+      },
+      phases: [phase],
+      stream: async function* () {
+        modelCalls += 1;
+        yield { type: "done" as const };
+      },
+      options: { idempotencyKey: "definition-duplicate-phase-agent" },
+    });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-duplicate-phase-run" });
     await expect(run.wait()).resolves.toMatchObject({
       type: "failed",
       failure: {
-        code: "execution_failed",
-        message: 'Extension Phase collides with Context Phase "review"',
+        code: "configuration_unavailable",
+        message: 'Duplicate Phase resource "review" in Resource View.',
       },
     });
     expect(modelCalls).toBe(0);
@@ -487,33 +444,36 @@ test("an Input Request continuation remains pinned after the Agent Configuration
     };
     yield { type: "done" as const, response: { content: text, stopReason: "stop" as const } };
   };
-  const config = (revision: string) => ({
-    identity: `definition-snapshot-${revision}`,
-    definition: {
-      name: "snapshot-agent",
-      description: "Keep a Run on one snapshot.",
-      prompt: `configuration-${revision}`,
-      contexts: ["revision_context"],
-      phases: { entryPhaseId: "question", phaseIds: ["question"] },
-    },
-    resources: {
-      tools: [],
-      skills: [],
-      contexts: [{ name: "revision_context", value: { revision } }],
-      phases: { phases: new Map([[phase.name, phase]]), entryPhaseId: null },
-    },
-    model: { provider: "test", id: "model" },
-    stream,
-  }) satisfies AgentConfig;
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  const configurationFor = async (revision: string) => {
+    const view = await seedResources(runtime, {
+      agents: [{
+        name: "snapshot-agent",
+        description: "Keep a Run on one snapshot.",
+        prompt: `configuration-${revision}`,
+        contexts: ["revision_context"],
+        phases: { entryPhaseId: "question", phaseIds: ["question"] },
+      }],
+      phases: [phase],
+      core: true,
+    });
+    return configuration({
+      identity: `definition-snapshot-${revision}`,
+      definition: "snapshot-agent",
+      view,
+      model: { provider: "test", id: "model" },
+      stream,
+      contexts: [{ name: "revision_context", value: { revision } }],
+    });
+  };
   try {
-    const agentId = await runtime.createAgent(config("v1"), { idempotencyKey: "definition-snapshot-agent" });
+    const agentId = await runtime.createAgent(await configurationFor("v1"), { idempotencyKey: "definition-snapshot-agent" });
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "definition-snapshot-run" });
     const first = await run.wait();
     expect(first.type).toBe("input_required");
     if (first.type !== "input_required") return;
 
-    await runtime.updateAgentConfig(agentId, config("v2"), {
+    await runtime.updateAgentConfig(agentId, await configurationFor("v2"), {
       idempotencyKey: "definition-snapshot-update",
     });
     await run.respond({ requestId: first.requestId, input: "production" });
