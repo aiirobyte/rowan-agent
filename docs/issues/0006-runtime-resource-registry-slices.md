@@ -51,6 +51,12 @@ reverted rather than left half-done. Findings worth keeping:
   the System Prompt assembly), and the registry reserves the core Phase and Tool
   names, so a test that registers its own `stop` or `default` Phase now fails at
   registration instead of at execution.
+- One site has no equivalent in the view yet: a Definition that selects a Tool
+  an Extension registered. The extension's Tool reaches the registry, so it can
+  arrive through the view, while the assembly still appends the runner's copy —
+  and the legacy collision rule then rejects the pair. Either the view owns the
+  Extension's source or the assembly stops re-adding what the registry already
+  holds; that choice belongs to the collapse, not to a test.
 - What worked, and is the template for the rest: register the Definition and the
   resources through `runtime.loadAgents/loadSkills/loadPhases/loadTools`, list
   those sources in the view, put the Phase selection on the Definition

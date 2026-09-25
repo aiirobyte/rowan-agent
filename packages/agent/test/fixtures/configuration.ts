@@ -56,8 +56,10 @@ export async function seedResources(
     await runtime.loadTools({ sourceId: TEST_SOURCE, values: input.tools });
     sources.push("tools");
   }
+  // The Runtime's own assembly supplies the core Tools; a view that lists the core
+  // source lists it for its Phases.
   const ids = (kind: keyof SeededResources): readonly string[] => {
-    const fromCore = input.core && (kind === "tools" || kind === "phases") ? [CORE_SOURCE] : [];
+    const fromCore = input.core && kind === "phases" ? [CORE_SOURCE] : [];
     return sources.includes(kind) ? [...fromCore, TEST_SOURCE] : fromCore;
   };
   return { agents: ids("agents"), tools: ids("tools"), skills: ids("skills"), phases: ids("phases") };
