@@ -5,7 +5,6 @@ import {
   type ResourceView,
 } from "../../src/runtime/resource-registry";
 import {
-  materializeConfigurationSnapshot,
   resolveConfigurationSnapshot,
   type AgentConfiguration,
 } from "../../src/runtime/configuration-snapshot";
@@ -138,8 +137,6 @@ test("preserves Host additional Contexts without widening ordinary Definition se
       { name: "explicit_skill:review", value: { content: "Review guidance" } },
     ]);
     expect(snapshot.definition.contexts).toEqual(["project"]);
-    expect(materializeConfigurationSnapshot(snapshot).resources.contexts).toEqual(snapshot.contexts);
-    expect(materializeConfigurationSnapshot(snapshot).additionalContexts).toEqual(snapshot.additionalContexts);
   } finally {
     warnings.mockRestore();
   }

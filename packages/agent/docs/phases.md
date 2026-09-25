@@ -499,9 +499,9 @@ interface PhaseState {
 
 ## Reloading File Phases
 
-The durable Runtime does not read phase files automatically. Load them with the standalone `loadPhases()` helper and include the resulting `PhaseRegistry` in `AgentConfig.resources.phases`. The Runtime resolves the Agent Definition after configured Extensions, then merges the selected registry with its built-in `"default"` phase for each execution.
+The durable Runtime does not read phase files automatically. Load them with the standalone `loadPhases()` helper and register the loaded phases as a source with `runtime.loadPhases()`, then name that source in the Definition's `resourceView` and select the phases on the Definition. The Runtime resolves the Agent Definition after configured Extensions, so Extension-contributed phases are visible through the same view.
 
-To pick up file edits, call `loadPhases()` again and create a new immutable configuration snapshot with the refreshed registry. Existing Runs continue using their pinned configuration token.
+To pick up file edits, call `loadPhases()` again and replace the source. Existing Runs continue using their pinned configuration token.
 
 ---
 
@@ -595,18 +595,35 @@ interface PhaseRegistry {
 loadPhases(targetPath: string): Promise<PhaseRegistry>
 ```
 
-Pass the loaded `PhaseRegistry` into `AgentConfig.resources.phases`:
+Register the loaded phases under a source and select them on the Definition:
 
 ```typescript
 const phases = await loadPhases("./.rowan/phases");
-const agentId = await runtime.createAgent({
-  identity: "workspace-v1",
-  definition: {
+await runtime.loadAgents({
+  sourceId: "workspace",
+  values: [{
     name: "workspace",
     description: "Work in the current workspace.",
     prompt: "Complete the requested workspace task.",
+    phases: {
+      entryPhaseId: "plan",
+      phaseIds: [...phases.phases.keys()],
+    },
+  }],
+});
+await runtime.loadPhases({
+  sourceId: "workspace",
+  values: [...phases.phases.values()],
+});
+const agentId = await runtime.createAgent({
+  identity: "workspace-v1",
+  definition: { name: "workspace" },
+  resourceView: {
+    agents: ["workspace"],
+    tools: [],
+    skills: [],
+    phases: ["workspace"],
   },
-  resources: { tools, skills, phases },
   model,
   stream,
 });

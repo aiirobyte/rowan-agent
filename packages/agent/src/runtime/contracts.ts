@@ -1,8 +1,5 @@
 import Type from "typebox";
 import type {
-  ModelConfig,
-  ModelRef,
-  StreamFn,
   ThinkingLevel,
 } from "@rowan-agent/models";
 import type {
@@ -41,13 +38,12 @@ import type { Skill } from "../protocol";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
 import type { PhaseInteraction } from "../harness/phases/interactions";
 import type { AgentDefinition } from "../harness/definitions";
-import { assertAgentDefinition } from "../harness/definitions";
 import type {
   LoadInput,
   LoadResult,
 } from "./resource-registry";
 import type { RuntimeBootstrapRegistry } from "./extension-lifetime";
-import type { AgentConfiguration } from "./configuration-snapshot";
+import type { AgentConfiguration, ConfigurationSnapshot } from "./configuration-snapshot";
 import { assertJsonValue, assertUtf8ByteLimit, canonicalJson, isJsonValue } from "./json";
 
 export type {
@@ -193,16 +189,6 @@ export type AfterToolCall = (input: Readonly<{
   context: ToolInvocationContext;
   signal: AbortSignal;
 }>) => ToolExecutionResult | Promise<ToolExecutionResult>;
-export type AgentResources = Readonly<{
-  tools: readonly Tool[];
-  skills: readonly Skill[];
-  phases?: PhaseRegistry;
-  contexts?: readonly ContextCandidate[];
-  /** Source-qualified snapshot metadata retained for restart/recovery checks. */
-  resourceView?: import("./resource-registry").ResourceView;
-  resourceRefs?: readonly import("./resource-registry").ResourceRef[];
-  resourceRevisions?: Readonly<Record<import("./resource-registry").ResourceKind, readonly string[]>>;
-}>;
 export type InvocationSource = "auto" | "implicit" | "external";
 export type InvocationCatalogEntry = Readonly<{
   kind: "phase" | "skill";
@@ -220,26 +206,6 @@ export type ResolvedAgentContext = Readonly<{
   skills: readonly Skill[];
   phases?: PhaseRegistry;
 }>;
-export type AgentConfig = Readonly<{
-  identity: string;
-  definition: AgentDefinition;
-  resources: AgentResources;
-  /** Host-owned Contexts rendered in the System Prompt with the selected Contexts. */
-  additionalContexts?: readonly ContextCandidate[];
-  cwd?: string;
-  maxAttempts?: number;
-  beforeToolCall?: BeforeToolCall;
-  afterToolCall?: AfterToolCall;
-} & ({ model: ModelConfig; stream?: never } | { model: ModelRef; stream: StreamFn })>;
-/** Definition-reference request accepted at the public Runtime seam. */
-export type AgentConfigRequest = AgentConfig | AgentConfiguration;
-
-export function isAgentConfiguration(
-  config: AgentConfigRequest,
-): config is AgentConfiguration {
-  return !("resources" in config);
-}
-
 export type AgentRecord = Readonly<{
   id: AgentId;
   metadata?: Metadata;
@@ -347,13 +313,13 @@ export type RunBoundary =
   | Readonly<{ type: "cancelled"; reason?: string }>;
 
 export type ConfigResolution = Readonly<
-  | { kind: "available"; config: AgentConfigRequest }
+  | { kind: "available"; config: AgentConfiguration | ConfigurationSnapshot }
   | { kind: "deferred"; retryAfterMs?: number }
   | { kind: "unavailable"; reason: string }
 >;
 export type ConfigPutResult = Readonly<{ kind: "stored"; token: string } | { kind: "identity_conflict" }>;
 export interface ConfigProvider {
-  put(input: { agentId: AgentId; agentMetadata?: Metadata; config: AgentConfigRequest; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult>;
+  put(input: { agentId: AgentId; agentMetadata?: Metadata; config: AgentConfiguration | ConfigurationSnapshot; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult>;
   resolve(input: { agentId: AgentId; agentMetadata?: Metadata; token: ConfigToken; signal: AbortSignal }): Promise<ConfigResolution>;
 }
 export interface OwnedStore {
@@ -475,8 +441,8 @@ export interface AgentRuntime {
   loadPhases(input: LoadInput<import("../harness/phases/types").Phase>): Promise<LoadResult>;
   loadTools(input: Readonly<{ sourceId: string; values: readonly Tool[] }>): Promise<LoadResult>;
   unload(input: Readonly<{ kind: import("./resource-registry").ResourceKind; sourceId: string }>): Promise<LoadResult>;
-  createAgent(config: AgentConfigRequest, options?: { idempotencyKey?: string; metadata?: Metadata; historySeed?: HistorySeed }): Promise<AgentId>;
-  updateAgentConfig(agentId: AgentId, config: AgentConfigRequest, options: { idempotencyKey: string }): Promise<void>;
+  createAgent(config: AgentConfiguration, options?: { idempotencyKey?: string; metadata?: Metadata; historySeed?: HistorySeed }): Promise<AgentId>;
+  updateAgentConfig(agentId: AgentId, config: AgentConfiguration, options: { idempotencyKey: string }): Promise<void>;
   deleteAgent(input: AgentDeletionRequest): Promise<void>;
   revise(agentId: AgentId, input: {
     messageId: MessageId;
@@ -615,35 +581,7 @@ export function assertValidRunSnapshot(value: unknown, options: { committedMessa
       throw new TypeError("Invalid Run state");
   }
 }
-export function assertAgentConfig(config: AgentConfig): void {
-  if (typeof config.identity !== "string" || config.identity.length === 0) throw new TypeError("config.identity must be non-empty");
-  assertUtf8ByteLimit(config.identity, IDENTITY_LIMIT, "config.identity");
-  assertAgentDefinition(config.definition);
-  if (!config.resources || !Array.isArray(config.resources.tools) || !Array.isArray(config.resources.skills)) {
-    throw new TypeError("config.resources is invalid");
-  }
-  for (const tool of config.resources.tools) projectToolDefinition(tool);
-  const names = new Set<string>();
-  for (const context of config.resources.contexts ?? []) {
-    if (typeof context.name !== "string" || context.name.trim() === "") {
-      throw new TypeError("Context candidate name must be non-empty");
-    }
-    if (names.has(context.name)) throw new TypeError(`Duplicate Context candidate "${context.name}".`);
-    names.add(context.name);
-    assertJsonValue(context.value, `Context candidate "${context.name}" value`);
-  }
-  for (const context of config.additionalContexts ?? []) {
-    if (typeof context.name !== "string" || context.name.trim() === "") {
-      throw new TypeError("Additional Context candidate name must be non-empty");
-    }
-    assertJsonValue(context.value, `Additional Context candidate "${context.name}" value`);
-  }
-}
-export function assertAgentConfigRequest(config: AgentConfigRequest): void {
-  if (!isAgentConfiguration(config)) {
-    assertAgentConfig(config);
-    return;
-  }
+export function assertAgentConfiguration(config: AgentConfiguration): void {
   if (typeof config.identity !== "string" || config.identity.length === 0) throw new TypeError("config.identity must be non-empty");
   assertUtf8ByteLimit(config.identity, IDENTITY_LIMIT, "config.identity");
   if (!config.definition || typeof config.definition.name !== "string" || config.definition.name.trim() === "") {

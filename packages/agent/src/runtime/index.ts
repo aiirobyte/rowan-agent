@@ -5,7 +5,7 @@ export { ConfigCommandService, CONFIG_PROVIDER_DEADLINE_MS } from "./config-comm
 export { pageAgents, pageRuns } from "./read-models";
 export { AgentRuntime } from "./durable-runtime";
 export { ResourceRegistry, ResourceRegistryError } from "./resource-registry";
-export { resolveConfigurationSnapshot } from "./configuration-snapshot";
+export { isConfigurationSnapshot, resolveConfigurationSnapshot } from "./configuration-snapshot";
 export {
   ExtensionLifetimeError,
   RuntimeBootstrapRegistry,
@@ -19,9 +19,6 @@ export type {
   ExtensionLifetimeErrorCode,
 } from "./extension-lifetime";
 export type {
-  AgentConfig,
-  AgentConfigRequest,
-  AgentResources,
   ContextCandidate,
   AgentRecord,
   AgentRun,
@@ -82,10 +79,8 @@ export type {
   ConfigurationSnapshot,
   DefinitionLayer,
 } from "./configuration-snapshot";
-export { materializeConfigurationSnapshot } from "./configuration-snapshot";
 export {
-  assertAgentConfig,
-  assertAgentConfigRequest,
+  assertAgentConfiguration,
   assertToolExecutionResult,
   assertValidRunSnapshot,
   canonicalUserInput,

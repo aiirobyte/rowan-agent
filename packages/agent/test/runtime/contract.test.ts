@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import Type from "typebox";
 import {
   RUN_STATES,
-  assertAgentConfigRequest,
+  assertAgentConfiguration,
   assertJsonValue,
   assertToolExecutionResult,
   assertValidRunSnapshot,
@@ -145,7 +145,7 @@ test("Tool schemas retain TypeBox and project only JSON-safe provider data", () 
   });
   expect(() => projectToolDefinition({ ...tool, parameters: { execute: () => undefined } as never })).toThrow();
   expect(() => assertToolExecutionResult({ ok: true, content: null, toolCallId: "provider-id" })).toThrow();
-  expect(() => assertAgentConfigRequest(configuration({
+  expect(() => assertAgentConfiguration(configuration({
     identity: "",
     definition: "test",
     view: { agents: [], tools: [], skills: [], phases: [] },

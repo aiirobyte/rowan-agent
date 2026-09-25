@@ -16,12 +16,16 @@ import {
   loadExtensions,
   loadPhases,
   loadSkills,
-  type AgentConfig,
+  type AgentConfiguration,
+  type AgentDefinition,
   type AgentId,
   type AgentListCursor,
   type AgentRun,
   type AgentSummary,
+  type ConfigurationSnapshot,
   type ConfigProvider,
+  type PhaseRegistry,
+  type ResourceView,
   type Skill,
   type RunBoundary,
   type RunListCursor,
@@ -54,8 +58,10 @@ import { resolveInWorkspace, resolveWorkspacePaths, type WorkspacePaths } from "
  * only an opaque token; this adapter binds the current workspace configuration
  * to an Agent for the lifetime of the process.
  */
+const CLI_SOURCE = "rowan.cli";
+
 class CliConfigProvider implements ConfigProvider {
-  private readonly configs = new Map<string, AgentConfig>();
+  private readonly configs = new Map<string, AgentConfiguration | ConfigurationSnapshot>();
   private readonly manifests = new Map<string, { agentId: AgentId; identity: string }>();
 
   constructor(private readonly manifestPath: string) {}
@@ -73,7 +79,7 @@ class CliConfigProvider implements ConfigProvider {
     }
   }
 
-  bind(agentId: AgentId, config: AgentConfig): void {
+  bind(agentId: AgentId, config: AgentConfiguration | ConfigurationSnapshot): void {
     const token = tokenFor(agentId, config.identity);
     this.configs.set(token, config);
     this.remember(token, agentId, config.identity);
@@ -83,7 +89,7 @@ class CliConfigProvider implements ConfigProvider {
     await this.persist();
   }
 
-  async put(input: { agentId: AgentId; config: AgentConfig; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult> {
+  async put(input: { agentId: AgentId; config: AgentConfiguration | ConfigurationSnapshot; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult> {
     if (input.signal.aborted) throw abortError();
     this.bind(input.agentId, input.config);
     const token = tokenFor(input.agentId, input.config.identity);
@@ -418,9 +424,9 @@ type CliAgentListItem = {
     request?: Extract<RunSnapshot, { state: "input_required" }>["request"];
   };
 };
-type AgentResources = {
+type WorkspaceResources = {
   skills: Skill[];
-  phases: NonNullable<AgentConfig["resources"]["phases"]>;
+  phases: PhaseRegistry;
 };
 type ConfiguredAgent = {
   runtime: AgentRuntime;
@@ -544,7 +550,6 @@ async function createConfiguredAgent(
 ): Promise<ConfiguredAgent> {
   const resources = await loadAgentResources(args, workspace);
   const { skills } = resources;
-  const tools = createCoreTools({ root: workspace.cwd });
   // Load config file and register providers/models
   const configFile = await loadConfigFile(workspace);
 
@@ -608,24 +613,32 @@ async function createConfiguredAgent(
     });
   }
 
-  const config: AgentConfig = {
+  const phaseIds = [...resources.phases.phases.keys()];
+  const definition: AgentDefinition = {
+    name: "rowan-cli",
+    description: "General-purpose Rowan CLI Agent.",
+    prompt: [
+      "You are Rowan, a helpful assistant that can assist users with a wide variety of tasks.",
+      "",
+      "You operate as an agent — you can read and write files, execute commands, and use various tools to accomplish tasks on behalf of the user.",
+    ].join("\n"),
+    ...(resources.phases.entryPhaseId === null || phaseIds.length === 0
+      ? {}
+      : { phases: { entryPhaseId: resources.phases.entryPhaseId, phaseIds } }),
+  };
+  const view: ResourceView = {
+    agents: [CLI_SOURCE],
+    tools: [],
+    skills: skills.length > 0 ? [CLI_SOURCE] : [],
+    phases: phaseIds.length > 0 ? [CLI_SOURCE] : [],
+  };
+  const config: AgentConfiguration = {
     identity: `cli-v2:${defaultModelRef.provider}/${defaultModelRef.id}`,
+    definition: { name: definition.name },
+    resourceView: view,
     model: defaultModelRef,
     stream: createModelStream(),
-    definition: {
-      name: "rowan-cli",
-      description: "General-purpose Rowan CLI Agent.",
-      prompt: [
-        "You are Rowan, a helpful assistant that can assist users with a wide variety of tasks.",
-        "",
-        "You operate as an agent — you can read and write files, execute commands, and use various tools to accomplish tasks on behalf of the user.",
-      ].join("\n"),
-    },
-    resources: {
-      tools,
-      skills,
-      phases: resources.phases,
-    },
+    cwd: workspace.cwd,
   };
 
   await mkdir(workspaceRunsDir(workspace), { recursive: true });
@@ -644,6 +657,11 @@ async function createConfiguredAgent(
       configs,
       bootstrap: async (registry) => {
         await registry.loadExtensions(extensions);
+        await registry.loadAgents({ sourceId: CLI_SOURCE, values: [definition] });
+        if (skills.length > 0) await registry.loadSkills({ sourceId: CLI_SOURCE, values: skills });
+        if (phaseIds.length > 0) {
+          await registry.loadPhases({ sourceId: CLI_SOURCE, values: [...resources.phases.phases.values()] });
+        }
       },
     });
     const existing = args.agentId
@@ -680,7 +698,7 @@ async function createConfiguredAgent(
   }
 }
 
-async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Promise<AgentResources> {
+async function loadAgentResources(args: CliArgs, workspace: WorkspacePaths): Promise<WorkspaceResources> {
   const defaultSkillsDir = join(workspace.rowanDir, "skills");
   const discoveredSkills = existsSync(defaultSkillsDir) ? await loadSkills(defaultSkillsDir) : [];
   const configuredSkills = (await Promise.all(

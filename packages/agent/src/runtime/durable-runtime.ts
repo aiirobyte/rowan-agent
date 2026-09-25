@@ -8,8 +8,6 @@ import { createId } from "../utils";
 import { executeOnce } from "./execution";
 import { ConfigCommandService } from "./config-commands";
 import type {
-  AgentConfig,
-  AgentConfigRequest,
   AgentRecord,
   AgentRun,
   AgentRuntime as AgentRuntimeContract,
@@ -25,6 +23,8 @@ import type {
   RunSnapshot,
   RunState,
   RunSummary,
+  BeforeToolCall,
+  AfterToolCall,
   MessageRevisionResult,
   HistorySeed,
   Tool as DurableTool,
@@ -37,7 +37,6 @@ import type {
 } from "./contracts";
 import {
   assertToolExecutionResult,
-  isAgentConfiguration,
   thinkingLevelFromMessages,
 } from "./contracts";
 import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
@@ -61,7 +60,7 @@ import { RuntimeBootstrapRegistry } from "./extension-lifetime";
 import type { AgentDefinition } from "../harness/definitions";
 import type { Phase } from "../harness/phases/types";
 import type { Skill } from "../protocol";
-import { materializeConfigurationSnapshot, resolveConfigurationSnapshot } from "./configuration-snapshot";
+import { isConfigurationSnapshot, resolveConfigurationSnapshot, type AgentConfiguration, type ConfigurationSnapshot } from "./configuration-snapshot";
 
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_POLL_MS = 25;
@@ -96,8 +95,8 @@ type ActiveExecution = Readonly<{
 
 type ExecutionToolConfig = Readonly<{
   tools: readonly DurableTool[];
-  beforeToolCall?: AgentConfig["beforeToolCall"];
-  afterToolCall?: AgentConfig["afterToolCall"];
+  beforeToolCall?: BeforeToolCall;
+  afterToolCall?: AfterToolCall;
 }>;
 
 /** Keep large custom Tool Results out of the model transcript while retaining
@@ -206,7 +205,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.resources.unload(input);
   }
 
-  async createAgent(config: AgentConfigRequest, options: { idempotencyKey?: string; metadata?: import("../runtime-events").Metadata; historySeed?: HistorySeed } = {}): Promise<AgentId> {
+  async createAgent(config: AgentConfiguration, options: { idempotencyKey?: string; metadata?: import("../runtime-events").Metadata; historySeed?: HistorySeed } = {}): Promise<AgentId> {
     this.assertOpen();
     return this.commands.createAgent({
       config,
@@ -216,7 +215,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     });
   }
 
-  async updateAgentConfig(agentId: AgentId, config: AgentConfigRequest, options: { idempotencyKey: string }): Promise<void> {
+  async updateAgentConfig(agentId: AgentId, config: AgentConfiguration, options: { idempotencyKey: string }): Promise<void> {
     this.assertOpen();
     await this.commands.updateAgentConfig({ agentId, config, idempotencyKey: options.idempotencyKey });
   }
@@ -333,9 +332,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         reason: resolution.kind === "deferred" ? "Configuration is deferred." : resolution.reason,
       });
     }
-    const config = isAgentConfiguration(resolution.config)
-      ? this.materializeConfig(resolution.config)
-      : resolution.config;
+    const config = this.resolveConfig(resolution.config);
     const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
       toolArchiveDir: this.archiveDirFor(agentId),
     });
@@ -513,9 +510,9 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       let resolvedConfig = resolution.config;
-      if (isAgentConfiguration(resolvedConfig)) {
+      if (!isConfigurationSnapshot(resolvedConfig)) {
         try {
-          const snapshot = this.materializeConfig(resolvedConfig);
+          const snapshot = this.resolveConfig(resolvedConfig);
           token = await this.commands.storeSnapshot({
             agent,
             config: snapshot,
@@ -527,7 +524,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           return;
         }
       }
-      const config = resolvedConfig as AgentConfig;
+      const config = this.resolveConfig(resolvedConfig);
       const controlKind = controlRunKind(run);
       if (!controlKind && !this.autoCompactionRuns.has(run.id)) {
         const contextWindow = await resolveContextWindowForConfig(config);
@@ -592,8 +589,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       let executionContext = buildExecutionContext(modelMessages);
       const executionTools: ExecutionToolConfig = {
         tools: assembly.context.tools,
-        beforeToolCall: assembly.beforeToolCall ?? config.beforeToolCall,
-        afterToolCall: assembly.afterToolCall ?? config.afterToolCall,
+        beforeToolCall: assembly.beforeToolCall,
+        afterToolCall: assembly.afterToolCall,
       };
       const executeModel = (context: ReturnType<typeof buildExecutionContext>) => executeOnce({
         canonicalMessages: context.messages,
@@ -812,9 +809,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (!agent.currentConfigToken) return 128_000;
     const resolution = await this.commands.resolve({ agent, token: agent.currentConfigToken });
     if (resolution.kind !== "available") return 128_000;
-    const config = isAgentConfiguration(resolution.config)
-      ? this.materializeConfig(resolution.config)
-      : resolution.config;
+    const config = this.resolveConfig(resolution.config);
     return resolveContextWindowForConfig(config);
   }
 
@@ -1094,9 +1089,10 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (this.closed) throw new RuntimeError("runtime_closed", null);
   }
 
-  private materializeConfig(config: AgentConfigRequest): AgentConfig {
-    if (!isAgentConfiguration(config)) return config;
-    return materializeConfigurationSnapshot(resolveConfigurationSnapshot(this.resources, config));
+  /** Resolve one stored configuration to the snapshot this execution uses. A
+   * stored snapshot is already source-qualified and is used as it stands. */
+  private resolveConfig(config: AgentConfiguration | ConfigurationSnapshot): ConfigurationSnapshot {
+    return isConfigurationSnapshot(config) ? config : resolveConfigurationSnapshot(this.resources, config);
   }
 
   private startHeartbeat(): void {
@@ -1198,7 +1194,7 @@ function isCompactionOutcome(payload: unknown): boolean {
     && (payload as { kind?: unknown }).kind === "context_compaction";
 }
 
-async function resolveContextWindowForConfig(config: AgentConfig): Promise<number> {
+async function resolveContextWindowForConfig(config: ConfigurationSnapshot): Promise<number> {
   if ("contextWindow" in config.model && typeof config.model.contextWindow === "number") {
     return config.model.contextWindow;
   }

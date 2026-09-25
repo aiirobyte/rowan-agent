@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfig, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import type { RunId } from "../../src/runtime-events";
@@ -892,17 +892,7 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
     bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
   });
   try {
-    // This site cannot take the Resource View yet: an Extension's Tool is
-    // implicit in every view while the assembly still appends its own copy of it,
-    // so the two collide. It moves once the assemblies collapse and the view
-    // becomes the only source.
-    const agentId = await runtime.createAgent({
-      identity: "runtime-test-v1",
-      model: { provider: "test", id: "model" },
-      stream,
-      definition: { name: "test", description: "Test Agent.", prompt: "Test" },
-      resources: { tools: [], skills: [] },
-    } as unknown as AgentConfig, { idempotencyKey: "agent-extension-assembly" });
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "agent-extension-assembly" });
     const run = await runtime.start(agentId, "use extension", { idempotencyKey: "run-extension-assembly" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(beforeCalls).toBe(1);

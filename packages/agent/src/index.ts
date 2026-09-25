@@ -4,8 +4,7 @@ import { createRuntimeCoreTools } from "./runtime/core-tools";
 
 export { AgentRuntime } from "./runtime/durable-runtime";
 export { ResourceRegistry, ResourceRegistryError } from "./runtime/resource-registry";
-export { resolveConfigurationSnapshot } from "./runtime/configuration-snapshot";
-export { materializeConfigurationSnapshot } from "./runtime/configuration-snapshot";
+export { isConfigurationSnapshot, resolveConfigurationSnapshot } from "./runtime/configuration-snapshot";
 export {
   ExtensionLifetimeError,
   RuntimeBootstrapRegistry,
@@ -44,9 +43,6 @@ export function createCoreTools(input: CoreToolContext = {}): RuntimeTool[] {
 }
 
 export type {
-  AgentConfig,
-  AgentConfigRequest,
-  AgentResources,
   AgentId,
   AgentListCursor,
   AgentRecord,

@@ -17,7 +17,7 @@ export const publicValueExports = [
   "RuntimeBootstrapRegistry",
   "RuntimeExtensionLifetime",
   "resolveConfigurationSnapshot",
-  "materializeConfigurationSnapshot",
+  "isConfigurationSnapshot",
   "SqliteStore",
   "brandConfigToken",
   "isRuntimeError",
@@ -35,11 +35,8 @@ export const publicValueExports = [
 
 export const publicTypeExports = [
   "AfterToolCall",
-  "AgentConfig",
-  "AgentConfigRequest",
   "AgentConfiguration",
   "AgentDefinition",
-  "AgentResources",
   "AgentId",
   "AgentListCursor",
   "AgentRecord",

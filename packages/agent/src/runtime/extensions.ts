@@ -1,9 +1,8 @@
-import type { RegisteredTool } from "../extensions/types";
-import type { PhaseRegistry } from "../harness/phases/types";
-import { COMPACT_PHASE_ID, createCorePhases, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/core-phases";
+import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/core-phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import { buildContextDescription } from "../harness/context/resource-formatter";
-import type { AgentConfig, ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolInvocationContext, ToolExecutionResult } from "./contracts";
+import type { ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolExecutionResult } from "./contracts";
+import type { ConfigurationSnapshot } from "./configuration-snapshot";
 import type { JsonValue } from "../runtime-events";
 import { projectTool } from "./model-context";
 import type { BeforePhaseHook, AfterPhaseHook, BeforePromptHook } from "../loop/types";
@@ -24,31 +23,23 @@ export type ExtensionAssembly = Readonly<{
 /** Assemble already-activated Runtime-global Extensions for one immutable
  * configuration. No Extension factory is executed here. */
 export function assembleRegisteredExtensions(
-  config: AgentConfig,
+  snapshot: ConfigurationSnapshot,
   runner: import("../extensions").ExtensionRunner,
   options: Readonly<{ toolArchiveDir?: string }> = {},
 ): ExtensionAssembly {
-
-  const extensionTools = runner.getAllRegisteredTools().map(adaptExtensionTool);
+  // Extension contributions reach this assembly the way every other resource
+  // does: through the Resource View's implicit Extension source. The assembly
+  // never adds a second copy of them.
   const coreTools = createRuntimeCoreTools({
-    root: config.cwd,
+    root: snapshot.cwd,
     ...(options.toolArchiveDir ? { archiveDir: options.toolArchiveDir } : {}),
   });
   const coreNames = new Set(coreTools.map((tool) => tool.name));
   const tools = [
-    ...config.resources.tools.filter((tool) => !coreNames.has(tool.name)),
+    ...snapshot.resources.tools.filter((tool) => !coreNames.has(tool.name)),
     ...coreTools,
   ];
-  const names = new Set(tools.map((tool) => tool.name));
-  for (const tool of extensionTools) {
-    if (names.has(tool.name)) throw new TypeError(`Extension Tool collides with Context Tool "${tool.name}"`);
-    names.add(tool.name);
-    tools.push(tool);
-  }
-
-  const extensionPhases = runner.createPhaseRegistry({ entryPhaseId: null });
-  const phases = mergePhases(config.resources.phases, extensionPhases);
-  const context = resolveDefinitionContext(config, { tools, phases });
+  const context = resolveDefinitionContext(snapshot, tools);
   return {
     context,
     beforePhase: (phaseId, input) => runner.emitBeforePhase(phaseId, input),
@@ -71,98 +62,52 @@ export function assembleRegisteredExtensions(
 }
 
 function resolveDefinitionContext(
-  config: AgentConfig,
-  assembled: Readonly<{ tools?: readonly Tool[]; phases?: PhaseRegistry }> = {},
+  snapshot: ConfigurationSnapshot,
+  assembled: readonly Tool[],
 ): ResolvedAgentContext {
-  const candidateTools = assembled.tools ?? config.resources.tools;
-  const coreTools = candidateTools.filter((tool) => tool.core);
-  const authoredTools = candidateTools.filter((tool) => !tool.core);
+  const coreTools = assembled.filter((tool) => tool.core);
+  const authoredTools = assembled.filter((tool) => !tool.core);
   const tools = [
-    ...selectNamedResources(authoredTools, config.definition.tools, "Tool"),
+    ...selectNamedResources(authoredTools, snapshot.definition.tools, "Tool"),
     ...coreTools,
   ];
   const skills = mergeSkills(
-    selectNamedResources(config.resources.skills, config.definition.skills, "Skill"),
-    config.definition.bundledSkills,
+    selectNamedResources(snapshot.resources.skills, snapshot.definition.skills, "Skill"),
+    snapshot.definition.bundledSkills,
   );
   // Host-supplied Context is part of the same System Prompt Context block as
   // the Definition's declared Context. It is never a separate message, so the
   // System Prompt remains the single Context injection seam.
   const contexts = [
-    ...selectNamedResources(
-      config.resources.contexts ?? [],
-      config.definition.contexts,
-      "Context",
-    ),
-    ...(config.additionalContexts ?? []),
+    ...selectNamedResources(snapshot.contexts, snapshot.definition.contexts, "Context"),
+    ...snapshot.additionalContexts,
   ];
-  const candidateRegistry = assembled.phases ?? config.resources.phases;
-  const phaseCandidates = [...(candidateRegistry?.phases.values() ?? [])];
+  const phaseCandidates = [...(snapshot.resources.phases?.phases.values() ?? [])];
   const coreNames = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
   const selectedPhases = [
     ...phaseCandidates.filter((phase) => phase.core || coreNames.has(phase.name)),
     ...selectNamedResources(
       phaseCandidates.filter((phase) => !phase.core && !coreNames.has(phase.name)),
-      config.definition.phases?.phaseIds,
+      snapshot.definition.phases?.phaseIds,
       "Phase",
     ),
   ];
   const phases = new Map(selectedPhases.map((phase) => [phase.name, phase]));
-  const requestedEntry = config.definition.phases
-    ? config.definition.phases.entryPhaseId
-    : candidateRegistry?.entryPhaseId ?? null;
+  const requestedEntry = snapshot.definition.phases
+    ? snapshot.definition.phases.entryPhaseId
+    : snapshot.resources.phases?.entryPhaseId ?? null;
   const entryPhaseId = requestedEntry === DEFAULT_PHASE_ID
     ? DEFAULT_PHASE_ID
     : requestedEntry && phases.has(requestedEntry)
     ? requestedEntry
     : null;
-  if (requestedEntry && requestedEntry !== DEFAULT_PHASE_ID && !phases.has(requestedEntry)) {
-    console.warn(`Phase entry "${requestedEntry}" is not available; Rowan will use "default".`);
-  }
   return {
-    systemPrompt: [config.definition.prompt, buildContextDescription(contexts)]
+    systemPrompt: [snapshot.definition.prompt, buildContextDescription(contexts)]
       .filter((section) => section.length > 0)
       .join("\n\n"),
     tools,
     skills,
     phases: { phases, entryPhaseId },
-  };
-}
-
-function mergePhases(base: PhaseRegistry | undefined, extension: PhaseRegistry): PhaseRegistry | undefined {
-  const core = createCorePhases();
-  const coreNames = new Set(core.map(({ name }) => name));
-  const phases = new Map(core.map((phase) => [phase.name, phase] as const));
-  for (const [name, phase] of base?.phases ?? []) {
-    if (coreNames.has(name)) {
-      if (!phase.core) throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${name}".`);
-      continue;
-    }
-    phases.set(name, phase);
-  }
-  for (const [name, phase] of extension.phases) {
-    if (phases.has(name)) throw new TypeError(`Extension Phase collides with Context Phase "${name}"`);
-    phases.set(name, phase);
-  }
-  return {
-    phases,
-    entryPhaseId: base?.entryPhaseId ?? extension.entryPhaseId ?? DEFAULT_PHASE_ID,
-  };
-}
-
-function adaptExtensionTool(input: RegisteredTool): Tool {
-  const definition = input.definition;
-  return {
-    name: definition.name,
-    description: definition.description,
-    parameters: definition.parameters as never,
-    execute: async (args: JsonValue, _context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult> => {
-      const result = await definition.execute(args, signal);
-      const content = JSON.parse(JSON.stringify(result.content)) as JsonValue;
-      return result.isError
-        ? { ok: false, content, error: "Extension Tool failed." }
-        : { ok: true, content };
-    },
   };
 }
 

@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type AgentConfig, type ContextCandidate } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, type ContextCandidate } from "../../src/runtime";
 import type { AgentDefinition } from "../../src/harness/definitions";
 import { configuration, createAgentWith, seedResources, TEST_SOURCE } from "../fixtures/configuration";
 import type { Phase } from "../../src/harness/phases/types";
@@ -20,42 +20,38 @@ test("Runtime resolves Definition names after selected Extension assembly", asyn
     }, process.cwd()),
     name: "quality",
   };
-  const config = {
-    identity: "definition-extension-selection-v1",
-    definition: {
-      name: "extension-agent",
-      description: "Use one selected Extension Tool.",
-      prompt: "Use the extension.",
-      tools: ["extension_lookup"],
-    },
-    resources: { tools: [], skills: [] },
-    model: { provider: "test", id: "model" },
-    stream: async function* (request) {
-      expect(request.tools?.map(({ name }) => name).filter((name) => name !== "route"))
-        .toEqual(["read", "bash", "edit", "write", "extension_lookup"]);
-      yield {
-        type: "text_delta" as const,
-        text: "done",
-        partial: {
-          role: "assistant" as const,
-          contentBlocks: [{ type: "text" as const, text: "done" }],
-        },
-      };
-      yield {
-        type: "done" as const,
-        response: stopResponse("done"),
-      };
-    },
-  } satisfies AgentConfig;
-
   const runtime = await AgentRuntime.init({
     store: new InMemoryStore(),
     concurrency: 1,
     bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
   });
   try {
-    const agentId = await runtime.createAgent(config, {
-      idempotencyKey: "definition-extension-selection-agent",
+    const agentId = await createAgentWith(runtime, {
+      identity: "definition-extension-selection-v1",
+      core: true,
+      definition: {
+        name: "extension-agent",
+        description: "Use one selected Extension Tool.",
+        prompt: "Use the extension.",
+        tools: ["extension_lookup"],
+      },
+      stream: async function* (request) {
+        expect(request.tools?.map(({ name }) => name).filter((name) => name !== "route"))
+          .toEqual(["read", "bash", "edit", "write", "extension_lookup"]);
+        yield {
+          type: "text_delta" as const,
+          text: "done",
+          partial: {
+            role: "assistant" as const,
+            contentBlocks: [{ type: "text" as const, text: "done" }],
+          },
+        };
+        yield {
+          type: "done" as const,
+          response: stopResponse("done"),
+        };
+      },
+      options: { idempotencyKey: "definition-extension-selection-agent" },
     });
     const run = await runtime.start(agentId, "lookup", {
       idempotencyKey: "definition-extension-selection-run",

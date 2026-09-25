@@ -1,7 +1,7 @@
 # Scoped Runtime Resource Registry issue slices
 
-Status: Partially implemented locally; Slice 7's removal is not done. Do not
-publish to GitHub without a separate request.
+Status: Implemented locally through Slice 7. Do not publish to GitHub without a
+separate request.
 
 Source: [PRD-0006](../prd/0006-runtime-resource-registry.md)
 
@@ -9,6 +9,56 @@ Decision: [ADR-0007](../adr/0007-runtime-resource-registry.md)
 
 Each slice follows one red → green cycle through a public Rowan seam. Host
 migration may consume a slice only after all prerequisites named below land.
+
+## Progress: Slice 7 landed (recorded after the fact, 2026-09-25)
+
+The removal is in the tree. What landed, in the order it landed:
+
+1. Tests first, so every step stayed green while both shapes were supported.
+   Every test that creates an Agent registers its Definition, Tools, Skills and
+   Phases through `runtime.loadAgents/loadSkills/loadPhases/loadTools` and reads
+   them through a Resource View; `test/fixtures/configuration.ts` grew
+   `seedResources`, `configuration`, `createAgentWith` and `createPhaseAgent`.
+   Two expectations moved with the shape: duplicate Tool candidates are rejected
+   at registration instead of as an execution failure, and a host Phase whose
+   name an Extension also contributes is rejected while the view resolves
+   (`configuration_unavailable`), because Extension contributions are implicit
+   in every view and the registry owns collision semantics.
+2. The collapse. `AgentConfig`, `AgentResources`, `AgentConfigRequest`,
+   `isAgentConfiguration` and `assertAgentConfig` are gone; `AgentConfiguration`
+   is the only request shape and `assertAgentConfiguration` the only validator.
+   `materializeConfigurationSnapshot` is gone, replaced by
+   `isConfigurationSnapshot`. The assembly reads a `ConfigurationSnapshot`
+   directly, a `ConfigurationSnapshot` is held frozen in place rather than
+   rebuilt from a request, and `resourceView` is part of every request.
+3. Extension contributions have exactly one source. The assembly no longer
+   appends the runner's own copy of an Extension Tool and no longer merges the
+   runner's Phase registry: `RuntimeBootstrapRegistry.loadExtensions` already
+   registers both under the implicit `rowan.extensions` source, which
+   `withImplicit` adds to every view. That resolves the site this file recorded
+   as having no equivalent: a Definition selecting an Extension Tool, and the
+   Run that assembles Extension Tools and hooks, both now use the view.
+4. `packages/cli/src/cli.ts` registers its workspace Definition, Skills and
+   Phases under `rowan.cli` in `init({ bootstrap })` and passes a view; its
+   Config Provider holds `AgentConfiguration | ConfigurationSnapshot`.
+5. Docs: `packages/agent/README.md` and `packages/agent/docs/phases.md`
+   document registration, Definition selection and the view instead of a
+   concrete `resources` bag.
+6. Public interface: 32 runtime values, 145 types (`AgentConfig`,
+   `AgentConfigRequest` and `AgentResources` are gone; `isConfigurationSnapshot`
+   replaces `materializeConfigurationSnapshot`).
+
+Verified: `bun run build` (tsc), `bun test packages` (320 pass),
+`bun test packages/cli` (38 pass), `bun run build:packages` (public interface),
+`git diff --check`. The acceptance searches hold: no `AgentConfig.resources`
+outside the dated design docs, no Definition/Phase `extensions` field, no
+Runtime-global ordinary resource collision rule, no shared Tool/Phase Invocation
+Outcome.
+
+Still open, and deliberately not part of this slice: the host migration. Mori
+builds concrete configs today (`packages/core/src/runtime/config-provider.ts`,
+`loadMergedAgentConfig`), so it moves to `resourceView` sources before it can
+adopt the release that carries this change.
 
 ## Progress (recorded after the fact, 2026-09-24)
 
@@ -21,7 +71,8 @@ execution identity carried on Tool and Phase contexts.
 Tests: `test/runtime/{resource-registry,core-resources,tool-lifecycle,phase-normalization,configuration-snapshot,extension-lifetime,runtime-bootstrap}.test.ts`,
 `test/harness/resource-loading.test.ts`.
 
-Not landed: Slice 7, the removal it names. What it takes, measured on this tree:
+Not landed at that point: Slice 7, the removal it names. What it took, measured
+on that tree:
 four production files (`runtime/contracts.ts`'s `AgentResources` and the
 `resources` field, `runtime/configuration-snapshot.ts`, the two
 `assembleRegisteredExtensions` call sites in `runtime/durable-runtime.ts`, and
@@ -70,19 +121,19 @@ the view that reads them, and `phase-payload.test.ts` is migrated onto it as the
 worked example — nine tests green on the registry path, including the two moves
 the migration has to know about: the entry Phase selection belongs to the
 Definition (`definition.phases`), and a view that needs the route Tool or the core
-Phases lists `rowan.core`. What remains: the other eleven test files, the CLI, then
+Phases lists `rowan.core`. What remained at that point: the other eleven test files, the CLI, then
 the source collapse itself (`contracts.ts`'s `AgentResources`/`AgentConfig`/
 `AgentConfigRequest`/`isAgentConfiguration`/`assertAgentConfig`,
 `configuration-snapshot.ts`'s `materializeConfigurationSnapshot`, the assembly's
 `config.resources` reads, `config-commands.ts`, the index exports), the hook
 fallback in `durable-runtime.ts` that no Host supplies, docs/examples, and the
-public-interface baseline. Then Mori, whose config provider builds concrete
-configs. `AgentConfig.resources` /
-`AgentResources` are still exported and accepted, the per-Agent assembly
-(`runtime/extensions.ts:assembleRegisteredExtensions`) is still called from
-`durable-runtime.ts`, `loadSkills`/`loadPhases` are still public, and the README
-and `docs/phases.md` still document the concrete `resources` shape. Slice 5
-landed additively, so this is the piece that would make the registry the only
+public-interface baseline. Then Mori, whose config provider built concrete
+configs. At that point `AgentConfig.resources` /
+`AgentResources` were still exported and accepted, the per-Agent assembly
+(`runtime/extensions.ts:assembleRegisteredExtensions`) was still called from
+`durable-runtime.ts`, `loadSkills`/`loadPhases` were still public, and the README
+and `docs/phases.md` still documented the concrete `resources` shape. Slice 5
+landed additively, so this was the piece that would make the registry the only
 authority.
 
 ## Dependency graph

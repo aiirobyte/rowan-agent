@@ -1,6 +1,7 @@
-import type { AgentConfig, AgentConfigRequest, AgentRecord, ConfigProvider, ConfigResolution, HistorySeed, OwnedStore } from "./contracts";
+import type { AgentConfiguration, ConfigurationSnapshot } from "./configuration-snapshot";
+import type { AgentRecord, ConfigProvider, ConfigResolution, HistorySeed, OwnedStore } from "./contracts";
 import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
-import { assertAgentConfigRequest } from "./contracts";
+import { assertAgentConfiguration } from "./contracts";
 import { brandConfigToken, validateConfigResolution } from "./config-provider";
 import { CONFIG_IDENTITY_BYTES } from "./idempotency";
 import { assertUtf8ByteLimit } from "./json";
@@ -15,8 +16,8 @@ export class ConfigCommandService {
     private readonly storeIncarnation: string,
   ) {}
 
-  async createAgent(input: { config: AgentConfigRequest; metadata?: Metadata; historySeed?: HistorySeed; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
-    assertAgentConfigRequest(input.config);
+  async createAgent(input: { config: AgentConfiguration; metadata?: Metadata; historySeed?: HistorySeed; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
+    assertAgentConfiguration(input.config);
     assertIdentity(input.config.identity);
     const reserved = await this.store.reserveAgent({
       idempotencyKey: input.idempotencyKey,
@@ -40,8 +41,8 @@ export class ConfigCommandService {
     return reserved.id;
   }
 
-  async updateAgentConfig(input: { agentId: AgentId; config: AgentConfigRequest; idempotencyKey: string; signal?: AbortSignal }): Promise<void> {
-    assertAgentConfigRequest(input.config);
+  async updateAgentConfig(input: { agentId: AgentId; config: AgentConfiguration; idempotencyKey: string; signal?: AbortSignal }): Promise<void> {
+    assertAgentConfiguration(input.config);
     assertIdentity(input.config.identity);
     const agent = await this.findAgent(input.agentId);
     const operationId = this.operationId("update_agent_config", input.agentId, input.idempotencyKey);
@@ -75,11 +76,11 @@ export class ConfigCommandService {
    * cannot mutate an active or input-waiting Run. */
   async storeSnapshot(input: {
     agent: AgentRecord;
-    config: AgentConfig;
+    config: ConfigurationSnapshot;
     operationId: string;
     signal?: AbortSignal;
   }): Promise<ConfigToken> {
-    assertAgentConfigRequest(input.config);
+    assertAgentConfiguration(input.config);
     const result = await this.put({
       agentId: input.agent.id,
       agentMetadata: input.agent.metadata,
@@ -102,7 +103,7 @@ export class ConfigCommandService {
   private async put(input: {
     agentId: AgentId;
     agentMetadata?: Metadata;
-    config: AgentConfigRequest;
+    config: AgentConfiguration | ConfigurationSnapshot;
     operationId: string;
     signal?: AbortSignal;
   }) {

@@ -9,7 +9,6 @@ identity, not a process-local Session object.
 ```ts
 import {
   AgentRuntime,
-  createCoreTools,
   InMemoryStore,
   loadPhases,
   loadSkills,
@@ -21,6 +20,21 @@ const runtime = await AgentRuntime.init({
   store: new InMemoryStore(),
 });
 
+await runtime.loadAgents({
+  sourceId: "workspace",
+  values: [{
+    name: "workspace-assistant",
+    description: "Assist with the current workspace.",
+    prompt: "You are helpful.",
+    contexts: ["workspace"],
+  }],
+});
+await runtime.loadSkills({ sourceId: "workspace", values: skills });
+await runtime.loadPhases({
+  sourceId: "workspace",
+  values: [...phases.phases.values()],
+});
+
 const agentId = await runtime.createAgent({
   identity: "example:v1", // Stable config snapshot identity, not the Agent ID
   model: {
@@ -30,21 +44,17 @@ const agentId = await runtime.createAgent({
     baseUrl: "https://api.openai.com/v1",
     apiKey: process.env.OPENAI_API_KEY!,
   },
-  definition: {
-    name: "workspace-assistant",
-    description: "Assist with the current workspace.",
-    prompt: "You are helpful.",
-    contexts: ["workspace"],
+  definition: { name: "workspace-assistant" },
+  resourceView: {
+    agents: ["workspace"],
+    tools: [],
+    skills: ["workspace"],
+    phases: ["workspace"],
   },
-  resources: {
-    tools: createCoreTools({ root: process.cwd() }),
-    skills,
-    contexts: [{
-      name: "workspace",
-      value: { root: process.cwd() },
-    }],
-    phases,
-  },
+  contexts: [{
+    name: "workspace",
+    value: { root: process.cwd() },
+  }],
 });
 
 const run = await runtime.start(agentId, "Summarize the workspace.", {
@@ -93,8 +103,8 @@ lifecycles, and Owner fencing.
 
 ## Tool lifecycle
 
-Tools are supplied as `AgentConfig.resources.tools`, selected by the
-Definition, and persist through:
+Tools are registered under a source, selected by the Definition, and persist
+through:
 
 `pending → running → completed | failed | indeterminate`
 
@@ -150,17 +160,13 @@ await runtime.loadAgents({
     prompt: "You are helpful.",
   }],
 });
-await runtime.loadTools({
-  sourceId: "workspace",
-  values: createCoreTools({ root: process.cwd() }),
-});
 
 const agentId = await runtime.createAgent({
   identity: "workspace:v1",
   definition: { name: "workspace-assistant" },
   resourceView: {
     agents: ["workspace"],
-    tools: ["workspace"],
+    tools: [],
     skills: [],
     phases: [],
   },
@@ -176,8 +182,10 @@ const agentId = await runtime.createAgent({
 
 Each `load*()` call replaces one source atomically; use `directory` or inline
 `values`. `resourceView` controls visibility, so same-name resources can live
-in isolated sources but collide when selected together. The built-in `route`
-Tool and `default` Phase are always available and cannot be overridden.
+in isolated sources but collide when selected together. The Runtime supplies the
+core `read`/`bash`/`edit`/`write`/`route` Tools itself; its `rowan.core` source
+holds the built-in Phases, so list it when a Definition selects one. Core names
+cannot be claimed by another source.
 
 Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
 `bootstrap`; after initialization they are frozen until the Runtime closes.
@@ -185,34 +193,22 @@ Definition name lists narrow the selected Tools, Skills, and Phases: omission
 inherits all candidates, `[]` selects none, and missing names are skipped. The
 same rule applies to `definition.contexts`.
 
-### Resources and Definition
+### Registration, Definition, and View
 
-`resources` and `definition` have different jobs:
+Registration, selection, and visibility have different jobs:
 
-- `resources` supplies the concrete candidates available to one Agent. Its
-  Tools contain executable `execute()` functions; Skills and Phases contain
-  their loaded content; Contexts contain JSON-safe values.
-- `definition` declares which candidates this Agent uses. `tools`, `skills`,
+- A **source** supplies resources. Tools carry their executable `execute()`,
+  Skills and Phases carry their loaded content, and a Definition carries its
+  prompt. Register them with `runtime.loadAgents/loadSkills/loadPhases/loadTools`.
+- The **Definition** declares what one Agent uses. `tools`, `skills`,
   `contexts`, and `phases` are name-based selectors; they cannot create a
-  resource that is absent from `resources`.
+  resource that no selected source holds.
+- The **Resource View** decides which sources the Agent can see at all, by
+  stable source ID.
 
-For a single-process embedding, provide concrete resources directly and omit
-the selectors when the Agent should use everything:
-
-```ts
-const agentId = await runtime.createAgent({
-  identity: "workspace:v1",
-  definition: {
-    name: "workspace-assistant",
-    description: "Assist with the current workspace.",
-    prompt: "You are helpful.",
-  },
-  resources: { tools, skills, contexts, phases },
-  model,
-});
-```
-
-Use selectors when several Agents share a candidate pool:
+Contexts are the exception: `contexts` and `additionalContexts` ship with the
+configuration request, because they carry host values rather than registered
+resources. Use selectors when several Agents share a candidate pool:
 
 ```ts
 definition: {
@@ -225,10 +221,6 @@ definition: {
 }
 ```
 
-For process-boundary persistence, use the Resource Registry form shown above:
-`resourceView` stores stable source IDs instead of executable resource
-closures, and the Runtime resolves those sources into an immutable
-Configuration Snapshot. This lets a restarted Runtime resolve the same
-resource revisions while keeping each Run pinned to the snapshot that created
-it. Direct `resources` are simpler for embedding; `resourceView` is the
-declarative form for shared, reloadable, and restart-resolvable resources.
+Each Run resolves its view once into an immutable Configuration Snapshot and
+stays pinned to it: replacing a source afterwards cannot change an active or
+input-waiting Run, and a restarted Runtime re-resolves the same source IDs.

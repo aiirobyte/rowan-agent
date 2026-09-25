@@ -104,36 +104,12 @@ export function resolveConfigurationSnapshot(
   } as ConfigurationSnapshot;
 }
 
-/** Materialize the immutable resolver output at the legacy execution seam.
- * The conversion is intentionally one-way: callers cannot feed concrete
- * candidate bags back through the public configuration request. */
-export function materializeConfigurationSnapshot(snapshot: ConfigurationSnapshot): import("./contracts").AgentConfig {
-  return {
-    identity: snapshot.identity,
-    definition: snapshot.definition,
-    resources: {
-      tools: snapshot.resources.tools,
-      skills: snapshot.resources.skills,
-      ...(snapshot.resources.phases ? { phases: snapshot.resources.phases } : {}),
-      ...(snapshot.contexts.length > 0 ? { contexts: snapshot.contexts } : {}),
-      resourceView: snapshot.resourceView,
-      resourceRefs: [
-        ...snapshot.resources.refs.agent,
-        ...snapshot.resources.refs.tool,
-        ...snapshot.resources.refs.skill,
-        ...snapshot.resources.refs.phase,
-      ],
-      resourceRevisions: snapshot.resources.revisions,
-    },
-    ...(snapshot.additionalContexts.length > 0
-      ? { additionalContexts: snapshot.additionalContexts }
-      : {}),
-    ...(snapshot.cwd === undefined ? {} : { cwd: snapshot.cwd }),
-    ...(snapshot.maxAttempts === undefined ? {} : { maxAttempts: snapshot.maxAttempts }),
-    ...("stream" in snapshot && snapshot.stream
-      ? { model: snapshot.model, stream: snapshot.stream }
-      : { model: snapshot.model }),
-  } as import("./contracts").AgentConfig;
+/** Whether one stored configuration is already a resolved snapshot. A snapshot
+ * is used as it stands; a request is resolved against the current sources. */
+export function isConfigurationSnapshot(
+  config: AgentConfiguration | ConfigurationSnapshot,
+): config is ConfigurationSnapshot {
+  return "resources" in config;
 }
 
 function applyDefinitionLayer(base: AgentDefinition, layer: DefinitionLayer | undefined): AgentDefinition {
