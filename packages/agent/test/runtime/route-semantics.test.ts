@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type Tool } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, type Tool } from "../../src";
 import type { Phase } from "../../src/harness/phases/types";
 import { createDefaultPhase, createStopPhase } from "../../src/harness/phases/core-phases";
 import { createRouteTool } from "../../src/harness/tools/route-tool";

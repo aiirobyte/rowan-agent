@@ -11,7 +11,7 @@ function phaseAgent(
     identity: string;
     stream: StreamFn;
     phases?: Map<string, Phase> | Readonly<{ phases: Map<string, Phase>; entryPhaseId: string | null }>;
-    skills?: readonly Parameters<typeof createAgentWith>[1]["skills"] extends readonly (infer Skill)[] | undefined ? Skill : never;
+    skills?: NonNullable<Parameters<AgentRuntime["loadSkills"]>[0]["values"]>;
     entryPhaseId?: string | null;
     options?: Readonly<{ idempotencyKey?: string }>;
   }>,
