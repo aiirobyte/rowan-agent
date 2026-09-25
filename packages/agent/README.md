@@ -183,8 +183,9 @@ const agentId = await runtime.createAgent({
 Each `load*()` call replaces one source atomically; use `directory` or inline
 `values`. `resourceView` controls visibility, so same-name resources can live
 in isolated sources but collide when selected together. The Runtime supplies the
-core `read`/`bash`/`edit`/`write`/`route` Tools itself; its `rowan.core` source
-holds the built-in Phases, so list it when a Definition selects one. Core names
+core `read`/`bash`/`edit`/`write`/`route` Tools itself, and its `rowan.core`
+source — like an Extension's `rowan.extensions` — is implicit in every view, so
+a Definition can select a built-in Phase without naming that source. Core names
 cannot be claimed by another source.
 
 Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
