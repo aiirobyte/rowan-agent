@@ -32,6 +32,8 @@ export type PhaseInteractionDriver = Readonly<{
   }>): PhaseInteraction;
   pending(): readonly PhaseInteraction[];
   answers(): ReadonlyMap<string, JsonValue>;
+  checkpoint(): JsonValue | undefined;
+  clearCheckpoint(): void;
   suspend(input?: Readonly<{ checkpoint?: JsonValue }>): never;
 }>;
 
@@ -145,6 +147,15 @@ export function createPhaseInteractionDriver(
 
     answers(): ReadonlyMap<string, JsonValue> {
       return new Map(answers);
+    },
+
+    checkpoint(): JsonValue | undefined {
+      return checkpoint;
+    },
+
+    clearCheckpoint(): void {
+      checkpoint = undefined;
+      sync();
     },
 
     suspend(input = {}): never {

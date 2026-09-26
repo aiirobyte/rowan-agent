@@ -34,6 +34,7 @@ import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import { HooksManager } from "./hooks";
 import type {
+  BeforeToolCallResult,
   HookEventType,
   HookHandler,
   HookResultMap,
@@ -490,11 +491,23 @@ export class ExtensionRunner {
   async emitBeforeToolCall(
     tool: Tool,
     args: unknown,
-  ): Promise<{ allow: boolean; reason?: string }> {
+    context?: {
+      runId?: string;
+      agentId?: string;
+      toolCallId?: string;
+      metadata?: Readonly<Record<string, unknown>>;
+      answer?: unknown;
+    },
+  ): Promise<BeforeToolCallResult> {
     const result = await this.emitHook("before_tool_call", {
       type: "before_tool_call",
       tool,
       args,
+      ...(context?.runId !== undefined ? { runId: context.runId } : {}),
+      ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
+      ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
+      ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
+      ...(context?.answer !== undefined ? { answer: context.answer } : {}),
     });
     return result ?? { allow: true };
   }
@@ -502,11 +515,21 @@ export class ExtensionRunner {
   async emitAfterToolCall(
     tool: Tool,
     result: ToolResult,
+    context?: {
+      runId?: string;
+      agentId?: string;
+      toolCallId?: string;
+      metadata?: Readonly<Record<string, unknown>>;
+    },
   ): Promise<ToolResult> {
     const hookResult = await this.emitHook("after_tool_call", {
       type: "after_tool_call",
       tool,
       result,
+      ...(context?.runId !== undefined ? { runId: context.runId } : {}),
+      ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
+      ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
+      ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
     });
     return hookResult?.result ?? result;
   }

@@ -24,6 +24,7 @@ import type {
   RunState,
   RunSummary,
   BeforeToolCall,
+  BeforeToolCallDecision,
   AfterToolCall,
   MessageRevisionResult,
   HistorySeed,
@@ -47,6 +48,7 @@ import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
 import type { PhaseRegistry } from "../harness/phases/types";
+import { PhaseInteractionBoundary, PhaseInteractionCancelledError, type PhaseInteractionDriver } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
 import { assertJsonValue, isJsonValue } from "./json";
@@ -662,7 +664,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         },
         onContext: assembly.setContext,
         runtime: {
-          tools: ({ toolCall }: { config: import("../loop/types").AgentConfig; toolCall: ToolCall }) => {
+          tools: ({ toolCall, driver }: import("../loop/types").ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -672,6 +674,8 @@ export class AgentRuntime implements AgentRuntimeContract {
                 toolConfig: executionTools,
                 toolCalls: [toolCall],
                 signal: controller.signal,
+                driver,
+                onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
               return execution.results[0]!;
@@ -679,7 +683,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
           },
-          toolsBatch: ({ toolCalls }: { config: import("../loop/types").AgentConfig; toolCalls: readonly ToolCall[] }) => {
+          toolsBatch: ({ toolCalls, driver }: { config: import("../loop/types").AgentConfig; toolCalls: readonly ToolCall[]; driver?: import("../harness/phases/interactions").PhaseInteractionDriver }) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -689,6 +693,8 @@ export class AgentRuntime implements AgentRuntimeContract {
                 toolConfig: executionTools,
                 toolCalls,
                 signal: controller.signal,
+                driver,
+                onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
               return execution.results;
@@ -730,11 +736,13 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "input_required") {
-        const output = latestAssistant(
-          run,
-          result.messages.slice(modelMessages.length),
-          modelMessages.length,
-        );
+        const output = (result.interactions && result.interactions.length > 0)
+          ? undefined
+          : latestAssistant(
+              run,
+              result.messages.slice(modelMessages.length),
+              modelMessages.length,
+            );
         const prompt = output ?? promptMessage(run, result.request.prompt, result.messages.length);
         await this.owned.commitInputRequired({
           runId: run.id,
@@ -821,6 +829,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     toolConfig: ExecutionToolConfig;
     toolCall: ToolCall;
     signal: AbortSignal;
+    driver?: PhaseInteractionDriver;
   }): Promise<{ result: ToolResult; revision: number }> {
     const batch = await this.executeToolBatch({ ...input, toolCalls: [input.toolCall] });
     return { result: batch.results[0]!, revision: batch.revision };
@@ -834,128 +843,470 @@ export class AgentRuntime implements AgentRuntimeContract {
     toolConfig: ExecutionToolConfig;
     toolCalls: readonly ToolCall[];
     signal: AbortSignal;
+    driver?: PhaseInteractionDriver;
+    onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
-    const reserved = await this.owned.reserveToolCalls({
-      runId: input.run.id,
-      execution: input.execution,
-      expectedRevision: input.expectedRevision,
-      requestMessageId: createId("msg") as MessageId,
-      calls: input.toolCalls.map((toolCall) => ({
-        providerToolCallId: toolCall.id,
-        name: toolCall.name,
-        args: toJsonValue(toolCall.args),
-      })),
-    });
-    let revision = reserved.run.revision;
-    const results: ToolResult[] = [];
-    for (let index = 0; index < input.toolCalls.length; index += 1) {
-      const toolCall = input.toolCalls[index]!;
-      const tool = reserved.toolCalls[index]!;
-      const execution = await this.executeReservedTool({
-        ...input,
-        toolCall,
-        tool,
-        expectedRevision: revision,
-      });
-      revision = execution.revision;
-      results.push(execution.result);
-    }
-    return { results, revision };
-  }
+    const checkpoint = input.driver?.checkpoint();
+    const isSuspensionResume = checkpoint && typeof checkpoint === "object" && (checkpoint as any).kind === "tool_call_suspension";
+    const suspension = isSuspensionResume ? (checkpoint as {
+      kind: "tool_call_suspension";
+      toolCalls: readonly ToolCall[];
+      pendingIndex: number;
+      toolCallId?: ToolCallId;
+      interactionId?: string;
+      completedResults: readonly ToolResult[];
+    }) : undefined;
 
-  private async executeReservedTool(input: {
-    run: RunRecord;
-    agentMetadata?: import("../runtime-events").Metadata;
-    execution: import("./contracts").ExecutionToken;
-    expectedRevision: number;
-    toolConfig: ExecutionToolConfig;
-    toolCall: ToolCall;
-    tool: import("../runtime-events").ToolCallSnapshot;
-    signal: AbortSignal;
-  }): Promise<{ result: ToolResult; revision: number }> {
-    const durableTool = input.toolConfig.tools.find((candidate) => candidate.name === input.toolCall.name);
-    const providerToolCallId = input.toolCall.id;
-    const toolCallId = input.tool.id;
     let revision = input.expectedRevision;
-    const protocolFailure = (error: string): ToolResult => ({ toolCallId: providerToolCallId, toolName: input.toolCall.name, ok: false, content: null, error });
-    if (!durableTool) {
-      const failed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "failed", result: { ok: false, content: null, error: `Tool ${input.toolCall.name} is not available.` } });
-      return { result: protocolFailure(`Tool ${input.toolCall.name} is not available.`), revision: failed.run.revision };
-    }
+    const setRevision = (newRevision: number) => {
+      revision = newRevision;
+      input.onRevision?.(revision);
+    };
 
-    let progressActive = false;
-    const context = {
-      agentId: input.run.agentId,
-      runId: input.run.id,
-      ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
-      ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
-      toolCallId,
-      reportProgress: (progress: JsonValue) => {
-        const active = this.executions.get(input.run.id);
-        if (
-          !progressActive
-          || this.closed
-          || input.signal.aborted
-          || active?.executionId !== input.execution.executionId
-          || !isJsonValue(progress)
-        ) return;
-        let copy: JsonValue;
-        try {
-          if (JSON.stringify(progress).length > 64 * 1024) return;
-          copy = structuredClone(progress);
-        } catch {
-          return;
+    // If not resuming and more than 1 tool call, check if we can reserve all tools atomically in one message
+    if (!suspension && input.toolCalls.length > 1) {
+      let hasInteraction = false;
+      const preDecisions: BeforeToolCallDecision[] = [];
+      const toolCallIds: ToolCallId[] = input.toolCalls.map(() => createId("tool") as ToolCallId);
+
+      for (let i = 0; i < input.toolCalls.length; i++) {
+        const toolCall = input.toolCalls[i]!;
+        const durableTool = input.toolConfig.tools.find((c) => c.name === toolCall.name);
+        if (!durableTool || !input.toolConfig.beforeToolCall) {
+          preDecisions.push({ allow: true });
+          continue;
         }
-        this.transientEvents.publish({
-          kind: "tool_progress",
-          durability: "transient",
+        const toolCallId = toolCallIds[i]!;
+        const context = {
+          agentId: input.run.agentId,
           runId: input.run.id,
-          executionId: input.execution.executionId,
+          ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
+          ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
           toolCallId,
-          progress: copy,
-        });
-      },
-    } as const;
-    try {
-      if (input.toolConfig.beforeToolCall) {
-        const decision = await input.toolConfig.beforeToolCall({ tool: durableTool, args: toJsonValue(input.toolCall.args), context, signal: input.signal });
-        if (!decision.allow) {
-          const failed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "failed", result: { ok: false, content: null, error: decision.reason } });
-          return { result: protocolFailure(decision.reason), revision: failed.run.revision };
+          reportProgress: () => {},
+        };
+        try {
+          const decision = await input.toolConfig.beforeToolCall({
+            tool: durableTool,
+            args: toJsonValue(toolCall.args),
+            context,
+            signal: input.signal,
+          });
+          if ("interaction" in decision && decision.interaction !== undefined) {
+            hasInteraction = true;
+            break;
+          }
+          preDecisions.push(decision);
+        } catch {
+          preDecisions.push({ allow: true });
         }
       }
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Tool policy rejected the call.";
-      const failed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "failed", result: { ok: false, content: null, error: reason } });
-      return { result: protocolFailure(reason), revision: failed.run.revision };
+
+      if (!hasInteraction) {
+        const reserved = await this.owned.reserveToolCalls({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          requestMessageId: createId("msg") as MessageId,
+          calls: input.toolCalls.map((tc, i) => ({
+            toolCallId: toolCallIds[i]!,
+            providerToolCallId: tc.id,
+            name: tc.name,
+            args: toJsonValue(tc.args),
+          })),
+        });
+        setRevision(reserved.run.revision);
+
+        const results: ToolResult[] = [];
+        for (let i = 0; i < input.toolCalls.length; i++) {
+          const toolCall = input.toolCalls[i]!;
+          const durableTool = input.toolConfig.tools.find((c) => c.name === toolCall.name);
+          const providerToolCallId = toolCall.id;
+          const toolCallId = toolCallIds[i]!;
+          const protocolFailure = (error: string): ToolResult => ({
+            toolCallId: providerToolCallId,
+            toolName: toolCall.name,
+            ok: false,
+            content: null,
+            error,
+          });
+
+          if (!durableTool) {
+            const failed = await this.owned.commitToolResult({
+              runId: input.run.id,
+              execution: input.execution,
+              expectedRevision: revision,
+              toolCallId,
+              state: "failed",
+              result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+            });
+            setRevision(failed.run.revision);
+            results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
+            continue;
+          }
+
+          const decision = preDecisions[i] ?? { allow: true };
+          if ("allow" in decision && !decision.allow) {
+            const failed = await this.owned.commitToolResult({
+              runId: input.run.id,
+              execution: input.execution,
+              expectedRevision: revision,
+              toolCallId,
+              state: "failed",
+              result: { ok: false, content: null, error: decision.reason },
+            });
+            setRevision(failed.run.revision);
+            results.push(protocolFailure(decision.reason));
+            continue;
+          }
+
+          let progressActive = false;
+          const context = {
+            agentId: input.run.agentId,
+            runId: input.run.id,
+            ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
+            ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
+            toolCallId,
+            reportProgress: (progress: JsonValue) => {
+              const active = this.executions.get(input.run.id);
+              if (
+                !progressActive
+                || this.closed
+                || input.signal.aborted
+                || active?.executionId !== input.execution.executionId
+                || !isJsonValue(progress)
+              ) return;
+              let copy: JsonValue;
+              try {
+                if (JSON.stringify(progress).length > 64 * 1024) return;
+                copy = structuredClone(progress);
+              } catch {
+                return;
+              }
+              this.transientEvents.publish({
+                kind: "tool_progress",
+                durability: "transient",
+                runId: input.run.id,
+                executionId: input.execution.executionId,
+                toolCallId,
+                progress: copy,
+              });
+            },
+          } as const;
+
+          const started = await this.owned.startToolCall({
+            runId: input.run.id,
+            execution: input.execution,
+            expectedRevision: revision,
+            toolCallId,
+          });
+          setRevision(started.run.revision);
+          progressActive = true;
+
+          try {
+            let result = await durableTool.execute(toJsonValue(toolCall.args), context, input.signal);
+            assertToolExecutionResult(result);
+            if (input.toolConfig.afterToolCall) {
+              result = await input.toolConfig.afterToolCall({
+                tool: durableTool,
+                result,
+                context,
+                signal: input.signal,
+              });
+            }
+            assertToolExecutionResult(result);
+            result = await spillLargeToolResult(
+              result,
+              this.archiveDirFor(input.run.agentId),
+              toolCall.name,
+            );
+            const committed = await this.owned.commitToolResult({
+              runId: input.run.id,
+              execution: input.execution,
+              expectedRevision: revision,
+              toolCallId,
+              state: result.ok ? "completed" : "failed",
+              result,
+            });
+            setRevision(committed.run.revision);
+            results.push({
+              toolCallId: providerToolCallId,
+              toolName: toolCall.name,
+              ...result,
+            });
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
+            const indeterminate = await this.owned.commitToolResult({
+              runId: input.run.id,
+              execution: input.execution,
+              expectedRevision: revision,
+              toolCallId,
+              state: "indeterminate",
+              reason,
+              result: { ok: false, content: null, error: reason },
+            });
+            setRevision(indeterminate.run.revision);
+            results.push(protocolFailure(reason));
+          } finally {
+            progressActive = false;
+            this.transientEvents.clearTool(input.run.id, toolCallId);
+          }
+        }
+
+        return { results, revision };
+      }
     }
 
-    const started = await this.owned.startToolCall({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId });
-    revision = started.run.revision;
-    progressActive = true;
-    try {
-      let result = await durableTool.execute(toJsonValue(input.toolCall.args), context, input.signal);
-      assertToolExecutionResult(result);
-      if (input.toolConfig.afterToolCall) result = await input.toolConfig.afterToolCall({ tool: durableTool, result, context, signal: input.signal });
-      assertToolExecutionResult(result);
-      result = await spillLargeToolResult(
-        result,
-        this.archiveDirFor(input.run.agentId),
-        input.toolCall.name,
-      );
-      const committed = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: result.ok ? "completed" : "failed", result });
-      return {
-        result: { toolCallId: providerToolCallId, toolName: input.toolCall.name, ...result },
-        revision: committed.run.revision,
-      };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
-      const indeterminate = await this.owned.commitToolResult({ runId: input.run.id, execution: input.execution, expectedRevision: revision, toolCallId, state: "indeterminate", reason, result: { ok: false, content: null, error: reason } });
-      return { result: protocolFailure(reason), revision: indeterminate.run.revision };
-    } finally {
-      progressActive = false;
-      this.transientEvents.clearTool(input.run.id, toolCallId);
+    const results: ToolResult[] = suspension ? [...suspension.completedResults] : [];
+    const startIndex = suspension ? suspension.pendingIndex : 0;
+
+    for (let index = startIndex; index < input.toolCalls.length; index += 1) {
+      const toolCall = input.toolCalls[index]!;
+      const durableTool = input.toolConfig.tools.find((candidate) => candidate.name === toolCall.name);
+      const providerToolCallId = toolCall.id;
+      const toolCallId: ToolCallId = (suspension && index === suspension.pendingIndex && suspension.toolCallId)
+        ? suspension.toolCallId
+        : (createId("tool") as ToolCallId);
+
+      const protocolFailure = (error: string): ToolResult => ({
+        toolCallId: providerToolCallId,
+        toolName: toolCall.name,
+        ok: false,
+        content: null,
+        error,
+      });
+
+      if (!durableTool) {
+        const reserved = await this.owned.reserveToolCalls({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          requestMessageId: createId("msg") as MessageId,
+          calls: [{
+            toolCallId,
+            providerToolCallId,
+            name: toolCall.name,
+            args: toJsonValue(toolCall.args),
+          }],
+        });
+        setRevision(reserved.run.revision);
+        const failed = await this.owned.commitToolResult({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          toolCallId,
+          state: "failed",
+          result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+        });
+        setRevision(failed.run.revision);
+        results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
+        continue;
+      }
+
+      let progressActive = false;
+      const context = {
+        agentId: input.run.agentId,
+        runId: input.run.id,
+        ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
+        ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
+        toolCallId,
+        reportProgress: (progress: JsonValue) => {
+          const active = this.executions.get(input.run.id);
+          if (
+            !progressActive
+            || this.closed
+            || input.signal.aborted
+            || active?.executionId !== input.execution.executionId
+            || !isJsonValue(progress)
+          ) return;
+          let copy: JsonValue;
+          try {
+            if (JSON.stringify(progress).length > 64 * 1024) return;
+            copy = structuredClone(progress);
+          } catch {
+            return;
+          }
+          this.transientEvents.publish({
+            kind: "tool_progress",
+            durability: "transient",
+            runId: input.run.id,
+            executionId: input.execution.executionId,
+            toolCallId,
+            progress: copy,
+          });
+        },
+      } as const;
+
+      const answer = (suspension && index === suspension.pendingIndex && suspension.interactionId)
+        ? input.driver?.answers().get(suspension.interactionId)
+        : undefined;
+
+      try {
+        if (input.toolConfig.beforeToolCall) {
+          const decision = await input.toolConfig.beforeToolCall({
+            tool: durableTool,
+            args: toJsonValue(toolCall.args),
+            context,
+            signal: input.signal,
+            answer,
+          });
+
+          if ("interaction" in decision && decision.interaction !== undefined) {
+            if (!input.driver) {
+              throw new Error("Tool call requested interaction but no interaction driver is active.");
+            }
+            const interactionRequest = input.driver.request({
+              id: decision.interaction.id,
+              kind: decision.interaction.kind,
+              prompt: decision.interaction.prompt,
+              payload: decision.interaction.payload,
+            });
+            input.driver.suspend({
+              checkpoint: {
+                kind: "tool_call_suspension",
+                toolCalls: input.toolCalls,
+                pendingIndex: index,
+                toolCallId,
+                interactionId: interactionRequest.id,
+                completedResults: results,
+              } as unknown as JsonValue,
+            });
+          }
+
+          if ("allow" in decision && !decision.allow) {
+            const reserved = await this.owned.reserveToolCalls({
+              runId: input.run.id,
+              execution: input.execution,
+              expectedRevision: revision,
+              requestMessageId: createId("msg") as MessageId,
+              calls: [{
+                toolCallId,
+                providerToolCallId,
+                name: toolCall.name,
+                args: toJsonValue(toolCall.args),
+              }],
+            });
+            setRevision(reserved.run.revision);
+            const failed = await this.owned.commitToolResult({
+              runId: input.run.id,
+              execution: input.execution,
+              expectedRevision: revision,
+              toolCallId,
+              state: "failed",
+              result: { ok: false, content: null, error: decision.reason },
+            });
+            setRevision(failed.run.revision);
+            results.push(protocolFailure(decision.reason));
+            continue;
+          }
+        }
+      } catch (error) {
+        if (error instanceof PhaseInteractionBoundary || error instanceof PhaseInteractionCancelledError) {
+          throw error;
+        }
+        const reason = error instanceof Error ? error.message : "Tool policy rejected the call.";
+        const reserved = await this.owned.reserveToolCalls({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          requestMessageId: createId("msg") as MessageId,
+          calls: [{
+            toolCallId,
+            providerToolCallId,
+            name: toolCall.name,
+            args: toJsonValue(toolCall.args),
+          }],
+        });
+        setRevision(reserved.run.revision);
+        const failed = await this.owned.commitToolResult({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          toolCallId,
+          state: "failed",
+          result: { ok: false, content: null, error: reason },
+        });
+        setRevision(failed.run.revision);
+        results.push(protocolFailure(reason));
+        continue;
+      }
+
+      // Tool call is approved to execute
+      const reserved = await this.owned.reserveToolCalls({
+        runId: input.run.id,
+        execution: input.execution,
+        expectedRevision: revision,
+        requestMessageId: createId("msg") as MessageId,
+        calls: [{
+          toolCallId,
+          providerToolCallId,
+          name: toolCall.name,
+          args: toJsonValue(toolCall.args),
+        }],
+      });
+      setRevision(reserved.run.revision);
+
+      const started = await this.owned.startToolCall({
+        runId: input.run.id,
+        execution: input.execution,
+        expectedRevision: revision,
+        toolCallId,
+      });
+      setRevision(started.run.revision);
+      progressActive = true;
+
+      try {
+        let result = await durableTool.execute(toJsonValue(toolCall.args), context, input.signal);
+        assertToolExecutionResult(result);
+        if (input.toolConfig.afterToolCall) {
+          result = await input.toolConfig.afterToolCall({
+            tool: durableTool,
+            result,
+            context,
+            signal: input.signal,
+          });
+        }
+        assertToolExecutionResult(result);
+        result = await spillLargeToolResult(
+          result,
+          this.archiveDirFor(input.run.agentId),
+          toolCall.name,
+        );
+        const committed = await this.owned.commitToolResult({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          toolCallId,
+          state: result.ok ? "completed" : "failed",
+          result,
+        });
+        setRevision(committed.run.revision);
+        results.push({
+          toolCallId: providerToolCallId,
+          toolName: toolCall.name,
+          ...result,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
+        const indeterminate = await this.owned.commitToolResult({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          toolCallId,
+          state: "indeterminate",
+          reason,
+          result: { ok: false, content: null, error: reason },
+        });
+        setRevision(indeterminate.run.revision);
+        results.push(protocolFailure(reason));
+      } finally {
+        progressActive = false;
+        this.transientEvents.clearTool(input.run.id, toolCallId);
+      }
     }
+
+    input.driver?.clearCheckpoint();
+    return { results, revision };
   }
 
   private async requireAgent(agentId: AgentId): Promise<AgentRecord> {

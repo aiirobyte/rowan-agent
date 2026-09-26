@@ -1,5 +1,16 @@
 import type { Outcome, Tool, ToolResult } from "../types";
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
+import type { JsonValue } from "../runtime-events";
+import type { PhaseInteractionKind } from "../harness/phases/interactions";
+
+export type ToolCallInteractionKind = PhaseInteractionKind;
+
+export interface ToolCallInteractionRequest {
+  id?: string;
+  kind: ToolCallInteractionKind;
+  prompt: string;
+  payload?: JsonValue;
+}
 
 export interface BeforePhaseEvent {
   type: "before_phase";
@@ -23,12 +34,21 @@ export interface BeforeToolCallEvent {
   type: "before_tool_call";
   tool: Tool;
   args: unknown;
+  readonly runId?: string;
+  readonly agentId?: string;
+  readonly toolCallId?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly answer?: unknown;
 }
 
 export interface AfterToolCallEvent {
   type: "after_tool_call";
   tool: Tool;
   result: ToolResult;
+  readonly runId?: string;
+  readonly agentId?: string;
+  readonly toolCallId?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 export type HookEvent =
@@ -55,8 +75,9 @@ export interface BeforePromptResult {
 }
 
 export interface BeforeToolCallResult {
-  allow: boolean;
+  allow?: boolean;
   reason?: string;
+  interaction?: ToolCallInteractionRequest;
 }
 
 export interface AfterToolCallResult {

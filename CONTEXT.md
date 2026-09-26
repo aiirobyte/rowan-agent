@@ -263,3 +263,8 @@ _Avoid_: Shell command, Tool Event
 **Indeterminate Tool Call**:
 A Tool Call whose external effect may have happened but whose determinate result was not durably committed. It terminates the Run and is never retried automatically.
 _Avoid_: Failed Tool Call, retryable error
+
+**Tool Call Interaction**:
+A durable, typed interaction boundary requested before a Tool Call executes (e.g. for user permission, approval, or confirmation). Reuses the generic Phase Interaction and suspension model; when answered, the tool call re-enters with the answer provided to the hook.
+_Avoid_: Interactive Tool, Tool Prompt, Synchronous Confirmation Modal
+

@@ -28,7 +28,7 @@ import type {
   Phase,
   PhaseRegistry,
 } from "../harness/phases";
-import { createPhaseInteractionDriver } from "../harness/phases/interactions";
+import { createPhaseInteractionDriver, type PhaseInteractionDriver } from "../harness/phases/interactions";
 import { readPhaseContent } from "../harness/phases";
 import { preparePhasePayload } from "../harness/phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
@@ -406,42 +406,63 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       ...ctx.context,
       messages: ctx.messageManager.visible(),
     };
-    const collected = await ctx.execution.invokeModel(roundContext);
 
-    output = {
-      message: collected.text,
-      phase: ctx.phase.name,
-      // A route decision sharing a model response with an ordinary Tool is
-      // rejected for this round. Keep ordinary calls visible so they can run,
-      // but do not let the route escape the error/re-decision boundary.
-      toolCalls: collected.toolCalls.some((candidate) => candidate.name === PhaseRouteTool)
-        && collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
-        ? collected.toolCalls.filter((candidate) => candidate.name !== PhaseRouteTool)
-        : collected.toolCalls,
-    };
-
-    for (const toolCall of collected.toolCalls) {
-      if (toolCall.name !== PhaseRouteTool) continue;
-      const messageId = ctx.messageManager.start(
-        "tool",
-        createRouteToolResultContent(
-          toolCall,
-          collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
-            ? "Route must be called separately after ordinary tools finish; this route decision was ignored."
-            : undefined,
-        ),
-        {
-        phase: ctx.phase.name,
-        },
+    let executableToolCalls: readonly ToolCall[];
+    const checkpoint = ctx.execution.interaction.checkpoint();
+    if (checkpoint && typeof checkpoint === "object" && (checkpoint as any).kind === "tool_call_suspension") {
+      const toolSuspension = checkpoint as {
+        kind: "tool_call_suspension";
+        toolCalls: readonly ToolCall[];
+        pendingIndex: number;
+        interactionId?: string;
+        completedResults: readonly ToolResult[];
+      };
+      executableToolCalls = toolSuspension.toolCalls.filter((toolCall: ToolCall) =>
+        executableToolNames.has(toolCall.name),
       );
-      await ctx.messageManager.end(messageId);
-    }
+      output = {
+        message: "",
+        phase: ctx.phase.name,
+        toolCalls: [...toolSuspension.toolCalls],
+      };
+    } else {
+      const collected = await ctx.execution.invokeModel(roundContext);
 
-    const executableToolCalls = collected.toolCalls.filter((toolCall) =>
-      executableToolNames.has(toolCall.name),
-    );
-    if (executableToolCalls.length === 0) {
-      return output;
+      output = {
+        message: collected.text,
+        phase: ctx.phase.name,
+        // A route decision sharing a model response with an ordinary Tool is
+        // rejected for this round. Keep ordinary calls visible so they can run,
+        // but do not let the route escape the error/re-decision boundary.
+        toolCalls: collected.toolCalls.some((candidate) => candidate.name === PhaseRouteTool)
+          && collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
+          ? collected.toolCalls.filter((candidate) => candidate.name !== PhaseRouteTool)
+          : collected.toolCalls,
+      };
+
+      for (const toolCall of collected.toolCalls) {
+        if (toolCall.name !== PhaseRouteTool) continue;
+        const messageId = ctx.messageManager.start(
+          "tool",
+          createRouteToolResultContent(
+            toolCall,
+            collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
+              ? "Route must be called separately after ordinary tools finish; this route decision was ignored."
+              : undefined,
+          ),
+          {
+            phase: ctx.phase.name,
+          },
+        );
+        await ctx.messageManager.end(messageId);
+      }
+
+      executableToolCalls = collected.toolCalls.filter((toolCall) =>
+        executableToolNames.has(toolCall.name),
+      );
+      if (executableToolCalls.length === 0) {
+        return output;
+      }
     }
 
     const results = await ctx.execution.executeTools(roundContext, executableToolCalls);
@@ -1086,12 +1107,14 @@ async function executeToolCall(input: {
   config: AgentConfig;
   tools: Tool[];
   toolCall: ToolCall;
+  driver?: PhaseInteractionDriver;
 }): Promise<ToolResult> {
   let result: ToolResult;
   if (input.config.runtime?.tools) {
     result = await input.config.runtime.tools({
       config: input.config,
       toolCall: input.toolCall,
+      driver: input.driver,
     });
   } else {
     const toolContext = {
@@ -1121,11 +1144,13 @@ async function executeToolCalls(input: {
   config: AgentConfig;
   tools: Tool[];
   toolCalls: readonly ToolCall[];
+  driver?: PhaseInteractionDriver;
 }): Promise<readonly ToolResult[]> {
   if (input.config.runtime?.toolsBatch) {
     const results = await input.config.runtime.toolsBatch({
       config: input.config,
       toolCalls: input.toolCalls,
+      driver: input.driver,
     });
     if (results.length !== input.toolCalls.length) throw new Error("Runtime returned an invalid Tool batch result");
     return results.map((result, index) => ({
@@ -1249,6 +1274,7 @@ function createPhaseExecution(
           },
           tools,
           toolCall,
+          driver: interaction,
         });
         await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
         return result;
@@ -1272,6 +1298,7 @@ function createPhaseExecution(
           },
           tools,
           toolCalls,
+          driver: interaction,
         });
         for (const result of results) {
           await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);

@@ -36,7 +36,7 @@ import type {
 } from "../runtime-events";
 import type { Skill } from "../protocol";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import type { PhaseInteraction } from "../harness/phases/interactions";
+import type { PhaseInteraction, PhaseInteractionKind } from "../harness/phases/interactions";
 import type { AgentDefinition } from "../harness/definitions";
 import type {
   LoadInput,
@@ -177,12 +177,25 @@ export type Tool = Readonly<{
 }>;
 export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
 export type ProviderToolDefinition = Readonly<{ name: string; description: string; parameters: JsonObject }>;
+export type ToolCallInteractionRequest = Readonly<{
+  id?: string;
+  kind: PhaseInteractionKind;
+  prompt: string;
+  payload?: JsonValue;
+}>;
+
+export type BeforeToolCallDecision =
+  | Readonly<{ allow: true }>
+  | Readonly<{ allow: false; reason: string }>
+  | Readonly<{ interaction: ToolCallInteractionRequest }>;
+
 export type BeforeToolCall = (input: Readonly<{
   tool: Tool;
   args: JsonValue;
   context: ToolInvocationContext;
   signal: AbortSignal;
-}>) => Readonly<{ allow: true }> | Readonly<{ allow: false; reason: string }> | Promise<Readonly<{ allow: true }> | Readonly<{ allow: false; reason: string }>>;
+  answer?: JsonValue;
+}>) => BeforeToolCallDecision | Promise<BeforeToolCallDecision>;
 export type AfterToolCall = (input: Readonly<{
   tool: Tool;
   result: ToolExecutionResult;

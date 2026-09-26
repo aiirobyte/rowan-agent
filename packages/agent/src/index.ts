@@ -109,6 +109,7 @@ export type {
   ThinkingContent,
   Tool,
   ToolCallId,
+  ToolCallInteractionRequest,
   ToolCallSnapshot,
   ToolCallState,
   ToolExecutionResult,

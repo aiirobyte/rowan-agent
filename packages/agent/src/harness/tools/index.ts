@@ -202,19 +202,41 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
     return result;
   }
 
-  let decision: { allow: true } | { allow: false; reason: string } | undefined;
+  let decision:
+    | { allow: true }
+    | { allow: false; reason: string }
+    | { interaction: import("../../extensions/hooks").ToolCallInteractionRequest }
+    | undefined;
   if (input.beforeToolCall) {
     await input.observe?.({ type: "approval_requested", tool, args });
-    decision = await input.beforeToolCall({ tool, args });
-    await input.observe?.({
-      type: "approval_result",
+    decision = await input.beforeToolCall({
       tool,
       args,
-      decision: decision ?? { allow: true },
+      toolCallId: input.toolCall.id,
     });
+    if (decision && "allow" in decision) {
+      await input.observe?.({
+        type: "approval_result",
+        tool,
+        args,
+        decision,
+      });
+    }
   }
 
-  if (decision && !decision.allow) {
+  if (decision && "interaction" in decision) {
+    const result = toolResult({
+      context: input.toolContext,
+      toolName: tool.name,
+      ok: false,
+      content: null,
+      error: `Tool interaction required: ${decision.interaction.prompt}`,
+    });
+    await input.observe?.({ type: "tool_blocked", tool, reason: decision.interaction.prompt });
+    return result;
+  }
+
+  if (decision && "allow" in decision && !decision.allow) {
     const result = toolResult({
       context: input.toolContext,
       toolName: tool.name,

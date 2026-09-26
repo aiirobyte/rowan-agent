@@ -47,12 +47,30 @@ export function assembleRegisteredExtensions(
     beforePrompt: (phaseId, input) => runner.emitBeforePrompt(phaseId, input),
     beforeToolCall: async (input) => {
       const tool = projectTool(input.tool, input.context.agentId, input.context.runId);
-      const decision = await runner.emitBeforeToolCall(tool, input.args);
+      const decision = await runner.emitBeforeToolCall(tool, input.args, {
+        runId: input.context.runId,
+        agentId: input.context.agentId,
+        toolCallId: input.context.toolCallId,
+        metadata: input.context.runMetadata,
+        answer: input.answer,
+      });
+      if (decision.interaction !== undefined) {
+        return { interaction: decision.interaction };
+      }
       return decision.allow ? { allow: true } : { allow: false, reason: decision.reason ?? "Extension hook rejected the Tool." };
     },
     afterToolCall: async (input) => {
       const tool = projectTool(input.tool, input.context.agentId, input.context.runId);
-      const result = await runner.emitAfterToolCall(tool, toLoopResult(input.result, input.context.toolCallId, input.tool.name));
+      const result = await runner.emitAfterToolCall(
+        tool,
+        toLoopResult(input.result, input.context.toolCallId, input.tool.name),
+        {
+          runId: input.context.runId,
+          agentId: input.context.agentId,
+          toolCallId: input.context.toolCallId,
+          metadata: input.context.runMetadata,
+        },
+      );
       return fromLoopResult(result);
     },
     setContext: (context) => {

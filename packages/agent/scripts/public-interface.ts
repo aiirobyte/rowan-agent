@@ -165,6 +165,7 @@ export const publicTypeExports = [
   "Tool",
   "ToolContribution",
   "ToolCallId",
+  "ToolCallInteractionRequest",
   "ToolCallSnapshot",
   "ToolCallState",
   "ToolDefinition",

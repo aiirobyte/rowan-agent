@@ -66,11 +66,24 @@ export type AgentContext = {
 export type BeforeToolCall = (input: {
   tool: Tool;
   args: unknown;
-}) => Promise<{ allow: true } | { allow: false; reason: string }>;
+  runId?: string;
+  agentId?: string;
+  toolCallId?: string;
+  metadata?: Readonly<Record<string, unknown>>;
+  answer?: unknown;
+}) => Promise<
+  | { allow: true }
+  | { allow: false; reason: string }
+  | { interaction: import("./extensions/hooks").ToolCallInteractionRequest }
+>;
 
 export type AfterToolCall = (input: {
   tool: Tool;
   result: ToolResult;
+  runId?: string;
+  agentId?: string;
+  toolCallId?: string;
+  metadata?: Readonly<Record<string, unknown>>;
 }) => Promise<ToolResult>;
 
 export function createMessage(
