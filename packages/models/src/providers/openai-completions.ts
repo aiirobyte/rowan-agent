@@ -13,6 +13,7 @@ import type {
 import { executeProviderRequest, streamProviderRequest } from "./http";
 import {
   type BaseProviderConfig,
+  ProviderError,
   normalizeBaseUrl,
   normalizeUsage,
   resolveBaseProviderConfig,
@@ -203,6 +204,7 @@ type ChatCompletionChunk = {
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; input_tokens?: number; output_tokens?: number };
+  error?: { message?: string; code?: string | number; type?: string };
 };
 
 type ChatCompletionResponse = {
@@ -336,6 +338,14 @@ async function* streamChatCompletions(
         let chunk: ChatCompletionChunk;
         try { chunk = JSON.parse(sse.data) as ChatCompletionChunk; } catch { continue; }
 
+        // OpenAI-compatible gateways report a mid-stream failure as an error chunk.
+        if (chunk.error) {
+          throw new ProviderError({
+            code: "stream_error",
+            message: chunk.error.message || "Provider stream error.",
+            details: { code: chunk.error.code, type: chunk.error.type },
+          });
+        }
         if (chunk.usage) usage = normalizeUsage(chunk.usage);
 
         const choice = chunk.choices?.[0];

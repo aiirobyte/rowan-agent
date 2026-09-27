@@ -703,6 +703,34 @@ test("createOpenAICompletionsStream structures HTML HTTP errors", async () => {
   }
 });
 
+test("createOpenAICompletionsStream surfaces an in-stream provider error", async () => {
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async () => new Response(
+      'data: {"error":{"message":"Daily quota reached.","code":"quota"}}\n\n',
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    ),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+  const error = events.find((event) => event.type === "error");
+
+  const done = events.find((event) => event.type === "done");
+
+  expect(done?.type === "done" && done.response?.stopReason).toBe("error");
+  expect(error?.type).toBe("error");
+  if (error?.type === "error") {
+    expect(error.error).toBeInstanceOf(ProviderError);
+    expect(error.error.message).toBe("Daily quota reached.");
+  }
+});
+
 test("createOpenAICompletionsStream times out while waiting for response headers", async () => {
   const fetchMock: ProviderFetch = async (_url, init) =>
     new Promise<Response>((_resolve, reject) => {
