@@ -91,14 +91,21 @@ export function createPhaseInteractionDriver(
     if (signal?.aborted) throw new PhaseInteractionCancelledError();
   };
 
+  // Re-entry after a resume asks again with the same metadata; only a request
+  // still open (pending or answered) and, for tool calls, from the same call
+  // is that one. A cancelled or expired request, or another call's approval,
+  // never stands in for a new ask.
   const matchingStoredRequest = (input: Readonly<{
     kind: PhaseInteractionKind;
     prompt: string;
     payload?: JsonValue;
+    toolCallId?: string;
   }>): PhaseInteraction | undefined => {
     const fingerprint = interactionFingerprint(input);
     return [...requests.values()].find((request) =>
       !usedRequestIds.has(request.id)
+      && (answers.has(request.id) || request.status === "pending")
+      && request.toolCallId === input.toolCallId
       && interactionFingerprint(request) === fingerprint);
   };
 
