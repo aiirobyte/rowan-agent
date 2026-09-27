@@ -627,7 +627,7 @@ export class InMemoryStore implements DurableStore {
     expectedRevision: number;
     requestId?: InputRequestId;
     phase: string;
-    prompt: AssistantMessage;
+    prompt?: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
     interactions?: readonly PhaseInteraction[];
     interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>;
@@ -637,24 +637,28 @@ export class InMemoryStore implements DurableStore {
     const requestId = input.requestId ?? (createId("input") as InputRequestId);
     const operationKey = `input_required:${requestId}`;
     const interactions = input.interactions ?? [];
-    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.phase, input.prompt.id, input.checkpoint, interactions, input.interactionAnswers ?? null] as never);
+    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.phase, input.prompt ? input.prompt.id : null, input.checkpoint, interactions, input.interactionAnswers ?? null] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as InputRequiredCommit);
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
     this.assertState(run, ["running"]);
     this.assertNoOpenTools(run);
-    const prompt: AssistantMessage = {
-      ...clone(input.prompt),
-      sequenceWithinRun: this.nextMessageSequence(run.id),
-    };
+    const isToolCallInteraction = interactions.length > 0 && interactions.some((interaction) => interaction.origin === "tool_call");
+    let prompt: AssistantMessage | undefined;
+    if (input.prompt && !isToolCallInteraction) {
+      prompt = {
+        ...clone(input.prompt),
+        sequenceWithinRun: this.nextMessageSequence(run.id),
+      };
+      this.messages.set(prompt.id, prompt);
+    }
     const request: InputRequest = {
       id: requestId,
       phase: input.phase,
-      messageId: prompt.id,
+      ...(prompt ? { messageId: prompt.id } : {}),
       createdAt: createTimestamp(),
     };
-    this.messages.set(prompt.id, prompt);
     run.state = "input_required";
     run.checkpoint = clone(input.checkpoint);
     run.openInputRequest = request;
@@ -669,9 +673,16 @@ export class InMemoryStore implements DurableStore {
     delete run.execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
-    this.appendMessage(run, prompt);
+    if (prompt) {
+      this.appendMessage(run, prompt);
+    }
     this.appendTransition(run, "running", "input_required", request, prompt, undefined, undefined, undefined, interactions, run.interactionAnswers ?? {});
-    const result = { run: clone(run), prompt: clone(prompt), request: clone(request), interactions: clone(interactions) };
+    const result: InputRequiredCommit = {
+      run: clone(run),
+      ...(prompt ? { prompt: clone(prompt) } : {}),
+      request: clone(request),
+      interactions: clone(interactions),
+    };
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
   }
@@ -726,28 +737,33 @@ export class InMemoryStore implements DurableStore {
     this.assertRevision(run, input.expectedRevision);
     this.assertState(run, ["input_required"]);
     const openInteractions = run.openInteractions ?? [];
-    if (!openInteractions.some((interaction) => interaction.id === input.interactionId)) {
+    const targetInteraction = openInteractions.find((interaction) => interaction.id === input.interactionId);
+    if (!targetInteraction) {
       throw new RuntimeError("input_request_conflict", { runId: run.id, requestId: input.interactionId as InputRequestId, reason: "not_found" });
     }
-    const message: Message = {
-      id: createId("msg") as MessageId,
-      agentId: run.agentId,
-      runId: run.id,
-      role: "user",
-      content: typeof input.input === "string" ? input.input : JSON.stringify(input.input),
-      metadata: { kind: "phase_interaction", interactionId: input.interactionId },
-      sequenceWithinRun: this.nextMessageSequence(run.id),
-      createdAt: createTimestamp(),
-    };
-    this.messages.set(message.id, message);
+    const isToolCall = targetInteraction.origin === "tool_call";
+    const now = createTimestamp();
+    if (!isToolCall) {
+      const message: Message = {
+        id: createId("msg") as MessageId,
+        agentId: run.agentId,
+        runId: run.id,
+        role: "user",
+        content: typeof input.input === "string" ? input.input : JSON.stringify(input.input),
+        metadata: { kind: "phase_interaction", interactionId: input.interactionId },
+        sequenceWithinRun: this.nextMessageSequence(run.id),
+        createdAt: now,
+      };
+      this.messages.set(message.id, message);
+      this.appendMessage(run, message);
+    }
     run.openInteractions = openInteractions.filter((interaction) => interaction.id !== input.interactionId);
     run.interactionAnswers = {
       ...(run.interactionAnswers ?? {}),
       [input.interactionId]: clone(input.input),
     };
     run.revision += 1;
-    run.updatedAt = message.createdAt;
-    this.appendMessage(run, message);
+    run.updatedAt = now;
     if (run.openInteractions.length === 0) {
       delete run.openInteractions;
       delete run.openInputRequest;
@@ -1101,12 +1117,16 @@ export class InMemoryStore implements DurableStore {
       case "running": return { ...base, state: run.state };
       case "input_required": {
         const request = run.openInputRequest;
-        const prompt = request && this.messages.get(request.messageId);
-        if (!prompt || prompt.role !== "assistant") throw new Error(`Run ${run.id} has an invalid input prompt.`);
+        const prompt = request?.messageId ? this.messages.get(request.messageId) : undefined;
+        if (request?.messageId && (!prompt || prompt.role !== "assistant")) throw new Error(`Run ${run.id} has an invalid input prompt.`);
         return {
           ...base,
           state: "input_required",
-          request: { id: request.id, phase: request.phase, prompt: clone(prompt) },
+          request: {
+            id: request?.id ?? ("" as InputRequestId),
+            phase: request?.phase ?? "",
+            ...(prompt ? { prompt: clone(prompt as AssistantMessage) } : {}),
+          },
           interactions: clone(run.openInteractions ?? []),
           answers: clone(run.interactionAnswers ?? {}),
         };
@@ -1505,7 +1525,15 @@ export class InMemoryStore implements DurableStore {
       kind: "run_state_changed",
       from,
       to,
-      ...(to === "input_required" && request && prompt ? { request: { id: request.id, phase: request.phase, prompt } } : {}),
+      ...(to === "input_required" && request
+        ? {
+            request: {
+              id: request.id,
+              phase: request.phase,
+              ...(prompt ? { prompt } : {}),
+            },
+          }
+        : {}),
       ...(to === "input_required" ? { interactions: clone(interactions ?? []), answers: clone(answers ?? {}) } : {}),
       ...(to === "completed" && outcome ? { outcome } : {}),
       ...(to === "failed" && failure ? { failure: failure as never } : {}),
@@ -1579,7 +1607,7 @@ class MemoryOwnedStore implements OwnedStore {
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
-  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly PhaseInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>> }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
+  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly PhaseInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>> }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
   async answerInput(input: { runId: RunId; requestId: InputRequestId; expectedRevision: number; input: UserInput; messageId?: MessageId }): Promise<RunRecord> { return this.store.answerInput(this.lease, input); }
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input: import("../runtime-events").JsonValue }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }

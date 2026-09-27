@@ -74,6 +74,10 @@ test("a Phase can suspend on multiple interactions and resume after each answer"
       state: "completed",
       outcome: { payload: { first: "ready", second: "confirmed" } },
     });
+
+    const history = await runtime.history(agentId);
+    expect(history.some((m) => m.role === "user" && m.content === "confirmed" && (m.metadata as any)?.kind === "phase_interaction")).toBe(true);
+    expect(history.some((m) => m.role === "user" && m.content === "ready" && (m.metadata as any)?.kind === "phase_interaction")).toBe(true);
   } finally {
     await runtime.close();
   }

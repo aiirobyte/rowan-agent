@@ -190,6 +190,22 @@ test("tool call interaction suspends into input_required and resumes with allow"
 
     const snapshotAfter = await run.snapshot();
     expect(snapshotAfter.state).toBe("completed");
+
+    const history = await runtime.history(agentId);
+    expect(history).toHaveLength(4);
+    expect(history[0]!.role).toBe("user");
+    expect(history[0]!.content).toBe("write secret");
+    expect(history[1]!.role).toBe("assistant");
+    expect(Array.isArray(history[1]!.content)).toBe(true);
+    expect((history[1]!.content as any)[0].type).toBe("tool_use");
+    expect(history[2]!.role).toBe("tool");
+    expect(Array.isArray(history[2]!.content)).toBe(true);
+    expect((history[2]!.content as any)[0].type).toBe("tool_result");
+    expect(history[3]!.role).toBe("assistant");
+    expect(history[3]!.content).toBe("file written successfully");
+    // Stored history must not contain the prompt assistant message nor the answer user message
+    expect(history.some((m) => m.content === "Allow writing to secrets.txt?")).toBe(false);
+    expect(history.some((m) => m.content === "allow")).toBe(false);
   } finally {
     await runtime.close();
   }
@@ -350,11 +366,12 @@ test("tool call interaction survives process restart/rehydrate while pending the
     bootstrap: async (registry) => { await registry.loadExtensions([createExtension()]); },
   });
 
+  let agentId: any;
   let runId: any;
   let interactionId: any;
 
   try {
-    const agentId = await createAgentWith(runtime1, {
+    agentId = await createAgentWith(runtime1, {
       identity: "agent-tool-restart",
       stream,
       options: { idempotencyKey: "agent-tool-restart-key" },
@@ -398,6 +415,10 @@ test("tool call interaction survives process restart/rehydrate while pending the
     const finalBoundary = await run2.wait();
     expect(finalBoundary.type).toBe("completed");
     expect(executionsCount).toBe(1);
+
+    const historyAfterRestart = await runtime2.history(agentId);
+    expect(historyAfterRestart.some((m) => m.content === "Approve execution?")).toBe(false);
+    expect(historyAfterRestart.some((m) => m.content === "yes")).toBe(false);
   } finally {
     await runtime2.close();
   }
@@ -650,3 +671,56 @@ test("multiple tool calls in one assistant turn: sequential suspension per call"
     await runtime.close();
   }
 });
+
+test("read of a missing file produces failed tool result and Run continues to completion", async () => {
+  let receivedToolResult: any;
+
+  const stream: StreamFn = async function* (request) {
+    const toolMsg = request.messages.find((m) => m.role === "tool");
+    if (!toolMsg) {
+      const id = "call_read_missing";
+      const args = JSON.stringify({ path: "non_existent_file_12345.txt" });
+      const partial = {
+        role: "assistant" as const,
+        contentBlocks: [{ type: "tool_call" as const, id, name: "read", args }],
+      };
+      yield { type: "tool_call_start", id, name: "read", partial };
+      yield { type: "tool_call_delta", id, arguments: args, partial };
+      yield { type: "tool_call_end", id, name: "read", arguments: args, partial };
+      yield { type: "done" };
+      return;
+    }
+    if (Array.isArray(toolMsg.content)) {
+      receivedToolResult = toolMsg.content.find((p: any) => p.type === "tool_result");
+    }
+    yield { type: "text_delta", text: "handled missing file", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "handled missing file" }] } };
+    yield { type: "done", response: stopResponse("handled missing file") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-read-missing",
+      stream,
+      options: { idempotencyKey: "agent-read-missing-key" },
+    });
+    const run = await runtime.start(agentId, "read missing", { idempotencyKey: "run-read-missing-key" });
+
+    const finalBoundary = await run.wait();
+    expect(finalBoundary.type).toBe("completed");
+
+    const snapshot = await run.snapshot();
+    expect(snapshot.state).toBe("completed");
+
+    expect(receivedToolResult).toBeDefined();
+    expect(receivedToolResult.isError).toBe(true);
+    expect(receivedToolResult.content).toContain("ENOENT");
+  } finally {
+    await runtime.close();
+  }
+});
+

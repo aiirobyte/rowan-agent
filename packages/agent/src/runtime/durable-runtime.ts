@@ -736,6 +736,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "input_required") {
+        const isToolCallInteraction = result.interactions?.some((i) => i.origin === "tool_call");
         const output = (result.interactions && result.interactions.length > 0)
           ? undefined
           : latestAssistant(
@@ -743,14 +744,16 @@ export class AgentRuntime implements AgentRuntimeContract {
               result.messages.slice(modelMessages.length),
               modelMessages.length,
             );
-        const prompt = output ?? promptMessage(run, result.request.prompt, result.messages.length);
+        const prompt = isToolCallInteraction
+          ? undefined
+          : (output ?? promptMessage(run, result.request.prompt, result.messages.length));
         await this.owned.commitInputRequired({
           runId: run.id,
           execution: claim.execution,
           expectedRevision: executionRevision,
           requestId: createId("input") as import("../runtime-events").InputRequestId,
           phase: result.request.phase,
-          prompt,
+          ...(prompt ? { prompt } : {}),
           checkpoint: result.checkpoint,
           interactions: result.interactions,
           interactionAnswers: claim.run.interactionAnswers,
@@ -1160,6 +1163,8 @@ export class AgentRuntime implements AgentRuntimeContract {
               kind: decision.interaction.kind,
               prompt: decision.interaction.prompt,
               payload: decision.interaction.payload,
+              origin: "tool_call",
+              toolCallId,
             });
             input.driver.suspend({
               checkpoint: {
@@ -1497,7 +1502,7 @@ function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
       type: "input_required",
       requestId: snapshot.request.id,
       phase: snapshot.request.phase,
-      prompt: snapshot.request.prompt,
+      ...(snapshot.request.prompt ? { prompt: snapshot.request.prompt } : {}),
       interactions: snapshot.interactions,
       answers: snapshot.answers,
     };

@@ -182,7 +182,7 @@ test("Memory DurableStore commits input boundaries and terminal outcomes atomica
   expect(waiting.run.state).toBe("input_required");
   const snapshot = await owner.snapshotRun(run.id);
   expect(snapshot.state).toBe("input_required");
-  if (snapshot.state === "input_required") expect(snapshot.request.prompt.id).toBe(prompt.id);
+  if (snapshot.state === "input_required") expect(snapshot.request.prompt?.id).toBe(prompt.id);
 
   const queued = await owner.answerInput({
     runId: run.id,

@@ -5,6 +5,7 @@ import { assertJsonValue, canonicalJson } from "../../runtime/json";
 
 export type PhaseInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
 export type PhaseInteractionStatus = "pending" | "answered" | "denied" | "cancelled" | "expired";
+export type PhaseInteractionOrigin = "tool_call" | "phase";
 
 export type PhaseInteraction = Readonly<{
   id: string;
@@ -14,6 +15,8 @@ export type PhaseInteraction = Readonly<{
   payload?: JsonValue;
   createdAt: string;
   status: PhaseInteractionStatus;
+  origin?: PhaseInteractionOrigin;
+  toolCallId?: string;
 }>;
 
 export type PhaseInteractionState = Readonly<{
@@ -29,6 +32,8 @@ export type PhaseInteractionDriver = Readonly<{
     kind: PhaseInteractionKind;
     prompt: string;
     payload?: JsonValue;
+    origin?: PhaseInteractionOrigin;
+    toolCallId?: string;
   }>): PhaseInteraction;
   pending(): readonly PhaseInteraction[];
   answers(): ReadonlyMap<string, JsonValue>;
@@ -130,6 +135,8 @@ export function createPhaseInteractionDriver(
         kind: input.kind,
         prompt: input.prompt,
         ...(input.payload === undefined ? {} : { payload: input.payload }),
+        ...(input.origin === undefined ? {} : { origin: input.origin }),
+        ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
         createdAt: createTimestamp(),
         status: "pending",
       };

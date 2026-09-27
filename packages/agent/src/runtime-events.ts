@@ -190,7 +190,7 @@ export type RunStateChanged = DurableEventBase & (
       kind: "run_state_changed";
       from: "running";
       to: "input_required";
-      request: Readonly<{ id: InputRequestId; phase: string; prompt: AssistantMessage }>;
+      request?: Readonly<{ id: InputRequestId; phase: string; prompt?: AssistantMessage }>;
       interactions: readonly PhaseInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>

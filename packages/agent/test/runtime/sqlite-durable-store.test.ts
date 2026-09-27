@@ -295,7 +295,7 @@ test("SQLite DurableStore assigns terminal message sequence after durable Tool m
       },
       checkpoint: { codec: "test", version: 1, data: {} },
     });
-    expect(suspended.prompt.sequenceWithinRun).toBe(3);
+    expect(suspended.prompt?.sequenceWithinRun).toBe(3);
 
     const database = new Database(filename, { readwrite: true, strict: true });
     try {

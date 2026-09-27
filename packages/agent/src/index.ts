@@ -195,6 +195,7 @@ export type {
   PhaseInteraction,
   PhaseInteractionDriver,
   PhaseInteractionKind,
+  PhaseInteractionOrigin,
   PhaseInteractionState,
   PhaseInteractionStatus,
 } from "./harness/phases/interactions";

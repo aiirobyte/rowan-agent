@@ -36,7 +36,7 @@ import type {
 } from "../runtime-events";
 import type { Skill } from "../protocol";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import type { PhaseInteraction, PhaseInteractionKind } from "../harness/phases/interactions";
+import type { PhaseInteraction, PhaseInteractionKind, PhaseInteractionOrigin } from "../harness/phases/interactions";
 import type { AgentDefinition } from "../harness/definitions";
 import type {
   LoadInput,
@@ -235,10 +235,10 @@ export type AgentDeletionRequest = Readonly<{
 }>;
 export type ExecutionToken = Readonly<{ runId: RunId; ownerEpoch: number; executionId: ExecutionId }>;
 export type ExecutionCheckpoint = Readonly<{ codec: string; version: number; data: JsonValue }>;
-export type InputRequest = Readonly<{ id: InputRequestId; phase: string; messageId: MessageId; createdAt: string }>;
+export type InputRequest = Readonly<{ id: InputRequestId; phase: string; messageId?: MessageId; createdAt: string }>;
 export type OwnerLease = Readonly<{ ownerId: string; token: OwnerToken; epoch: number; expiresAt: string }>;
 export type RunClaim = Readonly<{ run: RunRecord; execution: ExecutionToken; history: readonly Message[] }>;
-export type InputRequiredCommit = Readonly<{ run: RunRecord; prompt: AssistantMessage; request: InputRequest; interactions: readonly PhaseInteraction[] }>;
+export type InputRequiredCommit = Readonly<{ run: RunRecord; prompt?: AssistantMessage; request: InputRequest; interactions: readonly PhaseInteraction[] }>;
 export type ToolCallReservation = Readonly<{
   providerToolCallId: string;
   name: string;
@@ -304,7 +304,7 @@ export type RunSnapshot = RunSnapshotBase & (
   | Readonly<{ state: "queued" | "running" }>
   | Readonly<{
       state: "input_required";
-      request: Readonly<{ id: InputRequestId; phase: string; prompt: AssistantMessage }>;
+      request: Readonly<{ id: InputRequestId; phase: string; prompt?: AssistantMessage }>;
       interactions: readonly PhaseInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>
@@ -317,7 +317,7 @@ export type RunBoundary =
       type: "input_required";
       requestId: InputRequestId;
       phase: string;
-      prompt: AssistantMessage;
+      prompt?: AssistantMessage;
       interactions: readonly PhaseInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>
@@ -362,7 +362,7 @@ export interface OwnedStore {
     expectedRevision: number;
     requestId?: InputRequestId;
     phase: string;
-    prompt: AssistantMessage;
+    prompt?: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
     interactions?: readonly PhaseInteraction[];
     interactionAnswers?: Readonly<Record<string, JsonValue>>;
@@ -575,8 +575,10 @@ export function assertValidRunSnapshot(value: unknown, options: { committedMessa
       if (["request", "outcome", "output", "failure", "reason"].some((key) => key in value)) throw new TypeError("Snapshot contains incompatible state data");
       return;
     case "input_required":
-      if (!isRecord(value.request) || !hasOnlyKeys(value.request, ["id", "phase", "prompt"]) || typeof value.request.id !== "string" || typeof value.request.phase !== "string" || value.request.phase.length === 0) throw new TypeError("Invalid Input Request snapshot");
-      assertAssistantReference(value.request.prompt, value.agentId, value.runId, options.committedMessages, "request.prompt");
+      if (!isRecord(value.request) || typeof value.request.id !== "string" || typeof value.request.phase !== "string" || value.request.phase.length === 0) throw new TypeError("Invalid Input Request snapshot");
+      if ("prompt" in value.request && value.request.prompt !== undefined) {
+        assertAssistantReference(value.request.prompt, value.agentId, value.runId, options.committedMessages, "request.prompt");
+      }
       if (["outcome", "output", "failure", "reason"].some((key) => key in value)) throw new TypeError("Input-required snapshot contains terminal data");
       return;
     case "completed":

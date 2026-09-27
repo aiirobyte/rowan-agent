@@ -387,7 +387,19 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
         });
       }
 
-      const fileStat = await stat(resolved.absolutePath);
+      let fileStat;
+      try {
+        fileStat = await stat(resolved.absolutePath);
+      } catch (error) {
+        return toolResult({
+          context: toolContext,
+          toolName: "read",
+          ok: false,
+          content: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
       if (!fileStat.isFile()) {
         return toolResult({
           context: toolContext,
@@ -398,7 +410,18 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
         });
       }
 
-      const bytes = await readFile(resolved.absolutePath);
+      let bytes: Uint8Array;
+      try {
+        bytes = await readFile(resolved.absolutePath);
+      } catch (error) {
+        return toolResult({
+          context: toolContext,
+          toolName: "read",
+          ok: false,
+          content: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       const source = new TextDecoder().decode(bytes);
       const sourceLines = source.split(/\r\n|\n|\r/);
       const requestedOffset = parsed.offset ?? 1;

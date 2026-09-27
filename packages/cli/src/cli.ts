@@ -812,7 +812,9 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   if (configured.pendingRun && configured.pendingSnapshot?.state === "input_required") {
     const request = configured.pendingSnapshot.request;
     console.error(`Input-required Run id: ${configured.pendingRun.id}`);
-    console.error(`Input requested: ${request.prompt.content}`);
+    if (request.prompt) {
+      console.error(`Input requested: ${request.prompt.content}`);
+    }
   }
 
   let activeRun: Promise<void> | undefined;
