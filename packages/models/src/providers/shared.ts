@@ -58,6 +58,30 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The failure a provider or gateway reports inside a 200 response body or
+ * stream: `{ error }` (OpenAI-compatible gateways, Anthropic `error` events,
+ * Responses `error` events) or a Responses `response.failed` event.
+ */
+export function payloadError(payload: unknown): ProviderError | undefined {
+  if (!isRecord(payload)) return undefined;
+  const failed = payload.type === "response.failed" && isRecord(payload.response)
+    ? payload.response.error ?? { message: "The response failed." }
+    : undefined;
+  const error = failed ?? payload.error ?? (payload.type === "error" ? payload : undefined);
+  if (error === undefined || error === null) return undefined;
+  const message = typeof error === "string"
+    ? error
+    : isRecord(error) && typeof error.message === "string" && error.message
+      ? error.message
+      : "Provider reported an error.";
+  return new ProviderError({
+    code: "stream_error",
+    message,
+    ...(isRecord(error) ? { details: { code: error.code, type: error.type } } : {}),
+  });
+}
+
 export function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

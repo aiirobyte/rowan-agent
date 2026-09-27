@@ -13,7 +13,7 @@ import type {
 } from "../protocol";
 import { streamProviderRequest } from "./http";
 import {
-  ProviderError,
+  payloadError,
   type BaseProviderConfig,
   normalizeBaseUrl,
   resolveBaseProviderConfig,
@@ -284,6 +284,8 @@ async function* streamResponses(
       for await (const sse of response.sse()) {
         let event: ResponsesStreamEvent;
         try { event = JSON.parse(sse.data) as ResponsesStreamEvent; } catch { continue; }
+        const streamError = payloadError(event);
+        if (streamError) throw streamError;
 
         switch (event.type) {
           case "response.reasoning_summary_part.added": {
@@ -455,13 +457,6 @@ async function* streamResponses(
             }
             stopReason = event.response.incomplete_details?.reason ?? "incomplete";
             break;
-
-          case "error":
-            throw new ProviderError({
-              code: "stream_error",
-              message: event.error.message,
-              details: { type: event.error.type },
-            });
         }
       }
 

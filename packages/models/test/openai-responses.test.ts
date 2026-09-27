@@ -399,3 +399,30 @@ test("Responses preserves call_id across a streamed tool call and its output", a
     },
   ]);
 });
+
+for (const [name, event, message] of [
+  ["a response.failed event", { type: "response.failed", response: { error: { code: "server_error", message: "Upstream failed" } } }, "Upstream failed"],
+  ["an error event", { type: "error", code: "rate_limit_exceeded", message: "Slow down" }, "Slow down"],
+  ["a gateway error chunk", { error: { message: "Daily quota reached." } }, "Daily quota reached."],
+] as const) {
+  test(`Responses surfaces ${name}`, async () => {
+    const stream = createOpenAIResponsesStream({
+      baseUrl: "https://api.example/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      maxRetries: 0,
+      fetch: async () => sseResponse([event]),
+    });
+
+    const events = await collect(stream(
+      { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+      {},
+    ));
+    const error = events.find((item) => item.type === "error");
+    const done = events.find((item) => item.type === "done");
+
+    expect(done?.type === "done" && done.response?.stopReason).toBe("error");
+    expect(error?.type === "error" && error.error).toBeInstanceOf(ProviderError);
+    expect(error?.type === "error" && error.error.message).toBe(message);
+  });
+}

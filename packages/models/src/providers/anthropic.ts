@@ -16,6 +16,7 @@ import { streamProviderRequest } from "./http";
 import {
   type BaseProviderConfig,
   normalizeBaseUrl,
+  payloadError,
   resolveBaseProviderConfig,
 } from "./shared";
 
@@ -291,6 +292,11 @@ async function* streamAnthropicMessages(
       }
 
       for await (const sse of response.sse()) {
+        if (sse.event === "error") {
+          let payload: unknown;
+          try { payload = JSON.parse(sse.data); } catch { payload = { error: sse.data }; }
+          throw payloadError(payload) ?? payloadError({ error: sse.data })!;
+        }
         if (!sse.event || !MESSAGE_EVENTS.has(sse.event)) continue;
 
         let event: AnthropicStreamEvent;

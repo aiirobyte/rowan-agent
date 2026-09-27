@@ -267,3 +267,33 @@ test("Anthropic applies custom request headers", async () => {
   expect(requestHeaders?.["x-tenant"]).toBe("tenant-1");
   expect(requestHeaders?.["anthropic-version"]).toBe("2023-06-01");
 });
+
+test("Anthropic surfaces an in-stream error event", async () => {
+  const stream = createAnthropicStream({
+    baseUrl: "https://api.example",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async () => anthropicSseResponse([
+      {
+        event: "message_start",
+        data: { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 2, output_tokens: 0 } } },
+      },
+      {
+        event: "error",
+        data: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+      },
+    ]),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+  const error = events.find((event) => event.type === "error");
+  const done = events.find((event) => event.type === "done");
+
+  expect(done?.type === "done" && done.response?.stopReason).toBe("error");
+  expect(error?.type === "error" && error.error).toBeInstanceOf(ProviderError);
+  expect(error?.type === "error" && error.error.message).toBe("Overloaded");
+});
