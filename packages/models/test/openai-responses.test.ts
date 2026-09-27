@@ -426,3 +426,72 @@ for (const [name, event, message] of [
     expect(error?.type === "error" && error.error.message).toBe(message);
   });
 }
+
+test("Responses replays encrypted reasoning statelessly and reports tool use", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const stream = createOpenAIResponsesStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sseResponse([
+        { type: "response.output_item.done", output_index: 0, item: { type: "reasoning", id: "rs_1", encrypted_content: "enc", summary: [{ type: "summary_text", text: "plan" }] } },
+        { type: "response.output_item.added", output_index: 1, item: { type: "function_call", call_id: "call_1", name: "read" } },
+        { type: "response.output_item.done", output_index: 1, item: { type: "function_call", call_id: "call_1", name: "read", arguments: "{}" } },
+        { type: "response.completed", response: { usage: { input_tokens: 4, output_tokens: 1, total_tokens: 5, input_tokens_details: { cached_tokens: 2 } } } },
+      ]);
+    },
+  });
+
+  const events = await collect(stream({
+    model: { provider: "test", id: "test-model" },
+    messages: [{ role: "user", content: "hello" }],
+    tools: [{ name: "read", description: "Read", parameters: { type: "object", properties: {} } }],
+    toolChoice: "required",
+    thinkingLevel: "high",
+  }, {}));
+  const done = events.find((event) => event.type === "done");
+  const last = [...events].reverse().find((event) => "partial" in event);
+  const thinking = last && "partial" in last ? last.partial.contentBlocks.find((block) => block.type === "thinking") : undefined;
+
+  expect(bodies[0]).toMatchObject({ store: false, include: ["reasoning.encrypted_content"], tool_choice: "required" });
+  expect(done?.type === "done" && done.response?.stopReason).toBe("tool_use");
+  expect(done?.type === "done" && done.response?.usage?.cacheReadTokens).toBe(2);
+
+  await collect(stream({
+    model: { provider: "test", id: "test-model" },
+    messages: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "plan", ...(thinking?.type === "thinking" && thinking.signature ? { signature: thinking.signature } : {}) },
+        { type: "tool_use", id: "call_1", name: "read", input: {} },
+      ] },
+      { role: "tool", content: [{ type: "tool_result", toolUseId: "call_1", content: "ok" }] },
+    ],
+  }, {}));
+
+  expect((bodies[1]?.input as unknown[]).slice(1, 3)).toEqual([
+    { type: "reasoning", id: "rs_1", encrypted_content: "enc", summary: [{ type: "summary_text", text: "plan" }] },
+    { type: "function_call", call_id: "call_1", name: "read", arguments: "{}" },
+  ]);
+});
+
+test("Responses maps a max_output_tokens cut-off to max_tokens", async () => {
+  const stream = createOpenAIResponsesStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async () => sseResponse([
+      { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "par" },
+      { type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" } } },
+    ]),
+  });
+
+  const events = await collect(stream({ model: { provider: "test", id: "test-model" }, messages: [{ role: "user", content: "hello" }] }, {}));
+  const done = events.find((event) => event.type === "done");
+
+  expect(done?.type === "done" && done.response?.stopReason).toBe("max_tokens");
+});

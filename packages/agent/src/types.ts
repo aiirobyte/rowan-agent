@@ -124,7 +124,7 @@ export function contentBlocksToMessageContent(blocks: ContentBlock[]): LlmConten
       return { type: "text", text: block.text };
     }
     if (block.type === "thinking") {
-      return { type: "thinking", thinking: block.thinking };
+      return { type: "thinking", thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) };
     }
 
     let input: unknown = block.args;

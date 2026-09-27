@@ -104,6 +104,8 @@ export type RawUsage = {
   total_tokens?: number;
   input_tokens?: number;
   output_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+  input_tokens_details?: { cached_tokens?: number } | null;
 };
 
 export function normalizeUsage(usage: RawUsage | undefined): LlmTokenUsage | undefined {
@@ -112,6 +114,8 @@ export function normalizeUsage(usage: RawUsage | undefined): LlmTokenUsage | und
   const inputTokens = asNumber(usage.prompt_tokens) ?? asNumber(usage.input_tokens);
   const outputTokens = asNumber(usage.completion_tokens) ?? asNumber(usage.output_tokens);
   const totalTokens = asNumber(usage.total_tokens);
+  const cacheReadTokens = asNumber(usage.prompt_tokens_details?.cached_tokens)
+    ?? asNumber(usage.input_tokens_details?.cached_tokens);
 
   if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
     return undefined;
@@ -121,6 +125,7 @@ export function normalizeUsage(usage: RawUsage | undefined): LlmTokenUsage | und
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(outputTokens !== undefined ? { outputTokens } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
   };
 }
 
@@ -182,4 +187,9 @@ export function resolveBaseProviderConfig(
     ...(input.retryDelayMs !== undefined ? { retryDelayMs: input.retryDelayMs } : {}),
     ...(input.fetch ? { fetch: input.fetch } : {}),
   };
+}
+
+/** OpenAI reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. */
+export function openAIReasoningEffort(level: Exclude<ThinkingLevel, "off">): string {
+  return level === "max" ? "xhigh" : level;
 }

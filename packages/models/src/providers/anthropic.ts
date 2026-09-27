@@ -1,11 +1,14 @@
 import type {
+  ContentBlock,
   LlmContentPart,
   LlmMessage,
   LlmRequest,
+  LlmStopReason,
   LlmStreamEvent,
   LlmTokenUsage,
   LlmStreamOptions,
   LlmToolCall,
+  LlmToolChoice,
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
@@ -39,6 +42,26 @@ const DEFAULT_THINKING_BUDGETS: Record<Exclude<ThinkingLevel, "off">, number> = 
   xhigh: 16384,
   max: 16384,
 };
+const EFFORTS: Record<Exclude<ThinkingLevel, "off">, "low" | "medium" | "high" | "xhigh" | "max"> = {
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "max",
+};
+
+/** Redacted thinking travels in the portable signature slot with this prefix. */
+const REDACTED_PREFIX = "anthropic-redacted:";
+
+/**
+ * Claude 4.6 and later reason with adaptive thinking plus `output_config.effort`;
+ * `budget_tokens` is rejected from 4.7 on. Earlier and unknown models keep the
+ * budget form, which Anthropic-compatible gateways also accept.
+ */
+function usesAdaptiveThinking(model: string): boolean {
+  return /claude-(?:opus|sonnet)-4-(?:[6-9]|\d{2})|claude-(?:opus|sonnet|fable|mythos)-[5-9]/.test(model);
+}
 
 function thinkingBudgetForLevel(level: ThinkingLevel, maxTokens: number): number | undefined {
   if (level === "off") return undefined;
@@ -47,26 +70,22 @@ function thinkingBudgetForLevel(level: ThinkingLevel, maxTokens: number): number
   return budget >= 1024 ? budget : undefined;
 }
 
-function resolveThinkingConfig(
-  config: AnthropicConfig,
-  request: LlmRequest,
-): { budgetTokens: number } | undefined {
-  if (request.thinkingLevel !== undefined) {
-    const budgetTokens = thinkingBudgetForLevel(
-      request.thinkingLevel,
-      request.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
-    );
-    return budgetTokens === undefined ? undefined : { budgetTokens };
+type ThinkingRequest =
+  | { type: "adaptive"; effort: "low" | "medium" | "high" | "xhigh" | "max" }
+  | { type: "enabled"; budgetTokens: number };
+
+function resolveThinking(config: AnthropicConfig, request: LlmRequest, maxTokens: number): ThinkingRequest | undefined {
+  const level = request.thinkingLevel ?? (config.thinking ? undefined : config.thinkingLevel);
+  if (level === undefined) {
+    if (!config.thinking) return undefined;
+    return usesAdaptiveThinking(config.model)
+      ? { type: "adaptive", effort: "high" }
+      : { type: "enabled", budgetTokens: config.thinking.budgetTokens };
   }
-
-  if (config.thinking) return config.thinking;
-  if (config.thinkingLevel === undefined) return undefined;
-
-  const budgetTokens = thinkingBudgetForLevel(
-    config.thinkingLevel,
-    request.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
-  );
-  return budgetTokens === undefined ? undefined : { budgetTokens };
+  if (level === "off") return undefined;
+  if (usesAdaptiveThinking(config.model)) return { type: "adaptive", effort: EFFORTS[level] };
+  const budgetTokens = thinkingBudgetForLevel(level, maxTokens);
+  return budgetTokens === undefined ? undefined : { type: "enabled", budgetTokens };
 }
 
 export function resolveAnthropicConfig(input: ResolveAnthropicConfigInput = {}): AnthropicConfig {
@@ -83,6 +102,8 @@ export function resolveAnthropicConfig(input: ResolveAnthropicConfigInput = {}):
 type AnthropicContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
 
@@ -90,86 +111,62 @@ type AnthropicMessage =
   | { role: "user"; content: string | AnthropicContentBlock[] }
   | { role: "assistant"; content: string | AnthropicContentBlock[] };
 
-function convertContentParts(parts: LlmContentPart[]): string | AnthropicContentBlock[] {
-  const hasNonText = parts.some((p) => p.type !== "text");
-  if (!hasNonText) {
-    return parts
-      .filter((p): p is { type: "text"; text: string } => p.type === "text")
-      .map((p) => p.text)
-      .join("\n");
+function convertContentPart(part: LlmContentPart): AnthropicContentBlock | undefined {
+  switch (part.type) {
+    case "text":
+      return { type: "text", text: part.text };
+    case "image":
+      return { type: "image", source: { type: "base64", media_type: part.mimeType, data: part.data } };
+    case "thinking":
+      // Only a block Anthropic signed can be replayed; any other is dropped.
+      if (!part.signature || part.signature.includes(":") && !part.signature.startsWith(REDACTED_PREFIX)) return undefined;
+      return part.signature.startsWith(REDACTED_PREFIX)
+        ? { type: "redacted_thinking", data: part.signature.slice(REDACTED_PREFIX.length) }
+        : { type: "thinking", thinking: part.thinking, signature: part.signature };
+    case "tool_use":
+      return { type: "tool_use", id: part.id, name: part.name, input: part.input };
+    case "tool_result":
+      return { type: "tool_result", tool_use_id: part.toolUseId, content: part.content, ...(part.isError ? { is_error: true } : {}) };
   }
+}
 
-  const blocks: AnthropicContentBlock[] = [];
-  for (const part of parts) {
-    if (part.type === "text") {
-      blocks.push({ type: "text", text: part.text });
-    } else if (part.type === "image") {
-      blocks.push({
-        type: "image",
-        source: { type: "base64", media_type: part.mimeType, data: part.data },
-      });
-    } else if (part.type === "tool_use") {
-      blocks.push({ type: "tool_use", id: part.id, name: part.name, input: part.input });
-    } else if (part.type === "tool_result") {
-      blocks.push({ type: "tool_result", tool_use_id: part.toolUseId, content: part.content, is_error: part.isError });
-    }
-  }
-  return blocks;
+function convertContent(content: string | LlmContentPart[]): string | AnthropicContentBlock[] {
+  if (typeof content === "string") return content;
+  const blocks = content.flatMap((part) => convertContentPart(part) ?? []);
+  return blocks.every((block) => block.type === "text")
+    ? blocks.map((block) => (block as { text: string }).text).join("\n")
+    : blocks;
 }
 
 function convertMessages(messages: LlmMessage[]): AnthropicMessage[] {
-  const result: AnthropicMessage[] = [];
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        result.push({ role: "user", content: msg.content });
-      } else {
-        result.push({ role: "user", content: convertContentParts(msg.content) });
-      }
-    } else if (msg.role === "assistant") {
-      if (typeof msg.content === "string") {
-        result.push({ role: "assistant", content: msg.content });
-      } else {
-        // Check for tool_use blocks - if present, use content blocks directly
-        const hasToolUse = msg.content.some((p) => p.type === "tool_use");
-        if (hasToolUse) {
-          result.push({ role: "assistant", content: convertContentParts(msg.content) });
-        } else {
-          const texts = msg.content
-            .filter((p): p is { type: "text"; text: string } => p.type === "text")
-            .map((p) => p.text);
-          result.push({ role: "assistant", content: texts.join("\n") });
-        }
-      }
-    } else if (msg.role === "tool") {
-      // Anthropic requires tool_result blocks inside a user message
-      if (typeof msg.content === "string") {
-        result.push({ role: "user", content: msg.content });
-      } else {
-        result.push({ role: "user", content: convertContentParts(msg.content) });
-      }
-    }
-  }
-  return result;
+  // Anthropic carries tool results inside a user message.
+  return messages.map((msg) => ({
+    role: msg.role === "assistant" ? "assistant" : "user",
+    content: convertContent(msg.content),
+  }));
 }
 
 function convertTools(tools: LlmToolDefinition[]): Array<{
   name: string;
   description: string;
-  input_schema: { type: "object"; properties: Record<string, unknown>; required: string[] };
+  input_schema: Record<string, unknown>;
 }> {
-  return tools.map((tool) => {
-    const schema = (tool.parameters ?? {}) as { properties?: Record<string, unknown>; required?: string[] };
-    return {
-      name: tool.name,
-      description: tool.description,
-      input_schema: {
-        type: "object" as const,
-        properties: schema.properties ?? {},
-        required: schema.required ?? [],
-      },
-    };
-  });
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: {
+      type: "object",
+      properties: {},
+      ...((tool.parameters ?? {}) as Record<string, unknown>),
+    },
+  }));
+}
+
+function convertToolChoice(choice: LlmToolChoice): Record<string, unknown> {
+  if (choice === "auto") return { type: "auto" };
+  if (choice === "required") return { type: "any" };
+  if (choice === "none") return { type: "none" };
+  return { type: "tool", name: choice.name };
 }
 
 // ---------------------------------------------------------------------------
@@ -177,20 +174,29 @@ function convertTools(tools: LlmToolDefinition[]): Array<{
 // ---------------------------------------------------------------------------
 
 function buildRequestBody(config: AnthropicConfig, request: LlmRequest): Record<string, unknown> {
-  const messages = convertMessages(request.messages);
+  const maxTokens = request.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS;
   const body: Record<string, unknown> = {
     model: config.model,
-    messages,
-    max_tokens: request.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
+    messages: convertMessages(request.messages),
+    max_tokens: maxTokens,
     stream: true,
   };
 
   if (request.system) body.system = request.system;
-  if (request.temperature !== undefined) body.temperature = request.temperature;
-  if (request.tools && request.tools.length > 0) body.tools = convertTools(request.tools);
-  const thinking = resolveThinkingConfig(config, request);
-  if (thinking?.budgetTokens !== undefined) {
+  if (request.tools && request.tools.length > 0) {
+    body.tools = convertTools(request.tools);
+    if (request.toolChoice) body.tool_choice = convertToolChoice(request.toolChoice);
+  }
+  const thinking = resolveThinking(config, request, maxTokens);
+  if (thinking?.type === "adaptive") {
+    body.thinking = { type: "adaptive", display: "summarized" };
+    body.output_config = { effort: thinking.effort };
+  } else if (thinking) {
     body.thinking = { type: "enabled", budget_tokens: thinking.budgetTokens };
+  }
+  // Sampling parameters are incompatible with thinking and removed on 4.7+.
+  if (request.temperature !== undefined && !thinking && !usesAdaptiveThinking(config.model)) {
+    body.temperature = request.temperature;
   }
 
   return body;
@@ -200,12 +206,14 @@ function buildRequestBody(config: AnthropicConfig, request: LlmRequest): Record<
 // Stop reason mapping
 // ---------------------------------------------------------------------------
 
-function mapStopReason(reason: string): "end_turn" | "max_tokens" | "tool_use" | "stop" | "unknown" {
+function mapStopReason(reason: string): LlmStopReason {
   switch (reason) {
     case "end_turn": return "end_turn";
-    case "max_tokens": return "max_tokens";
+    case "max_tokens":
+    case "model_context_window_exceeded": return "max_tokens";
     case "tool_use": return "tool_use";
     case "stop_sequence": return "stop";
+    case "refusal": return "error";
     default: return "unknown";
   }
 }
@@ -214,12 +222,23 @@ function mapStopReason(reason: string): "end_turn" | "max_tokens" | "tool_use" |
 // SSE event types
 // ---------------------------------------------------------------------------
 
+type AnthropicUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+};
+
 type AnthropicStreamEvent =
-  | { type: "message_start"; message: { id: string; usage: { input_tokens: number; output_tokens: number } } }
-  | { type: "content_block_start"; index: number; content_block: { type: "text" | "thinking" | "tool_use"; id?: string; name?: string } }
-  | { type: "content_block_delta"; index: number; delta: { type: "text_delta"; text: string } | { type: "thinking_delta"; thinking: string } | { type: "input_json_delta"; partial_json: string } }
+  | { type: "message_start"; message: { id: string; usage: AnthropicUsage } }
+  | { type: "content_block_start"; index: number; content_block: { type: string; id?: string; name?: string; data?: string } }
+  | { type: "content_block_delta"; index: number; delta:
+      | { type: "text_delta"; text: string }
+      | { type: "thinking_delta"; thinking: string }
+      | { type: "signature_delta"; signature: string }
+      | { type: "input_json_delta"; partial_json: string } }
   | { type: "content_block_stop"; index: number }
-  | { type: "message_delta"; delta: { stop_reason: string | null }; usage: { output_tokens: number } }
+  | { type: "message_delta"; delta: { stop_reason: string | null }; usage: AnthropicUsage }
   | { type: "message_stop" };
 
 const MESSAGE_EVENTS = new Set([
@@ -255,41 +274,32 @@ async function* streamAnthropicMessages(
       body: JSON.stringify(body),
     }),
   }, async function* (response) {
-      let content = "";
-      let thinking = "";
       let stopReason: string | null = null;
-      let inputTokens = 0;
-      let outputTokens = 0;
-      const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
-      const blockTypes = new Map<number, "text" | "thinking" | "tool_use">();
+      const usage: LlmTokenUsage = {};
+      // Content blocks by stream index, so interleaved thinking keeps its place.
+      const blocks = new Map<number, ContentBlock>();
 
       const partial: AssistantMessagePartial = {
         role: "assistant",
         contentBlocks: [],
       };
+      const snapshot = (): AssistantMessagePartial => {
+        partial.contentBlocks = [...blocks.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([, block]) => ({ ...block }));
+        return { ...partial, contentBlocks: [...partial.contentBlocks] };
+      };
+      const addUsage = (next: AnthropicUsage): void => {
+        if (next.input_tokens != null) usage.inputTokens = next.input_tokens;
+        if (next.output_tokens != null) usage.outputTokens = next.output_tokens;
+        if (next.cache_read_input_tokens != null) usage.cacheReadTokens = next.cache_read_input_tokens;
+        if (next.cache_creation_input_tokens != null) usage.cacheWriteTokens = next.cache_creation_input_tokens;
+      };
 
       // Anthropic emits thinking before any text/tool block. Start the
       // assistant message before consuming content so a thinking-only or
       // interrupted response can still be persisted by the loop collector.
-      yield { type: "start", partial: { ...partial, contentBlocks: [] } };
-
-      function rebuildPartial(): void {
-        partial.contentBlocks = [];
-        if (thinking) {
-          partial.contentBlocks.push({ type: "thinking", thinking });
-        }
-        if (content) {
-          partial.contentBlocks.push({ type: "text", text: content });
-        }
-        for (const tc of toolCalls.values()) {
-          partial.contentBlocks.push({
-            type: "tool_call",
-            id: tc.id,
-            name: tc.name,
-            args: tc.arguments,
-          });
-        }
-      }
+      yield { type: "start", partial: snapshot() };
 
       for await (const sse of response.sse()) {
         if (sse.event === "error") {
@@ -304,53 +314,52 @@ async function* streamAnthropicMessages(
 
         switch (event.type) {
           case "message_start":
-            inputTokens = event.message.usage.input_tokens;
-            outputTokens = event.message.usage.output_tokens;
+            addUsage(event.message.usage);
             break;
 
-          case "content_block_start":
-            blockTypes.set(event.index, event.content_block.type);
-            if (event.content_block.type === "tool_use") {
-              const tc = { id: event.content_block.id ?? "", name: event.content_block.name ?? "", arguments: "" };
-              toolCalls.set(event.index, tc);
-              rebuildPartial();
-              yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+          case "content_block_start": {
+            const start = event.content_block;
+            if (start.type === "text") blocks.set(event.index, { type: "text", text: "" });
+            else if (start.type === "thinking") blocks.set(event.index, { type: "thinking", thinking: "" });
+            else if (start.type === "redacted_thinking") {
+              blocks.set(event.index, { type: "thinking", thinking: "", signature: `${REDACTED_PREFIX}${start.data ?? ""}` });
+            } else if (start.type === "tool_use") {
+              const block = { type: "tool_call" as const, id: start.id ?? "", name: start.name ?? "", args: "" };
+              blocks.set(event.index, block);
+              yield { type: "tool_call_start", id: block.id, name: block.name, partial: snapshot() };
             }
             break;
+          }
 
-          case "content_block_delta":
-            if (event.delta.type === "text_delta") {
-              content += event.delta.text;
-              rebuildPartial();
-              yield { type: "text_delta", text: event.delta.text, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-            } else if (event.delta.type === "thinking_delta") {
-              thinking += event.delta.thinking;
-              rebuildPartial();
-              yield { type: "thinking_delta", thinking: event.delta.thinking, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-            } else if (event.delta.type === "input_json_delta") {
-              const tc = toolCalls.get(event.index);
-              if (tc) {
-                tc.arguments += event.delta.partial_json;
-                rebuildPartial();
-                yield { type: "tool_call_delta", id: tc.id, arguments: event.delta.partial_json, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-              }
+          case "content_block_delta": {
+            const block = blocks.get(event.index);
+            const delta = event.delta;
+            if (delta.type === "text_delta" && block?.type === "text") {
+              block.text += delta.text;
+              yield { type: "text_delta", text: delta.text, partial: snapshot() };
+            } else if (delta.type === "thinking_delta" && block?.type === "thinking") {
+              block.thinking += delta.thinking;
+              yield { type: "thinking_delta", thinking: delta.thinking, partial: snapshot() };
+            } else if (delta.type === "signature_delta" && block?.type === "thinking") {
+              block.signature = (block.signature ?? "") + delta.signature;
+            } else if (delta.type === "input_json_delta" && block?.type === "tool_call") {
+              block.args += delta.partial_json;
+              yield { type: "tool_call_delta", id: block.id, arguments: delta.partial_json, partial: snapshot() };
             }
             break;
+          }
 
           case "content_block_stop": {
-            if (blockTypes.get(event.index) === "tool_use") {
-              const tc = toolCalls.get(event.index);
-              if (tc) {
-                rebuildPartial();
-                yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-              }
+            const block = blocks.get(event.index);
+            if (block?.type === "tool_call") {
+              yield { type: "tool_call_end", id: block.id, name: block.name, arguments: block.args, partial: snapshot() };
             }
             break;
           }
 
           case "message_delta":
             if (event.delta.stop_reason) stopReason = event.delta.stop_reason;
-            outputTokens = event.usage.output_tokens;
+            addUsage(event.usage);
             break;
 
           case "message_stop":
@@ -358,14 +367,16 @@ async function* streamAnthropicMessages(
         }
       }
 
-      const toolCallResults: LlmToolCall[] = [];
-      for (const tc of toolCalls.values()) {
-        let parsedArgs: unknown = tc.arguments;
-        try { parsedArgs = JSON.parse(tc.arguments); } catch {}
-        toolCallResults.push({ id: tc.id, name: tc.name, arguments: parsedArgs });
-      }
-
-      const usage: LlmTokenUsage = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+      const final = snapshot().contentBlocks;
+      const content = final.flatMap((block) => block.type === "text" ? [block.text] : []).join("");
+      const thinking = final.flatMap((block) => block.type === "thinking" ? [block.thinking] : []).join("");
+      const toolCallResults: LlmToolCall[] = final.flatMap((block) => {
+        if (block.type !== "tool_call") return [];
+        let parsedArgs: unknown = block.args;
+        try { parsedArgs = JSON.parse(block.args); } catch {}
+        return [{ id: block.id, name: block.name, arguments: parsedArgs }];
+      });
+      usage.totalTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 
       yield {
         type: "done",

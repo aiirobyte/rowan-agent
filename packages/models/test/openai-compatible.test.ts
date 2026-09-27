@@ -1244,3 +1244,36 @@ test("createOpenAICompletionsStream yields text_delta for non-JSON text", async 
   const text = textDelta(events);
   expect(text).toBe("Just plain text without JSON.");
 });
+
+test("createOpenAICompletionsStream sends the current Chat Completions request fields", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    fetch: async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sseResponse([
+        { data: { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] } },
+        { data: { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, prompt_tokens_details: { cached_tokens: 8 } } } },
+      ]);
+    },
+  });
+
+  const events = await collect(stream({
+    model: { provider: "test", id: "test-model" },
+    messages: [{ role: "user", content: "hello" }],
+    tools: [{ name: "read", description: "Read", parameters: { type: "object", properties: {} } }],
+    toolChoice: { type: "tool", name: "read" },
+    thinkingLevel: "max",
+    maxTokens: 100,
+  }, {}));
+  const done = events.find((event) => event.type === "done");
+
+  expect(bodies[0]?.max_completion_tokens).toBe(100);
+  expect(bodies[0]?.max_tokens).toBeUndefined();
+  expect(bodies[0]?.reasoning_effort).toBe("xhigh");
+  expect(bodies[0]?.tool_choice).toEqual({ type: "function", function: { name: "read" } });
+  expect(done?.type === "done" && done.response?.usage).toEqual({ inputTokens: 10, outputTokens: 2, totalTokens: 12, cacheReadTokens: 8 });
+});

@@ -297,3 +297,98 @@ test("Anthropic surfaces an in-stream error event", async () => {
   expect(error?.type === "error" && error.error).toBeInstanceOf(ProviderError);
   expect(error?.type === "error" && error.error.message).toBe("Overloaded");
 });
+
+function capturingAnthropic(model: string, events: Array<{ event: string; data: object }> = []) {
+  const bodies: Array<Record<string, unknown>> = [];
+  const stream = createAnthropicStream({
+    baseUrl: "https://api.example",
+    apiKey: "test-key",
+    model,
+    maxRetries: 0,
+    fetch: async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return anthropicSseResponse(events);
+    },
+  });
+  return { stream, bodies };
+}
+
+const tool = {
+  name: "read",
+  description: "Read a file",
+  parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
+};
+
+test("Anthropic uses adaptive thinking, effort and tool_choice on current models", async () => {
+  const { stream, bodies } = capturingAnthropic("claude-opus-5");
+  await collect(stream({
+    model: { provider: "anthropic", id: "claude-opus-5" },
+    messages: [{ role: "user", content: "hi" }],
+    tools: [tool],
+    toolChoice: "required",
+    thinkingLevel: "max",
+    temperature: 0.2,
+  }, {}));
+
+  expect(bodies[0]?.thinking).toEqual({ type: "adaptive", display: "summarized" });
+  expect(bodies[0]?.output_config).toEqual({ effort: "max" });
+  expect(bodies[0]?.temperature).toBeUndefined();
+  expect(bodies[0]?.tool_choice).toEqual({ type: "any" });
+  expect((bodies[0]?.tools as Array<{ input_schema: unknown }>)[0]?.input_schema).toEqual(tool.parameters);
+});
+
+test("Anthropic keeps budget thinking for earlier models", async () => {
+  const { stream, bodies } = capturingAnthropic("claude-haiku-4-5");
+  await collect(stream({
+    model: { provider: "anthropic", id: "claude-haiku-4-5" },
+    messages: [{ role: "user", content: "hi" }],
+    thinkingLevel: "low",
+  }, {}));
+
+  expect(bodies[0]?.thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
+  expect(bodies[0]?.output_config).toBeUndefined();
+});
+
+test("Anthropic captures thinking signatures in order and replays only its own", async () => {
+  const { stream, bodies } = capturingAnthropic("claude-opus-5", [
+    { event: "message_start", data: { type: "message_start", message: { id: "m", usage: { input_tokens: 5, output_tokens: 0, cache_read_input_tokens: 3 } } } },
+    { event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "thinking" } } },
+    { event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "plan" } } },
+    { event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-1" } } },
+    { event: "content_block_start", data: { type: "content_block_start", index: 1, content_block: { type: "redacted_thinking", data: "enc" } } },
+    { event: "content_block_start", data: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "t1", name: "read" } } },
+    { event: "content_block_delta", data: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"path\":\"a\"}" } } },
+    { event: "content_block_stop", data: { type: "content_block_stop", index: 2 } },
+    { event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 9 } } },
+  ]);
+  const events = await collect(stream({ model: { provider: "anthropic", id: "claude-opus-5" }, messages: [{ role: "user", content: "hi" }] }, {}));
+  const done = events.find((event) => event.type === "done");
+  const blocks = [...events].reverse().find((event) => "partial" in event);
+
+  expect(blocks && "partial" in blocks ? blocks.partial.contentBlocks : []).toEqual([
+    { type: "thinking", thinking: "plan", signature: "sig-1" },
+    { type: "thinking", thinking: "", signature: "anthropic-redacted:enc" },
+    { type: "tool_call", id: "t1", name: "read", args: "{\"path\":\"a\"}" },
+  ]);
+  expect(done?.type === "done" && done.response?.usage).toEqual({ inputTokens: 5, outputTokens: 9, cacheReadTokens: 3, totalTokens: 14 });
+
+  await collect(stream({
+    model: { provider: "anthropic", id: "claude-opus-5" },
+    messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "plan", signature: "sig-1" },
+        { type: "thinking", thinking: "", signature: "anthropic-redacted:enc" },
+        { type: "thinking", thinking: "foreign", signature: "openai-reasoning:[]" },
+        { type: "tool_use", id: "t1", name: "read", input: { path: "a" } },
+      ] },
+      { role: "tool", content: [{ type: "tool_result", toolUseId: "t1", content: "ok" }] },
+    ],
+  }, {}));
+
+  expect((bodies[1]?.messages as Array<{ content: unknown }>)[1]?.content).toEqual([
+    { type: "thinking", thinking: "plan", signature: "sig-1" },
+    { type: "redacted_thinking", data: "enc" },
+    { type: "tool_use", id: "t1", name: "read", input: { path: "a" } },
+  ]);
+});

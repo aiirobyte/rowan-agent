@@ -5,6 +5,7 @@ import type {
   LlmTokenUsage,
   LlmStreamOptions,
   LlmToolCall,
+  LlmToolChoice,
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
@@ -15,6 +16,7 @@ import {
   type BaseProviderConfig,
   normalizeBaseUrl,
   normalizeUsage,
+  openAIReasoningEffort,
   payloadError,
   resolveBaseProviderConfig,
   sanitizeToolInput,
@@ -106,6 +108,10 @@ function convertMessages(messages: LlmMessage[]): OpenAIChatMessage[] {
   return result;
 }
 
+function convertToolChoice(choice: LlmToolChoice): unknown {
+  return typeof choice === "string" ? choice : { type: "function", function: { name: choice.name } };
+}
+
 function convertTools(tools: LlmToolDefinition[]): Array<{
   type: "function";
   function: { name: string; description: string; parameters: unknown };
@@ -144,17 +150,19 @@ function buildRequestBody(
     body.temperature = request.temperature ?? config.temperature ?? 0;
   }
 
+  // `max_tokens` is deprecated and rejected by reasoning models.
   if (request.maxTokens ?? config.maxTokens) {
-    body.max_tokens = request.maxTokens ?? config.maxTokens;
+    body.max_completion_tokens = request.maxTokens ?? config.maxTokens;
   }
 
   const thinkingLevel = request.thinkingLevel ?? config.thinkingLevel;
   if (thinkingLevel && thinkingLevel !== "off") {
-    body.reasoning_effort = thinkingLevel;
+    body.reasoning_effort = openAIReasoningEffort(thinkingLevel);
   }
 
   if (request.tools && request.tools.length > 0) {
     body.tools = convertTools(request.tools);
+    if (request.toolChoice) body.tool_choice = convertToolChoice(request.toolChoice);
   }
 
   if (config.responseFormat) {
@@ -175,7 +183,8 @@ function mapFinishReason(reason: string | null | undefined): "end_turn" | "max_t
       return "end_turn";
     case "stop": return "end_turn";
     case "length": return "max_tokens";
-    case "tool_calls": return "tool_use";
+    case "tool_calls":
+    case "function_call": return "tool_use";
     case "content_filter": return "error";
     default: return "unknown";
   }

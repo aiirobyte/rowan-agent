@@ -249,6 +249,8 @@ export type TextBlock = {
 export type ThinkingBlock = {
   type: "thinking";
   thinking: string;
+  /** Opaque provider token that lets the same provider verify a replayed block. */
+  signature?: string;
 };
 
 export type ToolCallBlock = {

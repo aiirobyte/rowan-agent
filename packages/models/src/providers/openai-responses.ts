@@ -4,7 +4,9 @@ import type {
   LlmStreamEvent,
   LlmTokenUsage,
   LlmStreamOptions,
+  LlmStopReason,
   LlmToolCall,
+  LlmToolChoice,
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
@@ -16,6 +18,9 @@ import {
   payloadError,
   type BaseProviderConfig,
   normalizeBaseUrl,
+  normalizeUsage,
+  openAIReasoningEffort,
+  type RawUsage,
   resolveBaseProviderConfig,
   sanitizeToolInput,
 } from "./shared";
@@ -47,7 +52,29 @@ type ResponsesInputMessage =
   | { role: "user"; content: string | ResponsesInputContent[] }
   | { role: "assistant"; content: string }
   | { type: "function_call"; call_id: string; name: string; arguments: string }
+  | ReasoningItem
   | { type: "function_call_output"; call_id: string; output: string };
+
+/** A reasoning item as the API returns it; replayed verbatim when `store` is false. */
+type ReasoningItem = {
+  type: "reasoning";
+  id: string;
+  encrypted_content?: string;
+  summary: Array<{ type: "summary_text"; text: string }>;
+};
+
+/** Reasoning items travel in the portable thinking signature with this prefix. */
+const REASONING_PREFIX = "openai-reasoning:";
+
+function reasoningItems(signature: string | undefined): ReasoningItem[] {
+  if (!signature?.startsWith(REASONING_PREFIX)) return [];
+  try {
+    const items = JSON.parse(signature.slice(REASONING_PREFIX.length)) as unknown;
+    return Array.isArray(items) ? items as ReasoningItem[] : [];
+  } catch {
+    return [];
+  }
+}
 
 type ResponsesInputContent =
   | { type: "input_text"; text: string }
@@ -79,14 +106,16 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
       if (typeof msg.content === "string") {
         result.push({ role: "assistant", content: msg.content });
       } else {
-        // Emit text content
+        // Replay reasoning first, as the API emitted it ahead of the output.
+        for (const part of msg.content) {
+          if (part.type === "thinking") result.push(...reasoningItems(part.signature));
+        }
         const text = msg.content
           .filter((p): p is { type: "text"; text: string } => p.type === "text")
           .map((p) => p.text)
           .join("\n");
         if (text) result.push({ role: "assistant", content: text });
 
-        // Emit function_call items for tool_use blocks
         for (const part of msg.content) {
           if (part.type === "tool_use") {
             result.push({
@@ -116,6 +145,10 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
     }
   }
   return result;
+}
+
+function convertToolChoice(choice: LlmToolChoice): unknown {
+  return typeof choice === "string" ? choice : { type: "function", name: choice.name };
 }
 
 function convertTools(tools: LlmToolDefinition[]): Array<{
@@ -148,6 +181,8 @@ function buildRequestBody(
     model: config.model,
     input,
     stream: true,
+    // Stateless: reasoning comes back encrypted and is replayed with the history.
+    store: false,
   };
 
   if (request.system) {
@@ -160,6 +195,7 @@ function buildRequestBody(
 
   if (request.tools && request.tools.length > 0) {
     body.tools = convertTools(request.tools);
+    if (request.toolChoice) body.tool_choice = convertToolChoice(request.toolChoice);
   }
 
   const requestedThinkingLevel = request.thinkingLevel ?? config.thinkingLevel;
@@ -167,7 +203,8 @@ function buildRequestBody(
     ? undefined
     : requestedThinkingLevel ?? config.reasoningEffort;
   if (reasoningEffort) {
-    body.reasoning = { effort: reasoningEffort, summary: "auto" };
+    body.reasoning = { effort: openAIReasoningEffort(reasoningEffort), summary: "auto" };
+    body.include = ["reasoning.encrypted_content"];
   }
 
   return body;
@@ -177,11 +214,13 @@ function buildRequestBody(
 // Stop reason mapping
 // ---------------------------------------------------------------------------
 
-function mapStopReason(reason: string | null | undefined): "end_turn" | "max_tokens" | "tool_use" | "error" | "unknown" {
+function mapStopReason(reason: string | null | undefined, hasToolCalls: boolean): LlmStopReason {
   switch (reason) {
-    case "completed": return "end_turn";
-    case "max_tokens": return "max_tokens";
+    case "completed": return hasToolCalls ? "tool_use" : "end_turn";
+    case "max_output_tokens":
+    case "max_tokens":
     case "incomplete": return "max_tokens";
+    case "content_filter": return "error";
     default: return "unknown";
   }
 }
@@ -204,9 +243,9 @@ type ResponsesStreamEvent =
   | { type: "response.output_text.done"; output_index: number; content_index: number; text: string }
   | { type: "response.function_call_arguments.delta"; output_index: number; item_id: string; call_id?: string; delta: string }
   | { type: "response.function_call_arguments.done"; output_index: number; item_id: string; call_id?: string; name?: string; arguments: string }
-  | { type: "response.output_item.done"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string; arguments?: string; summary?: Array<{ type: string; text?: string }>; content?: Array<{ type: string; text?: string }> } }
-  | { type: "response.completed"; response: { usage?: { input_tokens: number; output_tokens: number; total_tokens: number } } }
-  | { type: "response.incomplete"; response: { usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; incomplete_details?: { reason: string } } }
+  | { type: "response.output_item.done"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string; arguments?: string; encrypted_content?: string; summary?: Array<{ type: string; text?: string }>; content?: Array<{ type: string; text?: string }> } }
+  | { type: "response.completed"; response: { usage?: RawUsage } }
+  | { type: "response.incomplete"; response: { usage?: RawUsage; incomplete_details?: { reason: string } } }
   | { type: "error"; error: { message: string; type?: string } };
 
 // ---------------------------------------------------------------------------
@@ -238,6 +277,7 @@ async function* streamResponses(
       let content = "";
       let thinking = "";
       const reasoningParts = new Map<string, string>();
+      const reasoning: ReasoningItem[] = [];
       let stopReason: string | null = null;
       let usage: LlmTokenUsage | undefined;
       // Map output_index -> tool call state
@@ -250,8 +290,12 @@ async function* streamResponses(
 
       function rebuildPartial(): void {
         partial.contentBlocks = [];
-        if (thinking) {
-          partial.contentBlocks.push({ type: "thinking", thinking });
+        if (thinking || reasoning.length > 0) {
+          partial.contentBlocks.push({
+            type: "thinking",
+            thinking,
+            ...(reasoning.length > 0 ? { signature: REASONING_PREFIX + JSON.stringify(reasoning) } : {}),
+          });
         }
         if (content) {
           partial.contentBlocks.push({ type: "text", text: content });
@@ -398,6 +442,16 @@ async function* streamResponses(
 
           case "response.output_item.done": {
             if (event.item.type === "reasoning") {
+              if (event.item.id) {
+                reasoning.push({
+                  type: "reasoning",
+                  id: event.item.id,
+                  ...(event.item.encrypted_content ? { encrypted_content: event.item.encrypted_content } : {}),
+                  summary: (event.item.summary ?? []).flatMap((part) =>
+                    part.type === "summary_text" && part.text ? [{ type: "summary_text" as const, text: part.text }] : []),
+                });
+                rebuildPartial();
+              }
               for (const [index, part] of (event.item.summary ?? []).entries()) {
                 if (part.type !== "summary_text" || !part.text) continue;
                 const delta = updateReasoningPart(
@@ -437,24 +491,12 @@ async function* streamResponses(
           }
 
           case "response.completed":
-            if (event.response.usage) {
-              usage = {
-                inputTokens: event.response.usage.input_tokens,
-                outputTokens: event.response.usage.output_tokens,
-                totalTokens: event.response.usage.total_tokens,
-              };
-            }
+            usage = normalizeUsage(event.response.usage) ?? usage;
             stopReason = "completed";
             break;
 
           case "response.incomplete":
-            if (event.response.usage) {
-              usage = {
-                inputTokens: event.response.usage.input_tokens,
-                outputTokens: event.response.usage.output_tokens,
-                totalTokens: event.response.usage.total_tokens,
-              };
-            }
+            usage = normalizeUsage(event.response.usage) ?? usage;
             stopReason = event.response.incomplete_details?.reason ?? "incomplete";
             break;
         }
@@ -472,7 +514,7 @@ async function* streamResponses(
         response: {
           content,
           ...(thinking ? { thinking } : {}),
-          stopReason: mapStopReason(stopReason),
+          stopReason: mapStopReason(stopReason, toolCallResults.length > 0),
           ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
           ...(usage ? { usage } : {}),
         },
