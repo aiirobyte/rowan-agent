@@ -4,12 +4,13 @@ import {
   RuntimeError,
 } from "../../src/runtime";
 import type {
+  AgentId,
   AssistantMessage,
   ConfigToken,
-  InputRequestId,
   MessageId,
+  RunId,
 } from "../../src/runtime-events";
-import type { ExecutionCheckpoint } from "../../src/runtime/contracts";
+import type { ExecutionCheckpoint, RunInteraction } from "../../src/runtime/contracts";
 
 const token = "config-1" as ConfigToken;
 
@@ -168,26 +169,34 @@ test("Memory DurableStore commits input boundaries and terminal outcomes atomica
     sequenceWithinRun: 1,
     createdAt: "2026-07-23T00:00:00.000Z",
   };
+  const interaction: RunInteraction = {
+    id: "interaction-1",
+    phase: "plan",
+    kind: "user_input",
+    prompt: "Which target?",
+    createdAt: "2026-07-23T00:00:00.000Z",
+    status: "pending",
+  };
   const checkpoint: ExecutionCheckpoint = { codec: "rowan.agent.execution", version: 1, data: { phase: "plan" } };
   const inputRequired = {
     runId: run.id,
     execution: claimed.execution,
     expectedRevision: claimed.run.revision,
-    requestId: "request-1" as InputRequestId,
     prompt,
     checkpoint,
+    interactions: [interaction],
   };
   await expect(owner.commitInputRequired({ ...inputRequired, phase: "" })).rejects.toBeInstanceOf(TypeError);
-  const waiting = await owner.commitInputRequired({ ...inputRequired, phase: "plan" });
-  expect(waiting.run.state).toBe("input_required");
+  const waitingRun = await owner.commitInputRequired({ ...inputRequired, phase: "plan" });
+  expect(waitingRun.state).toBe("input_required");
   const snapshot = await owner.snapshotRun(run.id);
   expect(snapshot.state).toBe("input_required");
-  if (snapshot.state === "input_required") expect(snapshot.request.prompt?.id).toBe(prompt.id);
+  if (snapshot.state === "input_required") expect(snapshot.interactions[0]?.id).toBe("interaction-1");
 
-  const queued = await owner.answerInput({
+  const queued = await owner.answerInteraction({
     runId: run.id,
-    requestId: waiting.request.id,
-    expectedRevision: waiting.run.revision,
+    interactionId: "interaction-1",
+    expectedRevision: waitingRun.revision,
     input: "production",
   });
   expect(queued.state).toBe("queued");
@@ -216,11 +225,18 @@ test("Memory DurableStore drops a Claim receipt when its Execution Attempt ends"
   const claimed = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
   expect(claimReceiptKeys()).toEqual([`claim:${claimed.execution.executionId}`]);
 
-  const waiting = await owner.commitInputRequired({
+  const interactionClaim: RunInteraction = {
+    id: "interaction-claim-receipts",
+    phase: "plan",
+    kind: "user_input",
+    prompt: "Which target?",
+    createdAt: "2026-07-23T00:00:00.000Z",
+    status: "pending",
+  };
+  const waitingRun = await owner.commitInputRequired({
     runId: run.id,
     execution: claimed.execution,
     expectedRevision: claimed.run.revision,
-    requestId: "request-claim-receipts" as InputRequestId,
     phase: "plan",
     prompt: {
       id: "prompt-claim-receipts" as MessageId,
@@ -232,13 +248,14 @@ test("Memory DurableStore drops a Claim receipt when its Execution Attempt ends"
       createdAt: "2026-07-23T00:00:00.000Z",
     },
     checkpoint: { codec: "rowan.agent.execution", version: 1, data: { phase: "plan" } },
+    interactions: [interactionClaim],
   });
   expect(claimReceiptKeys()).toEqual([]);
 
-  const queued = await owner.answerInput({
+  const queued = await owner.answerInteraction({
     runId: run.id,
-    requestId: waiting.request.id,
-    expectedRevision: waiting.run.revision,
+    interactionId: "interaction-claim-receipts",
+    expectedRevision: waitingRun.revision,
     input: "production",
   });
   const resumed = await owner.claimRun({ runId: run.id, expectedRevision: queued.revision });
@@ -346,3 +363,46 @@ test("Memory DurableStore resumes a Consumer from its durable checkpoint", async
 function storeIncarnation(cursor: string): string {
   return cursor.split(":")[0]!;
 }
+
+test("InMemoryStore.fromState cancels open v0.12 Input Request runs with retirement reason", async () => {
+  const store = InMemoryStore.fromState({
+    incarnation: "v012-test",
+    agents: [{
+      id: "agt_1" as AgentId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }],
+    runs: [{
+      id: "run_1" as RunId,
+      agentId: "agt_1" as AgentId,
+      agentSequence: 0,
+      readySequence: 0,
+      revision: 1,
+      state: "input_required",
+      input: "hello",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      openInputRequest: {
+        id: "req_1",
+        phase: "work",
+        prompt: { id: "msg_1", content: "need input" },
+      },
+    } as any],
+    messages: [],
+    toolCalls: [],
+    events: [],
+    idempotency: [],
+    operationReceipts: [],
+    consumerCheckpoints: [],
+    nextAgentSequence: [["agt_1" as AgentId, 1]],
+    nextReadySequence: [["agt_1" as AgentId, 1]],
+    eventSequence: 0,
+  });
+
+  const owner = await store.openOwner({ ownerId: "owner-upgraded", leaseMs: 10_000 });
+  const snapshot = await owner.snapshotRun("run_1" as RunId);
+  expect(snapshot.state).toBe("cancelled");
+  if (snapshot.state === "cancelled") {
+    expect(snapshot.reason).toBe("Input Request retired in v0.13");
+  }
+});

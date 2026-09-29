@@ -30,7 +30,6 @@ export type {
   ExecutionCheckpoint,
   ExecutionToken,
   HistorySeed,
-  InputRequiredCommit,
   Message,
   MessageDelta,
   ThinkingDelta,

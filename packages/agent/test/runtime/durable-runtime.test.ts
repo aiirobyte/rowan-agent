@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import type { RunId } from "../../src/runtime-events";
+import type { AssistantMessage, RunId } from "../../src/runtime-events";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { configuration, createAgentWith, createPhaseAgent, seedResources, testDefinition } from "../fixtures/configuration";
@@ -256,7 +256,7 @@ test("input_required preserves the current assistant thinking parts", async () =
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "input-thinking-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "input_required" });
 
-    const assistant = (await runtime.history(agentId)).find(({ role }) => role === "assistant");
+    const assistant = (await runtime.history(agentId)).find((m): m is AssistantMessage => m.role === "assistant");
     expect(assistant?.content).toEqual([
       { type: "thinking", thinking },
       { type: "text", text },
@@ -316,7 +316,7 @@ test("AgentRuntime compacts once and retries after a provider context overflow",
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "overflow-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     expect(calls).toBe(3);
-    expect((await runtime.history(agentId)).filter(({ role }) => role === "assistant").map(({ content }) => content)).toEqual(["retried reply"]);
+    expect((await runtime.history(agentId)).filter((m): m is AssistantMessage => m.role === "assistant").map(({ content }) => content)).toEqual(["retried reply"]);
     expect((await runtime.contextStatus(agentId)).coveredThrough).toBeDefined();
   } finally {
     await runtime.close();
@@ -954,14 +954,14 @@ test("AgentRuntime resumes an input-required Run without replaying its original 
     expect(first.type).toBe("input_required");
     if (first.type !== "input_required") return;
     const before = await run.snapshot();
-    await run.respond({ requestId: first.requestId, input: "production" });
+    await run.respondInteraction({ interactionId: first.interactions[0]!.id, input: "production" });
     const second = await run.wait();
     expect(second.type).toBe("input_required");
     expect(requests[1]?.messages
       .filter(({ role, content }) =>
-        role === "user" && (content === "hello" || content === "production"))
+        role === "user" && (content === "hello" || (typeof content === "string" && content.includes("The user answered"))))
       .map(({ content }) => content))
-      .toEqual(["hello", "production"]);
+      .toEqual(["hello", 'The user answered "Which target?": production']);
     expect((await run.snapshot()).revision).toBeGreaterThan(before.revision);
   } finally {
     await runtime.close();
@@ -1008,7 +1008,7 @@ test("input-required Phase survives Runtime restart and remains visible at the p
       const boundary = await run.wait();
       expect(boundary.type).toBe("input_required");
       if (boundary.type !== "input_required") return;
-      expect(boundary.phase).toBe("task-planning");
+      expect(boundary.interactions[0]!.phase).toBe("task-planning");
     } finally {
       await firstRuntime.close();
       firstStore.close();
@@ -1021,11 +1021,11 @@ test("input-required Phase survives Runtime restart and remains visible at the p
       const snapshot = await recovered.snapshot();
       expect(snapshot.state).toBe("input_required");
       if (snapshot.state !== "input_required") return;
-      expect(snapshot.request.phase).toBe("task-planning");
+      expect(snapshot.interactions[0]!.phase).toBe("task-planning");
       const boundary = await recovered.wait();
       expect(boundary.type).toBe("input_required");
       if (boundary.type !== "input_required") return;
-      expect(boundary.phase).toBe("task-planning");
+      expect(boundary.interactions[0]!.phase).toBe("task-planning");
     } finally {
       await secondRuntime.close();
       secondStore.close();

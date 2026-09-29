@@ -76,7 +76,7 @@ await runtime.close();
 2. `createAgent()` creates a persistent Agent identity and binds a configuration snapshot.
 3. `start()` creates a queued Run; `run(runId)` returns a stateless Run handle.
 4. `observe()` follows display-oriented `RunEvent` values; `wait()` waits for an authoritative boundary.
-5. `respond()` continues an `input_required` Run; `cancel()` terminates an unfinished Run.
+5. `respondInteraction()` continues an `input_required` Run; `cancel()` terminates an unfinished Run.
 6. `close()` seals the Owner and releases the Store.
 
 `AgentRuntime` does not expose process-local Agents, Sessions, Bindings,

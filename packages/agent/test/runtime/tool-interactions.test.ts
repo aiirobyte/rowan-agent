@@ -191,21 +191,24 @@ test("tool call interaction suspends into input_required and resumes with allow"
     const snapshotAfter = await run.snapshot();
     expect(snapshotAfter.state).toBe("completed");
 
-    const history = await runtime.history(agentId);
-    expect(history).toHaveLength(4);
+    const history = await runtime.history(agentId) as any[];
+    expect(history).toHaveLength(5);
     expect(history[0]!.role).toBe("user");
     expect(history[0]!.content).toBe("write secret");
-    expect(history[1]!.role).toBe("assistant");
-    expect(Array.isArray(history[1]!.content)).toBe(true);
-    expect((history[1]!.content as any)[0].type).toBe("tool_use");
-    expect(history[2]!.role).toBe("tool");
+    expect(history[1]!.role).toBe("interaction");
+    expect((history[1] as any).status).toBe("answered");
+    expect((history[1] as any).answer).toBe("allow");
+    expect(history[2]!.role).toBe("assistant");
     expect(Array.isArray(history[2]!.content)).toBe(true);
-    expect((history[2]!.content as any)[0].type).toBe("tool_result");
-    expect(history[3]!.role).toBe("assistant");
-    expect(history[3]!.content).toBe("file written successfully");
+    expect((history[2]!.content as any)[0].type).toBe("tool_use");
+    expect(history[3]!.role).toBe("tool");
+    expect(Array.isArray(history[3]!.content)).toBe(true);
+    expect((history[3]!.content as any)[0].type).toBe("tool_result");
+    expect(history[4]!.role).toBe("assistant");
+    expect(history[4]!.content).toBe("file written successfully");
     // Stored history must not contain the prompt assistant message nor the answer user message
-    expect(history.some((m) => m.content === "Allow writing to secrets.txt?")).toBe(false);
-    expect(history.some((m) => m.content === "allow")).toBe(false);
+    expect(history.some((m) => (m as any).content === "Allow writing to secrets.txt?")).toBe(false);
+    expect(history.some((m) => m.role === "user" && m.content === "allow")).toBe(false);
   } finally {
     await runtime.close();
   }
@@ -416,7 +419,7 @@ test("tool call interaction survives process restart/rehydrate while pending the
     expect(finalBoundary.type).toBe("completed");
     expect(executionsCount).toBe(1);
 
-    const historyAfterRestart = await runtime2.history(agentId);
+    const historyAfterRestart = await runtime2.history(agentId) as any[];
     expect(historyAfterRestart.some((m) => m.content === "Approve execution?")).toBe(false);
     expect(historyAfterRestart.some((m) => m.content === "yes")).toBe(false);
   } finally {

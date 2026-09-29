@@ -85,7 +85,7 @@ test("Runtime falls back to its built-in default when a custom Phase registry ha
 
     await expect(run.wait()).resolves.toMatchObject({
       type: "input_required",
-      phase: "default",
+      interactions: [expect.objectContaining({ phase: "default" })],
     });
     expect(modelCalls).toBe(1);
   } finally {
@@ -194,7 +194,10 @@ test("default keeps root Skills while a file Phase adds its Bundle Skills", asyn
       idempotencyKey: "phase-normalization-skill-scope-run",
     });
 
-    await expect(run.wait()).resolves.toMatchObject({ type: "input_required", phase: "default" });
+    await expect(run.wait()).resolves.toMatchObject({
+      type: "input_required",
+      interactions: [expect.objectContaining({ phase: "default" })],
+    });
     expect(observed).toEqual([["root-skill"]]);
     expect(requests[0]).not.toContain("Phase replacement guidance");
     expect(requests).toHaveLength(1);

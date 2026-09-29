@@ -410,23 +410,13 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.owned.history(agentId);
   }
 
-  async respond(runId: RunId, input: { requestId: import("../runtime-events").InputRequestId; input: UserInput }): Promise<void> {
-    this.assertOpen();
-    const snapshot = await this.owned.snapshotRun(runId);
-    if (snapshot.state !== "input_required" || snapshot.request.id !== input.requestId) {
-      throw new RuntimeError("input_request_conflict", { runId, requestId: input.requestId, reason: "not_found" });
-    }
-    await this.owned.answerInput({ runId, requestId: input.requestId, expectedRevision: snapshot.revision, input: input.input });
-    void this.pump();
-  }
-
-  async respondInteraction(runId: RunId, input: { interactionId: string; input: JsonValue }): Promise<void> {
+  async respondInteraction(runId: RunId, input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void> {
     this.assertOpen();
     const snapshot = await this.owned.snapshotRun(runId);
     if (snapshot.state !== "input_required" || !snapshot.interactions.some((interaction) => interaction.id === input.interactionId)) {
-      throw new RuntimeError("input_request_conflict", { runId, requestId: input.interactionId as import("../runtime-events").InputRequestId, reason: "not_found" });
+      throw new RuntimeError("input_request_conflict", { runId, interactionId: input.interactionId, reason: "not_found" });
     }
-    await this.owned.answerInteraction({ runId, interactionId: input.interactionId, expectedRevision: snapshot.revision, input: input.input });
+    await this.owned.answerInteraction({ runId, interactionId: input.interactionId, expectedRevision: snapshot.revision, input: input.input, cancel: input.cancel });
     void this.pump();
   }
 
@@ -737,7 +727,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
       if (result.type === "input_required") {
         const isToolCallInteraction = result.interactions?.some((i) => i.toolCallId !== undefined);
-        const output = (result.interactions && result.interactions.length > 0)
+        const output = isToolCallInteraction
           ? undefined
           : latestAssistant(
               run,
@@ -746,13 +736,12 @@ export class AgentRuntime implements AgentRuntimeContract {
             );
         const prompt = isToolCallInteraction
           ? undefined
-          : (output ?? promptMessage(run, result.request.prompt, result.messages.length));
+          : (output ?? (result.interactions[0]?.prompt ? promptMessage(run, result.interactions[0].prompt, result.messages.length) : undefined));
         await this.owned.commitInputRequired({
           runId: run.id,
           execution: claim.execution,
           expectedRevision: executionRevision,
-          requestId: createId("input") as import("../runtime-events").InputRequestId,
-          phase: result.request.phase,
+          phase: result.interactions[0]?.phase ?? "default",
           ...(prompt ? { prompt } : {}),
           checkpoint: result.checkpoint,
           interactions: result.interactions,
@@ -1465,8 +1454,7 @@ class DurableRun implements AgentRun {
   snapshot(): Promise<RunSnapshot> { return this.runtime.snapshot(this.id); }
   observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<RunEvent> { return this.runtime.observe(this.id, options); }
   wait(options?: { signal?: AbortSignal }): Promise<RunBoundary> { return this.runtime.wait(this.id, options); }
-  respond(input: { requestId: import("../runtime-events").InputRequestId; input: UserInput }): Promise<void> { return this.runtime.respond(this.id, input); }
-  respondInteraction(input: { interactionId: string; input: JsonValue }): Promise<void> { return this.runtime.respondInteraction(this.id, input); }
+  respondInteraction(input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void> { return this.runtime.respondInteraction(this.id, input); }
   cancel(reason?: string): Promise<RunBoundary> { return this.runtime.cancel(this.id, reason); }
 }
 
@@ -1499,9 +1487,6 @@ function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
   switch (snapshot.state) {
     case "input_required": return {
       type: "input_required",
-      requestId: snapshot.request.id,
-      phase: snapshot.request.phase,
-      ...(snapshot.request.prompt ? { prompt: snapshot.request.prompt } : {}),
       interactions: snapshot.interactions,
       answers: snapshot.answers,
     };

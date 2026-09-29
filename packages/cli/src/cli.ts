@@ -421,7 +421,7 @@ type CliAgentListItem = {
   run?: {
     id: string;
     state: RunSnapshot["state"];
-    request?: Extract<RunSnapshot, { state: "input_required" }>["request"];
+    interactions?: Extract<RunSnapshot, { state: "input_required" }>["interactions"];
   };
 };
 type WorkspaceResources = {
@@ -810,10 +810,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
   console.error(`Agent id: ${configured.agentId}`);
 
   if (configured.pendingRun && configured.pendingSnapshot?.state === "input_required") {
-    const request = configured.pendingSnapshot.request;
+    const interactions = configured.pendingSnapshot.interactions;
     console.error(`Input-required Run id: ${configured.pendingRun.id}`);
-    if (request.prompt) {
-      console.error(`Input requested: ${request.prompt.content}`);
+    for (const interaction of interactions) {
+      console.error(`Input requested: ${interaction.prompt}`);
     }
   }
 
@@ -902,7 +902,10 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     if (!activeAgentRun || !configured.pendingSnapshot || configured.pendingSnapshot.state !== "input_required") return;
     waitingForInput = false;
     resetActiveRunReady();
-    await activeAgentRun.respond({ requestId: configured.pendingSnapshot.request.id, input: prompt });
+    const interactionId = configured.pendingSnapshot.interactions[0]?.id;
+    if (interactionId) {
+      await activeAgentRun.respondInteraction({ interactionId, input: prompt });
+    }
     activeRun = runPrompt(activeAgentRun, {
       onInputWait: () => { waitingForInput = true; markActiveRunReady(); },
     }).finally(() => {

@@ -33,8 +33,8 @@ try {
   if (boundary.type === "completed") {
     console.log(boundary.outcome.message);
   } else if (boundary.type === "input_required") {
-    await run.respond({
-      requestId: boundary.requestId,
+    await run.respondInteraction({
+      interactionId: boundary.interactions[0]!.id,
       input: "Focus on Runtime ownership and recovery semantics.",
     });
     const resumed = await run.wait();

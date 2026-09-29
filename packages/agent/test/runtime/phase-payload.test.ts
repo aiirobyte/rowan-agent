@@ -261,7 +261,10 @@ test("an invalid Model payload does not enter the target Phase", async () => {
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-invalid-run" });
 
-    await expect(run.wait()).resolves.toMatchObject({ type: "input_required", phase: "source" });
+    await expect(run.wait()).resolves.toMatchObject({
+      type: "input_required",
+      interactions: [expect.objectContaining({ phase: "source" })],
+    });
     expect(targetEntered).toBe(false);
     expect(modelCalls).toBe(1);
   } finally {

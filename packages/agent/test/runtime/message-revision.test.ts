@@ -158,7 +158,7 @@ test("history seed copies active context with fresh identities and no Run", asyn
   expect(await owner.listRuns({ agentId: agent.id })).toEqual([]);
   const run = await owner.createRun({ agentId: agent.id, input: "next", idempotencyKey: "seed-run" });
   const claimed = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
-  expect(claimed.history.map((message) => message.content)).toEqual(["before", "answer", "next"]);
+  expect(claimed.history.map((message) => (message as any).content)).toEqual(["before", "answer", "next"]);
   expect(claimed.history.slice(0, 2).map((message) => message.id)).not.toEqual(seed.map((message) => message.id));
   expect(claimed.history.slice(0, 2).every((message) => message.agentId === agent.id)).toBe(true);
 });
@@ -188,7 +188,7 @@ test("a forked seed user Message can be revised without creating a duplicate", a
   });
   expect(revised.message.id).toBe(copied.id);
   expect(revised.replacementRun.state).toBe("queued");
-  expect((await owner.history(agent.id)).map((message) => message.content)).toEqual(["after"]);
+  expect((await owner.history(agent.id)).map((message) => (message as any).content)).toEqual(["after"]);
 });
 
 test("retention compaction hard-deletes obsolete runs and expires old cursors", async () => {
@@ -236,5 +236,5 @@ test("retention compaction hard-deletes obsolete runs and expires old cursors", 
     code: "invalid_cursor",
     details: { reason: "expired" },
   });
-  expect((await owner.history(agent.id)).map((message) => message.content)).toEqual(["new"]);
+  expect((await owner.history(agent.id)).map((message) => (message as any).content)).toEqual(["new"]);
 });

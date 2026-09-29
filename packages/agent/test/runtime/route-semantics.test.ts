@@ -187,7 +187,10 @@ test("a mixed stop route is invalid and leaves the current Phase waiting for inp
       { idempotencyKey: "route-invalid-mixed-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-invalid-mixed-run" });
-    await expect(run.wait()).resolves.toMatchObject({ type: "input_required", phase: "work" });
+    await expect(run.wait()).resolves.toMatchObject({
+      type: "input_required",
+      interactions: [expect.objectContaining({ phase: "work" })],
+    });
     expect(modelCalls).toBe(1);
   } finally {
     await runtime.close();
@@ -213,7 +216,10 @@ test("invalid ordinary route targets are ignored when no valid target remains", 
       { idempotencyKey: "route-invalid-target-agent" },
     );
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-invalid-target-run" });
-    await expect(run.wait()).resolves.toMatchObject({ type: "input_required", phase: "work" });
+    await expect(run.wait()).resolves.toMatchObject({
+      type: "input_required",
+      interactions: [expect.objectContaining({ phase: "work" })],
+    });
     expect(modelCalls).toBe(1);
   } finally {
     await runtime.close();
@@ -290,8 +296,10 @@ test("maxAttempts suspends an autonomous self-loop instead of implicitly stoppin
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-max-attempts-run" });
     await expect(run.wait()).resolves.toMatchObject({
       type: "input_required",
-      phase: "work",
-      prompt: expect.objectContaining({ content: expect.stringContaining("2") }),
+      interactions: [expect.objectContaining({
+        phase: "work",
+        prompt: expect.stringContaining("2"),
+      })],
     });
   } finally {
     await runtime.close();

@@ -463,7 +463,7 @@ test("an Input Request continuation remains pinned after the Agent Configuration
     await runtime.updateAgentConfig(agentId, await configurationFor("v2"), {
       idempotencyKey: "definition-snapshot-update",
     });
-    await run.respond({ requestId: first.requestId, input: "production" });
+    await run.respondInteraction({ interactionId: first.interactions[0]!.id, input: "production" });
     await run.wait();
 
     expect(observedSystems).toEqual([

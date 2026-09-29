@@ -25,6 +25,7 @@ import type { JsonValue } from "../runtime-events";
 import type { ThinkingLevel } from "@rowan-agent/models";
 import { assertJsonValue, canonicalJson, isJsonValue } from "./json";
 import type { ExecutionCheckpoint } from "./contracts";
+import { createId } from "../utils";
 
 export const EXECUTION_CHECKPOINT_CODEC = "rowan.agent.execution";
 export const EXECUTION_CHECKPOINT_VERSION = 1 as const;
@@ -74,7 +75,6 @@ export type OneShotExecutionInput = Readonly<{
 export type OneShotExecutionResult =
   | Readonly<{
       type: "input_required";
-      request: ExecutionInputRequest;
       interactions: readonly RunInteraction[];
       checkpoint: ExecutionCheckpoint;
       messages: readonly AgentMessage[];
@@ -287,10 +287,17 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     };
   } catch (error) {
     if (error instanceof InputRequiredBoundary) {
+      const interaction: RunInteraction = {
+        id: createId("input"),
+        kind: "user_input",
+        phase: error.request.phase,
+        prompt: error.request.prompt,
+        status: "pending",
+        createdAt: error.request.requestedAt,
+      };
       return {
         type: "input_required",
-        request: error.request,
-        interactions: [],
+        interactions: [interaction],
         checkpoint: encodeExecutionCheckpoint(error.state),
         messages: snapshotMessages(context.messages),
       };
@@ -298,11 +305,6 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     if (error instanceof RunInteractionBoundary) {
       return {
         type: "input_required",
-        request: {
-          phase: error.interactions[0]?.phase ?? state.currentPhase,
-          prompt: error.interactions.map((interaction) => interaction.prompt).join("\n"),
-          requestedAt: error.interactions[0]?.createdAt ?? new Date().toISOString(),
-        },
         interactions: error.interactions,
         checkpoint: encodeExecutionCheckpoint(error.state),
         messages: snapshotMessages(context.messages),
@@ -351,8 +353,11 @@ function isRunInteractionState(value: unknown): value is RunInteractionState {
     && ["user_input", "permission", "elicitation", "confirmation"].includes(request.kind as string)
     && typeof request.prompt === "string"
     && typeof request.createdAt === "string"
-    && ["pending", "answered", "denied", "cancelled", "expired"].includes(request.status as string)
-    && (request.payload === undefined || isJsonValue(request.payload)));
+    && ["pending", "answered", "replied", "cancelled"].includes(request.status as string)
+    && (request.payload === undefined || isJsonValue(request.payload))
+    && (request.result === undefined || isRecord(request.result))
+    && (request.answer === undefined || isJsonValue(request.answer))
+    && (request.reply === undefined || typeof request.reply === "string"));
 }
 
 function isMetrics(value: unknown): value is CheckpointMetrics {

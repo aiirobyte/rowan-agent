@@ -4,7 +4,7 @@ import type { ExecutionState } from "../../loop/types";
 import { assertJsonValue, canonicalJson } from "../../runtime/json";
 
 export type RunInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
-export type RunInteractionStatus = "pending" | "answered" | "denied" | "cancelled" | "expired";
+export type RunInteractionStatus = "pending" | "answered" | "replied" | "cancelled";
 
 export type RunInteraction = Readonly<{
   id: string;
@@ -14,7 +14,14 @@ export type RunInteraction = Readonly<{
   payload?: JsonValue;
   createdAt: string;
   status: RunInteractionStatus;
+  answer?: JsonValue;
+  reply?: string;
   toolCallId?: string;
+  result?: Readonly<{
+    answered?: string;
+    replied?: string;
+    cancelled?: string;
+  }>;
 }>;
 
 export type RunInteractionRequest = Readonly<{
@@ -23,6 +30,11 @@ export type RunInteractionRequest = Readonly<{
   prompt: string;
   payload?: JsonValue;
   toolCallId?: string;
+  result?: Readonly<{
+    answered?: string;
+    replied?: string;
+    cancelled?: string;
+  }>;
 }>;
 
 export type RunInteractionState = Readonly<{
@@ -142,6 +154,7 @@ export function createRunInteractionDriver(
         prompt: input.prompt,
         ...(input.payload === undefined ? {} : { payload: input.payload }),
         ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
+        ...(input.result === undefined ? {} : { result: input.result }),
         createdAt: createTimestamp(),
         status: "pending",
       };

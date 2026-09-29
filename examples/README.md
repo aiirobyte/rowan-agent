@@ -38,7 +38,7 @@ examples/
 
 `durable-runtime.ts` shows the public execution path:
 `AgentRuntime.init()` → `runtime.createAgent()` → `runtime.start()` →
-`run.wait()`. An `input_required` boundary is resumed with `run.respond()`.
+`run.wait()`. An `input_required` boundary is resumed with `run.respondInteraction()`.
 
 ### Config
 

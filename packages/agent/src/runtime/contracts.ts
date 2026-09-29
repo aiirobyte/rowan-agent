@@ -11,7 +11,6 @@ import type {
   DurableRunEvent,
   EventCursor,
   ExecutionId,
-  InputRequestId,
   JsonObject,
   JsonValue,
   Message,
@@ -59,7 +58,7 @@ export type {
   EventId,
   ExecutionId,
   ImageContent,
-  InputRequestId,
+  InteractionRecord,
   JsonObject,
   JsonPrimitive,
   JsonValue,
@@ -228,10 +227,8 @@ export type AgentDeletionRequest = Readonly<{
 }>;
 export type ExecutionToken = Readonly<{ runId: RunId; ownerEpoch: number; executionId: ExecutionId }>;
 export type ExecutionCheckpoint = Readonly<{ codec: string; version: number; data: JsonValue }>;
-export type InputRequest = Readonly<{ id: InputRequestId; phase: string; messageId?: MessageId; createdAt: string }>;
 export type OwnerLease = Readonly<{ ownerId: string; token: OwnerToken; epoch: number; expiresAt: string }>;
 export type RunClaim = Readonly<{ run: RunRecord; execution: ExecutionToken; history: readonly Message[] }>;
-export type InputRequiredCommit = Readonly<{ run: RunRecord; prompt?: AssistantMessage; request: InputRequest; interactions: readonly RunInteraction[] }>;
 export type ToolCallReservation = Readonly<{
   providerToolCallId: string;
   name: string;
@@ -253,7 +250,6 @@ export type RunRecord = Readonly<{
   metadata?: Metadata;
   pinnedConfigToken?: ConfigToken;
   checkpoint?: ExecutionCheckpoint;
-  openInputRequest?: InputRequest;
   openInteractions?: readonly RunInteraction[];
   interactionAnswers?: Readonly<Record<string, JsonValue>>;
   execution?: ExecutionToken;
@@ -297,7 +293,6 @@ export type RunSnapshot = RunSnapshotBase & (
   | Readonly<{ state: "queued" | "running" }>
   | Readonly<{
       state: "input_required";
-      request: Readonly<{ id: InputRequestId; phase: string; prompt?: AssistantMessage }>;
       interactions: readonly RunInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>
@@ -308,9 +303,6 @@ export type RunSnapshot = RunSnapshotBase & (
 export type RunBoundary =
   | Readonly<{
       type: "input_required";
-      requestId: InputRequestId;
-      phase: string;
-      prompt?: AssistantMessage;
       interactions: readonly RunInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>
@@ -353,25 +345,18 @@ export interface OwnedStore {
     runId: RunId;
     execution: ExecutionToken;
     expectedRevision: number;
-    requestId?: InputRequestId;
     phase: string;
     prompt?: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
     interactions?: readonly RunInteraction[];
     interactionAnswers?: Readonly<Record<string, JsonValue>>;
-  }): Promise<InputRequiredCommit>;
-  answerInput(input: {
-    runId: RunId;
-    requestId: InputRequestId;
-    expectedRevision: number;
-    input: UserInput;
-    messageId?: MessageId;
   }): Promise<RunRecord>;
   answerInteraction(input: {
     runId: RunId;
     interactionId: string;
     expectedRevision: number;
-    input: JsonValue;
+    input?: JsonValue;
+    cancel?: boolean;
   }): Promise<RunRecord>;
   commitOutcome(input: {
     runId: RunId;
@@ -437,8 +422,7 @@ export interface AgentRun {
   snapshot(): Promise<RunSnapshot>;
   observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<RunEvent>;
   wait(options?: { signal?: AbortSignal }): Promise<RunBoundary>;
-  respond(input: { requestId: InputRequestId; input: UserInput }): Promise<void>;
-  respondInteraction(input: { interactionId: string; input: JsonValue }): Promise<void>;
+  respondInteraction(input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void>;
   cancel(reason?: string): Promise<RunBoundary>;
 }
 export interface AgentRuntime {
@@ -568,11 +552,9 @@ export function assertValidRunSnapshot(value: unknown, options: { committedMessa
       if (["request", "outcome", "output", "failure", "reason"].some((key) => key in value)) throw new TypeError("Snapshot contains incompatible state data");
       return;
     case "input_required":
-      if (!isRecord(value.request) || typeof value.request.id !== "string" || typeof value.request.phase !== "string" || value.request.phase.length === 0) throw new TypeError("Invalid Input Request snapshot");
-      if ("prompt" in value.request && value.request.prompt !== undefined) {
-        assertAssistantReference(value.request.prompt, value.agentId, value.runId, options.committedMessages, "request.prompt");
-      }
-      if (["outcome", "output", "failure", "reason"].some((key) => key in value)) throw new TypeError("Input-required snapshot contains terminal data");
+      if (!Array.isArray(value.interactions)) throw new TypeError("Invalid interactions array in input_required snapshot");
+      if (!isRecord(value.answers)) throw new TypeError("Invalid answers in input_required snapshot");
+      if (["request", "outcome", "output", "failure", "reason"].some((key) => key in value)) throw new TypeError("Input-required snapshot contains incompatible data");
       return;
     case "completed":
       if (!isOutcome(value.outcome)) throw new TypeError("Invalid completed outcome");

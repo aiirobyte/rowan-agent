@@ -88,7 +88,7 @@ test("one-shot execution returns input_required without retaining a continuation
   });
   expect(result.type).toBe("input_required");
   if (result.type !== "input_required") return;
-  expect(result.request.prompt).toBe("Which target?");
+  expect(result.interactions[0]?.prompt).toBe("Which target?");
   expect(result.checkpoint.codec).toBe(EXECUTION_CHECKPOINT_CODEC);
   expect(canonical).toHaveLength(1);
   expect(result.messages.length).toBeGreaterThan(1);

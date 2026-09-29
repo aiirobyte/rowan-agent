@@ -1,4 +1,4 @@
-import type { AgentId, InputRequestId, MessageId, RunId, RunState, ToolCallId } from "../runtime-events";
+import type { AgentId, MessageId, RunId, RunState, ToolCallId } from "../runtime-events";
 
 export type RuntimeErrorCode =
   | "invalid_argument"
@@ -45,7 +45,8 @@ export type RuntimeErrorDetails = {
   }>;
   input_request_conflict: Readonly<{
     runId: RunId;
-    requestId: InputRequestId;
+    interactionId?: string;
+    requestId?: string;
     reason: "not_found" | "wrong_run" | "different_answer";
   }>;
   idempotency_conflict: Readonly<{

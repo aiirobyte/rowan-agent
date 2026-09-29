@@ -10,7 +10,6 @@ export type OpaqueId<Kind extends string> = string & {
 export type AgentId = OpaqueId<"AgentId">;
 export type RunId = OpaqueId<"RunId">;
 export type MessageId = OpaqueId<"MessageId">;
-export type InputRequestId = OpaqueId<"InputRequestId">;
 export type ToolCallId = OpaqueId<"ToolCallId">;
 export type EventId = OpaqueId<"EventId">;
 export type ExecutionId = OpaqueId<"ExecutionId">;
@@ -77,7 +76,23 @@ export type MessageBase = Readonly<{
 export type UserMessage = MessageBase & Readonly<{ role: "user"; content: UserContent }>;
 export type AssistantMessage = MessageBase & Readonly<{ role: "assistant"; content: AssistantContent; interrupted?: boolean }>;
 export type ToolMessage = MessageBase & Readonly<{ role: "tool"; content: ToolMessageContent }>;
-export type Message = UserMessage | AssistantMessage | ToolMessage;
+export type InteractionRecord = MessageBase & Readonly<{
+  role: "interaction";
+  interactionId: string;
+  kind: "user_input" | "permission" | "elicitation" | "confirmation";
+  prompt: string;
+  phase: string;
+  status: "answered" | "replied" | "cancelled";
+  answer?: JsonValue;
+  reply?: string;
+  toolCallId?: ToolCallId;
+  result?: Readonly<{
+    answered?: string;
+    replied?: string;
+    cancelled?: string;
+  }>;
+}>;
+export type Message = UserMessage | AssistantMessage | ToolMessage | InteractionRecord;
 
 export type Outcome = Readonly<{
   id: OutcomeId;
@@ -188,7 +203,6 @@ export type RunStateChanged = DurableEventBase & (
       kind: "run_state_changed";
       from: "running";
       to: "input_required";
-      request?: Readonly<{ id: InputRequestId; phase: string; prompt?: AssistantMessage }>;
       interactions: readonly RunInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>

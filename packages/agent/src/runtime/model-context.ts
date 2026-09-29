@@ -5,12 +5,24 @@ import type {
   AgentId,
   AssistantContent,
   AssistantMessage,
+  InteractionRecord,
   JsonValue,
   Message,
   RunId,
   UserContent,
 } from "../runtime-events";
 import { isJsonValue } from "./json";
+
+export function renderInteractionText(record: Pick<InteractionRecord, "kind" | "status" | "prompt" | "answer" | "reply">): string {
+  if (record.status === "answered") {
+    const answerStr = typeof record.answer === "string" ? record.answer : (record.answer !== undefined ? JSON.stringify(record.answer) : "");
+    return `The user answered "${record.prompt}": ${answerStr}`;
+  }
+  if (record.status === "replied") {
+    return `The user replied instead: ${record.reply ?? ""}`;
+  }
+  return `The user cancelled: ${record.prompt}`;
+}
 
 /** Project durable Runtime messages and tools into the loop's provider-facing context. */
 export function projectModelContext(input: {
@@ -64,7 +76,38 @@ function projectMessage(message: Message): AgentMessage {
       return { id: message.id, role: message.role, content: projectAssistantContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
     case "tool":
       return { id: message.id, role: message.role, content: projectToolContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
+    case "interaction":
+      return { id: message.id, role: "user", content: renderInteractionText(message), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
   }
+}
+
+function projectToolMessage(
+  message: Extract<Message, { role: "tool" }>,
+  toolInteractionTexts: ReadonlyMap<string, readonly string[]>,
+): AgentMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content.map((part) => {
+      const rawResult = jsonText(part.result.content);
+      const interactionTexts = toolInteractionTexts.get(String(part.toolCallId));
+      let content = rawResult;
+      if (interactionTexts && interactionTexts.length > 0) {
+        const prefix = interactionTexts.join("\n\n");
+        content = (rawResult === "null" || rawResult.length === 0)
+          ? prefix
+          : `${prefix}\n\n${rawResult}`;
+      }
+      return {
+        type: "tool_result",
+        toolUseId: part.providerToolCallId ?? String(part.toolCallId),
+        content,
+        ...(part.result.ok ? {} : { isError: true }),
+      };
+    }),
+    createdAt: message.createdAt,
+    ...(message.metadata ? { metadata: message.metadata as never } : {}),
+  };
 }
 
 function durableAssistantContent(content: AgentMessage["content"]): AssistantContent {

@@ -217,13 +217,13 @@ test("AgentRun.observe keeps the next Execution Attempt's deltas across input_re
     );
     expect(promptCommitted.kind).toBe("message_committed");
 
-    await run.respond({ requestId: boundary.requestId, input: "production" });
+    await run.respondInteraction({ interactionId: boundary.interactions[0]!.id, input: "production" });
     await earlyDeltaPublished;
     const inputRequired = await iterator.next();
     expect(inputRequired.value).toMatchObject({
       kind: "run_state_changed",
       to: "input_required",
-      request: { phase: "plan" },
+      interactions: [expect.objectContaining({ phase: "plan" })],
     });
 
     const nextEvent = iterator.next();
