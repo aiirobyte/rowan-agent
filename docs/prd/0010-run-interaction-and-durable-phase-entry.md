@@ -3,60 +3,96 @@
 ## Status
 
 Proposed. Implements [ADR-0012](../adr/0012-run-interaction-and-durable-phase-entry.md)
-as release v0.13.0.
+as release v0.13.0. The version is bumped but not published; Mori consumes it
+through a local link until the owner publishes.
 
 ## Requirements
 
-### R1 — Rename to Run Interaction
+### R1 — Rename, and remove `origin`
 
-- Rename every public `PhaseInteraction*` / `ToolCallInteraction*` type and
-  export as listed in ADR-0012 D1. No deprecated aliases are kept.
-- `RunInteraction` carries `phase` and an optional `toolCallId`. Remove
-  `PhaseInteractionOrigin` and the `origin` field (ADR-0012 D1).
-- Update CONTEXT.md:
-  - **Run Interaction** replaces **Phase Interaction**, **Tool Call
-    Interaction**, and **Input Request**, which move under _Avoid_;
-  - **Run Interaction Driver** replaces **Phase Interaction Driver**.
-- Supersede the vocabulary in ADR-0010 and ADR-0011 with a note that points to
-  ADR-0012.
+- Rename every public `PhaseInteraction*` / `ToolCallInteraction*` export to
+  `RunInteraction*` (ADR D1). Keep no aliases.
+- Remove `PhaseInteractionOrigin` and `origin`. `toolCallId` marks an
+  interaction raised on a Tool call.
+- CONTEXT.md:
+  - **Run Interaction**, **Run Interaction Driver**, and **Interaction
+    Record** replace **Phase Interaction**, **Phase Interaction Driver**,
+    **Tool Call Interaction**, and **Input Request**. The old names go under
+    _Avoid_.
+  - ADR-0010 and ADR-0011 get a note that ADR-0012 supersedes their
+    vocabulary.
 
-### R2 — One answer path
+### R2 — Final states and one answer path
 
+- `RunInteractionStatus` is one of `pending`, `answered`, `replied`, or
+  `cancelled`.
+- `respondInteraction({ interactionId, input })` sets `answered`.
+  `respondInteraction({ interactionId, cancel: true })` sets `cancelled`.
+- New Agent Input for an Agent whose Run is `input_required` sets every
+  pending interaction of that Run to `replied`. The input is committed as a
+  user message after their records, and the Run resumes.
+- Cancelling a Run sets its pending interactions to `cancelled`.
+- The Run resumes when no interaction is pending.
 - Remove `InputRequest`, `InputRequestId`, `InputRequiredCommit`, and
   `run.respond` / `runtime.respond`.
-- A Phase's `user_input` request is a Run Interaction answered by
-  `respondInteraction`. Its answer is `{ text, images? }`. A `user_input`
-  answer of any other shape is refused. Other kinds keep opaque JSON answers.
-- A store migration turns each open Input Request into a pending `user_input`
-  Run Interaction with the same id, prompt, and Phase. The Run stays
-  `input_required` across the upgrade.
+- Upgrade: each Run left with an open v0.12 Input Request is cancelled with
+  the reason "Input Request retired in v0.13".
 
-### R3 — Tools raise Run Interactions
+### R3 — Interaction Records and result templates
 
-- `ToolInvocationContext.interaction: RunInteractionDriver`.
-- `request` + `suspend` inside `execute` suspends the Tool call durably. The
-  Run enters `input_required`. On `respondInteraction` the call re-executes
-  with `interaction.answers()` holding the answer. The rules for cancellation
-  and for multiple Tool calls in one turn are those of ADR-0011.
+- A request may carry `result?: { answered?, replied?, cancelled? }`. These are
+  template strings with the placeholders `{{prompt}}`, `{{answer}}` (the answer
+  as compact JSON, or the string itself), and `{{reply}}` (the text of the
+  replying input). They are stored durably with the interaction.
+- On a final state, Rowan commits one Interaction Record to the transcript
+  and never commits a user message for an answer. Remove the current
+  "Phase-origin answer becomes a user message" path.
+- Model projection:
+  - a record without `toolCallId` becomes one model message, rendered from its
+    template or the Rowan default for its kind and state;
+  - a record with `toolCallId` is folded into that Tool call's result text and
+    is never a separate message.
+- Default templates cover every kind × state, for example:
+  - `permission`/`cancelled`: "The user did not grant permission: {{prompt}}";
+  - `user_input`/`answered`: "The user answered \"{{prompt}}\": {{answer}}".
 
-### R4 — Durable Phase entry
+### R4 — Tools raise Run Interactions
 
-- A durable run event `phase_entered { runId, executionId, phaseId, visit }` is
-  committed whenever the route enters a Phase, including the entry Phase and
-  repeated visits.
-- `RunSnapshot.currentPhaseId` is the last entered Phase.
+- `ToolInvocationContext.interaction: RunInteractionDriver`, with the direct
+  Phase contract including the checkpoint.
+- A suspended Tool call:
+  - moves the Run to `input_required`;
+  - re-executes on resume with answers and checkpoint;
+  - never executes if cancelled.
+- Several Tool calls in one turn follow the ADR-0011 rules.
+
+### R5 — Durable Phase entry
+
+- The durable event `phase_entered { runId, executionId, phaseId, visit }` is
+  committed on every Phase entry.
+- `RunSnapshot.currentPhaseId` holds the last entered Phase and survives
+  rehydration.
 
 ## Tests
 
-- Rename: the type-level export surface test, updated.
-- Migration: an open Input Request in a v0.12 store resumes as a pending
-  `user_input` Run Interaction and is answered with `respondInteraction`.
-- A Tool that requests and suspends: the Run enters `input_required`, and
-  after the answer the Tool re-executes and reads it. Cancelling while it is
-  pending never executes the Tool.
-- `phase_entered` order across a Run that routes a → b → a, and `currentPhaseId`
-  after rehydration.
+- Answer / cancel / reply:
+  - one of two interactions answered keeps the Run waiting;
+  - cancelling the second resumes it;
+  - new Agent Input marks all pending ones `replied`, commits the user message
+    after the records, and resumes.
+- Records: an answered card commits a record and no user message; the
+  projection renders the declared template, or the default when there is none.
+- Tool fold: a permission record with `toolCallId` appears inside that Tool
+  result in the provider request. The tool_use → tool_result adjacency holds.
+- A Tool that requests and suspends in `execute`:
+  - it resumes with the answer and its checkpoint;
+  - cancelling it never executes the Tool.
+- Upgrade: a v0.12 store with an open Input Request comes up with that Run
+  cancelled and the stated reason.
+- `phase_entered` order for a → b → a, and `currentPhaseId` after
+  rehydration.
 
 ## Out of scope
 
-- Any host UI or policy. Payload schemas stay opaque.
+- Host UI and policy. Answer payload schemas stay opaque to Rowan.
+- Publishing to npm.
