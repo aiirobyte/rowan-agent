@@ -8,6 +8,7 @@ import {
 import type { Phase } from "../../src/harness/phases/types";
 import type { ExecutionState } from "../../src/loop/types";
 import type { Message } from "../../src/runtime-events";
+import { projectModelContext, renderInteractionText } from "../../src/runtime/model-context";
 import { createPhaseAgent } from "../fixtures/configuration";
 
 function agent(
@@ -324,4 +325,90 @@ test("new Agent Input marks all pending interactions replied, commits user messa
   } finally {
     await runtime.close();
   }
+});
+
+test("model projection renders declared result templates and default templates", () => {
+  const renderedDeclared = renderInteractionText({
+    kind: "permission",
+    status: "answered",
+    prompt: "Write to /tmp",
+    answer: "yes",
+    result: { answered: "Permission granted for: {{prompt}} (answer: {{answer}})" },
+  });
+  expect(renderedDeclared).toBe("Permission granted for: Write to /tmp (answer: yes)");
+
+  const renderedDefault = renderInteractionText({
+    kind: "user_input",
+    status: "answered",
+    prompt: "Favorite color?",
+    answer: "blue",
+  });
+  expect(renderedDefault).toBe('The user answered "Favorite color?": blue');
+
+  const renderedReplied = renderInteractionText({
+    kind: "confirmation",
+    status: "replied",
+    prompt: "Delete database?",
+    reply: "Actually, cancel that",
+  });
+  expect(renderedReplied).toBe("The user replied instead: Actually, cancel that");
+});
+
+test("projectModelContext folds interaction record with toolCallId into tool result", () => {
+  const toolCallId = "tool_123" as any;
+  const messages: Message[] = [
+    {
+      id: "msg_user" as any,
+      agentId: "agt_1" as any,
+      runId: "run_1" as any,
+      role: "user",
+      content: "Do action",
+      sequenceWithinRun: 0,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "msg_record" as any,
+      agentId: "agt_1" as any,
+      runId: "run_1" as any,
+      role: "interaction",
+      interactionId: "int_1",
+      kind: "permission",
+      prompt: "Allow tool?",
+      phase: "work",
+      status: "answered",
+      answer: "allow",
+      toolCallId,
+      sequenceWithinRun: 1,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "msg_tool" as any,
+      agentId: "agt_1" as any,
+      runId: "run_1" as any,
+      role: "tool",
+      content: [{
+        type: "tool_result",
+        toolCallId,
+        result: { ok: true, content: "file created" },
+      }],
+      sequenceWithinRun: 2,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  const projected = projectModelContext({
+    context: { systemPrompt: "test", tools: [], skills: [] },
+    messages,
+    agentId: "agt_1" as any,
+    runId: "run_1" as any,
+  });
+
+  // msg_record should not appear as a separate user message
+  expect(projected.messages.some((m) => m.id === "msg_record")).toBe(false);
+  // Tool result should contain folded interaction text
+  const toolMsg = projected.messages.find((m) => m.role === "tool");
+  expect(toolMsg).toBeDefined();
+  const toolResultContent = (toolMsg?.content as any[])[0];
+  expect(toolResultContent.content).toContain("The user granted permission: Allow tool?");
+  expect(toolResultContent.content).toContain("file created");
 });

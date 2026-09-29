@@ -13,15 +13,46 @@ import type {
 } from "../runtime-events";
 import { isJsonValue } from "./json";
 
-export function renderInteractionText(record: Pick<InteractionRecord, "kind" | "status" | "prompt" | "answer" | "reply">): string {
-  if (record.status === "answered") {
-    const answerStr = typeof record.answer === "string" ? record.answer : (record.answer !== undefined ? JSON.stringify(record.answer) : "");
-    return `The user answered "${record.prompt}": ${answerStr}`;
-  }
-  if (record.status === "replied") {
-    return `The user replied instead: ${record.reply ?? ""}`;
-  }
-  return `The user cancelled: ${record.prompt}`;
+export const DEFAULT_INTERACTION_TEMPLATES: Record<
+  "user_input" | "permission" | "elicitation" | "confirmation",
+  Record<"answered" | "replied" | "cancelled", string>
+> = {
+  user_input: {
+    answered: 'The user answered "{{prompt}}": {{answer}}',
+    replied: "The user replied instead: {{reply}}",
+    cancelled: "The user cancelled input: {{prompt}}",
+  },
+  permission: {
+    answered: "The user granted permission: {{prompt}}",
+    replied: "The user replied instead: {{reply}}",
+    cancelled: "The user did not grant permission: {{prompt}}",
+  },
+  elicitation: {
+    answered: 'The user answered "{{prompt}}": {{answer}}',
+    replied: "The user replied instead: {{reply}}",
+    cancelled: "The user cancelled elicitation: {{prompt}}",
+  },
+  confirmation: {
+    answered: "The user confirmed: {{prompt}}",
+    replied: "The user replied instead: {{reply}}",
+    cancelled: "The user cancelled: {{prompt}}",
+  },
+};
+
+export function renderInteractionText(
+  record: Pick<InteractionRecord, "kind" | "status" | "prompt" | "answer" | "reply" | "result">,
+): string {
+  const template = record.result?.[record.status]
+    ?? DEFAULT_INTERACTION_TEMPLATES[record.kind]?.[record.status]
+    ?? "{{prompt}}";
+  const answerStr = typeof record.answer === "string"
+    ? record.answer
+    : (record.answer !== undefined ? JSON.stringify(record.answer) : "");
+  const replyStr = record.reply ?? "";
+  return template
+    .replaceAll("{{prompt}}", record.prompt)
+    .replaceAll("{{answer}}", answerStr)
+    .replaceAll("{{reply}}", replyStr);
 }
 
 /** Project durable Runtime messages and tools into the loop's provider-facing context. */
@@ -31,9 +62,44 @@ export function projectModelContext(input: {
   agentId: AgentId;
   runId: RunId;
 }): AgentContext {
+  const toolInteractionTexts = new Map<string, string[]>();
+  for (const message of input.messages) {
+    if (message.role === "interaction" && message.toolCallId !== undefined) {
+      const text = renderInteractionText(message);
+      const existing = toolInteractionTexts.get(String(message.toolCallId));
+      if (existing) {
+        existing.push(text);
+      } else {
+        toolInteractionTexts.set(String(message.toolCallId), [text]);
+      }
+    }
+  }
+
+  const projectedMessages: AgentMessage[] = [];
+  for (const message of input.messages) {
+    if (message.role === "interaction") {
+      if (message.toolCallId !== undefined) {
+        continue;
+      }
+      projectedMessages.push({
+        id: message.id,
+        role: "user",
+        content: renderInteractionText(message),
+        createdAt: message.createdAt,
+        ...(message.metadata ? { metadata: message.metadata as never } : {}),
+      });
+      continue;
+    }
+    if (message.role === "tool") {
+      projectedMessages.push(projectToolMessage(message, toolInteractionTexts));
+      continue;
+    }
+    projectedMessages.push(projectMessage(message));
+  }
+
   return {
     systemPrompt: input.context.systemPrompt,
-    messages: input.messages.map(projectMessage),
+    messages: projectedMessages,
     tools: input.context.tools.map((tool) => projectTool(tool, input.agentId, input.runId)),
     skills: [...input.context.skills],
     ...(input.context.phases ? { phases: input.context.phases } : {}),
