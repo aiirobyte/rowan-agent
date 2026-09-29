@@ -2,7 +2,8 @@
 status: accepted
 ---
 
-# Add a generic suspendable Phase Interaction Driver
+
+> **Superseded by [ADR-0012](0012-run-interaction-and-durable-phase-entry.md).** The v0.13 Run Interaction API replaces `PhaseInteraction*` names and retires `InputRequest` and `run.respond`; use the accepted decision for the current boundary.
 
 Rowan adds an execution-scoped, protocol-neutral `PhaseInteractionDriver`. The
 v0.9.7 local implementation lets a Phase create typed Interactions, read

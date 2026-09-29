@@ -1,4 +1,13 @@
-# Rowan Agent Runtime
+## Current release baseline
+
+**v0.13.0**
+
+The Run Interaction API replaces Phase/Tool Call interaction names and legacy
+Input Requests. Resolved interactions create records, Tools can suspend during
+`execute`, and each Phase entry is durable. See
+[PRD-0010](docs/prd/0010-run-interaction-and-durable-phase-entry.md) and
+[release notes](docs/releases/0012-run-interaction-and-durable-phase-entry.md) for the implementation
+contract and breaking-change summary.
 
 Rowan Agent Runtime hosts durable, independently scheduled Agents inside one application process. It owns execution continuity and reliable observation without learning host Project, Task, Workflow, hierarchy, or routing models.
 
@@ -87,7 +96,7 @@ _Avoid_: Resource Candidate, Agent Extension, Scoped Extension
 ## Conversation
 
 **Agent Input**:
-JSON-safe user content accepted to create an Agent Run or answer an Input Request. Queued input is durable but is not a Canonical Message until its Run first begins execution.
+JSON-safe user content accepted to create an Agent Run or answer an open Run Interaction. Queued input is durable but is not a Canonical Message until its Run first begins execution.
 _Avoid_: Command, Runtime Message, arbitrary Agent Message
 
 **Canonical Message**:
@@ -115,7 +124,7 @@ _Avoid_: Runtime State, Session, canonical transcript
 ## Execution
 
 **Agent Run**:
-A durable FIFO processing request created from Agent Input. It may be queued, running, waiting for input, or terminal, and it can have multiple Execution Attempts separated by Input Requests.
+A durable FIFO processing request created from Agent Input. It may be queued, running, waiting for input, or terminal, and it can have multiple Execution Attempts separated by Run Interactions.
 _Avoid_: Job, Workflow Run, Turn Promise
 
 **Execution Attempt**:
@@ -123,10 +132,7 @@ One fenced period in which the Scheduler claims an Agent Run and executes it unt
 _Avoid_: Worker, Lease, Agent process
 
 **Phase Execution**:
-One invocation of a selected Phase inside an Execution Attempt, governed by the
-Run's Phase state, routing, Execution Checkpoint, and protocol-neutral Phase
-Interaction Driver. It is not an independent durable Tool Call and has no
-Tool-style automatic retry contract.
+One invocation of a selected Phase inside an Execution Attempt, governed by the Run's Phase state, routing, Execution Checkpoint, and Run Interaction Driver. It is not an independent durable Tool Call and has no Tool-style automatic retry contract.
 _Avoid_: Tool Call, Phase Job, Generic Invocation
 
 **Phase Status**:
@@ -136,19 +142,13 @@ its lifecycle `state` is explicitly `running` for in-progress work or
 `completed` for the final update. Every status update must provide its state.
 _Avoid_: Conversation Message, Run State, Tool Progress
 
-**Phase Interaction**:
-A durable, typed Phase boundary that requests host input while a Phase is
-executing. Interaction kinds are generic runtime concepts such as `user_input`,
-`permission`, `elicitation`, and `confirmation`; their payload schema remains
-opaque to Rowan.
-_Avoid_: ACP Message, Tool Call, Prompt String
+**Run Interaction**:
+A durable interaction boundary belonging to a Run. A Phase, Tool hook, or Tool execution may request it; its opaque JSON answer resolves it, Agent Input can reply to all open interactions, and cancellation closes it. A resolved interaction creates an Interaction Record.
+_Avoid_: Phase Interaction, Tool Call Interaction, Input Request, ACP Message, Prompt String
 
-**Phase Interaction Driver**:
-The execution-scoped Rowan capability through which a Phase creates pending
-Interactions, reads resolved answers, checkpoints continuation state, suspends,
-and observes cancellation. It is protocol-neutral and does not know Providers,
-processes, or host business domains.
-_Avoid_: ACP Client, Provider Adapter, Tool Registry
+**Run Interaction Driver**:
+The execution-scoped Rowan capability through which a Phase or Tool requests interactions, reads resolved answers, checkpoints continuation state, suspends, and observes cancellation. It is protocol-neutral and does not know Providers, processes, or host business domains.
+_Avoid_: Phase Interaction Driver, ACP Client, Provider Adapter, Tool Registry
 
 **Phase Settings Definition**:
 A JSON-safe, host-neutral declaration registered by a Phase bundle through the
@@ -157,29 +157,20 @@ with `api.phase.settings.register(provider)` but does not render the definition
 or interpret its domain fields; the host owns presentation and persistence.
 _Avoid_: ACP Settings page, host-specific configuration model
 
+**Interaction Record**:
+A structured Canonical Message that records a resolved Run Interaction. The Model Context renders its declared result template or Rowan's default; records raised by a Tool Call are folded into that Tool result.
+_Avoid_: Phase Interaction answer message, user answer message
+
 **Phase Suspension**:
-A durable execution boundary produced by a Phase when it cannot continue until
-one or more Phase Interactions are resolved. It stores JSON-safe continuation
-data and resumes through a new Execution Attempt; it never serializes a
-JavaScript closure or automatically replays an external side effect. Host
-integrations may map Interaction IDs to their own Sessions or streams outside
-Rowan.
+A durable execution boundary produced by a Phase or Tool when it cannot continue until one or more Run Interactions are resolved. It stores JSON-safe continuation data and resumes through a new Execution Attempt; it never serializes a JavaScript closure. Suspended Tools re-execute with answers and checkpoint data; cancellation prevents their execution.
 _Avoid_: Suspended Promise, Callback Handle, Automatic Retry
 
-**Input Request**:
-A legacy `user_input` Phase Interaction projection: one durable one-shot
-request for more Agent Input, linked to the Phase that requested it, one prompt
-Message, and one Execution Checkpoint. Its ID remains the idempotency identity
-of its answer while the general Interaction collection supports multiple
-pending requests.
-_Avoid_: Suspension Promise, pending callback, resume token
-
 **Execution Checkpoint**:
-Opaque durable state produced by the execution loop at an Input Request and consumed by a later Execution Attempt under the same Configuration Snapshot.
+Opaque durable state produced by the execution loop at an input boundary and consumed by a later Execution Attempt under the same Configuration Snapshot.
 _Avoid_: Session State, continuation object, Consumer Checkpoint
 
 **Run Boundary**:
-The stable observable result of reaching either an Input Request or a terminal Run state.
+The stable observable result of reaching either an input-required Run Interaction state or a terminal Run state.
 _Avoid_: Stream Event, Promise rejection
 
 **Outcome**:
@@ -221,7 +212,7 @@ The authoritative durable state for Agent identity, Run scheduling, canonical hi
 _Avoid_: Model Context, Session, Memory
 
 **Durable Run Event**:
-An immutable replayable fact committed atomically with the Run aggregate change it describes.
+An immutable replayable fact committed atomically with the Run aggregate change it describes. `phase_entered` records each Phase visit; `RunSnapshot.currentPhaseId` exposes the last entered Phase.
 _Avoid_: Agent Input, Transient Run Event, command
 
 **Transient Run Event**:
@@ -264,7 +255,6 @@ _Avoid_: Shell command, Tool Event
 A Tool Call whose external effect may have happened but whose determinate result was not durably committed. It terminates the Run and is never retried automatically.
 _Avoid_: Failed Tool Call, retryable error
 
-**Tool Call Interaction**:
-A durable, typed interaction boundary requested before a Tool Call executes (e.g. for user permission, approval, or confirmation). Reuses the generic Phase Interaction and suspension model; when answered, the tool call re-enters with the answer provided to the hook.
-_Avoid_: Interactive Tool, Tool Prompt, Synchronous Confirmation Modal
-
+**Run Interaction**:
+A durable interaction requested by a Phase, Tool hook, or Tool execution. It uses the Run Interaction Driver and commits an Interaction Record when resolved.
+_Avoid_: Phase Interaction, Input Request, Tool Call Interaction, Interactive Tool

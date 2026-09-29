@@ -2,7 +2,8 @@
 status: accepted
 ---
 
-# Tool-Call Interactions and Hook Execution Context
+
+> **Superseded by [ADR-0012](0012-run-interaction-and-durable-phase-entry.md).** Tool-hook interactions are now Run Interactions, and Tools may request them directly from `execute`; refer to the accepted decision for the current contract.
 
 Rowan adds execution identity and run metadata to tool hook events, and enables `before_tool_call` extension hooks to request typed, suspendable interactions (e.g. permissions and confirmations) that pause the Run in `input_required` and resume on host input using the existing ADR-0010 `PhaseInteraction` machinery.
 

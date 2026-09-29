@@ -84,7 +84,7 @@ Mailboxes, or compatibility factories. The Durable Store is the source of truth;
 Run handles do not hold business state.
 
 Programmatic Phases may use the execution-scoped
-[`PhaseInteractionDriver`](./docs/phase-interactions.md) for durable typed
+[`RunInteractionDriver`](./docs/phase-interactions.md) for durable typed
 Interactions, suspension checkpoints, and cancellation.
 This is a generic Rowan boundary; transport and Provider semantics remain in
 the embedding host.

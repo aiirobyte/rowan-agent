@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Run Interaction and Durable Phase Entry

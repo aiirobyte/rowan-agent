@@ -294,7 +294,7 @@ export default async function(api: ExtensionAPI) {
 ## Interactive Phases
 
 Programmatic Phases that need a durable host interaction use the generic
-[`PhaseInteractionDriver`](./phase-interactions.md) attached to their
+[`RunInteractionDriver`](./phase-interactions.md) attached to their
 `PhaseExecution`. The driver is suitable for permission requests, user input,
 elicitation, and confirmations. A host may map Interaction IDs to its own
 activity streams or concurrent Sessions without adding those concepts to Rowan.

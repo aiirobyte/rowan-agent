@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Implements [ADR-0012](../adr/0012-run-interaction-and-durable-phase-entry.md)
+Accepted. Implements [ADR-0012](../adr/0012-run-interaction-and-durable-phase-entry.md)
 as release v0.13.0. The version is bumped but not published; Mori consumes it
 through a local link until the owner publishes.
 
