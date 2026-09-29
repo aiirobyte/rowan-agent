@@ -441,14 +441,24 @@ test("AgentRun.observe streams message deltas before the durable boundary", asyn
       return value;
     });
 
-    const firstDelta = next();
+    const firstDelta = (async () => {
+      while (true) {
+        const result = await next();
+        if (result.done || result.value.kind === "message_delta") return result;
+      }
+    })();
     releaseFirstDelta();
     await expect(firstDelta).resolves.toMatchObject({
       done: false,
       value: { kind: "message_delta", offset: 0, text: "Hel" },
     });
     const boundarySettledAtFirstDelta = boundarySettled;
-    const secondDelta = next();
+    const secondDelta = (async () => {
+      while (true) {
+        const result = await next();
+        if (result.done || result.value.kind === "message_delta") return result;
+      }
+    })();
     releaseCompletion();
     await expect(secondDelta).resolves.toMatchObject({
       done: false,
@@ -543,13 +553,23 @@ test("AgentRun.observe streams ThinkingBlock deltas before the durable boundary"
     }
 
     const boundary = run.wait();
-    const firstThinking = next();
+    const firstThinking = (async () => {
+      while (true) {
+        const result = await next();
+        if (result.done || result.value.kind === "thinking_delta") return result;
+      }
+    })();
     releaseThinking();
     await expect(firstThinking).resolves.toMatchObject({
       done: false,
       value: { kind: "thinking_delta", blockIndex: 0, offset: 0, text: "First thought. " },
     });
-    const secondThinking = next();
+    const secondThinking = (async () => {
+      while (true) {
+        const result = await next();
+        if (result.done || result.value.kind === "thinking_delta") return result;
+      }
+    })();
     releaseSecondThinking();
     await expect(secondThinking).resolves.toMatchObject({
       done: false,
@@ -1009,6 +1029,7 @@ test("input-required Phase survives Runtime restart and remains visible at the p
       expect(boundary.type).toBe("input_required");
       if (boundary.type !== "input_required") return;
       expect(boundary.interactions[0]!.phase).toBe("task-planning");
+      expect((await run.snapshot()).currentPhaseId).toBe("task-planning");
     } finally {
       await firstRuntime.close();
       firstStore.close();
@@ -1022,6 +1043,7 @@ test("input-required Phase survives Runtime restart and remains visible at the p
       expect(snapshot.state).toBe("input_required");
       if (snapshot.state !== "input_required") return;
       expect(snapshot.interactions[0]!.phase).toBe("task-planning");
+      expect(snapshot.currentPhaseId).toBe("task-planning");
       const boundary = await recovered.wait();
       expect(boundary.type).toBe("input_required");
       if (boundary.type !== "input_required") return;

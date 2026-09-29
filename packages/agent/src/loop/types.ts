@@ -98,6 +98,7 @@ export type AgentConfig = {
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
+  onPhaseEntered?: (phaseId: string) => void | Promise<void>;
   onPhaseStatus?: (phaseId: string, status: PhaseStatus) => void | Promise<void>;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onMessageDelta?: (event: MessageDeltaNotification) => void;

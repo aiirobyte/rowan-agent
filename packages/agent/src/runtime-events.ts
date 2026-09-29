@@ -181,6 +181,13 @@ export type DurableEventBase = Readonly<{
   createdAt: string;
 }>;
 
+export type PhaseEntered = DurableEventBase & Readonly<{
+  kind: "phase_entered";
+  executionId: ExecutionId;
+  phaseId: string;
+  visit: number;
+}>;
+
 export type MessageCommitted = DurableEventBase & Readonly<{
   kind: "message_committed";
   message: Message;
@@ -266,7 +273,7 @@ export type ToolStateChanged = DurableEventBase & (
     }>
 );
 
-export type DurableRunEvent = MessageCommitted | MessageRevised | RunStateChanged | ToolStateChanged;
+export type DurableRunEvent = PhaseEntered | MessageCommitted | MessageRevised | RunStateChanged | ToolStateChanged;
 
 export type MessageDelta = Readonly<{
   kind: "message_delta";

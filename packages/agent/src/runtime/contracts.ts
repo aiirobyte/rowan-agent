@@ -251,6 +251,7 @@ export type RunRecord = Readonly<{
   metadata?: Metadata;
   pinnedConfigToken?: ConfigToken;
   checkpoint?: ExecutionCheckpoint;
+  currentPhaseId?: string;
   openInteractions?: readonly RunInteraction[];
   interactionAnswers?: Readonly<Record<string, JsonValue>>;
   execution?: ExecutionToken;
@@ -286,12 +287,13 @@ export type RunSnapshotBase = Readonly<{
   metadata?: Metadata;
   messageCount: number;
   toolCallCount: number;
+  currentPhaseId?: string;
   createdAt: string;
   updatedAt: string;
   cursor: EventCursor;
 }>;
 export type RunSnapshot = RunSnapshotBase & (
-  | Readonly<{ state: "queued" | "running" }>
+  | Readonly<{ state: "queued" | "running"; currentPhaseId?: string }>
   | Readonly<{
       state: "input_required";
       interactions: readonly RunInteraction[];
@@ -342,6 +344,7 @@ export interface OwnedStore {
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
+  commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord>;
   commitInputRequired(input: {
     runId: RunId;
     execution: ExecutionToken;

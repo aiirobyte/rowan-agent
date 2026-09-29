@@ -716,6 +716,26 @@ export class InMemoryStore implements DurableStore {
     return result;
   }
 
+  commitPhaseEntered(lease: OwnerLease, input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): RunRecord {
+    this.assertOwner(lease);
+    if (input.phaseId.length === 0) throw new TypeError("phaseId must be non-empty");
+    const operationKey = `phase_entered:${input.runId}:${input.execution.executionId}:${input.visit}`;
+    const operationPayload = canonicalJson([input.phaseId, input.expectedRevision] as never);
+    const replay = this.replayOperation(operationKey, operationPayload);
+    if (replay) return clone(replay as RunRecord);
+    const run = this.requireRun(input.runId);
+    this.assertExecution(run, input.execution, input.expectedRevision);
+    this.assertState(run, ["running"]);
+    run.currentPhaseId = input.phaseId;
+    run.revision += 1;
+    run.updatedAt = createTimestamp();
+    const visit = this.events.filter((event) => event.runId === run.id && event.kind === "phase_entered").length + 1;
+    this.events.push(this.baseEvent(run, { kind: "phase_entered", executionId: input.execution.executionId, phaseId: input.phaseId, visit } as import("../runtime-events").PhaseEntered) as import("../runtime-events").PhaseEntered);
+    const result = clone(run);
+    this.writeOperationReceipt(operationKey, operationPayload, result);
+    return result;
+  }
+
   commitInputRequired(lease: OwnerLease, input: {
     runId: RunId;
     execution: ExecutionToken;
@@ -1203,6 +1223,7 @@ export class InMemoryStore implements DurableStore {
       ...(run.metadata ? { metadata: clone(run.metadata) } : {}),
       messageCount: this.messagesForRun(run.id).length,
       toolCallCount: [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id).length,
+      ...(run.currentPhaseId === undefined ? {} : { currentPhaseId: run.currentPhaseId }),
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
       cursor: this.cursorForRun(run.id),
@@ -1689,6 +1710,7 @@ class MemoryOwnedStore implements OwnedStore {
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
+  async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }

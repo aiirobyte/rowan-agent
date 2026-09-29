@@ -131,6 +131,40 @@ test("Runtime preserves an explicit custom Phase entry", async () => {
   }
 });
 
+test("Durable phase_entered events preserve repeated phase entries in order", async () => {
+  const makePhase = (name: string, route: string): Phase => ({
+    ...customPhase,
+    name,
+    run: async () => ({ message: name, route }),
+  });
+  const phases = new Map<string, Phase>([
+    ["a", makePhase("a", "b")],
+    ["b", makePhase("b", "a")],
+    ["c", makePhase("c", "stop")],
+  ]);
+  phases.set("a", { ...makePhase("a", "b"), run: async (context) => ({ message: "a", route: context.state.iterations >= 3 ? "stop" : "b" }) });
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
+  try {
+    const agentId = await phaseAgent(runtime, {
+      identity: "durable-phase-entry-order",
+      stream: async function* () { yield { type: "done", response: { content: "unused", stopReason: "stop" } }; },
+      phases,
+      entryPhaseId: "a",
+      options: { idempotencyKey: "durable-phase-entry-order-agent" },
+    });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "durable-phase-entry-order-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    const entered: string[] = [];
+    for await (const event of run.observe()) {
+      if (event.kind === "phase_entered") entered.push(event.phaseId);
+    }
+    expect(entered).toEqual(["a", "b", "a"]);
+    expect((await run.snapshot()).currentPhaseId).toBe("a");
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("default keeps root Skills while a file Phase adds its Bundle Skills", async () => {
   const requests: string[] = [];
   const stream: StreamFn = async function* (request) {

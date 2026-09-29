@@ -67,6 +67,7 @@ export type OneShotExecutionInput = Readonly<{
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
+  onPhaseEntered?: (phaseId: string) => void | Promise<void>;
   onPhaseStatus?: (phaseId: string, status: PhaseStatus) => void | Promise<void>;
   runtime?: AgentRuntimePort;
   onContext?: (context: AgentContext) => void;
@@ -270,6 +271,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     onThinkingDelta: input.onThinkingDelta,
     onOutcome: input.onOutcome,
     onModelTranscript: input.onModelTranscript,
+    onPhaseEntered: input.onPhaseEntered,
     onPhaseStatus: input.onPhaseStatus,
     runtime: input.runtime,
     waitForInput: async (nextState: ExecutionState | undefined, request: { phase: string; prompt: string; requestedAt: string } | undefined) => {

@@ -632,6 +632,8 @@ export class AgentRuntime implements AgentRuntimeContract {
         beforeToolCall: assembly.beforeToolCall,
         afterToolCall: assembly.afterToolCall,
       };
+      let phaseVisit = (await this.owned.listEvents())
+        .filter((event) => event.runId === run.id && event.kind === "phase_entered").length;
       const executeModel = (context: ReturnType<typeof buildExecutionContext>) => executeOnce({
         canonicalMessages: context.messages,
         context,
@@ -653,6 +655,18 @@ export class AgentRuntime implements AgentRuntimeContract {
         beforePhase: assembly.beforePhase,
         afterPhase: assembly.afterPhase,
         beforePrompt: assembly.beforePrompt,
+        onPhaseEntered: async (phaseId) => {
+          const active = this.executions.get(run.id);
+          if (active?.executionId !== claim!.execution.executionId) return;
+          const entered = await this.owned.commitPhaseEntered({
+            runId: run.id,
+            execution: claim!.execution,
+            expectedRevision: executionRevision,
+            phaseId,
+            visit: ++phaseVisit,
+          });
+          executionRevision = entered.revision;
+        },
         onPhaseStatus: (phaseId, status) => {
           const active = this.executions.get(run.id);
           if (active?.executionId !== claim!.execution.executionId) return;
@@ -1513,7 +1527,17 @@ export class AgentRuntime implements AgentRuntimeContract {
           }
         }
         const events = await this.owned.listEvents(cursor ? { after: cursor } : {});
+        const transientBeforeDurable = subscription.shift();
+        if (transientBeforeDurable) {
+          yield transientBeforeDurable;
+          continue;
+        }
         for (const event of events) {
+          const transientBeforeEvent = subscription.shift();
+          if (transientBeforeEvent) {
+            yield transientBeforeEvent;
+            continue;
+          }
           cursor = event.cursor;
           if (event.runId !== runId) continue;
           if (event.kind === "message_committed") {

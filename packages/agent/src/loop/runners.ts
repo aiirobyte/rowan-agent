@@ -635,6 +635,7 @@ async function runPhaseLoop(
     state.attempt++;
     state.metrics.iterations++;
 
+    await config.onPhaseEntered?.(currentPhaseId);
     const phase = registry.phases.get(currentPhaseId);
     if (!phase) {
       throw new Error(`Phase "${currentPhaseId}" not found`);

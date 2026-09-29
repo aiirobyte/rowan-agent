@@ -110,6 +110,7 @@ test("AgentRun.observe drains final Phase.Status before the terminal Run event",
 
     expect(remaining.map((event) => event.kind)).toEqual([
       "phase_status",
+      "phase_entered",
       "message_committed",
       "run_state_changed",
     ]);
@@ -219,20 +220,30 @@ test("AgentRun.observe keeps the next Execution Attempt's deltas across input_re
 
     await run.respondInteraction({ interactionId: boundary.interactions[0]!.id, input: "production" });
     await earlyDeltaPublished;
-    const inputRequired = await iterator.next();
+    const beforeInputRequired: RunEvent[] = [];
+    let inputRequired: IteratorResult<RunEvent>;
+    do {
+      inputRequired = await iterator.next();
+      if (!inputRequired.done && inputRequired.value.kind !== "run_state_changed") beforeInputRequired.push(inputRequired.value);
+    } while (!inputRequired.done && !(inputRequired.value.kind === "run_state_changed" && inputRequired.value.to === "input_required"));
     expect(inputRequired.value).toMatchObject({
       kind: "run_state_changed",
       to: "input_required",
       interactions: [expect.objectContaining({ phase: "plan" })],
     });
 
-    const nextEvent = iterator.next();
     releaseProbeDelta();
-    const observed = await nextEvent;
+    const secondAttemptDeltas: string[] = [];
+    let observed: IteratorResult<RunEvent>;
+    do {
+      observed = await iterator.next();
+      if (!observed.done && observed.value.kind === "message_delta") secondAttemptDeltas.push(observed.value.text);
+    } while (!observed.done && (observed.value.kind !== "message_delta" || !observed.value.text.includes("late")));
+    expect([...beforeInputRequired.filter((event): event is Extract<RunEvent, { kind: "message_delta" }> => event.kind === "message_delta").map(({ text }) => text), ...secondAttemptDeltas].join("")).toContain("earlylate");
     expect(observed.done).toBe(false);
     expect(observed.value).toMatchObject({
       kind: "message_delta",
-      text: expect.stringContaining("early"),
+      text: expect.stringContaining("late"),
     });
 
     releaseCompletion();
@@ -360,7 +371,12 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
     const iterator = run.observe()[Symbol.asyncIterator]();
 
     await nextMatching(iterator, (event) => event.kind === "run_state_changed" && event.to === "running");
-    const firstTransient = iterator.next();
+    const firstTransient = (async () => {
+      while (true) {
+        const event = await iterator.next();
+        if (event.done || event.value.kind === "message_delta" || event.value.kind === "thinking_delta" || event.value.kind === "tool_progress" || event.value.kind === "phase_status") return event;
+      }
+    })();
     releaseDeltas();
     await expect(firstTransient).resolves.toMatchObject({
       done: false,
