@@ -14,9 +14,9 @@ Every Phase entry is recorded as a durable `phase_entered` event, including repe
 ## Packages
 
 - `@rowan-agent/agent` 0.13.0
-- `@rowan-agent/models` 0.13.0
-- `@rowan-agent/cli` 0.13.0
-- `@rowan-agent/logging` 0.13.0
+- `@rowan-agent/models` 0.7.0 (unchanged)
+- `@rowan-agent/cli` 0.7.0
+- `@rowan-agent/logging` 0.6.3 (unchanged)
 
 ## Compatibility
 
