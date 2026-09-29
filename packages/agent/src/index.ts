@@ -68,6 +68,7 @@ export type {
   EventId,
   ExecutionCheckpoint,
   ExecutionId,
+  ExecutionToken,
   InteractionRecord,
   InvocationCatalogEntry,
   InvocationSource,
