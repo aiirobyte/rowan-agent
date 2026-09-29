@@ -7,7 +7,7 @@ import type {
 import type { LlmContentPart } from "@rowan-agent/models";
 import type { ContentBlock } from "@rowan-agent/models";
 import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
-import type { PhaseInteractionDriver } from "../harness/phases/interactions";
+import type { RunInteractionDriver } from "../harness/phases/interactions";
 
 export type { PhaseOutput };
 
@@ -36,7 +36,7 @@ export type PhaseExecution = {
   reportStatus(status: PhaseStatus): Promise<void>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
   executeTools(context: AgentContext, toolCalls: readonly ToolCall[]): Promise<readonly ToolResult[]>;
-  interaction: PhaseInteractionDriver;
+  interaction: RunInteractionDriver;
   /** Message lifecycle manager for streaming updates from programmatic phases */
   messages: PhaseMessageManager;
 };

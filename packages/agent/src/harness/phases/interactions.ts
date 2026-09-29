@@ -3,78 +3,77 @@ import type { JsonValue } from "../../runtime-events";
 import type { ExecutionState } from "../../loop/types";
 import { assertJsonValue, canonicalJson } from "../../runtime/json";
 
-export type PhaseInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
-export type PhaseInteractionStatus = "pending" | "answered" | "denied" | "cancelled" | "expired";
-export type PhaseInteractionOrigin = "tool_call" | "phase";
+export type RunInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
+export type RunInteractionStatus = "pending" | "answered" | "denied" | "cancelled" | "expired";
 
-export type PhaseInteraction = Readonly<{
+export type RunInteraction = Readonly<{
   id: string;
   phase: string;
-  kind: PhaseInteractionKind;
+  kind: RunInteractionKind;
   prompt: string;
   payload?: JsonValue;
   createdAt: string;
-  status: PhaseInteractionStatus;
-  origin?: PhaseInteractionOrigin;
+  status: RunInteractionStatus;
   toolCallId?: string;
 }>;
 
-export type PhaseInteractionState = Readonly<{
-  requests: readonly PhaseInteraction[];
+export type RunInteractionRequest = Readonly<{
+  id?: string;
+  kind: RunInteractionKind;
+  prompt: string;
+  payload?: JsonValue;
+  toolCallId?: string;
+}>;
+
+export type RunInteractionState = Readonly<{
+  requests: readonly RunInteraction[];
   answers: Readonly<Record<string, JsonValue>>;
   checkpoint?: JsonValue;
 }>;
 
-export type PhaseInteractionDriver = Readonly<{
+export type RunInteractionDriver = Readonly<{
   signal: AbortSignal;
-  request(input: Readonly<{
-    id?: string;
-    kind: PhaseInteractionKind;
-    prompt: string;
-    payload?: JsonValue;
-    origin?: PhaseInteractionOrigin;
-    toolCallId?: string;
-  }>): PhaseInteraction;
-  pending(): readonly PhaseInteraction[];
+  request(input: RunInteractionRequest): RunInteraction;
+  pending(): readonly RunInteraction[];
   answers(): ReadonlyMap<string, JsonValue>;
   checkpoint(): JsonValue | undefined;
   clearCheckpoint(): void;
   suspend(input?: Readonly<{ checkpoint?: JsonValue }>): never;
 }>;
 
-export class PhaseInteractionCancelledError extends Error {
-  readonly code = "phase_interaction_cancelled" as const;
+export class RunInteractionCancelledError extends Error {
+  readonly code = "run_interaction_cancelled" as const;
 
   constructor() {
-    super("Phase interaction work was cancelled.");
-    this.name = "PhaseInteractionCancelledError";
+    super("Run interaction work was cancelled.");
+    this.name = "RunInteractionCancelledError";
   }
 }
 
-export class PhaseInteractionBoundary extends Error {
+export class RunInteractionBoundary extends Error {
   constructor(
     readonly state: ExecutionState,
-    readonly interactions: readonly PhaseInteraction[],
+    readonly interactions: readonly RunInteraction[],
   ) {
-    super("Phase interactions require host input.");
-    this.name = "PhaseInteractionBoundary";
+    super("Run interactions require host input.");
+    this.name = "RunInteractionBoundary";
   }
 }
 
-export function createPhaseInteractionDriver(
+export function createRunInteractionDriver(
   state: ExecutionState,
   phase: string,
   signal?: AbortSignal,
-): PhaseInteractionDriver {
-  const stored = state.phaseInteractions;
-  const requests = new Map<string, PhaseInteraction>(
-    stored?.requests.map((request) => [request.id, { ...request }]) ?? [],
+): RunInteractionDriver {
+  const stored = state.runInteractions ?? (state as any).phaseInteractions;
+  const requests = new Map<string, RunInteraction>(
+    stored?.requests.map((request: RunInteraction) => [request.id, { ...request }]) ?? [],
   );
   const answers = new Map<string, JsonValue>(Object.entries(stored?.answers ?? {}));
   const usedRequestIds = new Set<string>();
   let checkpoint = stored?.checkpoint;
 
-  const snapshot = (): PhaseInteractionState => ({
+  const snapshot = (): RunInteractionState => ({
     requests: [...requests.values()].map((request) => ({
       ...request,
       status: answers.has(request.id) ? "answered" : request.status,
@@ -84,11 +83,11 @@ export function createPhaseInteractionDriver(
   });
 
   const sync = (): void => {
-    state.phaseInteractions = snapshot();
+    state.runInteractions = snapshot();
   };
 
   const assertActive = (): void => {
-    if (signal?.aborted) throw new PhaseInteractionCancelledError();
+    if (signal?.aborted) throw new RunInteractionCancelledError();
   };
 
   // Re-entry after a resume asks again with the same metadata; only a request
@@ -96,11 +95,11 @@ export function createPhaseInteractionDriver(
   // is that one. A cancelled or expired request, or another call's approval,
   // never stands in for a new ask.
   const matchingStoredRequest = (input: Readonly<{
-    kind: PhaseInteractionKind;
+    kind: RunInteractionKind;
     prompt: string;
     payload?: JsonValue;
     toolCallId?: string;
-  }>): PhaseInteraction | undefined => {
+  }>): RunInteraction | undefined => {
     const fingerprint = interactionFingerprint(input);
     return [...requests.values()].find((request) =>
       !usedRequestIds.has(request.id)
@@ -111,24 +110,24 @@ export function createPhaseInteractionDriver(
 
   return {
     signal: signal ?? new AbortController().signal,
-    request(input): PhaseInteraction {
+    request(input): RunInteraction {
       assertActive();
       if (input.id !== undefined && input.id.trim().length === 0) {
-        throw new TypeError("Phase interaction id must be non-empty.");
+        throw new TypeError("Run interaction id must be non-empty.");
       }
       if (input.prompt.trim().length === 0) {
-        throw new TypeError("Phase interaction prompt must be non-empty.");
+        throw new TypeError("Run interaction prompt must be non-empty.");
       }
-      if (!(PHASE_INTERACTION_KINDS as readonly string[]).includes(input.kind)) {
-        throw new TypeError(`Unsupported Phase interaction kind: ${String(input.kind)}.`);
+      if (!(RUN_INTERACTION_KINDS as readonly string[]).includes(input.kind)) {
+        throw new TypeError(`Unsupported Run interaction kind: ${String(input.kind)}.`);
       }
-      if (input.payload !== undefined) assertJsonValue(input.payload, "Phase interaction payload");
+      if (input.payload !== undefined) assertJsonValue(input.payload, "Run interaction payload");
       const matched = input.id === undefined ? matchingStoredRequest(input) : undefined;
       const id = input.id ?? matched?.id ?? createId("interaction");
       const existing = requests.get(id);
       if (existing) {
         if (interactionFingerprint(existing) !== interactionFingerprint(input)) {
-          throw new Error(`Phase interaction ${id} was requested with different metadata.`);
+          throw new Error(`Run interaction ${id} was requested with different metadata.`);
         }
         usedRequestIds.add(id);
         return {
@@ -136,13 +135,12 @@ export function createPhaseInteractionDriver(
           status: answers.has(id) ? "answered" : existing.status,
         };
       }
-      const request: PhaseInteraction = {
+      const request: RunInteraction = {
         id,
         phase,
         kind: input.kind,
         prompt: input.prompt,
         ...(input.payload === undefined ? {} : { payload: input.payload }),
-        ...(input.origin === undefined ? {} : { origin: input.origin }),
         ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
         createdAt: createTimestamp(),
         status: "pending",
@@ -153,7 +151,7 @@ export function createPhaseInteractionDriver(
       return request;
     },
 
-    pending(): readonly PhaseInteraction[] {
+    pending(): readonly RunInteraction[] {
       return [...requests.values()]
         .filter((request) => request.status === "pending" && !answers.has(request.id))
         .map((request) => ({ ...request, status: "pending" as const }));
@@ -175,16 +173,16 @@ export function createPhaseInteractionDriver(
     suspend(input = {}): never {
       assertActive();
       const pending = this.pending();
-      if (pending.length === 0) throw new Error("Cannot suspend without pending Phase interactions.");
+      if (pending.length === 0) throw new Error("Cannot suspend without pending Run interactions.");
       if (input.checkpoint !== undefined) checkpoint = input.checkpoint;
       state.status = "suspended";
       sync();
-      throw new PhaseInteractionBoundary(state, pending);
+      throw new RunInteractionBoundary(state, pending);
     },
   };
 }
 
-const PHASE_INTERACTION_KINDS: readonly PhaseInteractionKind[] = [
+const RUN_INTERACTION_KINDS: readonly RunInteractionKind[] = [
   "user_input",
   "permission",
   "elicitation",
@@ -192,7 +190,7 @@ const PHASE_INTERACTION_KINDS: readonly PhaseInteractionKind[] = [
 ];
 
 function interactionFingerprint(value: Readonly<{
-  kind: PhaseInteractionKind;
+  kind: RunInteractionKind;
   prompt: string;
   payload?: JsonValue;
 }>): string {

@@ -28,7 +28,7 @@ import type {
   Phase,
   PhaseRegistry,
 } from "../harness/phases";
-import { createPhaseInteractionDriver, type PhaseInteractionDriver } from "../harness/phases/interactions";
+import { createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
 import { readPhaseContent } from "../harness/phases";
 import { preparePhasePayload } from "../harness/phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
@@ -1107,7 +1107,7 @@ async function executeToolCall(input: {
   config: AgentConfig;
   tools: Tool[];
   toolCall: ToolCall;
-  driver?: PhaseInteractionDriver;
+  driver?: RunInteractionDriver;
 }): Promise<ToolResult> {
   let result: ToolResult;
   if (input.config.runtime?.tools) {
@@ -1144,7 +1144,7 @@ async function executeToolCalls(input: {
   config: AgentConfig;
   tools: Tool[];
   toolCalls: readonly ToolCall[];
-  driver?: PhaseInteractionDriver;
+  driver?: RunInteractionDriver;
 }): Promise<readonly ToolResult[]> {
   if (input.config.runtime?.toolsBatch) {
     const results = await input.config.runtime.toolsBatch({
@@ -1178,7 +1178,7 @@ function createPhaseExecution(
   toolExecutionManager: PhaseToolExecutionManager,
   registry: PhaseRegistry,
 ): PhaseExecution {
-  const interaction = createPhaseInteractionDriver(state, phase.name, config.signal);
+  const interaction = createRunInteractionDriver(state, phase.name, config.signal);
   return {
     interaction,
     messages: messageManager,

@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore } from "../../src/runtime";
 import {
-  PhaseInteractionCancelledError,
-  createPhaseInteractionDriver,
+  RunInteractionCancelledError,
+  createRunInteractionDriver,
 } from "../../src/harness/phases/interactions";
 import type { Phase } from "../../src/harness/phases/types";
 import type { ExecutionState } from "../../src/loop/types";
@@ -76,8 +76,8 @@ test("a Phase can suspend on multiple interactions and resume after each answer"
     });
 
     const history = await runtime.history(agentId);
-    expect(history.some((m) => m.role === "user" && m.content === "confirmed" && (m.metadata as any)?.kind === "phase_interaction")).toBe(true);
-    expect(history.some((m) => m.role === "user" && m.content === "ready" && (m.metadata as any)?.kind === "phase_interaction")).toBe(true);
+    expect(history.some((m) => m.role === "user" && m.content === "confirmed" && (m.metadata as any)?.kind === "run_interaction")).toBe(true);
+    expect(history.some((m) => m.role === "user" && m.content === "ready" && (m.metadata as any)?.kind === "run_interaction")).toBe(true);
   } finally {
     await runtime.close();
   }
@@ -146,16 +146,16 @@ test("a cancelled Phase interaction driver refuses new requests", () => {
       startedAtMs: Date.now(),
     },
   } satisfies ExecutionState;
-  const driver = createPhaseInteractionDriver(state, "cancelled", controller.signal);
+  const driver = createRunInteractionDriver(state, "cancelled", controller.signal);
   controller.abort();
 
   expect(() => driver.request({
     kind: "permission",
     prompt: "Allow?",
-  })).toThrow(PhaseInteractionCancelledError);
+  })).toThrow(RunInteractionCancelledError);
 });
 
-function stateWith(requests: NonNullable<ExecutionState["phaseInteractions"]>["requests"], answers: Record<string, string> = {}): ExecutionState {
+function stateWith(requests: NonNullable<ExecutionState["runInteractions"]>["requests"], answers: Record<string, string> = {}): ExecutionState {
   return {
     currentPhase: "default",
     attempt: 0,
@@ -168,7 +168,7 @@ function stateWith(requests: NonNullable<ExecutionState["phaseInteractions"]>["r
       startedAt: new Date().toISOString(),
       startedAtMs: Date.now(),
     },
-    phaseInteractions: { requests, answers },
+    runInteractions: { requests, answers },
   } satisfies ExecutionState;
 }
 
@@ -177,7 +177,6 @@ const storedRequest = (id: string, status: "pending" | "answered" | "cancelled" 
   phase: "default",
   kind: "permission" as const,
   prompt: "Execute command: seq 1 100",
-  origin: "tool_call" as const,
   toolCallId,
   createdAt: new Date().toISOString(),
   status,
@@ -185,11 +184,11 @@ const storedRequest = (id: string, status: "pending" | "answered" | "cancelled" 
 
 test("a new tool call asks again instead of reusing a closed or foreign interaction", () => {
   for (const [status, toolCallId] of [["cancelled", "tool_1"], ["expired", "tool_1"], ["answered", "tool_1"]] as const) {
-    const driver = createPhaseInteractionDriver(
+    const driver = createRunInteractionDriver(
       stateWith([storedRequest("interaction_old", status, toolCallId)], status === "answered" ? { interaction_old: "allow_once" } : {}),
       "default",
     );
-    const request = driver.request({ kind: "permission", prompt: "Execute command: seq 1 100", origin: "tool_call", toolCallId: "tool_2" });
+    const request = driver.request({ kind: "permission", prompt: "Execute command: seq 1 100", toolCallId: "tool_2" });
 
     expect(request.id).not.toBe("interaction_old");
     expect(request.status).toBe("pending");
@@ -198,11 +197,11 @@ test("a new tool call asks again instead of reusing a closed or foreign interact
 });
 
 test("the same tool call resumes its answered interaction", () => {
-  const driver = createPhaseInteractionDriver(
+  const driver = createRunInteractionDriver(
     stateWith([storedRequest("interaction_1", "answered", "tool_1")], { interaction_1: "allow_once" }),
     "default",
   );
-  const request = driver.request({ kind: "permission", prompt: "Execute command: seq 1 100", origin: "tool_call", toolCallId: "tool_1" });
+  const request = driver.request({ kind: "permission", prompt: "Execute command: seq 1 100", toolCallId: "tool_1" });
 
   expect(request).toMatchObject({ id: "interaction_1", status: "answered" });
 });

@@ -205,7 +205,7 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
   let decision:
     | { allow: true }
     | { allow: false; reason: string }
-    | { interaction: import("../../extensions/hooks").ToolCallInteractionRequest }
+    | { interaction: import("../../extensions/hooks").RunInteractionRequest }
     | undefined;
   if (input.beforeToolCall) {
     await input.observe?.({ type: "approval_requested", tool, args });

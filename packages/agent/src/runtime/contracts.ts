@@ -36,7 +36,7 @@ import type {
 } from "../runtime-events";
 import type { Skill } from "../protocol";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import type { PhaseInteraction, PhaseInteractionKind, PhaseInteractionOrigin } from "../harness/phases/interactions";
+import type { RunInteraction, RunInteractionKind, RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentDefinition } from "../harness/definitions";
 import type {
   LoadInput,
@@ -97,7 +97,7 @@ export type {
   UserMessage,
 } from "../runtime-events";
 
-export type { PhaseInteraction, PhaseInteractionKind, PhaseInteractionState, PhaseInteractionStatus } from "../harness/phases/interactions";
+export type { RunInteraction, RunInteractionDriver, RunInteractionKind, RunInteractionRequest, RunInteractionState, RunInteractionStatus } from "../harness/phases/interactions";
 
 export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
 export type HistorySeed = readonly Message[];
@@ -177,17 +177,10 @@ export type Tool = Readonly<{
 }>;
 export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
 export type ProviderToolDefinition = Readonly<{ name: string; description: string; parameters: JsonObject }>;
-export type ToolCallInteractionRequest = Readonly<{
-  id?: string;
-  kind: PhaseInteractionKind;
-  prompt: string;
-  payload?: JsonValue;
-}>;
-
 export type BeforeToolCallDecision =
   | Readonly<{ allow: true }>
   | Readonly<{ allow: false; reason: string }>
-  | Readonly<{ interaction: ToolCallInteractionRequest }>;
+  | Readonly<{ interaction: RunInteractionRequest }>;
 
 export type BeforeToolCall = (input: Readonly<{
   tool: Tool;
@@ -238,7 +231,7 @@ export type ExecutionCheckpoint = Readonly<{ codec: string; version: number; dat
 export type InputRequest = Readonly<{ id: InputRequestId; phase: string; messageId?: MessageId; createdAt: string }>;
 export type OwnerLease = Readonly<{ ownerId: string; token: OwnerToken; epoch: number; expiresAt: string }>;
 export type RunClaim = Readonly<{ run: RunRecord; execution: ExecutionToken; history: readonly Message[] }>;
-export type InputRequiredCommit = Readonly<{ run: RunRecord; prompt?: AssistantMessage; request: InputRequest; interactions: readonly PhaseInteraction[] }>;
+export type InputRequiredCommit = Readonly<{ run: RunRecord; prompt?: AssistantMessage; request: InputRequest; interactions: readonly RunInteraction[] }>;
 export type ToolCallReservation = Readonly<{
   providerToolCallId: string;
   name: string;
@@ -261,7 +254,7 @@ export type RunRecord = Readonly<{
   pinnedConfigToken?: ConfigToken;
   checkpoint?: ExecutionCheckpoint;
   openInputRequest?: InputRequest;
-  openInteractions?: readonly PhaseInteraction[];
+  openInteractions?: readonly RunInteraction[];
   interactionAnswers?: Readonly<Record<string, JsonValue>>;
   execution?: ExecutionToken;
   outcome?: Outcome;
@@ -305,7 +298,7 @@ export type RunSnapshot = RunSnapshotBase & (
   | Readonly<{
       state: "input_required";
       request: Readonly<{ id: InputRequestId; phase: string; prompt?: AssistantMessage }>;
-      interactions: readonly PhaseInteraction[];
+      interactions: readonly RunInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>
   | Readonly<{ state: "completed"; outcome: Outcome; output?: AssistantMessage }>
@@ -318,7 +311,7 @@ export type RunBoundary =
       requestId: InputRequestId;
       phase: string;
       prompt?: AssistantMessage;
-      interactions: readonly PhaseInteraction[];
+      interactions: readonly RunInteraction[];
       answers: Readonly<Record<string, JsonValue>>;
     }>
   | Readonly<{ type: "completed"; outcome: Outcome; output?: AssistantMessage }>
@@ -364,7 +357,7 @@ export interface OwnedStore {
     phase: string;
     prompt?: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
-    interactions?: readonly PhaseInteraction[];
+    interactions?: readonly RunInteraction[];
     interactionAnswers?: Readonly<Record<string, JsonValue>>;
   }): Promise<InputRequiredCommit>;
   answerInput(input: {

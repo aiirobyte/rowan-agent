@@ -48,7 +48,7 @@ import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { PhaseInteractionBoundary, PhaseInteractionCancelledError, type PhaseInteractionDriver } from "../harness/phases/interactions";
+import { RunInteractionBoundary, RunInteractionCancelledError, type RunInteractionDriver } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
 import { assertJsonValue, isJsonValue } from "./json";
@@ -683,7 +683,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
           },
-          toolsBatch: ({ toolCalls, driver }: { config: import("../loop/types").AgentConfig; toolCalls: readonly ToolCall[]; driver?: import("../harness/phases/interactions").PhaseInteractionDriver }) => {
+          toolsBatch: ({ toolCalls, driver }: { config: import("../loop/types").AgentConfig; toolCalls: readonly ToolCall[]; driver?: import("../harness/phases/interactions").RunInteractionDriver }) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -736,7 +736,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "input_required") {
-        const isToolCallInteraction = result.interactions?.some((i) => i.origin === "tool_call");
+        const isToolCallInteraction = result.interactions?.some((i) => i.toolCallId !== undefined);
         const output = (result.interactions && result.interactions.length > 0)
           ? undefined
           : latestAssistant(
@@ -832,7 +832,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     toolConfig: ExecutionToolConfig;
     toolCall: ToolCall;
     signal: AbortSignal;
-    driver?: PhaseInteractionDriver;
+    driver?: RunInteractionDriver;
   }): Promise<{ result: ToolResult; revision: number }> {
     const batch = await this.executeToolBatch({ ...input, toolCalls: [input.toolCall] });
     return { result: batch.results[0]!, revision: batch.revision };
@@ -846,7 +846,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     toolConfig: ExecutionToolConfig;
     toolCalls: readonly ToolCall[];
     signal: AbortSignal;
-    driver?: PhaseInteractionDriver;
+    driver?: RunInteractionDriver;
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
     const checkpoint = input.driver?.checkpoint();
@@ -1163,7 +1163,6 @@ export class AgentRuntime implements AgentRuntimeContract {
               kind: decision.interaction.kind,
               prompt: decision.interaction.prompt,
               payload: decision.interaction.payload,
-              origin: "tool_call",
               toolCallId,
             });
             input.driver.suspend({
@@ -1206,7 +1205,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           }
         }
       } catch (error) {
-        if (error instanceof PhaseInteractionBoundary || error instanceof PhaseInteractionCancelledError) {
+        if (error instanceof RunInteractionBoundary || error instanceof RunInteractionCancelledError) {
           throw error;
         }
         const reason = error instanceof Error ? error.message : "Tool policy rejected the call.";

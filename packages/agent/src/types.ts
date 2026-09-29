@@ -74,7 +74,7 @@ export type BeforeToolCall = (input: {
 }) => Promise<
   | { allow: true }
   | { allow: false; reason: string }
-  | { interaction: import("./extensions/hooks").ToolCallInteractionRequest }
+  | { interaction: import("./extensions/hooks").RunInteractionRequest }
 >;
 
 export type AfterToolCall = (input: {

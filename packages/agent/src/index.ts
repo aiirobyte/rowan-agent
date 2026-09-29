@@ -109,7 +109,7 @@ export type {
   ThinkingContent,
   Tool,
   ToolCallId,
-  ToolCallInteractionRequest,
+  RunInteractionRequest,
   ToolCallSnapshot,
   ToolCallState,
   ToolExecutionResult,
@@ -192,15 +192,14 @@ export type {
 } from "./harness/phases/types";
 export type { PhaseExecution, PhaseMessageManager } from "./loop/execution";
 export type {
-  PhaseInteraction,
-  PhaseInteractionDriver,
-  PhaseInteractionKind,
-  PhaseInteractionOrigin,
-  PhaseInteractionState,
-  PhaseInteractionStatus,
+  RunInteraction,
+  RunInteractionDriver,
+  RunInteractionKind,
+  RunInteractionState,
+  RunInteractionStatus,
 } from "./harness/phases/interactions";
 export {
-  PhaseInteractionBoundary,
-  PhaseInteractionCancelledError,
+  RunInteractionBoundary,
+  RunInteractionCancelledError,
 } from "./harness/phases/interactions";
 export type { CoreToolContext } from "./harness/tools";

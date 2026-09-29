@@ -19,13 +19,13 @@ export type {
 export { parsePhaseInput, phaseInputSchema, preparePhasePayload } from "./input";
 export type { PhaseInputValue } from "./input";
 export type {
-  PhaseInteraction,
-  PhaseInteractionDriver,
-  PhaseInteractionKind,
-  PhaseInteractionState,
-  PhaseInteractionStatus,
+  RunInteraction,
+  RunInteractionDriver,
+  RunInteractionKind,
+  RunInteractionState,
+  RunInteractionStatus,
 } from "./interactions";
-export { PhaseInteractionBoundary, PhaseInteractionCancelledError } from "./interactions";
+export { RunInteractionBoundary, RunInteractionCancelledError } from "./interactions";
 
 export { loadPhase, loadPhaseSettings, loadPhases, reloadPhases, readPhaseContent } from "./loader";
 export {

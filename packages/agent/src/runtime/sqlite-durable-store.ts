@@ -33,13 +33,14 @@ import type {
   RetentionResult,
   ToolCommit,
   UserInput,
+  DurableStore,
+  OwnedStore,
 } from "./contracts";
 import { InMemoryStore } from "./durable-store";
 import type { InMemoryStoreState } from "./durable-store";
 import { RuntimeError } from "./errors";
-import type { DurableStore, OwnedStore } from "./contracts";
 import type { ToolCallId, ToolExecutionResult, JsonValue } from "../runtime-events";
-import type { PhaseInteraction } from "../harness/phases/interactions";
+import type { RunInteraction } from "../harness/phases/interactions";
 
 const SCHEMA_ID = "rowan.agent.runtime";
 // Message revisions and history seeds are a clean durable-store cutover. Old
@@ -299,7 +300,7 @@ export class SqliteStore implements DurableStore {
     phase: string;
     prompt?: AssistantMessage;
     checkpoint: ExecutionCheckpoint;
-    interactions?: readonly PhaseInteraction[];
+    interactions?: readonly RunInteraction[];
     interactionAnswers?: Readonly<Record<string, JsonValue>>;
   }): Promise<InputRequiredCommit> {
     return this.invoke(lease, (store, current) => store.commitInputRequired(current, input));
@@ -709,7 +710,7 @@ class SqliteOwnedStore implements OwnedStore {
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
-  commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly PhaseInteraction[]; interactionAnswers?: Readonly<Record<string, JsonValue>> }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
+  commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestId?: InputRequestId; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, JsonValue>> }): Promise<InputRequiredCommit> { return this.store.commitInputRequired(this.lease, input); }
   answerInput(input: { runId: RunId; requestId: InputRequestId; expectedRevision: number; input: UserInput; messageId?: MessageId }): Promise<RunRecord> { return this.store.answerInput(this.lease, input); }
   answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input: JsonValue }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }

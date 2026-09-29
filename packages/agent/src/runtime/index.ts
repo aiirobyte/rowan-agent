@@ -50,15 +50,15 @@ export type {
   UserInput,
 } from "./contracts";
 export type {
-  PhaseInteraction,
-  PhaseInteractionDriver,
-  PhaseInteractionKind,
-  PhaseInteractionState,
-  PhaseInteractionStatus,
+  RunInteraction,
+  RunInteractionDriver,
+  RunInteractionKind,
+  RunInteractionState,
+  RunInteractionStatus,
 } from "../harness/phases/interactions";
 export {
-  PhaseInteractionBoundary,
-  PhaseInteractionCancelledError,
+  RunInteractionBoundary,
+  RunInteractionCancelledError,
 } from "../harness/phases/interactions";
 export type {
   AgentDefinition,

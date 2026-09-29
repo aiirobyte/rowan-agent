@@ -9,7 +9,7 @@ import type {
   ToolResult,
 } from "../types";
 import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput, PhaseStatus } from "../harness/phases/types";
-import type { PhaseInteractionDriver, PhaseInteractionState } from "../harness/phases/interactions";
+import type { RunInteractionDriver, RunInteractionState } from "../harness/phases/interactions";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
 import type { ThinkingLevel } from "@rowan-agent/models";
@@ -70,7 +70,8 @@ export type ExecutionState = {
   metrics: LoopMetrics;
   status: "idle" | "running" | "suspended" | "completed" | "aborted" | "failed";
   continuation?: ExecutionContinuationState;
-  phaseInteractions?: PhaseInteractionState;
+  runInteractions?: RunInteractionState;
+  phaseInteractions?: RunInteractionState;
 };
 
 export type ExecutionContinuationState = {
@@ -110,14 +111,14 @@ export type AgentConfig = {
 export type ToolRunnerInput = {
   config: AgentConfig;
   toolCall: ToolCall;
-  driver?: PhaseInteractionDriver;
+  driver?: RunInteractionDriver;
 };
 
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
 export type ToolBatchRunner = (input: {
   config: AgentConfig;
   toolCalls: readonly ToolCall[];
-  driver?: PhaseInteractionDriver;
+  driver?: RunInteractionDriver;
 }) => Promise<readonly ToolResult[]>;
 
 export type AgentRuntimePort = {

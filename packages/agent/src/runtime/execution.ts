@@ -18,7 +18,7 @@ import type {
   MessageDeltaNotification,
   ThinkingDeltaNotification,
 } from "../loop/types";
-import { PhaseInteractionBoundary, type PhaseInteraction, type PhaseInteractionState } from "../harness/phases/interactions";
+import { RunInteractionBoundary, type RunInteraction, type RunInteractionState } from "../harness/phases/interactions";
 import type { PhaseExecutionIdentity, PhaseRegistry, PhaseStatus } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
@@ -75,7 +75,7 @@ export type OneShotExecutionResult =
   | Readonly<{
       type: "input_required";
       request: ExecutionInputRequest;
-      interactions: readonly PhaseInteraction[];
+      interactions: readonly RunInteraction[];
       checkpoint: ExecutionCheckpoint;
       messages: readonly AgentMessage[];
     }>
@@ -115,7 +115,8 @@ type CheckpointData = Readonly<{
   attempt: number;
   metrics: CheckpointMetrics;
   continuation?: CheckpointContinuation;
-  phaseInteractions?: PhaseInteractionState;
+  runInteractions?: RunInteractionState;
+  phaseInteractions?: RunInteractionState;
 }>;
 
 export class ExecutionCheckpointError extends Error {
@@ -163,12 +164,13 @@ export function encodeExecutionCheckpoint(state: ExecutionState): ExecutionCheck
         ...(state.continuation.previousPhaseMessageId !== undefined ? { previousPhaseMessageId: state.continuation.previousPhaseMessageId } : {}),
       }
     : undefined;
+  const runInteractions = state.runInteractions ?? state.phaseInteractions;
   const data = {
     currentPhase: state.currentPhase,
     attempt: state.attempt,
     metrics,
     ...(continuation ? { continuation } : {}),
-    ...(state.phaseInteractions === undefined ? {} : { phaseInteractions: state.phaseInteractions }),
+    ...(runInteractions === undefined ? {} : { runInteractions }),
   } as unknown as CheckpointData;
   assertJsonValue(data, "execution checkpoint");
   return {
@@ -187,6 +189,7 @@ export function decodeExecutionCheckpoint(checkpoint: ExecutionCheckpoint): Exec
   if (!isCheckpointData(checkpoint.data)) {
     throw new ExecutionCheckpointError("Execution checkpoint payload is invalid.");
   }
+  const restoredInteractions = checkpoint.data.runInteractions ?? checkpoint.data.phaseInteractions;
   return {
     currentPhase: checkpoint.data.currentPhase,
     attempt: checkpoint.data.attempt,
@@ -201,13 +204,13 @@ export function decodeExecutionCheckpoint(checkpoint: ExecutionCheckpoint): Exec
         previousResults: checkpoint.data.continuation.previousResults.map((result) => ({ ...result })),
       },
     } : {}),
-    ...(checkpoint.data.phaseInteractions ? {
-      phaseInteractions: {
-        requests: checkpoint.data.phaseInteractions.requests.map((request) => ({ ...request })),
-        answers: { ...checkpoint.data.phaseInteractions.answers },
-        ...(checkpoint.data.phaseInteractions.checkpoint === undefined
+    ...(restoredInteractions ? {
+      runInteractions: {
+        requests: restoredInteractions.requests.map((request) => ({ ...request })),
+        answers: { ...restoredInteractions.answers },
+        ...(restoredInteractions.checkpoint === undefined
           ? {}
-          : { checkpoint: checkpoint.data.phaseInteractions.checkpoint }),
+          : { checkpoint: restoredInteractions.checkpoint }),
       },
     } : {}),
   };
@@ -237,15 +240,16 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     metrics: createMetrics(),
   };
   if (input.interactionAnswers) {
-    state.phaseInteractions = {
-      requests: state.phaseInteractions?.requests ?? [],
+    const existing = state.runInteractions ?? state.phaseInteractions;
+    state.runInteractions = {
+      requests: existing?.requests ?? [],
       answers: {
-        ...(state.phaseInteractions?.answers ?? {}),
+        ...(existing?.answers ?? {}),
         ...input.interactionAnswers,
       },
-      ...(state.phaseInteractions?.checkpoint === undefined
+      ...(existing?.checkpoint === undefined
         ? {}
-        : { checkpoint: state.phaseInteractions.checkpoint }),
+        : { checkpoint: existing.checkpoint }),
     };
   }
   const config = {
@@ -291,7 +295,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
         messages: snapshotMessages(context.messages),
       };
     }
-    if (error instanceof PhaseInteractionBoundary) {
+    if (error instanceof RunInteractionBoundary) {
       return {
         type: "input_required",
         request: {
@@ -332,11 +336,12 @@ function isCheckpointData(value: JsonValue): value is CheckpointData {
   if (!isRecord(value) || typeof value.currentPhase !== "string" || !Number.isInteger(value.attempt)) return false;
   if (!isMetrics(value.metrics)) return false;
   if (value.continuation !== undefined && !isContinuation(value.continuation)) return false;
-  if (value.phaseInteractions !== undefined && !isPhaseInteractionState(value.phaseInteractions)) return false;
+  if (value.runInteractions !== undefined && !isRunInteractionState(value.runInteractions)) return false;
+  if (value.phaseInteractions !== undefined && !isRunInteractionState(value.phaseInteractions)) return false;
   return true;
 }
 
-function isPhaseInteractionState(value: unknown): value is PhaseInteractionState {
+function isRunInteractionState(value: unknown): value is RunInteractionState {
   if (!isRecord(value) || !Array.isArray(value.requests) || !isRecord(value.answers)) return false;
   if (!Object.values(value.answers).every((answer) => isJsonValue(answer))) return false;
   if (value.checkpoint !== undefined && !isJsonValue(value.checkpoint)) return false;
