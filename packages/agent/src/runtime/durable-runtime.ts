@@ -43,12 +43,12 @@ import {
 import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import { pageAgents, pageRuns } from "./read-models";
-import { projectAssistantMessage, projectModelContext } from "./model-context";
+import { projectAssistantMessage, projectModelContext, renderInteractionText } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { RunInteractionBoundary, RunInteractionCancelledError, type RunInteractionDriver } from "../harness/phases/interactions";
+import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
 import { assertJsonValue, isJsonValue } from "./json";
@@ -100,6 +100,54 @@ type ExecutionToolConfig = Readonly<{
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
 }>;
+
+function createToolInteractionDriver(
+  driver: RunInteractionDriver,
+  input: { toolCallId: ToolCallId; toolCalls: readonly ToolCall[]; toolCallIds?: readonly ToolCallId[]; pendingIndex: number; completedResults: readonly ToolResult[] },
+): RunInteractionDriver {
+  const requestedIds = new Set<string>();
+  const stored = driver.checkpoint();
+  const checkpointRecord = stored && typeof stored === "object" && !Array.isArray(stored)
+    ? stored as Record<string, JsonValue>
+    : undefined;
+  const resumed = checkpointRecord?.kind === "tool_call_suspension" && checkpointRecord.toolCallId === input.toolCallId
+    ? checkpointRecord
+    : undefined;
+  return {
+    signal: driver.signal,
+    request(request) {
+      const interaction = driver.request({ ...request, toolCallId: input.toolCallId });
+      requestedIds.add(interaction.id);
+      return interaction;
+    },
+    pending: () => driver.pending(),
+    answers: () => driver.answers(),
+    checkpoint: () => resumed ? resumed.toolCheckpoint : stored,
+    clearCheckpoint: () => driver.clearCheckpoint(),
+    suspend(options = {}): never {
+      const interactionIds = [...new Set([
+        ...requestedIds,
+        ...driver.pending().filter((interaction) => interaction.toolCallId === input.toolCallId).map(({ id }) => id),
+      ])];
+      const pendingToolCallIds = [...new Set([
+        ...(input.toolCallIds ?? []),
+        ...input.toolCalls.slice(0, input.pendingIndex + 1).map((_, index) => index === input.pendingIndex ? input.toolCallId : undefined),
+      ].filter((id): id is ToolCallId => id !== undefined))];
+      driver.suspend({
+        checkpoint: {
+          kind: "tool_call_suspension",
+          toolCalls: input.toolCalls,
+          pendingIndex: input.pendingIndex,
+          toolCallId: input.toolCallId,
+          toolCallIds: pendingToolCallIds,
+          interactionIds,
+          ...(options.checkpoint === undefined ? {} : { toolCheckpoint: options.checkpoint }),
+          completedResults: input.completedResults,
+        } as unknown as JsonValue,
+      });
+    },
+  };
+}
 
 /** Keep large custom Tool Results out of the model transcript while retaining
  * the complete payload in the per-Agent durable archive. Core read/bash Tools
@@ -726,6 +774,21 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "input_required") {
+        const resultData = result.checkpoint.data && typeof result.checkpoint.data === "object" && !Array.isArray(result.checkpoint.data)
+          ? result.checkpoint.data as Record<string, JsonValue>
+          : undefined;
+        const interactionData = resultData?.runInteractions && typeof resultData.runInteractions === "object" && !Array.isArray(resultData.runInteractions)
+          ? resultData.runInteractions as Record<string, JsonValue>
+          : undefined;
+        const interactionCheckpoint = interactionData?.checkpoint && typeof interactionData.checkpoint === "object" && !Array.isArray(interactionData.checkpoint)
+          ? interactionData.checkpoint as Record<string, JsonValue>
+          : undefined;
+        let pendingToolCallIds = Array.isArray(interactionCheckpoint?.toolCallIds)
+          ? interactionCheckpoint.toolCallIds as ToolCallId[]
+          : [];
+        if (pendingToolCallIds.length === 0 && result.interactions.length > 0 && result.interactions.every(({ toolCallId }) => toolCallId !== undefined)) {
+          pendingToolCallIds = result.interactions.map(({ toolCallId }) => toolCallId as ToolCallId);
+        }
         const isToolCallInteraction = result.interactions?.some((i) => i.toolCallId !== undefined);
         const output = isToolCallInteraction
           ? undefined
@@ -746,6 +809,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           checkpoint: result.checkpoint,
           interactions: result.interactions,
           interactionAnswers: claim.run.interactionAnswers,
+          ...(pendingToolCallIds.length === 0 ? {} : { pendingToolCallIds }),
         });
         this.transientEvents.clear(run.id, claim.execution.executionId);
         return;
@@ -845,7 +909,9 @@ export class AgentRuntime implements AgentRuntimeContract {
       toolCalls: readonly ToolCall[];
       pendingIndex: number;
       toolCallId?: ToolCallId;
-      interactionId?: string;
+      toolCallIds?: readonly ToolCallId[];
+      interactionIds?: readonly string[];
+      toolCheckpoint?: JsonValue;
       completedResults: readonly ToolResult[];
     }) : undefined;
 
@@ -875,6 +941,12 @@ export class AgentRuntime implements AgentRuntimeContract {
           ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
           ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
           toolCallId,
+          interaction: createRunInteractionDriver({
+            currentPhase: "default",
+            attempt: 0,
+            status: "running",
+            metrics: { iterations: 0, phaseTransitions: [], compactionCount: 0, retryCount: 0, startedAt: new Date().toISOString(), startedAtMs: Date.now() },
+          }, "default", input.signal),
           reportProgress: () => {},
         };
         try {
@@ -959,6 +1031,13 @@ export class AgentRuntime implements AgentRuntimeContract {
             ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
             ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
             toolCallId,
+            interaction: createToolInteractionDriver(input.driver!, {
+              toolCallId,
+              toolCallIds,
+              toolCalls: input.toolCalls,
+              pendingIndex: i,
+              completedResults: results,
+            }),
             reportProgress: (progress: JsonValue) => {
               const active = this.executions.get(input.run.id);
               if (
@@ -1021,12 +1100,24 @@ export class AgentRuntime implements AgentRuntimeContract {
               result,
             });
             setRevision(committed.run.revision);
+            const projectedResult = await this.foldToolInteractionRecords(result, toolCallId, input.run.agentId);
             results.push({
               toolCallId: providerToolCallId,
               toolName: toolCall.name,
-              ...result,
+              ...projectedResult,
             });
           } catch (error) {
+            if (error instanceof RunInteractionBoundary) {
+              const suspended = await this.owned.suspendToolCall({
+                runId: input.run.id,
+                execution: input.execution,
+                expectedRevision: revision,
+                toolCallId,
+              });
+              setRevision(suspended.run.revision);
+              throw error;
+            }
+            if (error instanceof RunInteractionCancelledError) throw error;
             const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
             const indeterminate = await this.owned.commitToolResult({
               runId: input.run.id,
@@ -1056,9 +1147,11 @@ export class AgentRuntime implements AgentRuntimeContract {
       const toolCall = input.toolCalls[index]!;
       const durableTool = input.toolConfig.tools.find((candidate) => candidate.name === toolCall.name);
       const providerToolCallId = toolCall.id;
-      const toolCallId: ToolCallId = (suspension && index === suspension.pendingIndex && suspension.toolCallId)
-        ? suspension.toolCallId
-        : (createId("tool") as ToolCallId);
+      const toolCallId: ToolCallId = (suspension && index >= suspension.pendingIndex && suspension.toolCallIds?.[index])
+        ? suspension.toolCallIds[index]!
+        : (suspension && index === suspension.pendingIndex && suspension.toolCallId)
+          ? suspension.toolCallId
+          : (createId("tool") as ToolCallId);
 
       const protocolFailure = (error: string): ToolResult => ({
         toolCallId: providerToolCallId,
@@ -1096,12 +1189,28 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
 
       let progressActive = false;
+      const resumedStart = suspension && index === suspension.pendingIndex
+        ? await this.owned.startToolCall({
+            runId: input.run.id,
+            execution: input.execution,
+            expectedRevision: revision,
+            toolCallId,
+          })
+        : undefined;
+      if (resumedStart) setRevision(resumedStart.run.revision);
       const context = {
         agentId: input.run.agentId,
         runId: input.run.id,
         ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
         ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
         toolCallId,
+        interaction: createToolInteractionDriver(input.driver!, {
+          toolCallId,
+          ...(suspension?.toolCallIds === undefined ? {} : { toolCallIds: suspension.toolCallIds }),
+          toolCalls: input.toolCalls,
+          pendingIndex: index,
+          completedResults: results,
+        }),
         reportProgress: (progress: JsonValue) => {
           const active = this.executions.get(input.run.id);
           if (
@@ -1129,8 +1238,8 @@ export class AgentRuntime implements AgentRuntimeContract {
         },
       } as const;
 
-      const answer = (suspension && index === suspension.pendingIndex && suspension.interactionId)
-        ? input.driver?.answers().get(suspension.interactionId)
+      const answer = (suspension && index === suspension.pendingIndex)
+        ? suspension.interactionIds?.map((id) => input.driver?.answers().get(id)).find((value) => value !== undefined)
         : undefined;
 
       try {
@@ -1147,39 +1256,31 @@ export class AgentRuntime implements AgentRuntimeContract {
             if (!input.driver) {
               throw new Error("Tool call requested interaction but no interaction driver is active.");
             }
-            const interactionRequest = input.driver.request({
-              id: decision.interaction.id,
-              kind: decision.interaction.kind,
-              prompt: decision.interaction.prompt,
-              payload: decision.interaction.payload,
-              toolCallId,
-            });
-            input.driver.suspend({
-              checkpoint: {
-                kind: "tool_call_suspension",
-                toolCalls: input.toolCalls,
-                pendingIndex: index,
-                toolCallId,
-                interactionId: interactionRequest.id,
-                completedResults: results,
-              } as unknown as JsonValue,
-            });
+            context.interaction.request(decision.interaction);
+            if (!(suspension && index === suspension.pendingIndex)) {
+              const reserved = await this.owned.reserveToolCalls({
+                runId: input.run.id,
+                execution: input.execution,
+                expectedRevision: revision,
+                requestMessageId: createId("msg") as MessageId,
+                calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
+              });
+              setRevision(reserved.run.revision);
+            }
+            context.interaction.suspend();
           }
 
           if ("allow" in decision && !decision.allow) {
-            const reserved = await this.owned.reserveToolCalls({
-              runId: input.run.id,
-              execution: input.execution,
-              expectedRevision: revision,
-              requestMessageId: createId("msg") as MessageId,
-              calls: [{
-                toolCallId,
-                providerToolCallId,
-                name: toolCall.name,
-                args: toJsonValue(toolCall.args),
-              }],
-            });
-            setRevision(reserved.run.revision);
+            if (!(suspension && index === suspension.pendingIndex)) {
+              const reserved = await this.owned.reserveToolCalls({
+                runId: input.run.id,
+                execution: input.execution,
+                expectedRevision: revision,
+                requestMessageId: createId("msg") as MessageId,
+                calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
+              });
+              setRevision(reserved.run.revision);
+            }
             const failed = await this.owned.commitToolResult({
               runId: input.run.id,
               execution: input.execution,
@@ -1198,19 +1299,16 @@ export class AgentRuntime implements AgentRuntimeContract {
           throw error;
         }
         const reason = error instanceof Error ? error.message : "Tool policy rejected the call.";
-        const reserved = await this.owned.reserveToolCalls({
-          runId: input.run.id,
-          execution: input.execution,
-          expectedRevision: revision,
-          requestMessageId: createId("msg") as MessageId,
-          calls: [{
-            toolCallId,
-            providerToolCallId,
-            name: toolCall.name,
-            args: toJsonValue(toolCall.args),
-          }],
-        });
-        setRevision(reserved.run.revision);
+        if (!(suspension && index === suspension.pendingIndex)) {
+          const reserved = await this.owned.reserveToolCalls({
+            runId: input.run.id,
+            execution: input.execution,
+            expectedRevision: revision,
+            requestMessageId: createId("msg") as MessageId,
+            calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
+          });
+          setRevision(reserved.run.revision);
+        }
         const failed = await this.owned.commitToolResult({
           runId: input.run.id,
           execution: input.execution,
@@ -1224,28 +1322,23 @@ export class AgentRuntime implements AgentRuntimeContract {
         continue;
       }
 
-      // Tool call is approved to execute
-      const reserved = await this.owned.reserveToolCalls({
-        runId: input.run.id,
-        execution: input.execution,
-        expectedRevision: revision,
-        requestMessageId: createId("msg") as MessageId,
-        calls: [{
+      const reserved = resumedStart ?? await (async () => {
+        const committed = await this.owned.reserveToolCalls({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
+          requestMessageId: createId("msg") as MessageId,
+          calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
+        });
+        setRevision(committed.run.revision);
+        return this.owned.startToolCall({
+          runId: input.run.id,
+          execution: input.execution,
+          expectedRevision: revision,
           toolCallId,
-          providerToolCallId,
-          name: toolCall.name,
-          args: toJsonValue(toolCall.args),
-        }],
-      });
-      setRevision(reserved.run.revision);
-
-      const started = await this.owned.startToolCall({
-        runId: input.run.id,
-        execution: input.execution,
-        expectedRevision: revision,
-        toolCallId,
-      });
-      setRevision(started.run.revision);
+        });
+      })();
+      if (reserved) setRevision(reserved.run.revision);
       progressActive = true;
 
       try {
@@ -1274,12 +1367,24 @@ export class AgentRuntime implements AgentRuntimeContract {
           result,
         });
         setRevision(committed.run.revision);
+        const projectedResult = await this.foldToolInteractionRecords(result, toolCallId, input.run.agentId);
         results.push({
           toolCallId: providerToolCallId,
           toolName: toolCall.name,
-          ...result,
+          ...projectedResult,
         });
       } catch (error) {
+        if (error instanceof RunInteractionBoundary) {
+          const suspended = await this.owned.suspendToolCall({
+            runId: input.run.id,
+            execution: input.execution,
+            expectedRevision: revision,
+            toolCallId,
+          });
+          setRevision(suspended.run.revision);
+          throw error;
+        }
+        if (error instanceof RunInteractionCancelledError) throw error;
         const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
         const indeterminate = await this.owned.commitToolResult({
           runId: input.run.id,
@@ -1300,6 +1405,30 @@ export class AgentRuntime implements AgentRuntimeContract {
 
     input.driver?.clearCheckpoint();
     return { results, revision };
+  }
+
+  private async foldToolInteractionRecords(
+    result: import("./contracts").ToolExecutionResult,
+    toolCallId: ToolCallId,
+    agentId: AgentId,
+  ): Promise<import("./contracts").ToolExecutionResult> {
+    const interactionMessages = (await this.owned.history(agentId)).filter((message) =>
+      message.role === "interaction" && message.toolCallId === toolCallId,
+    );
+    if (interactionMessages.length === 0) return result;
+    const interactionText = interactionMessages
+      .filter((message): message is Extract<typeof message, { role: "interaction" }> => message.role === "interaction")
+      .map(renderInteractionText)
+      .join("\n\n");
+    const content = typeof result.content === "string"
+      ? result.content
+      : JSON.stringify(result.content) ?? "null";
+    return {
+      ...result,
+      content: content === "null" || content.length === 0
+        ? interactionText
+        : `${interactionText}\n\n${content}`,
+    };
   }
 
   private async requireAgent(agentId: AgentId): Promise<AgentRecord> {

@@ -241,6 +241,16 @@ export type ToolStateChanged = DurableEventBase & (
     }>
   | Readonly<{
       kind: "tool_state_changed";
+      transition: Readonly<{ from: "running"; to: "pending" }>;
+      toolCall: Extract<ToolCallSnapshot, { state: "pending" }>;
+    }>
+  | Readonly<{
+      kind: "tool_state_changed";
+      transition: Readonly<{ from: "running"; to: "pending" }>;
+      toolCall: Extract<ToolCallSnapshot, { state: "pending" }>;
+    }>
+  | Readonly<{
+      kind: "tool_state_changed";
       transition: Readonly<{ from: "running"; to: "completed" }>;
       toolCall: Extract<ToolCallSnapshot, { state: "completed" }>;
     }>

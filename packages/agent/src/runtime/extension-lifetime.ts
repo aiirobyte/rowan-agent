@@ -153,7 +153,7 @@ function adaptExtensionTool(input: RegisteredTool): import("./contracts").Tool {
     description: definition.description,
     parameters: definition.parameters as never,
     execute: async (args, context, signal) => {
-      const result = await definition.execute(args, signal);
+      const result = await definition.execute(args, context, signal);
       const content = JSON.parse(JSON.stringify(result.content));
       return result.isError
         ? { ok: false, content, error: "Extension Tool failed." }

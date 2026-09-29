@@ -91,7 +91,7 @@ export interface ToolDefinition {
   /** Parameter schema (JSON Schema) */
   parameters: Record<string, unknown>;
   /** Execute the tool */
-  execute: (args: unknown, signal?: AbortSignal) => Promise<ToolExecutionResult>;
+  execute: (args: unknown, context: import("../runtime/contracts").ToolInvocationContext, signal?: AbortSignal) => Promise<ToolExecutionResult>;
   /** Optional: per-tool execution mode override */
   executionMode?: "sequential" | "parallel";
 }

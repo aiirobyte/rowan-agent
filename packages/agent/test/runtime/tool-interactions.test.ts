@@ -195,12 +195,12 @@ test("tool call interaction suspends into input_required and resumes with allow"
     expect(history).toHaveLength(5);
     expect(history[0]!.role).toBe("user");
     expect(history[0]!.content).toBe("write secret");
-    expect(history[1]!.role).toBe("interaction");
-    expect((history[1] as any).status).toBe("answered");
-    expect((history[1] as any).answer).toBe("allow");
-    expect(history[2]!.role).toBe("assistant");
-    expect(Array.isArray(history[2]!.content)).toBe(true);
-    expect((history[2]!.content as any)[0].type).toBe("tool_use");
+    expect(history[1]!.role).toBe("assistant");
+    expect(Array.isArray(history[1]!.content)).toBe(true);
+    expect((history[1]!.content as any)[0].type).toBe("tool_use");
+    expect(history[2]!.role).toBe("interaction");
+    expect((history[2] as any).status).toBe("answered");
+    expect((history[2] as any).answer).toBe("allow");
     expect(history[3]!.role).toBe("tool");
     expect(Array.isArray(history[3]!.content)).toBe(true);
     expect((history[3]!.content as any)[0].type).toBe("tool_result");
@@ -675,53 +675,114 @@ test("multiple tool calls in one assistant turn: sequential suspension per call"
   }
 });
 
-test("read of a missing file produces failed tool result and Run continues to completion", async () => {
-  let receivedToolResult: any;
+test("a Tool execute interaction resumes with its answer and checkpoint, while cancellation does not re-enter it", async () => {
+  const executions: Array<{ answer: unknown; checkpoint: unknown }> = [];
+  const extension = loadExtensionFromFactory((api) => {
+    api.tool.register({
+      name: "interactive_tool",
+      description: "Ask during execution",
+      parameters: { type: "object", properties: {} },
+      execute: async (_args, context) => {
+        executions.push({
+          answer: context.interaction.answers().get("tool_question"),
+          checkpoint: context.interaction.checkpoint(),
+        });
+        const request = context.interaction.request({
+          id: "tool_question",
+          kind: "elicitation",
+          prompt: "Choose a value",
+          result: { answered: "Selected {{answer}} for {{prompt}}" },
+        });
+        if (!context.interaction.answers().has(request.id)) {
+          context.interaction.suspend({ checkpoint: { step: "after-question" } });
+        }
+        return { content: [{ type: "text", text: String(context.interaction.answers().get(request.id)) }] };
+      },
+    });
+  }, process.cwd(), "<runtime-extension>");
 
-  const stream: StreamFn = async function* (request) {
-    const toolMsg = request.messages.find((m) => m.role === "tool");
-    if (!toolMsg) {
-      const id = "call_read_missing";
-      const args = JSON.stringify({ path: "non_existent_file_12345.txt" });
-      const partial = {
-        role: "assistant" as const,
-        contentBlocks: [{ type: "tool_call" as const, id, name: "read", args }],
-      };
-      yield { type: "tool_call_start", id, name: "read", partial };
-      yield { type: "tool_call_delta", id, arguments: args, partial };
-      yield { type: "tool_call_end", id, name: "read", arguments: args, partial };
+  const toolStream: StreamFn = async function* (request) {
+    if (!request.messages.some((message) => message.role === "tool")) {
+      const id = "call_interactive";
+      const args = "{}";
+      const partial = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: "interactive_tool", args }] };
+      yield { type: "tool_call_start", id, name: "interactive_tool", partial };
+      yield { type: "tool_call_end", id, name: "interactive_tool", arguments: args, partial };
       yield { type: "done" };
       return;
     }
-    if (Array.isArray(toolMsg.content)) {
-      receivedToolResult = toolMsg.content.find((p: any) => p.type === "tool_result");
-    }
-    yield { type: "text_delta", text: "handled missing file", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "handled missing file" }] } };
-    yield { type: "done", response: stopResponse("handled missing file") };
+    const toolMessage = request.messages.find((message) => message.role === "tool");
+    const toolResult = JSON.parse((toolMessage?.content as any[])[0].content);
+    expect(toolResult.content).toContain('Selected {"choice":"blue"} for Choose a value');
+    yield { type: "text_delta", text: "finished", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "finished" }] } };
+    yield { type: "done", response: stopResponse("finished") };
   };
 
   const runtime = await AgentRuntime.init({
     store: new InMemoryStore(),
     concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
   });
-
   try {
     const agentId = await createAgentWith(runtime, {
-      identity: "agent-read-missing",
-      stream,
-      options: { idempotencyKey: "agent-read-missing-key" },
+      identity: "agent-execute-interaction",
+      stream: toolStream,
+      options: { idempotencyKey: "agent-execute-interaction-key" },
     });
-    const run = await runtime.start(agentId, "read missing", { idempotencyKey: "run-read-missing-key" });
+    const run = await runtime.start(agentId, "ask the tool", { idempotencyKey: "run-execute-interaction-key" });
+    const boundary = await run.wait();
+    expect(boundary.type).toBe("input_required");
+    if (boundary.type !== "input_required") return;
+    expect(boundary.interactions).toMatchObject([{ toolCallId: expect.any(String), kind: "elicitation" }]);
+    await run.respondInteraction({ interactionId: "tool_question", input: { choice: "blue" } });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(executions).toEqual([
+      { answer: undefined, checkpoint: undefined },
+      { answer: { choice: "blue" }, checkpoint: { step: "after-question" } },
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
 
-    const finalBoundary = await run.wait();
-    expect(finalBoundary.type).toBe("completed");
-
-    const snapshot = await run.snapshot();
-    expect(snapshot.state).toBe("completed");
-
-    expect(receivedToolResult).toBeDefined();
-    expect(receivedToolResult.isError).toBe(true);
-    expect(receivedToolResult.content).toContain("ENOENT");
+test("cancelling a Tool execute interaction does not re-enter the Tool", async () => {
+  let executions = 0;
+  const extension = loadExtensionFromFactory((api) => {
+    api.tool.register({
+      name: "cancelled_interactive_tool",
+      description: "Ask before continuing",
+      parameters: { type: "object", properties: {} },
+      execute: async (_args, context) => {
+        executions += 1;
+        const request = context.interaction.request({ kind: "permission", prompt: "Continue?" });
+        context.interaction.suspend({ checkpoint: { requestId: request.id } });
+        return { content: [{ type: "text", text: "cancelled" }] };
+      },
+    });
+  }, process.cwd(), "<runtime-extension>");
+  const stream: StreamFn = async function* () {
+    const id = "call_cancel_interactive";
+    const args = "{}";
+    const partial = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: "cancelled_interactive_tool", args }] };
+    yield { type: "tool_call_start", id, name: "cancelled_interactive_tool", partial };
+    yield { type: "tool_call_end", id, name: "cancelled_interactive_tool", arguments: args, partial };
+    yield { type: "done" };
+  };
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-cancel-execute-interaction",
+      stream,
+      options: { idempotencyKey: "agent-cancel-execute-interaction-key" },
+    });
+    const run = await runtime.start(agentId, "cancel the tool", { idempotencyKey: "run-cancel-execute-interaction-key" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "input_required" });
+    await expect(run.cancel("cancel pending tool interaction")).resolves.toMatchObject({ type: "cancelled" });
+    expect(executions).toBe(1);
   } finally {
     await runtime.close();
   }

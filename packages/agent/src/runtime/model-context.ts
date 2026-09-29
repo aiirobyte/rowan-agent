@@ -1,6 +1,8 @@
 import type { LlmContentPart } from "@rowan-agent/models";
 import type { AgentMessage, AgentContext, Tool as LoopTool, ToolResult } from "../types";
 import type { ResolvedAgentContext, Tool as DurableTool } from "./contracts";
+import { createRunInteractionDriver } from "../harness/phases/interactions";
+import type { RunInteractionDriver } from "../harness/phases/interactions";
 import type {
   AgentId,
   AssistantContent,
@@ -213,6 +215,22 @@ function projectToolContent(content: Extract<Message, { role: "tool" }>["content
   }));
 }
 
+function inertRunInteraction(signal?: AbortSignal): RunInteractionDriver {
+  const controller = signal ? undefined : new AbortController();
+  const state = {
+    currentPhase: "default",
+    attempt: 0,
+    status: "running" as const,
+    metrics: { iterations: 0, phaseTransitions: [], compactionCount: 0, retryCount: 0, startedAt: new Date().toISOString(), startedAtMs: Date.now() },
+  };
+  const driver = createRunInteractionDriver(state, "default", signal ?? controller!.signal);
+  return {
+    ...driver,
+    request: () => { throw new Error("Run interactions require an active interaction driver."); },
+    suspend: () => { throw new Error("Run interactions require an active interaction driver."); },
+  };
+}
+
 export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): LoopTool {
   return {
     name: tool.name,
@@ -225,6 +243,7 @@ export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): 
         runId,
         toolCallId: context.toolCallId as never,
         reportProgress: () => undefined,
+        interaction: context.interaction ?? inertRunInteraction(signal),
       }, signal ?? new AbortController().signal);
       return { toolCallId: context.toolCallId, toolName: tool.name, ...result };
     },

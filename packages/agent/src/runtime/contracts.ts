@@ -35,7 +35,7 @@ import type {
 } from "../runtime-events";
 import type { Skill } from "../protocol";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import type { RunInteraction, RunInteractionKind, RunInteractionRequest } from "../harness/phases/interactions";
+import type { RunInteraction, RunInteractionDriver, RunInteractionKind, RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentDefinition } from "../harness/definitions";
 import type {
   LoadInput,
@@ -165,6 +165,7 @@ export type ToolInvocationContext = Readonly<{
   runMetadata?: Metadata;
   toolCallId: ToolCallId;
   reportProgress(progress: JsonValue): void;
+  interaction: RunInteractionDriver;
 }>;
 export type Tool = Readonly<{
   name: string;
@@ -350,6 +351,7 @@ export interface OwnedStore {
     checkpoint: ExecutionCheckpoint;
     interactions?: readonly RunInteraction[];
     interactionAnswers?: Readonly<Record<string, JsonValue>>;
+    pendingToolCallIds?: readonly ToolCallId[];
   }): Promise<RunRecord>;
   answerInteraction(input: {
     runId: RunId;
@@ -384,6 +386,12 @@ export interface OwnedStore {
     calls: readonly ToolCallReservation[];
   }): Promise<ToolBatchCommit>;
   startToolCall(input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    toolCallId: ToolCallId;
+  }): Promise<ToolCommit>;
+  suspendToolCall(input: {
     runId: RunId;
     execution: ExecutionToken;
     expectedRevision: number;

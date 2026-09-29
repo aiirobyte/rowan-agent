@@ -30,7 +30,7 @@ export type {
   ToolResult,
 } from "./protocol";
 
-export type ToolContext = Pick<AgentContext, "skills"> & { toolCallId: string };
+export type ToolContext = Pick<AgentContext, "skills"> & { toolCallId: string; interaction?: import("./harness/phases/interactions").RunInteractionDriver };
 
 export type ToolExecutionMode = "sequential" | "parallel";
 

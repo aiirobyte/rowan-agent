@@ -725,6 +725,7 @@ export class InMemoryStore implements DurableStore {
     checkpoint: ExecutionCheckpoint;
     interactions?: readonly RunInteraction[];
     interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>;
+    pendingToolCallIds?: readonly ToolCallId[];
   }): RunRecord {
     this.assertOwner(lease);
     if (typeof input.phase !== "string" || input.phase.length === 0) throw new TypeError("phase must be non-empty");
@@ -736,7 +737,7 @@ export class InMemoryStore implements DurableStore {
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
     this.assertState(run, ["running"]);
-    this.assertNoOpenTools(run);
+    this.assertNoOpenTools(run, input.pendingToolCallIds ?? []);
     const isToolCallInteraction = interactions.length > 0 && interactions.some((interaction) => interaction.toolCallId !== undefined);
     let prompt: AssistantMessage | undefined;
     if (input.prompt && !isToolCallInteraction) {
@@ -945,7 +946,7 @@ export class InMemoryStore implements DurableStore {
     toolCallId: ToolCallId;
   }): ToolCommit {
     this.assertOwner(lease);
-    const operationKey = `tool_start:${input.toolCallId}`;
+    const operationKey = `tool_start:${input.toolCallId}:${input.execution.executionId}`;
     const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.execution.executionId] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as ToolCommit);
@@ -953,12 +954,40 @@ export class InMemoryStore implements DurableStore {
     this.assertExecution(run, input.execution, input.expectedRevision);
     const toolCall = this.requireToolCall(input.toolCallId, run);
     if (toolCall.state !== "pending") throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
-    if (toolCall.executionId !== input.execution.executionId) throw new RuntimeError("runtime_ownership_lost", { reason: "epoch_advanced", expectedEpoch: input.execution.ownerEpoch, actualEpoch: this.ownerEpoch });
     toolCall.state = "running";
+    toolCall.executionId = input.execution.executionId;
+    toolCall.executionId = input.execution.executionId;
     toolCall.updatedAt = createTimestamp();
     run.revision += 1;
     run.updatedAt = toolCall.updatedAt;
     this.appendToolTransition(run, { from: "pending", to: "running" }, toolCall);
+    const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
+    this.writeOperationReceipt(operationKey, operationPayload, result);
+    return result;
+  }
+
+  suspendToolCall(lease: OwnerLease, input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    toolCallId: ToolCallId;
+  }): ToolCommit {
+    this.assertOwner(lease);
+    const operationKey = `tool_suspend:${input.toolCallId}:${input.execution.executionId}`;
+    const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.execution.executionId] as never);
+    const replay = this.replayOperation(operationKey, operationPayload);
+    if (replay) return clone(replay as ToolCommit);
+    const run = this.requireRun(input.runId);
+    this.assertExecution(run, input.execution, input.expectedRevision);
+    const toolCall = this.requireToolCall(input.toolCallId, run);
+    if (toolCall.state !== "running" || toolCall.executionId !== input.execution.executionId) {
+      throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
+    }
+    toolCall.state = "pending";
+    toolCall.updatedAt = createTimestamp();
+    run.revision += 1;
+    run.updatedAt = toolCall.updatedAt;
+    this.appendToolTransition(run, { from: "running", to: "pending" }, toolCall);
     const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
     this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
@@ -1099,9 +1128,21 @@ export class InMemoryStore implements DurableStore {
       return result;
     }
     const from = run.state;
-    const activeToolCalls = run.execution
-      ? [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.state === "pending" || toolCall.state === "running"))
-      : [];
+      const activeToolCalls = run.execution
+        ? [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.state === "pending" || toolCall.state === "running"))
+        : run.state === "input_required" && run.checkpoint?.data && typeof run.checkpoint.data === "object" && !Array.isArray(run.checkpoint.data)
+          ? (() => {
+              const interactionState = (run.checkpoint!.data as Record<string, import("../runtime-events").JsonValue>).runInteractions;
+              const interactionCheckpoint = interactionState && typeof interactionState === "object" && !Array.isArray(interactionState)
+                ? (interactionState as Record<string, import("../runtime-events").JsonValue>).checkpoint
+                : undefined;
+              const ids = interactionCheckpoint && typeof interactionCheckpoint === "object" && !Array.isArray(interactionCheckpoint)
+                ? (interactionCheckpoint as Record<string, import("../runtime-events").JsonValue>).toolCallIds
+                : undefined;
+              const allowed = new Set(Array.isArray(ids) ? ids : []);
+              return [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && toolCall.state === "pending" && allowed.has(toolCall.id));
+            })()
+          : [];
     const indeterminateToolCallIds = activeToolCalls
       .filter((toolCall) => toolCall.state === "running")
       .map((toolCall) => toolCall.id);
@@ -1389,8 +1430,10 @@ export class InMemoryStore implements DurableStore {
     return toolCall;
   }
 
-  private assertNoOpenTools(run: StoredRun): void {
-    if ([...this.toolCalls.values()].some((toolCall) => toolCall.runId === run.id && (toolCall.state === "pending" || toolCall.state === "running"))) {
+  private assertNoOpenTools(run: StoredRun, allowedPendingToolCallIds: readonly ToolCallId[] = []): void {
+    const allowed = new Set(allowedPendingToolCallIds);
+    if ([...this.toolCalls.values()].some((toolCall) => toolCall.runId === run.id
+      && (toolCall.state === "running" || (toolCall.state === "pending" && !allowed.has(toolCall.id))))) {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     }
   }
@@ -1646,12 +1689,13 @@ class MemoryOwnedStore implements OwnedStore {
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
-  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>> }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
+  async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
   async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
   async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
+  async suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
   async commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
   async snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
