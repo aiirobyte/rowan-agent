@@ -1,3 +1,4 @@
+import type { ContentBlock } from "@rowan-agent/models";
 import type {
   AgentMessage,
   AgentContext,
@@ -408,6 +409,7 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
     };
 
     let executableToolCalls: readonly ToolCall[];
+    let roundContentBlocks: readonly ContentBlock[] | undefined;
     const checkpoint = ctx.execution.interaction.checkpoint();
     if (checkpoint && typeof checkpoint === "object" && (checkpoint as any).kind === "tool_call_suspension") {
       const toolSuspension = checkpoint as {
@@ -460,12 +462,13 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       executableToolCalls = collected.toolCalls.filter((toolCall) =>
         executableToolNames.has(toolCall.name),
       );
+      roundContentBlocks = collected.contentBlocks;
       if (executableToolCalls.length === 0) {
         return output;
       }
     }
 
-    const results = await ctx.execution.executeTools(roundContext, executableToolCalls);
+    const results = await ctx.execution.executeTools(roundContext, executableToolCalls, roundContentBlocks);
     for (const result of results) {
       const messageId = ctx.messageManager.start("tool", createToolResultContent(result), {
         phase: ctx.phase.name,
@@ -1108,6 +1111,7 @@ async function executeToolCall(input: {
   config: AgentConfig;
   tools: Tool[];
   toolCall: ToolCall;
+  contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
 }): Promise<ToolResult> {
   let result: ToolResult;
@@ -1115,6 +1119,7 @@ async function executeToolCall(input: {
     result = await input.config.runtime.tools({
       config: input.config,
       toolCall: input.toolCall,
+      contentBlocks: input.contentBlocks,
       driver: input.driver,
     });
   } else {
@@ -1145,12 +1150,14 @@ async function executeToolCalls(input: {
   config: AgentConfig;
   tools: Tool[];
   toolCalls: readonly ToolCall[];
+  contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
 }): Promise<readonly ToolResult[]> {
   if (input.config.runtime?.toolsBatch) {
     const results = await input.config.runtime.toolsBatch({
       config: input.config,
       toolCalls: input.toolCalls,
+      contentBlocks: input.contentBlocks,
       driver: input.driver,
     });
     if (results.length !== input.toolCalls.length) throw new Error("Runtime returned an invalid Tool batch result");
@@ -1282,7 +1289,7 @@ function createPhaseExecution(
       });
     },
 
-    async executeTools(phaseContext: AgentContext, toolCalls: readonly ToolCall[]): Promise<readonly ToolResult[]> {
+    async executeTools(phaseContext: AgentContext, toolCalls: readonly ToolCall[], contentBlocks?: readonly ContentBlock[]): Promise<readonly ToolResult[]> {
       return runTurn(async () => {
         const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
         for (const toolCall of toolCalls) {
@@ -1299,6 +1306,7 @@ function createPhaseExecution(
           },
           tools,
           toolCalls,
+          contentBlocks,
           driver: interaction,
         });
         for (const result of results) {

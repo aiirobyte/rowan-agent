@@ -5,14 +5,15 @@ import type {
   LlmTokenUsage,
   LlmStreamOptions,
   LlmStopReason,
-  LlmToolCall,
   LlmToolChoice,
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
   AssistantMessagePartial,
   ThinkingLevel,
+  ToolCallBlock,
 } from "../protocol";
+import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
 import {
   payloadError,
@@ -274,14 +275,19 @@ async function* streamResponses(
       body: JSON.stringify(body),
     }),
   }, async function* (response) {
-      let content = "";
-      let thinking = "";
+      // Reasoning parts by `<outputIndex>:<kind>:<index>`, so a done event can
+      // report only the text its deltas have not already streamed.
       const reasoningParts = new Map<string, string>();
-      const reasoning: ReasoningItem[] = [];
+      const reasoningKeys = new Map<number, string>();
+      const reasoning = new Map<number, ReasoningItem>();
       let stopReason: string | null = null;
       let usage: LlmTokenUsage | undefined;
       // Map output_index -> tool call state
-      const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+      const accumulator = new ContentBlockAccumulator();
+      const toolBlock = (outputIndex: number): ToolCallBlock | undefined => {
+        const block = accumulator.block(`tool:${outputIndex}`);
+        return block?.type === "tool_call" ? block : undefined;
+      };
 
       const partial: AssistantMessagePartial = {
         role: "assistant",
@@ -289,34 +295,31 @@ async function* streamResponses(
       };
 
       function rebuildPartial(): void {
-        partial.contentBlocks = [];
-        if (thinking || reasoning.length > 0) {
-          partial.contentBlocks.push({
-            type: "thinking",
-            thinking,
-            ...(reasoning.length > 0 ? { signature: REASONING_PREFIX + JSON.stringify(reasoning) } : {}),
-          });
+        for (const [outputIndex, item] of reasoning) {
+          const key = reasoningKeys.get(outputIndex);
+          if (key) accumulator.setThinkingSignatureFor(key, REASONING_PREFIX + JSON.stringify([item]));
         }
-        if (content) {
-          partial.contentBlocks.push({ type: "text", text: content });
-        }
-        for (const tc of toolCalls.values()) {
-          partial.contentBlocks.push({
-            type: "tool_call",
-            id: tc.id,
-            name: tc.name,
-            args: tc.arguments,
-          });
-        }
+        partial.contentBlocks = accumulator.snapshot();
       }
 
       function updateReasoningPart(key: string, text: string, append: boolean): string {
         const previous = reasoningParts.get(key) ?? "";
         const next = append ? previous + text : text;
         reasoningParts.set(key, next);
-        thinking = [...reasoningParts.values()].join("");
-        if (append) return text;
-        return next.startsWith(previous) ? next.slice(previous.length) : next;
+        const [outputIndexText] = key.split(":");
+        const outputIndex = Number(outputIndexText);
+        let blockKey = reasoningKeys.get(outputIndex);
+        if (!blockKey) {
+          blockKey = `reasoning:${outputIndex}`;
+          reasoningKeys.set(outputIndex, blockKey);
+          accumulator.startThinking(blockKey);
+        }
+        const prefix = `${outputIndex}:`;
+        accumulator.setThinking(
+          blockKey,
+          [...reasoningParts].filter(([partKey]) => partKey.startsWith(prefix)).map(([, value]) => value).join(""),
+        );
+        return append ? text : next.startsWith(previous) ? next.slice(previous.length) : next;
       }
 
       function reasoningPartKey(outputIndex: number, kind: "summary" | "text", index: number): string {
@@ -405,51 +408,54 @@ async function* streamResponses(
           }
 
           case "response.output_text.delta":
-            content += event.delta;
+            accumulator.appendText(event.delta);
             rebuildPartial();
             yield { type: "text_delta", text: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             break;
 
           case "response.output_item.added":
             if (event.item.type === "function_call") {
-              const tc = { id: event.item.call_id ?? event.item.id ?? "", name: event.item.name ?? "", arguments: "" };
-              toolCalls.set(event.output_index, tc);
+              const tc = { type: "tool_call" as const, id: event.item.call_id ?? event.item.id ?? "", name: event.item.name ?? "", args: "" };
+              accumulator.startToolCall(`tool:${event.output_index}`, tc);
               rebuildPartial();
               yield { type: "tool_call_start", id: tc.id, name: tc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
 
           case "response.function_call_arguments.delta": {
-            const tc = toolCalls.get(event.output_index);
-            if (tc) {
-              if (event.call_id) tc.id = event.call_id;
-              tc.arguments += event.delta;
+            const block = toolBlock(event.output_index);
+            if (block) {
+              accumulator.updateToolCall(`tool:${event.output_index}`, {
+                ...(event.call_id ? { id: event.call_id } : {}),
+                args: block.args + event.delta,
+              });
               rebuildPartial();
-              yield { type: "tool_call_delta", id: tc.id, arguments: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+              yield { type: "tool_call_delta", id: toolBlock(event.output_index)!.id, arguments: event.delta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
             }
             break;
           }
 
           case "response.function_call_arguments.done": {
-            const tc = toolCalls.get(event.output_index);
-            if (tc) {
-              if (event.call_id) tc.id = event.call_id;
-              if (event.name) tc.name = event.name;
-              tc.arguments = event.arguments;
+            if (toolBlock(event.output_index)) {
+              accumulator.updateToolCall(`tool:${event.output_index}`, {
+                ...(event.call_id ? { id: event.call_id } : {}),
+                ...(event.name ? { name: event.name } : {}),
+                args: event.arguments,
+              });
             }
             break;
           }
-
           case "response.output_item.done": {
             if (event.item.type === "reasoning") {
               if (event.item.id) {
-                reasoning.push({
+                const item: ReasoningItem = {
                   type: "reasoning",
                   id: event.item.id,
                   ...(event.item.encrypted_content ? { encrypted_content: event.item.encrypted_content } : {}),
                   summary: (event.item.summary ?? []).flatMap((part) =>
                     part.type === "summary_text" && part.text ? [{ type: "summary_text" as const, text: part.text }] : []),
-                });
+                };
+                reasoning.set(event.output_index, item);
                 rebuildPartial();
               }
               for (const [index, part] of (event.item.summary ?? []).entries()) {
@@ -478,13 +484,16 @@ async function* streamResponses(
               }
             }
             if (event.item.type === "function_call") {
-              const tc = toolCalls.get(event.output_index);
-              if (tc) {
-                if (event.item.call_id) tc.id = event.item.call_id;
-                if (event.item.name) tc.name = event.item.name;
-                if (event.item.arguments) tc.arguments = event.item.arguments;
+              const block = toolBlock(event.output_index);
+              if (block) {
+                accumulator.updateToolCall(`tool:${event.output_index}`, {
+                  ...(event.item.call_id ? { id: event.item.call_id } : {}),
+                  ...(event.item.name ? { name: event.item.name } : {}),
+                  ...(event.item.arguments ? { args: event.item.arguments } : {}),
+                });
                 rebuildPartial();
-                yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+                const final = toolBlock(event.output_index)!;
+                yield { type: "tool_call_end", id: final.id, name: final.name, arguments: final.args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
             break;
@@ -502,20 +511,13 @@ async function* streamResponses(
         }
       }
 
-      const toolCallResults: LlmToolCall[] = [];
-      for (const tc of toolCalls.values()) {
-        let parsedArgs: unknown = tc.arguments;
-        try { parsedArgs = JSON.parse(tc.arguments); } catch {}
-        toolCallResults.push({ id: tc.id, name: tc.name, arguments: parsedArgs });
-      }
+      const projected = contentBlocksResponse(accumulator.snapshot());
 
       yield {
         type: "done",
         response: {
-          content,
-          ...(thinking ? { thinking } : {}),
-          stopReason: mapStopReason(stopReason, toolCallResults.length > 0),
-          ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
+          ...projected,
+          stopReason: mapStopReason(stopReason, (projected.toolCalls?.length ?? 0) > 0),
           ...(usage ? { usage } : {}),
         },
       };

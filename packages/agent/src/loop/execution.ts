@@ -35,7 +35,7 @@ export type PhaseExecution = {
   invokeModel(context: PhaseContext, options?: { output?: "reply" | "internal" }): Promise<ModelInvokeOutput>;
   reportStatus(status: PhaseStatus): Promise<void>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
-  executeTools(context: AgentContext, toolCalls: readonly ToolCall[]): Promise<readonly ToolResult[]>;
+  executeTools(context: AgentContext, toolCalls: readonly ToolCall[], contentBlocks?: readonly ContentBlock[]): Promise<readonly ToolResult[]>;
   interaction: RunInteractionDriver;
   /** Message lifecycle manager for streaming updates from programmatic phases */
   messages: PhaseMessageManager;

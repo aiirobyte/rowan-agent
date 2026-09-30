@@ -1,5 +1,6 @@
 import Type from "typebox";
 import type {
+  ContentBlock,
   ThinkingLevel,
 } from "@rowan-agent/models";
 import type {
@@ -395,6 +396,8 @@ export interface OwnedStore {
     expectedRevision: number;
     requestMessageId: MessageId;
     calls: readonly ToolCallReservation[];
+    /** The model response's blocks, so the request message keeps what preceded the Tool Calls. */
+    contentBlocks?: readonly ContentBlock[];
   }): Promise<ToolBatchCommit>;
   startToolCall(input: {
     runId: RunId;

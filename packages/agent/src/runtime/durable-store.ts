@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ContentBlock } from "@rowan-agent/models";
 import { createId, createTimestamp } from "../utils";
 import type {
   AgentId,
@@ -34,6 +35,7 @@ import type {
   ToolCommit,
   RunStateChanged,
   ToolBatchCommit,
+  ToolCallReservation,
   UserInput,
 } from "./contracts";
 import type { DurableStore, OwnedStore } from "./contracts";
@@ -48,6 +50,7 @@ import { TOOL_VALUE_JSON_BYTES } from "./idempotency";
 import { assertJsonValue, assertUtf8ByteLimit, canonicalJson } from "./json";
 import { normalizeUserInput } from "./contracts";
 import type {
+  AssistantContent,
   DurableToolResult,
   EventId,
   InteractionRecord,
@@ -883,12 +886,9 @@ export class InMemoryStore implements DurableStore {
     execution: ExecutionToken;
     expectedRevision: number;
     requestMessageId: MessageId;
-    calls: readonly Readonly<{
-      providerToolCallId: string;
-      name: string;
-      args: import("../runtime-events").JsonValue;
-      toolCallId?: ToolCallId;
-    }>[];
+    calls: readonly ToolCallReservation[];
+    /** The model response's blocks, so the request message keeps what preceded the Tool Calls. */
+    contentBlocks?: readonly ContentBlock[];
   }): ToolBatchCommit {
     this.assertOwner(lease);
     if (input.calls.length === 0) throw new TypeError("calls must be non-empty");
@@ -911,6 +911,7 @@ export class InMemoryStore implements DurableStore {
       input.execution.executionId,
       input.requestMessageId,
       input.calls,
+      input.contentBlocks ?? null,
     ] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as ToolBatchCommit);
@@ -939,13 +940,7 @@ export class InMemoryStore implements DurableStore {
       agentId: run.agentId,
       runId: run.id,
       role: "assistant",
-      content: toolCalls.map((toolCall) => ({
-        type: "tool_use" as const,
-        toolCallId: toolCall.id,
-        providerToolCallId: toolCall.providerToolCallId,
-        name: toolCall.name,
-        input: clone(toolCall.args),
-      })),
+      content: requestMessageContent(toolCalls, input.contentBlocks),
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: timestamp,
     };
@@ -1720,7 +1715,7 @@ class MemoryOwnedStore implements OwnedStore {
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
-  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
+  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[]; contentBlocks?: readonly ContentBlock[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
   async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   async suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
   async commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
@@ -1871,4 +1866,40 @@ function digestToolEffects(toolCalls: readonly StoredToolCall[]): string {
 
 function assertToolValue(value: import("../runtime-events").JsonValue, argument: string): void {
   assertUtf8ByteLimit(canonicalJson(value), TOOL_VALUE_JSON_BYTES, argument);
+}
+
+/**
+ * The committed assistant request: the model response's blocks in the order it
+ * emitted them, with every reserved Tool Call carrying its durable identity.
+ */
+function requestMessageContent(
+  toolCalls: readonly StoredToolCall[],
+  contentBlocks: readonly ContentBlock[] | undefined,
+): Exclude<AssistantContent, string>[number][] {
+  const toolUse = (toolCall: StoredToolCall) => ({
+    type: "tool_use" as const,
+    toolCallId: toolCall.id,
+    providerToolCallId: toolCall.providerToolCallId,
+    name: toolCall.name,
+    input: clone(toolCall.args),
+  });
+  if (!contentBlocks) return toolCalls.map(toolUse);
+  const reserved = new Map(toolCalls.map((toolCall) => [toolCall.providerToolCallId, toolCall]));
+  const parts: Exclude<AssistantContent, string>[number][] = [];
+  for (const block of contentBlocks) {
+    if (block.type === "text") {
+      parts.push({ type: "text", text: block.text });
+    } else if (block.type === "thinking") {
+      parts.push({ type: "thinking", thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) });
+    } else {
+      const toolCall = reserved.get(block.id);
+      if (!toolCall) continue;
+      reserved.delete(block.id);
+      parts.push(toolUse(toolCall));
+    }
+  }
+  // A provider whose stream carried no block for a reserved call still owes the
+  // next request that call.
+  for (const toolCall of reserved.values()) parts.push(toolUse(toolCall));
+  return parts;
 }

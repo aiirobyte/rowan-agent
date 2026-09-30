@@ -1,5 +1,4 @@
 import type {
-  ContentBlock,
   LlmContentPart,
   LlmMessage,
   LlmRequest,
@@ -7,7 +6,6 @@ import type {
   LlmStreamEvent,
   LlmTokenUsage,
   LlmStreamOptions,
-  LlmToolCall,
   LlmToolChoice,
   LlmToolDefinition,
   StreamFn,
@@ -15,6 +13,7 @@ import type {
   AssistantMessagePartial,
   ThinkingLevel,
 } from "../protocol";
+import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
 import {
   type BaseProviderConfig,
@@ -276,17 +275,17 @@ async function* streamAnthropicMessages(
   }, async function* (response) {
       let stopReason: string | null = null;
       const usage: LlmTokenUsage = {};
-      // Content blocks by stream index, so interleaved thinking keeps its place.
-      const blocks = new Map<number, ContentBlock>();
+      // Provider block indices map onto accumulator keys, so interleaved
+      // thinking keeps its place in one ordered assembly.
+      const accumulator = new ContentBlockAccumulator();
+      const blockKey = (index: number): string => `anthropic:${index}`;
 
       const partial: AssistantMessagePartial = {
         role: "assistant",
         contentBlocks: [],
       };
       const snapshot = (): AssistantMessagePartial => {
-        partial.contentBlocks = [...blocks.entries()]
-          .sort(([a], [b]) => a - b)
-          .map(([, block]) => ({ ...block }));
+        partial.contentBlocks = accumulator.snapshot();
         return { ...partial, contentBlocks: [...partial.contentBlocks] };
       };
       const addUsage = (next: AnthropicUsage): void => {
@@ -319,38 +318,41 @@ async function* streamAnthropicMessages(
 
           case "content_block_start": {
             const start = event.content_block;
-            if (start.type === "text") blocks.set(event.index, { type: "text", text: "" });
-            else if (start.type === "thinking") blocks.set(event.index, { type: "thinking", thinking: "" });
-            else if (start.type === "redacted_thinking") {
-              blocks.set(event.index, { type: "thinking", thinking: "", signature: `${REDACTED_PREFIX}${start.data ?? ""}` });
+            const key = blockKey(event.index);
+            if (start.type === "text") {
+              accumulator.startText(key);
+            } else if (start.type === "thinking") {
+              accumulator.startThinking(key);
+            } else if (start.type === "redacted_thinking") {
+              accumulator.startThinking(key, `${REDACTED_PREFIX}${start.data ?? ""}`);
             } else if (start.type === "tool_use") {
               const block = { type: "tool_call" as const, id: start.id ?? "", name: start.name ?? "", args: "" };
-              blocks.set(event.index, block);
+              accumulator.startToolCall(key, block);
               yield { type: "tool_call_start", id: block.id, name: block.name, partial: snapshot() };
             }
             break;
           }
 
           case "content_block_delta": {
-            const block = blocks.get(event.index);
             const delta = event.delta;
+            const block = accumulator.block(blockKey(event.index));
             if (delta.type === "text_delta" && block?.type === "text") {
-              block.text += delta.text;
+              accumulator.appendTextTo(blockKey(event.index), delta.text);
               yield { type: "text_delta", text: delta.text, partial: snapshot() };
             } else if (delta.type === "thinking_delta" && block?.type === "thinking") {
-              block.thinking += delta.thinking;
+              accumulator.appendThinkingTo(blockKey(event.index), delta.thinking);
               yield { type: "thinking_delta", thinking: delta.thinking, partial: snapshot() };
             } else if (delta.type === "signature_delta" && block?.type === "thinking") {
-              block.signature = (block.signature ?? "") + delta.signature;
+              accumulator.setThinkingSignatureFor(blockKey(event.index), (block.signature ?? "") + delta.signature);
             } else if (delta.type === "input_json_delta" && block?.type === "tool_call") {
-              block.args += delta.partial_json;
+              accumulator.setToolCallArguments(blockKey(event.index), block.args + delta.partial_json);
               yield { type: "tool_call_delta", id: block.id, arguments: delta.partial_json, partial: snapshot() };
             }
             break;
           }
 
           case "content_block_stop": {
-            const block = blocks.get(event.index);
+            const block = accumulator.block(blockKey(event.index));
             if (block?.type === "tool_call") {
               yield { type: "tool_call_end", id: block.id, name: block.name, arguments: block.args, partial: snapshot() };
             }
@@ -367,24 +369,13 @@ async function* streamAnthropicMessages(
         }
       }
 
-      const final = snapshot().contentBlocks;
-      const content = final.flatMap((block) => block.type === "text" ? [block.text] : []).join("");
-      const thinking = final.flatMap((block) => block.type === "thinking" ? [block.thinking] : []).join("");
-      const toolCallResults: LlmToolCall[] = final.flatMap((block) => {
-        if (block.type !== "tool_call") return [];
-        let parsedArgs: unknown = block.args;
-        try { parsedArgs = JSON.parse(block.args); } catch {}
-        return [{ id: block.id, name: block.name, arguments: parsedArgs }];
-      });
       usage.totalTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 
       yield {
         type: "done",
         response: {
-          content,
-          ...(thinking ? { thinking } : {}),
+          ...contentBlocksResponse(accumulator.snapshot()),
           stopReason: mapStopReason(stopReason ?? "end_turn"),
-          ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
           usage,
         },
       };

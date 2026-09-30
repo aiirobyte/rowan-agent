@@ -4,13 +4,13 @@ import type {
   LlmStreamEvent,
   LlmTokenUsage,
   LlmStreamOptions,
-  LlmToolCall,
   LlmToolChoice,
   LlmToolDefinition,
   StreamFn,
   ApiStreamFn,
   AssistantMessagePartial,
 } from "../protocol";
+import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { executeProviderRequest, streamProviderRequest } from "./http";
 import {
   type BaseProviderConfig,
@@ -265,8 +265,7 @@ async function* streamChatCompletions(
         if (bodyError) throw bodyError;
         const choice = data.choices?.[0];
         const message = choice?.message;
-        const content = message?.content ?? "";
-        const thinking = message?.reasoning_content ?? message?.reasoning ?? "";
+        const accumulator = new ContentBlockAccumulator();
         const partial: AssistantMessagePartial = {
           role: "assistant",
           contentBlocks: [],
@@ -274,48 +273,48 @@ async function* streamChatCompletions(
 
         yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
 
+        const thinking = message?.reasoning_content ?? message?.reasoning ?? "";
         if (thinking) {
-          partial.contentBlocks.push({ type: "thinking", thinking });
+          accumulator.appendThinking(thinking);
+          partial.contentBlocks = accumulator.snapshot();
           yield { type: "thinking_delta", thinking, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
         }
-
-        if (content) {
-          partial.contentBlocks.push({ type: "text", text: content });
-          yield { type: "text_delta", text: content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+        if (message?.content) {
+          accumulator.appendText(message.content);
+          partial.contentBlocks = accumulator.snapshot();
+          yield { type: "text_delta", text: message.content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+        }
+        for (const [index, tc] of (message?.tool_calls ?? []).entries()) {
+          accumulator.startToolCall(`tool:${index}`, {
+            type: "tool_call",
+            id: tc.id ?? `call_${index}`,
+            name: tc.function?.name ?? "",
+            args: tc.function?.arguments ?? "",
+          });
         }
 
-        const toolCallResults: LlmToolCall[] = [];
-        for (const [index, tc] of (message?.tool_calls ?? []).entries()) {
-          const id = tc.id ?? `call_${index}`;
-          const name = tc.function?.name ?? "";
-          const args = tc.function?.arguments ?? "";
-          partial.contentBlocks.push({ type: "tool_call", id, name, args });
-          yield { type: "tool_call_start", id, name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-          yield { type: "tool_call_end", id, name, arguments: args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-          let parsedArgs: unknown = args;
-          try { parsedArgs = JSON.parse(args); } catch {}
-          toolCallResults.push({ id, name, arguments: parsedArgs });
+        partial.contentBlocks = accumulator.snapshot();
+        for (const block of partial.contentBlocks) {
+          if (block.type !== "tool_call") continue;
+          yield { type: "tool_call_start", id: block.id, name: block.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+          yield { type: "tool_call_end", id: block.id, name: block.name, arguments: block.args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
         }
 
         const usage = normalizeUsage(data.usage);
         yield {
           type: "done",
           response: {
-            content,
-            ...(thinking ? { thinking } : {}),
+            ...contentBlocksResponse(accumulator.snapshot()),
             stopReason: mapFinishReason(choice?.finish_reason),
-            ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
             ...(usage ? { usage } : {}),
           },
         };
         return;
       }
 
-      let content = "";
-      let thinking = "";
       let finishReason: string | null = null;
       let usage: LlmTokenUsage | undefined;
-      const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+      const accumulator = new ContentBlockAccumulator();
 
       const partial: AssistantMessagePartial = {
         role: "assistant",
@@ -323,21 +322,7 @@ async function* streamChatCompletions(
       };
 
       function rebuildPartial(): void {
-        partial.contentBlocks = [];
-        if (thinking) {
-          partial.contentBlocks.push({ type: "thinking", thinking });
-        }
-        if (content) {
-          partial.contentBlocks.push({ type: "text", text: content });
-        }
-        for (const tc of toolCalls.values()) {
-          partial.contentBlocks.push({
-            type: "tool_call",
-            id: tc.id,
-            name: tc.name,
-            args: tc.arguments,
-          });
-        }
+        partial.contentBlocks = accumulator.snapshot();
       }
 
       yield { type: "start", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
@@ -360,36 +345,38 @@ async function* streamChatCompletions(
         if (delta) {
           const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
           if (reasoningDelta) {
-            thinking += reasoningDelta;
+            accumulator.appendThinking(reasoningDelta);
             rebuildPartial();
             yield { type: "thinking_delta", thinking: reasoningDelta, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           }
           if (delta.content) {
-            content += delta.content;
+            accumulator.appendText(delta.content);
             rebuildPartial();
             yield { type: "text_delta", text: delta.content, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
           }
           if (delta.tool_calls) {
             for (const tc of delta.tool_calls) {
-              const existing = toolCalls.get(tc.index);
-              if (!existing) {
-                const newTc = { id: tc.id ?? "", name: tc.function?.name ?? "", arguments: tc.function?.arguments ?? "" };
-                toolCalls.set(tc.index, newTc);
+              const key = `tool:${tc.index}`;
+              let block = accumulator.block(key);
+              if (!block) {
+                accumulator.startToolCall(key, { type: "tool_call", id: tc.id ?? "", name: tc.function?.name ?? "", args: "" });
                 if (tc.id || tc.function?.name) {
                   rebuildPartial();
-                  yield { type: "tool_call_start", id: newTc.id, name: newTc.name, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
+                  yield { type: "tool_call_start", id: tc.id ?? "", name: tc.function?.name ?? "", partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
                 }
-                if (tc.function?.arguments) {
-                  yield { type: "tool_call_delta", id: newTc.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-                }
-              } else {
-                if (tc.id) existing.id = tc.id;
-                if (tc.function?.name) existing.name = tc.function.name;
-                if (tc.function?.arguments) {
-                  existing.arguments += tc.function.arguments;
-                  rebuildPartial();
-                  yield { type: "tool_call_delta", id: existing.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-                }
+              } else if (tc.id || tc.function?.name) {
+                accumulator.updateToolCall(key, {
+                  ...(tc.id ? { id: tc.id } : {}),
+                  ...(tc.function?.name ? { name: tc.function.name } : {}),
+                });
+                rebuildPartial();
+              }
+              block = accumulator.block(key)!;
+              if (block.type !== "tool_call") continue;
+              if (tc.function?.arguments) {
+                accumulator.setToolCallArguments(key, block.args + tc.function.arguments);
+                rebuildPartial();
+                yield { type: "tool_call_delta", id: block.id, arguments: tc.function.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
               }
             }
           }
@@ -397,25 +384,17 @@ async function* streamChatCompletions(
         if (choice.finish_reason) finishReason = choice.finish_reason;
       }
 
-      for (const tc of toolCalls.values()) {
+      for (const block of accumulator.snapshot()) {
+        if (block.type !== "tool_call") continue;
         rebuildPartial();
-        yield { type: "tool_call_end", id: tc.id, name: tc.name, arguments: tc.arguments, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
-      }
-
-      const toolCallResults: LlmToolCall[] = [];
-      for (const tc of toolCalls.values()) {
-        let parsedArgs: unknown = tc.arguments;
-        try { parsedArgs = JSON.parse(tc.arguments); } catch {}
-        toolCallResults.push({ id: tc.id, name: tc.name, arguments: parsedArgs });
+        yield { type: "tool_call_end", id: block.id, name: block.name, arguments: block.args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       }
 
       yield {
         type: "done",
         response: {
-          content,
-          ...(thinking ? { thinking } : {}),
+          ...contentBlocksResponse(accumulator.snapshot()),
           stopReason: mapFinishReason(finishReason),
-          ...(toolCallResults.length > 0 ? { toolCalls: toolCallResults } : {}),
           ...(usage ? { usage } : {}),
         },
       };

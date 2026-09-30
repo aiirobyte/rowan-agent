@@ -14,7 +14,7 @@
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "dependencies": {
         "@rowan-agent/models": "workspace:*",
         "jiti": "2.7.0",
@@ -46,9 +46,7 @@
         "pino": "^10.3.1",
       },
     },
-    "packages/models": {
-      "name": "@rowan-agent/models",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "devDependencies": {
         "tsup": "^8.5.1",
       },
