@@ -14,7 +14,7 @@
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.13.2",
+      "version": "0.13.3",
       "dependencies": {
         "@rowan-agent/models": "workspace:*",
         "jiti": "2.7.0",

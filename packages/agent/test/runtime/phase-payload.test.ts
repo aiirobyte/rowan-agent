@@ -172,6 +172,7 @@ test("entry Phase payload survives a Runtime restart while its Phase is suspende
       const resumed = secondRuntime.run(runId as never);
       const waiting = await resumed.snapshot();
       expect(waiting.state).toBe("input_required");
+      expect(waiting.phasePayload).toEqual({ provider: "anthropic", options: { includeTests: true } });
       if (waiting.state !== "input_required") return;
       await resumed.respondInteraction({ interactionId: waiting.interactions[0]!.id, input: true });
       await expect(resumed.wait()).resolves.toMatchObject({ type: "completed" });

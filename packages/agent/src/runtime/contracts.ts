@@ -291,6 +291,8 @@ export type RunSnapshotBase = Readonly<{
   revision: number;
   input: UserInput;
   metadata?: Metadata;
+  /** Effective entry Phase payload the Run started with (defaults filled). */
+  phasePayload?: JsonValue;
   messageCount: number;
   toolCallCount: number;
   currentPhaseId?: string;

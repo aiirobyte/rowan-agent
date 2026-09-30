@@ -1225,6 +1225,7 @@ export class InMemoryStore implements DurableStore {
       revision: run.revision,
       input: clone(run.input),
       ...(run.metadata ? { metadata: clone(run.metadata) } : {}),
+      ...(run.phasePayload === undefined ? {} : { phasePayload: clone(run.phasePayload) }),
       messageCount: this.messagesForRun(run.id).length,
       toolCallCount: [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id).length,
       ...(run.currentPhaseId === undefined ? {} : { currentPhaseId: run.currentPhaseId }),
