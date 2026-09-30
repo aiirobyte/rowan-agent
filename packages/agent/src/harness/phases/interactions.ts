@@ -16,6 +16,8 @@ export type RunInteraction = Readonly<{
   status: RunInteractionStatus;
   answer?: JsonValue;
   reply?: string;
+  /** The Run is only waiting for the next user message, not asking a question. */
+  turnBoundary?: true;
   toolCallId?: string;
   result?: Readonly<{
     answered?: string;

@@ -189,7 +189,7 @@ test("a mixed stop route is invalid and leaves the current Phase waiting for inp
     const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-invalid-mixed-run" });
     await expect(run.wait()).resolves.toMatchObject({
       type: "input_required",
-      interactions: [expect.objectContaining({ phase: "work" })],
+      interactions: [expect.objectContaining({ phase: "work", kind: "user_input", turnBoundary: true })],
     });
     expect(modelCalls).toBe(1);
   } finally {

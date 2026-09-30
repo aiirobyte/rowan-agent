@@ -300,6 +300,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
         kind: "user_input",
         phase: error.request.phase,
         prompt: error.request.prompt,
+        turnBoundary: true,
         status: "pending",
         createdAt: error.request.requestedAt,
       };
