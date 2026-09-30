@@ -37,6 +37,7 @@ import type {
   UserInput,
 } from "./contracts";
 import type { DurableStore, OwnedStore } from "./contracts";
+import type { JsonValue } from "../runtime-events";
 import {
   assertToolExecutionResult,
   isAssistantMessage,
@@ -44,7 +45,7 @@ import {
 import { RuntimeError } from "./errors";
 import { createIdempotencyScope, encodeIdempotencyScope, canonicalStartRunRequest } from "./idempotency";
 import { TOOL_VALUE_JSON_BYTES } from "./idempotency";
-import { assertUtf8ByteLimit, canonicalJson } from "./json";
+import { assertJsonValue, assertUtf8ByteLimit, canonicalJson } from "./json";
 import { normalizeUserInput } from "./contracts";
 import type {
   DurableToolResult,
@@ -560,12 +561,13 @@ export class InMemoryStore implements DurableStore {
     return record;
   }
 
-  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): RunRecord {
+  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
     this.assertOwner(lease);
     this.requireAgent(input.agentId);
     const normalizedInput = normalizeUserInput(input.input);
+    if (input.phasePayload !== undefined) assertJsonValue(input.phasePayload, "run.phasePayload");
     const scope = createIdempotencyScope("start_run", input.agentId, input.idempotencyKey);
-    const payload = canonicalStartRunRequest(normalizedInput, input.metadata);
+    const payload = canonicalStartRunRequest(normalizedInput, input.metadata, input.phasePayload, input.pinnedConfigToken);
     const replay = this.replay(scope, payload);
     if (replay) return clone(replay as RunRecord);
 
@@ -628,6 +630,8 @@ export class InMemoryStore implements DurableStore {
       state: "queued",
       input: clone(normalizedInput),
       ...(input.metadata ? { metadata: clone(input.metadata) } : {}),
+      ...(input.phasePayload === undefined ? {} : { phasePayload: clone(input.phasePayload) }),
+      ...(input.pinnedConfigToken === undefined ? {} : { pinnedConfigToken: input.pinnedConfigToken }),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -1707,7 +1711,7 @@ class MemoryOwnedStore implements OwnedStore {
   async commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> {
     return this.store.commitContextCompaction(this.lease, record);
   }
-  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
+  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }

@@ -254,6 +254,7 @@ export type RunRecord = Readonly<{
   initialMessageId?: MessageId;
   invalidatedBy?: Readonly<{ messageId: MessageId; messageRevision: number }>;
   metadata?: Metadata;
+  phasePayload?: JsonValue;
   pinnedConfigToken?: ConfigToken;
   checkpoint?: ExecutionCheckpoint;
   currentPhaseId?: string;
@@ -346,7 +347,7 @@ export interface OwnedStore {
   contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus>;
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
-  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; idempotencyKey: string }): Promise<RunRecord>;
+  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord>;
@@ -458,7 +459,7 @@ export interface AgentRuntime {
     effectDigestConfirmation?: string;
   }): Promise<MessageRevisionResult>;
   compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
-  start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata }): Promise<AgentRun>;
+  start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata; phasePayload?: JsonValue }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
   contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
   compactContext(agentId: AgentId, options?: { input?: UserInput; instructions?: string; idempotencyKey?: string }): Promise<AgentRun>;

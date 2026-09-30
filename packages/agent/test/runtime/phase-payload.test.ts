@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryConfigProvider, InMemoryStore, SqliteStore } from "../../src/runtime";
 import type { Phase } from "../../src/harness/phases/types";
 import { createPhaseAgent } from "../fixtures/configuration";
 import { routeResponse, stopResponse } from "./route-test-utils";
@@ -13,6 +16,182 @@ function agentWithPhase(
 ) {
   return createPhaseAgent(runtime, { identity: "phase-payload-v1", stream, phases, options });
 }
+
+test("AgentRuntime.start without phasePayload preserves entry Phase defaults", async () => {
+  let observed: unknown;
+  const phase: Phase = {
+    name: "configure-no-start-payload",
+    description: "Configure without start payload",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Configure without start payload.",
+    input: { provider: "codex", enabled: true },
+    run: async (context) => {
+      observed = context.state.payload;
+      return { message: "done", route: "stop" };
+    },
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* () { yield { type: "done" }; },
+      { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name },
+      { idempotencyKey: "phase-payload-no-start-agent" },
+    );
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-payload-no-start-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(observed).toEqual({ provider: "codex", enabled: true });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime.start sends its phasePayload through the entry Phase input path", async () => {
+  let requestContent = "";
+  let observedPayload: unknown;
+  const phase: Phase = {
+    name: "configure-start",
+    description: "Configure from start",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Configure from start.",
+    input: { provider: "codex", options: { includeTests: true } },
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* (request) {
+        requestContent = request.messages
+          .map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content))
+          .join("\n");
+        yield { type: "done", response: stopResponse() };
+      },
+      { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name },
+      { idempotencyKey: "phase-payload-start-agent" },
+    );
+    const run = await runtime.start(agentId, "hello", {
+      idempotencyKey: "phase-payload-start-run",
+      phasePayload: { provider: "anthropic" },
+    });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(requestContent).toContain('<phase_content name="configure-start">');
+    expect(requestContent).toContain("<provider>anthropic</provider>");
+    expect(requestContent).toContain("<includeTests>true</includeTests>");
+    expect((requestContent.match(/<phase_input>/g) ?? [])).toHaveLength(1);
+    const entered: string[] = [];
+    for await (const event of run.observe()) {
+      if (event.kind === "phase_entered") entered.push(event.phaseId);
+    }
+    expect(entered).toEqual(["configure-start"]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime.start rejects invalid entry Phase payloads before creating a Run", async () => {
+  const phase: Phase = {
+    name: "validate-start",
+    description: "Validate start payload",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Validate start payload.",
+    input: { timeout: 15, options: { enabled: true } },
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await agentWithPhase(
+      runtime,
+      async function* () { yield { type: "done", response: stopResponse() }; },
+      { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name },
+      { idempotencyKey: "phase-payload-invalid-start-agent" },
+    );
+    for (const [suffix, phasePayload] of [
+      ["type", { timeout: "fast" }],
+      ["unknown-key", { undeclared: true }],
+    ] as const) {
+      await expect(runtime.start(agentId, "hello", {
+        idempotencyKey: `phase-payload-invalid-start-${suffix}`,
+        phasePayload,
+      })).rejects.toThrow("Phase payload does not match the Phase input definition");
+      await expect(runtime.listRuns({ agentId })).resolves.toMatchObject({ items: [] });
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("entry Phase payload survives a Runtime restart while its Phase is suspended", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-phase-payload-restart-"));
+  const filename = join(directory, "runtime.sqlite");
+  const configProvider = new InMemoryConfigProvider();
+  const phase: Phase = {
+    name: "configure-after-restart",
+    description: "Configure after restart",
+    filePath: "<test>",
+    baseDir: "<test>",
+    content: "Configure after restart.",
+    input: { provider: "codex", options: { includeTests: true } },
+    run: async (context, execution) => {
+      payloads.push(context.state.payload);
+      if (payloads.length === 1) {
+        execution.interaction.request({ kind: "confirmation", prompt: "Continue after restart?" });
+        execution.interaction.suspend({ checkpoint: { step: "restart" } });
+      }
+      return { message: "done", route: "stop" };
+    },
+  };
+  let runId: string | undefined;
+  const payloads: unknown[] = [];
+  try {
+    const firstStore = new SqliteStore(filename);
+    const firstRuntime = await AgentRuntime.init({ store: firstStore, configs: configProvider, concurrency: 1 });
+    try {
+      const createdAgentId = await agentWithPhase(
+        firstRuntime,
+        async function* () { yield { type: "done" }; },
+        { phases: new Map([[phase.name, phase]]), entryPhaseId: phase.name },
+        { idempotencyKey: "phase-payload-restart-agent" },
+      );
+      const run = await firstRuntime.start(createdAgentId, "hello", {
+        idempotencyKey: "phase-payload-restart-run",
+        phasePayload: { provider: "anthropic" },
+      });
+      runId = String(run.id);
+      await expect(run.wait()).resolves.toMatchObject({ type: "input_required" });
+    } finally {
+      await firstRuntime.close();
+      firstStore.close();
+    }
+
+    const secondStore = new SqliteStore(filename);
+    const secondRuntime = await AgentRuntime.init({ store: secondStore, configs: configProvider, concurrency: 1 });
+    try {
+      const resumed = secondRuntime.run(runId as never);
+      const waiting = await resumed.snapshot();
+      expect(waiting.state).toBe("input_required");
+      if (waiting.state !== "input_required") return;
+      await resumed.respondInteraction({ interactionId: waiting.interactions[0]!.id, input: true });
+      await expect(resumed.wait()).resolves.toMatchObject({ type: "completed" });
+      expect(payloads).toEqual([
+        { provider: "anthropic", options: { includeTests: true } },
+        { provider: "anthropic", options: { includeTests: true } },
+      ]);
+      const events: string[] = [];
+      for await (const event of resumed.observe()) {
+        if (event.kind === "phase_entered") events.push(event.phaseId);
+      }
+      expect(events).toEqual(["configure-after-restart", "configure-after-restart"]);
+    } finally {
+      await secondRuntime.close();
+      secondStore.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("direct run Phases receive their effective input defaults", async () => {
   let observed: unknown;

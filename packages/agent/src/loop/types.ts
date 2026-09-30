@@ -13,6 +13,7 @@ import type { RunInteractionDriver, RunInteractionState } from "../harness/phase
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
 import type { ThinkingLevel } from "@rowan-agent/models";
+import type { JsonValue } from "../runtime-events";
 
 export const DEFAULT_MAX_ATTEMPTS = 16;
 
@@ -69,6 +70,7 @@ export type ExecutionState = {
   attempt: number;
   metrics: LoopMetrics;
   status: "idle" | "running" | "suspended" | "completed" | "aborted" | "failed";
+  initialPhasePayload?: JsonValue;
   continuation?: ExecutionContinuationState;
   runInteractions?: RunInteractionState;
   phaseInteractions?: RunInteractionState;

@@ -47,6 +47,7 @@ import { projectAssistantMessage, projectModelContext, renderInteractionText } f
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
+import { preparePhasePayload } from "../harness/phases/input";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
@@ -344,11 +345,42 @@ export class AgentRuntime implements AgentRuntimeContract {
     return new DurableRun(this, run.id);
   }
 
-  async start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: import("../runtime-events").Metadata }): Promise<AgentRun> {
+  async start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata; phasePayload?: JsonValue }): Promise<AgentRun> {
     this.assertOpen();
     const agent = await this.requireAgent(agentId);
     if (!agent.activatedAt || !agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
-    const run = await this.owned.createRun({ agentId, input, ...(options.metadata === undefined ? {} : { metadata: options.metadata }), idempotencyKey: options.idempotencyKey });
+    let phasePayload: JsonValue | undefined;
+    let pinnedConfigToken = agent.currentConfigToken;
+    if (options.phasePayload !== undefined) {
+      const resolution = await this.commands.resolve({ agent, token: agent.currentConfigToken });
+      if (resolution.kind !== "available") {
+        throw new RuntimeError("configuration_unavailable", {
+          agentId,
+          retryable: resolution.kind === "deferred",
+          reason: resolution.kind === "deferred" ? "Configuration is deferred." : resolution.reason,
+        });
+      }
+      const config = this.resolveConfig(resolution.config);
+      const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
+        toolArchiveDir: this.archiveDirFor(agentId),
+      });
+      const entryPhaseId = normalizePhaseRegistry(assembly.context.phases).entryPhaseId!;
+      const phase = assembly.context.phases?.phases.get(entryPhaseId);
+      phasePayload = preparePhasePayload(phase?.input, options.phasePayload);
+      pinnedConfigToken = await this.commands.storeSnapshot({
+        agent,
+        config,
+        operationId: `start-run-snapshot:${agentId}:${options.idempotencyKey}`,
+      });
+    }
+    const run = await this.owned.createRun({
+      agentId,
+      input,
+      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      ...(phasePayload === undefined ? {} : { phasePayload }),
+      ...(pinnedConfigToken === agent.currentConfigToken ? {} : { pinnedConfigToken }),
+      idempotencyKey: options.idempotencyKey,
+    });
     void this.pump();
     return new DurableRun(this, run.id);
   }
@@ -650,6 +682,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         stream,
         maxAttempts: config.maxAttempts,
         checkpoint: claim!.run.checkpoint,
+        ...(claim!.run.phasePayload === undefined ? {} : { initialPhasePayload: claim!.run.phasePayload }),
         interactionAnswers: claim!.run.interactionAnswers,
         signal: controller.signal,
         beforePhase: assembly.beforePhase,

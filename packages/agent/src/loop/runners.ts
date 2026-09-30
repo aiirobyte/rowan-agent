@@ -518,11 +518,13 @@ async function runPhaseLoop(
   if (resumingSuspendedRun) {
     state.status = "running";
   }
-  const initialPayload = !resumingSuspendedRun
-    ? config.execution.runMetadata?.phasePayload
-    : undefined;
+  const initialPayload = Object.hasOwn(state, "initialPhasePayload")
+    ? state.initialPhasePayload
+    : config.execution.runMetadata?.phasePayload;
   let previousPayload: unknown = resumingSuspendedRun
-    ? state.continuation?.previousPayload
+    ? (state.continuation && Object.hasOwn(state.continuation, "previousPayload")
+      ? state.continuation.previousPayload
+      : state.initialPhasePayload)
     : initialPayload;
   let previousPhaseMsgId: string | undefined = resumingSuspendedRun
     ? state.continuation?.previousPhaseMessageId
@@ -754,6 +756,7 @@ async function runPhaseLoop(
     // Execute phase
     const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext };
     let output = await executePhase(runtime);
+    delete state.initialPhasePayload;
 
     // Extract and normalize a model route. Invalid targets are filtered, but
     // an explicit stop mixed with any other original target invalidates the

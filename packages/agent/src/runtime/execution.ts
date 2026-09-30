@@ -46,6 +46,8 @@ export type ExecutionModelContext = Readonly<{
 export type OneShotExecutionInput = Readonly<{
   /** Immutable messages supplied by the durable Run projection. */
   canonicalMessages: readonly AgentMessage[];
+  /** Initial host payload, applied to the entry Phase only on the first attempt. */
+  initialPhasePayload?: JsonValue;
   /** Execution-local capabilities and prompts; messages are supplied separately. */
   context: ExecutionModelContext;
   /** Durable identity exposed to Phase callbacks. */
@@ -115,6 +117,7 @@ type CheckpointData = Readonly<{
   currentPhase: string;
   attempt: number;
   metrics: CheckpointMetrics;
+  initialPhasePayload?: JsonValue;
   continuation?: CheckpointContinuation;
   runInteractions?: RunInteractionState;
   phaseInteractions?: RunInteractionState;
@@ -172,6 +175,7 @@ export function encodeExecutionCheckpoint(state: ExecutionState): ExecutionCheck
     metrics,
     ...(continuation ? { continuation } : {}),
     ...(runInteractions === undefined ? {} : { runInteractions }),
+    ...(state.initialPhasePayload === undefined ? {} : { initialPhasePayload: state.initialPhasePayload }),
   } as unknown as CheckpointData;
   assertJsonValue(data, "execution checkpoint");
   return {
@@ -199,6 +203,7 @@ export function decodeExecutionCheckpoint(checkpoint: ExecutionCheckpoint): Exec
       phaseTransitions: checkpoint.data.metrics.phaseTransitions.map((transition) => ({ ...transition })),
     },
     status: "suspended",
+    ...(checkpoint.data.initialPhasePayload === undefined ? {} : { initialPhasePayload: checkpoint.data.initialPhasePayload }),
     ...(checkpoint.data.continuation ? {
       continuation: {
         ...checkpoint.data.continuation,
@@ -239,6 +244,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     attempt: 0,
     status: "running",
     metrics: createMetrics(),
+    ...(input.initialPhasePayload === undefined ? {} : { initialPhasePayload: input.initialPhasePayload }),
   };
   if (input.interactionAnswers) {
     const existing = state.runInteractions ?? state.phaseInteractions;
@@ -339,6 +345,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isCheckpointData(value: JsonValue): value is CheckpointData {
   if (!isRecord(value) || typeof value.currentPhase !== "string" || !Number.isInteger(value.attempt)) return false;
   if (!isMetrics(value.metrics)) return false;
+  if (value.initialPhasePayload !== undefined && !isJsonValue(value.initialPhasePayload)) return false;
   if (value.continuation !== undefined && !isContinuation(value.continuation)) return false;
   if (value.runInteractions !== undefined && !isRunInteractionState(value.runInteractions)) return false;
   if (value.phaseInteractions !== undefined && !isRunInteractionState(value.phaseInteractions)) return false;
