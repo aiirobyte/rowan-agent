@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createModelStream } from "@rowan-agent/models";
 import type { AgentMessage, ModelRef } from "../protocol";
-import type { StreamFn } from "@rowan-agent/models";
+import type { ContentBlock, StreamFn } from "@rowan-agent/models";
 import { createId } from "../utils";
 import { executeOnce } from "./execution";
 import { ConfigCommandService } from "./config-commands";
@@ -42,6 +42,7 @@ import {
 } from "./contracts";
 import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
+import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
 import { pageAgents, pageRuns } from "./read-models";
 import { projectAssistantMessage, projectModelContext, renderInteractionText } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
@@ -749,7 +750,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         },
         onContext: assembly.setContext,
         runtime: {
-          tools: ({ toolCall, driver }: import("../loop/types").ToolRunnerInput) => {
+          tools: ({ toolCall, contentBlocks, driver }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -758,6 +759,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 expectedRevision: executionRevision,
                 toolConfig: executionTools,
                 toolCalls: [toolCall],
+                contentBlocks,
                 signal: controller.signal,
                 driver,
                 onRevision: (rev) => { executionRevision = rev; },
@@ -768,7 +770,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
           },
-          toolsBatch: ({ toolCalls, driver }: { config: import("../loop/types").AgentConfig; toolCalls: readonly ToolCall[]; driver?: import("../harness/phases/interactions").RunInteractionDriver }) => {
+          toolsBatch: ({ toolCalls, contentBlocks, driver }: Parameters<ToolBatchRunner>[0]) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -777,6 +779,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 expectedRevision: executionRevision,
                 toolConfig: executionTools,
                 toolCalls,
+                contentBlocks,
                 signal: controller.signal,
                 driver,
                 onRevision: (rev) => { executionRevision = rev; },
@@ -936,6 +939,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     expectedRevision: number;
     toolConfig: ExecutionToolConfig;
     toolCall: ToolCall;
+    contentBlocks?: readonly ContentBlock[];
     signal: AbortSignal;
     driver?: RunInteractionDriver;
   }): Promise<{ result: ToolResult; revision: number }> {
@@ -950,6 +954,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     expectedRevision: number;
     toolConfig: ExecutionToolConfig;
     toolCalls: readonly ToolCall[];
+    contentBlocks?: readonly ContentBlock[];
     signal: AbortSignal;
     driver?: RunInteractionDriver;
     onRevision?: (revision: number) => void;
@@ -1024,6 +1029,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           execution: input.execution,
           expectedRevision: revision,
           requestMessageId: createId("msg") as MessageId,
+          contentBlocks: input.contentBlocks,
           calls: input.toolCalls.map((tc, i) => ({
             toolCallId: toolCallIds[i]!,
             providerToolCallId: tc.id,
@@ -1219,6 +1225,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           execution: input.execution,
           expectedRevision: revision,
           requestMessageId: createId("msg") as MessageId,
+          contentBlocks: input.contentBlocks,
           calls: [{
             toolCallId,
             providerToolCallId,
@@ -1315,6 +1322,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 execution: input.execution,
                 expectedRevision: revision,
                 requestMessageId: createId("msg") as MessageId,
+                contentBlocks: input.contentBlocks,
                 calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
               });
               setRevision(reserved.run.revision);
@@ -1329,6 +1337,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 execution: input.execution,
                 expectedRevision: revision,
                 requestMessageId: createId("msg") as MessageId,
+                contentBlocks: input.contentBlocks,
                 calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
               });
               setRevision(reserved.run.revision);
@@ -1357,6 +1366,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             execution: input.execution,
             expectedRevision: revision,
             requestMessageId: createId("msg") as MessageId,
+            contentBlocks: input.contentBlocks,
             calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
           });
           setRevision(reserved.run.revision);
@@ -1380,6 +1390,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           execution: input.execution,
           expectedRevision: revision,
           requestMessageId: createId("msg") as MessageId,
+          contentBlocks: input.contentBlocks,
           calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
         });
         setRevision(committed.run.revision);
