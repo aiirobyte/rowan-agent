@@ -903,7 +903,12 @@ export class AgentRuntime implements AgentRuntimeContract {
           execution: claim.execution,
           expectedRevision: executionRevision,
           failure: { code: "execution_failed", message: error instanceof Error ? error.message : "Execution failed." },
-        }).catch(() => undefined);
+        }).catch(async (commitError) => {
+          await this.owned.cancelRun({
+            runId: run.id,
+            reason: commitError instanceof Error ? commitError.message : "Run failure could not be committed.",
+          }).catch(() => undefined);
+        });
         return;
       }
       throw error;

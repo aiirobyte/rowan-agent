@@ -1163,6 +1163,38 @@ test("AgentRuntime backs off an idle durable Consumer after catching up", async 
   }
 });
 
+test("AgentRuntime cancels a Run when committing its failure also fails", async () => {
+  const backing = new InMemoryStore();
+  const store: DurableStore = {
+    async openOwner(input) {
+      const owned = await backing.openOwner(input);
+      return new Proxy(owned, {
+        get(target, property, receiver) {
+          if (property === "commitOutcome") return async () => { throw new Error("outcome commit failed"); };
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+  const stream: StreamFn = async function* () {
+    throw new Error("model failed");
+  };
+  const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+  try {
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "failed-outcome-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "failed-outcome-run" });
+    const boundary = await Promise.race([
+      run.wait(),
+      Bun.sleep(2_000).then(() => undefined),
+    ]);
+    expect(boundary?.type).toBe("cancelled");
+    expect(await run.snapshot()).toMatchObject({ state: "cancelled" });
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("AgentRuntime consumer receives Run metadata on terminal durable events", async () => {
   const stream: StreamFn = async function* () {
     yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };

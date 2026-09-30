@@ -585,7 +585,10 @@ export class InMemoryStore implements DurableStore {
         this.commitInteractionRecord(waitingRun, interaction, "replied", undefined, replyText);
       }
       delete waitingRun.openInteractions;
-      delete waitingRun.interactionAnswers;
+      waitingRun.interactionAnswers = {
+        ...(waitingRun.interactionAnswers ?? {}),
+        ...Object.fromEntries(openInteractions.map(({ id }) => [id, { status: "replied", reply: replyText }])),
+      };
 
       if (waitingRun.checkpoint?.data && typeof waitingRun.checkpoint.data === "object") {
         const stored = (waitingRun.checkpoint.data as any).runInteractions ?? (waitingRun.checkpoint.data as any).phaseInteractions;

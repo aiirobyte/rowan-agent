@@ -745,6 +745,83 @@ test("a Tool execute interaction resumes with its answer and checkpoint, while c
   }
 });
 
+test("a new Agent Input reaches a suspended before_tool_call hook as a replied answer", async () => {
+  const answers: unknown[] = [];
+  let executions = 0;
+  const extension = loadExtensionFromFactory((api) => {
+    api.tool.register({
+      name: "approval_tool",
+      description: "A tool that needs approval",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        executions += 1;
+        return { content: [{ type: "text", text: "executed" }] };
+      },
+    });
+    api.on("before_tool_call", (event) => {
+      answers.push(event.answer);
+      if (event.answer !== undefined) return { allow: false, reason: "Permission denied by user" };
+      return { interaction: { kind: "permission", prompt: "Allow this tool?" } };
+    });
+  }, process.cwd(), "<runtime-extension>");
+
+  let modelCalls = 0;
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const id = "call_approval";
+      const args = "{}";
+      const partial = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: "approval_tool", args }] };
+      yield { type: "tool_call_start", id, name: "approval_tool", partial };
+      yield { type: "tool_call_end", id, name: "approval_tool", arguments: args, partial };
+      yield { type: "done" };
+      return;
+    }
+    const result = request.messages.flatMap((message) =>
+      message.role === "tool" && Array.isArray(message.content) ? message.content : [],
+    ).find((part) => part.type === "tool_result");
+    expect(result && "content" in result ? result.content : undefined).toContain("Permission denied by user");
+    yield { type: "text_delta", text: "refused", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "refused" }] } };
+    yield { type: "done", response: stopResponse("refused") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-replied-tool-interaction",
+      stream,
+      options: { idempotencyKey: "agent-replied-tool-interaction" },
+    });
+    const run = await runtime.start(agentId, "try the tool", { idempotencyKey: "run-replied-tool-interaction" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "input_required" });
+
+    const resumed = await runtime.start(agentId, "I changed my mind", { idempotencyKey: "run-replied-tool-message" });
+    expect(resumed.id).toBe(run.id);
+    const boundary = await Promise.race([
+      run.wait(),
+      Bun.sleep(2_000).then(() => undefined),
+    ]);
+    expect(boundary?.type).toBe("completed");
+    expect(answers).toEqual([undefined, { status: "replied", reply: "I changed my mind" }]);
+    const history = await runtime.history(agentId);
+    expect(history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: "I changed my mind" }),
+      expect.objectContaining({
+        role: "tool",
+        content: [expect.objectContaining({ result: { ok: false, content: null, error: "Permission denied by user" } })],
+      }),
+    ]));
+    expect(executions).toBe(0);
+    expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("cancelling a Tool execute interaction does not re-enter the Tool", async () => {
   let executions = 0;
   const extension = loadExtensionFromFactory((api) => {
