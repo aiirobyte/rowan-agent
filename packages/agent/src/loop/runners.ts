@@ -518,14 +518,11 @@ async function runPhaseLoop(
   if (resumingSuspendedRun) {
     state.status = "running";
   }
-  const initialPayload = Object.hasOwn(state, "initialPhasePayload")
-    ? state.initialPhasePayload
-    : config.execution.runMetadata?.phasePayload;
   let previousPayload: unknown = resumingSuspendedRun
     ? (state.continuation && Object.hasOwn(state.continuation, "previousPayload")
       ? state.continuation.previousPayload
       : state.initialPhasePayload)
-    : initialPayload;
+    : state.initialPhasePayload;
   let previousPhaseMsgId: string | undefined = resumingSuspendedRun
     ? state.continuation?.previousPhaseMessageId
     : undefined;

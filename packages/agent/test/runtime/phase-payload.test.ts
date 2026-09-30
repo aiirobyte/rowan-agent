@@ -228,7 +228,7 @@ test("direct run Phases receive their effective input defaults", async () => {
   }
 });
 
-test("direct run Phases merge the host-provided initial payload", async () => {
+test("Run metadata phasePayload is not an entry Payload", async () => {
   let observed: unknown;
   const phase: Phase = {
     name: "configure-host",
@@ -258,7 +258,7 @@ test("direct run Phases merge the host-provided initial payload", async () => {
     });
 
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
-    expect(observed).toEqual({ provider: "anthropic", options: { includeTests: true } });
+    expect(observed).toEqual({ provider: "codex", options: { includeTests: true } });
   } finally {
     await runtime.close();
   }
