@@ -44,6 +44,7 @@ export type {
   RunRecord,
   RunSnapshot,
   Tool as RuntimeTool,
+  ToolCallContext,
   ToolInvocationContext,
   ToolProgress,
   UserInput,

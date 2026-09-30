@@ -111,6 +111,7 @@ export type {
   ToolCallSnapshot,
   ToolCallState,
   ToolExecutionResult,
+  ToolCallContext,
   ToolInvocationContext,
   ToolProgress,
   ToolMessage,

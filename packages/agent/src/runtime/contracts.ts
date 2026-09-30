@@ -156,7 +156,10 @@ export function thinkingLevelFromMessages(
   }
   return undefined;
 }
-export type ToolInvocationContext = Readonly<{
+/** Who is calling which tool, without the ability to ask or suspend. Hosts that
+ * describe a call before it runs (for example to build a confirmation) only
+ * have this much. */
+export type ToolCallContext = Readonly<{
   agentId: AgentId;
   runId: RunId;
   /** Opaque JSON metadata captured from the Agent and Run records. Rowan does
@@ -165,6 +168,8 @@ export type ToolInvocationContext = Readonly<{
   runMetadata?: Metadata;
   toolCallId: ToolCallId;
   reportProgress(progress: JsonValue): void;
+}>;
+export type ToolInvocationContext = ToolCallContext & Readonly<{
   interaction: RunInteractionDriver;
 }>;
 export type Tool = Readonly<{
