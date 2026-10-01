@@ -1232,3 +1232,184 @@ test("AgentRuntime consumer receives Run metadata on terminal durable events", a
     await runtime.close();
   }
 });
+
+for (const [storeName, createStore] of [
+  ["memory", async () => ({ store: new InMemoryStore(), cleanup: async () => {} })],
+  ["sqlite", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "rowan-cancel-test-"));
+    const store = new SqliteStore(join(dir, "runtime.sqlite"));
+    return { store, cleanup: async () => { await store.close(); await rm(dir, { recursive: true, force: true }); } };
+  }],
+] as const) {
+  test(`AgentRuntime cancellation before model output commits no output and preserves earlier Run reply (${storeName})`, async () => {
+    const thinkingText = "Reasoning through the first run prompt.";
+    const replyText = "I appreciate the question and here is the complete answer.";
+    let runCount = 0;
+    let run2StartedResolve!: () => void;
+    const run2Started = new Promise<void>((resolve) => { run2StartedResolve = resolve; });
+
+    const stream: StreamFn = async function* (_request, options) {
+      runCount += 1;
+      if (runCount === 1) {
+        yield { type: "start", partial: { role: "assistant", contentBlocks: [] } };
+        yield {
+          type: "thinking_delta",
+          thinking: thinkingText,
+          partial: {
+            role: "assistant",
+            contentBlocks: [{ type: "thinking", thinking: thinkingText }],
+          },
+        };
+        yield {
+          type: "text_delta",
+          text: replyText,
+          partial: {
+            role: "assistant",
+            contentBlocks: [
+              { type: "thinking", thinking: thinkingText },
+              { type: "text", text: replyText },
+            ],
+          },
+        };
+        yield { type: "done", response: stopResponse(replyText) };
+        return;
+      }
+
+      // Run 2: wait until cancelled without emitting any events
+      run2StartedResolve();
+      while (!options?.signal?.aborted) {
+        await Bun.sleep(10);
+      }
+    };
+
+    const { store, cleanup } = await createStore();
+    const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+    try {
+      const agentId = await simpleAgent(runtime, stream, { idempotencyKey: `cancel-stale-agent-${storeName}` });
+      const run1 = await runtime.start(agentId, "first prompt", { idempotencyKey: `run-1-${storeName}` });
+      const boundary1 = await run1.wait();
+      expect(boundary1.type).toBe("completed");
+
+      const historyAfterRun1 = await runtime.history(agentId);
+      const run1Assistant = historyAfterRun1.find((m): m is AssistantMessage => m.runId === run1.id && m.role === "assistant");
+      expect(run1Assistant).toBeDefined();
+      expect(run1Assistant?.interrupted).toBeUndefined();
+      expect(run1Assistant?.content).toEqual([
+        { type: "thinking", thinking: thinkingText },
+        { type: "text", text: replyText },
+      ]);
+
+      const run2 = await runtime.start(agentId, "Hello", { idempotencyKey: `run-2-${storeName}` });
+      await run2Started;
+      const cancelBoundary = await run2.cancel("Agent run stopped.");
+      expect(cancelBoundary.type).toBe("cancelled");
+
+      const snapshot2 = await run2.snapshot();
+      expect(snapshot2.state).toBe("cancelled");
+      expect("output" in snapshot2).toBe(false);
+
+      const historyAfterRun2 = await runtime.history(agentId);
+      const run2Assistant = historyAfterRun2.find((m): m is AssistantMessage => m.runId === run2.id && m.role === "assistant");
+      expect(run2Assistant).toBeUndefined();
+
+      // Run 1's assistant message must be unchanged (same id, runId, sequence, content incl. thinking)
+      const run1AssistantAfterRun2 = historyAfterRun2.find((m): m is AssistantMessage => m.id === run1Assistant!.id);
+      expect(run1AssistantAfterRun2).toBeDefined();
+      expect(run1AssistantAfterRun2!.runId).toBe(run1.id);
+      expect(run1AssistantAfterRun2!.sequenceWithinRun).toBe(run1Assistant!.sequenceWithinRun);
+      expect(run1AssistantAfterRun2!.content).toEqual(run1Assistant!.content);
+      expect(run1AssistantAfterRun2!.interrupted).toBeUndefined();
+      expect(run1AssistantAfterRun2).toEqual(run1Assistant);
+    } finally {
+      await runtime.close();
+      await cleanup();
+    }
+  });
+
+  test(`AgentRuntime cancellation after partial visible text commits Run 2 interrupted message (${storeName})`, async () => {
+    const thinkingText = "Reasoning through the first run prompt.";
+    const replyText = "I appreciate the question and here is the complete answer.";
+    const partialText = "Partial visible reply from run 2";
+    let runCount = 0;
+    let run2EmittedResolve!: () => void;
+    const run2Emitted = new Promise<void>((resolve) => { run2EmittedResolve = resolve; });
+
+    const stream: StreamFn = async function* (_request, options) {
+      runCount += 1;
+      if (runCount === 1) {
+        yield { type: "start", partial: { role: "assistant", contentBlocks: [] } };
+        yield {
+          type: "thinking_delta",
+          thinking: thinkingText,
+          partial: {
+            role: "assistant",
+            contentBlocks: [{ type: "thinking", thinking: thinkingText }],
+          },
+        };
+        yield {
+          type: "text_delta",
+          text: replyText,
+          partial: {
+            role: "assistant",
+            contentBlocks: [
+              { type: "thinking", thinking: thinkingText },
+              { type: "text", text: replyText },
+            ],
+          },
+        };
+        yield { type: "done", response: stopResponse(replyText) };
+        return;
+      }
+
+      // Run 2: emit partial visible text, then wait for cancellation
+      yield { type: "start", partial: { role: "assistant", contentBlocks: [] } };
+      yield {
+        type: "text_delta",
+        text: partialText,
+        partial: {
+          role: "assistant",
+          contentBlocks: [{ type: "text", text: partialText }],
+        },
+      };
+      run2EmittedResolve();
+      while (!options?.signal?.aborted) {
+        await Bun.sleep(10);
+      }
+    };
+
+    const { store, cleanup } = await createStore();
+    const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+    try {
+      const agentId = await simpleAgent(runtime, stream, { idempotencyKey: `cancel-partial-agent-${storeName}` });
+      const run1 = await runtime.start(agentId, "first prompt", { idempotencyKey: `run-1-${storeName}` });
+      await expect(run1.wait()).resolves.toMatchObject({ type: "completed" });
+
+      const historyAfterRun1 = await runtime.history(agentId);
+      const run1Assistant = historyAfterRun1.find((m): m is AssistantMessage => m.runId === run1.id && m.role === "assistant");
+      expect(run1Assistant).toBeDefined();
+
+      const run2 = await runtime.start(agentId, "second prompt", { idempotencyKey: `run-2-${storeName}` });
+      await run2Emitted;
+      const cancelBoundary = await run2.cancel("Agent run stopped.");
+      expect(cancelBoundary.type).toBe("cancelled");
+
+      const snapshot2 = await run2.snapshot();
+      expect(snapshot2.state).toBe("cancelled");
+
+      const historyAfterRun2 = await runtime.history(agentId);
+      const run2Assistant = historyAfterRun2.find((m): m is AssistantMessage => m.runId === run2.id && m.role === "assistant");
+      expect(run2Assistant).toBeDefined();
+      expect(run2Assistant!.id).not.toBe(run1Assistant!.id);
+      expect(run2Assistant!.runId).toBe(run2.id);
+      expect(run2Assistant!.interrupted).toBe(true);
+      expect(run2Assistant!.content).toBe(partialText);
+
+      // Run 1's assistant message must still be unchanged
+      const run1AssistantAfterRun2 = historyAfterRun2.find((m): m is AssistantMessage => m.id === run1Assistant!.id);
+      expect(run1AssistantAfterRun2).toEqual(run1Assistant);
+    } finally {
+      await runtime.close();
+      await cleanup();
+    }
+  });
+}

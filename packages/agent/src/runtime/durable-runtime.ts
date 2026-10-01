@@ -844,7 +844,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           ? undefined
           : latestAssistant(
               run,
-              result.messages.slice(modelMessages.length),
+              result.messages,
               modelMessages.length,
             );
         const prompt = isToolCallInteraction
@@ -865,7 +865,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "completed") {
-        const output = latestAssistant(run, result.messages.slice(modelMessages.length), modelMessages.length);
+        const output = latestAssistant(run, result.messages, modelMessages.length);
         if (controlKind === "compact" || isCompactionOutcome(result.outcome.payload)) {
           const summary = compactSummary(result.outcome.payload);
           const instructions = compactInstructions(run)
@@ -1664,10 +1664,10 @@ function promptMessage(run: RunRecord, prompt: string, sequence: number): Assist
   return { id: createId("msg") as MessageId, agentId: run.agentId, runId: run.id, role: "assistant", content: prompt, sequenceWithinRun: sequence, createdAt: new Date().toISOString() };
 }
 
-function latestAssistant(run: RunRecord, messages: readonly AgentMessage[], sequence: number, interrupted = false): AssistantMessage | undefined {
-  const message = [...messages].reverse().find((candidate) => candidate.role === "assistant");
+function latestAssistant(run: RunRecord, messages: readonly AgentMessage[], historyLength: number, interrupted = false): AssistantMessage | undefined {
+  const message = [...messages.slice(historyLength)].reverse().find((candidate) => candidate.role === "assistant");
   if (!message) return undefined;
-  return projectAssistantMessage(message, run.agentId, run.id, sequence, { interrupted });
+  return projectAssistantMessage(message, run.agentId, run.id, historyLength, { interrupted });
 }
 
 function hasVisibleAssistantText(message: AssistantMessage): boolean {

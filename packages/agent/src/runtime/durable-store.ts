@@ -1140,6 +1140,8 @@ export class InMemoryStore implements DurableStore {
     const run = this.requireRun(input.runId);
     if (input.expectedRevision !== undefined) this.assertRevision(run, input.expectedRevision);
     if (input.output !== undefined) {
+      const existing = this.messages.get(input.output.id);
+      if (existing && existing.runId !== run.id) throw new TypeError("cancelled output message id belongs to another Run");
       if (!isAssistantMessage(input.output) || input.output.agentId !== run.agentId || input.output.runId !== run.id || input.output.interrupted !== true) {
         throw new TypeError("cancelled output must be an interrupted AssistantMessage from this Run");
       }

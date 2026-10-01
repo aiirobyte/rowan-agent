@@ -154,6 +154,51 @@ test("Memory DurableStore keeps an interrupted assistant output on cancellation"
   }));
 });
 
+test("Memory DurableStore rejects cancelled output whose message id belongs to another Run", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-cross-run", leaseMs: 10_000 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-cross-run" });
+  await owner.activateAgent(agent.id);
+  await owner.updateAgentConfigToken({ agentId: agent.id, token, idempotencyKey: "config-cross-run" });
+  const run1 = await owner.createRun({ agentId: agent.id, input: "first", idempotencyKey: "run-cross-run-1" });
+  const claim1 = await owner.claimRun({ runId: run1.id, expectedRevision: run1.revision });
+  const output1: AssistantMessage = {
+    id: "msg-shared-id" as MessageId,
+    agentId: agent.id,
+    runId: run1.id,
+    role: "assistant",
+    content: "Run 1 output",
+    sequenceWithinRun: 1,
+    createdAt: new Date().toISOString(),
+  };
+  await owner.commitOutcome({
+    runId: run1.id,
+    execution: claim1.execution,
+    expectedRevision: claim1.run.revision,
+    outcome: { id: "out-1" as never, message: "done" },
+    output: output1,
+  });
+
+  const run2 = await owner.createRun({ agentId: agent.id, input: "second", idempotencyKey: "run-cross-run-2" });
+  const claim2 = await owner.claimRun({ runId: run2.id, expectedRevision: run2.revision });
+  const staleOutput: AssistantMessage = {
+    id: "msg-shared-id" as MessageId,
+    agentId: agent.id,
+    runId: run2.id,
+    role: "assistant",
+    content: "Run 2 output",
+    interrupted: true,
+    sequenceWithinRun: 1,
+    createdAt: new Date().toISOString(),
+  };
+
+  expect(() => owner.cancelRun({
+    runId: run2.id,
+    expectedRevision: claim2.run.revision,
+    output: staleOutput,
+  })).toThrow("cancelled output message id belongs to another Run");
+});
+
 test("Memory DurableStore commits input boundaries and terminal outcomes atomically", async () => {
   const store = new InMemoryStore();
   const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
