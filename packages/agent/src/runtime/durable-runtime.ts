@@ -706,7 +706,38 @@ export class AgentRuntime implements AgentRuntimeContract {
         interactionAnswers: claim!.run.interactionAnswers,
         signal: controller.signal,
         beforePhase: assembly.beforePhase,
-        afterPhase: assembly.afterPhase,
+        afterPhase: async (phaseId, output) => {
+          const extAfter = assembly.afterPhase ? await assembly.afterPhase(phaseId, output) : {};
+          const effectiveOutput = extAfter.output ?? output;
+          if (
+            !extAfter.abort
+            && (phaseId === COMPACT_PHASE_ID || isCompactionOutcome(effectiveOutput.payload))
+          ) {
+            const active = this.executions.get(run.id);
+            if (
+              active?.executionId === claim!.execution.executionId
+              && !this.cancellationRequested.has(run.id)
+              && !controller.signal.aborted
+            ) {
+              const summary = compactSummary(effectiveOutput.payload);
+              const instructions = compactInstructions(run)
+                ?? compactOutputInstructions(effectiveOutput.payload);
+              if (summary) {
+                const covered = claim!.history.at(-1);
+                const record: ContextCompactionRecord = {
+                  id: createId("compact"),
+                  agentId: run.agentId,
+                  summary,
+                  ...(covered ? { coveredThrough: { messageId: covered.id, sequence: covered.sequenceWithinRun } } : {}),
+                  ...(instructions ? { instructions } : {}),
+                  createdAt: new Date().toISOString(),
+                };
+                await this.owned.commitContextCompaction(record);
+              }
+            }
+          }
+          return extAfter;
+        },
         beforePrompt: assembly.beforePrompt,
         onPhaseEntered: async (phaseId) => {
           const active = this.executions.get(run.id);
@@ -817,14 +848,6 @@ export class AgentRuntime implements AgentRuntimeContract {
         const compactResult = await executeModel(compactContext);
         const summary = compactResult.type === "completed" ? compactSummary(compactResult.outcome.payload) : undefined;
         if (summary) {
-          const covered = claim.history.at(-1);
-          await this.owned.commitContextCompaction({
-            id: createId("compact"),
-            agentId: run.agentId,
-            summary,
-            ...(covered ? { coveredThrough: { messageId: covered.id, sequence: covered.sequenceWithinRun } } : {}),
-            createdAt: new Date().toISOString(),
-          });
           modelMessages = await this.owned.contextMessages(run.agentId);
           executionContext = buildExecutionContext(modelMessages);
           result = await executeModel(executionContext);
@@ -885,23 +908,6 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
       if (result.type === "completed") {
         const output = latestAssistant(run, result.messages, modelMessages.length);
-        if (controlKind === "compact" || isCompactionOutcome(result.outcome.payload)) {
-          const summary = compactSummary(result.outcome.payload);
-          const instructions = compactInstructions(run)
-            ?? compactOutputInstructions(result.outcome.payload);
-          if (summary) {
-            const covered = claim.history.at(-1);
-            const record: ContextCompactionRecord = {
-              id: createId("compact"),
-              agentId: run.agentId,
-              summary,
-              ...(covered ? { coveredThrough: { messageId: covered.id, sequence: covered.sequenceWithinRun } } : {}),
-              ...(instructions ? { instructions } : {}),
-              createdAt: new Date().toISOString(),
-            };
-            await this.owned.commitContextCompaction(record);
-          }
-        }
         await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, outcome: durableOutcome(result.outcome), ...(output ? { output } : {}) });
         this.transientEvents.clear(run.id, claim.execution.executionId, true);
         return;

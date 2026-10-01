@@ -1414,10 +1414,19 @@ async function executeParallelPhase(
   const execution = createPhaseExecution(config, state, phase, messageManager, toolExecutionManager, registry);
 
   const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry, context: phaseContext };
-  const output = await executePhase(runtime);
+  let output = await executePhase(runtime);
 
   // Clean up injected phase message
   if (phaseMsgId) removePhaseMessage(messages, phaseMsgId);
+
+  if (config.afterPhase) {
+    const extAfter = await config.afterPhase(phase.name, output);
+    if (extAfter?.output) output = extAfter.output;
+  }
+
+  if (output.status) {
+    await execution.reportStatus(output.status);
+  }
 
   // Extract payload from route tool call if present, fallback to output.payload
   const decision = output.toolCalls ? extractRouteCall(output.toolCalls) : undefined;
