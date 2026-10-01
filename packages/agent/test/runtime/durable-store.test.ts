@@ -451,3 +451,74 @@ test("InMemoryStore.fromState cancels open v0.12 Input Request runs with retirem
     expect(snapshot.reason).toBe("Input Request retired in v0.13");
   }
 });
+
+test("Memory DurableStore validates entryPhases arguments", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-entry-phases", leaseMs: 10_000 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-entry-phases" });
+  await owner.activateAgent(agent.id);
+
+  // Mutually exclusive with phasePayload
+  await expect(owner.createRun({
+    agentId: agent.id,
+    input: "hello",
+    phasePayload: { a: 1 },
+    entryPhases: [{ phase: "review" }],
+    idempotencyKey: "run-both",
+  })).rejects.toThrow(TypeError);
+
+  // Empty array
+  await expect(owner.createRun({
+    agentId: agent.id,
+    input: "hello",
+    entryPhases: [],
+    idempotencyKey: "run-empty",
+  })).rejects.toThrow(TypeError);
+
+  // Blank phase name
+  await expect(owner.createRun({
+    agentId: agent.id,
+    input: "hello",
+    entryPhases: [{ phase: "" }],
+    idempotencyKey: "run-blank-empty",
+  })).rejects.toThrow(TypeError);
+
+  await expect(owner.createRun({
+    agentId: agent.id,
+    input: "hello",
+    entryPhases: [{ phase: "   " }],
+    idempotencyKey: "run-blank-whitespace",
+  })).rejects.toThrow(TypeError);
+
+  // Invalid payload (function)
+  await expect(owner.createRun({
+    agentId: agent.id,
+    input: "hello",
+    entryPhases: [{ phase: "review", payload: (() => {}) as any }],
+    idempotencyKey: "run-bad-payload",
+  })).rejects.toThrow(TypeError);
+});
+
+test("Memory DurableStore persists entryPhases and exposes them on snapshot", async () => {
+  const store = new InMemoryStore();
+  const owner = await store.openOwner({ ownerId: "owner-entry-phases-snap", leaseMs: 10_000 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-entry-phases-snap" });
+  await owner.activateAgent(agent.id);
+
+  const entryPhases = [
+    { phase: "review", payload: { fast: true } },
+    { phase: "plan" },
+  ];
+  const run = await owner.createRun({
+    agentId: agent.id,
+    input: "hello",
+    entryPhases,
+    idempotencyKey: "run-entry-phases-ok",
+  });
+
+  expect(run.entryPhases).toEqual(entryPhases);
+
+  const snapshot = await owner.snapshotRun(run.id);
+  expect(snapshot.entryPhases).toEqual(entryPhases);
+});
+

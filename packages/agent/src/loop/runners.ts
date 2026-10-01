@@ -520,6 +520,7 @@ async function runPhaseLoop(
     : false;
   if (resumingSuspendedRun) {
     state.status = "running";
+    delete state.entryPhases;
   }
   let previousPayload: unknown = resumingSuspendedRun
     ? (state.continuation && Object.hasOwn(state.continuation, "previousPayload")
@@ -536,6 +537,83 @@ async function runPhaseLoop(
   let pendingInstruction: string | undefined = resumingSuspendedRun
     ? state.continuation?.pendingInstruction
     : undefined;
+
+  // Build available phases list for route tool from the explicit registry.
+  const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation'>[] = [];
+  for (const [, phase] of registry.phases) {
+    availablePhases.push({
+      name: phase.name,
+      description: phase.description,
+      tools: phase.tools,
+      skills: phase.skills,
+      input: phase.input,
+      isolated: phase.isolated,
+      disableAutoInvocation: phase.disableAutoInvocation,
+    });
+  }
+
+  // Execute targets concurrently — each gets its own PhaseContext (isolated=true
+  // → fresh, otherwise a fork of current messages). Results are stashed as
+  // previousResults for the next phase entry injection (<prev_phase_outputs>).
+  const dispatchParallel = async (
+    targets: ReadonlyArray<{ phase: string; payload?: unknown }>,
+    instruction: string | undefined,
+    fromPhaseId: string,
+  ): Promise<void> => {
+    const contextSnapshot = snapshotMessages(config.context.messages);
+    const parallelTasks = new Map<string, { promise: Promise<ParallelResult>; phaseId: string }>();
+    // Unique phases get plain id, duplicates get #1, #2, ...
+    const instanceIds = buildInstanceIds(targets.map((t) => t.phase));
+    const groupId = createId("phase-group");
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i]!;
+      const pt = registry.phases.get(target.phase);
+      if (!pt) continue;
+      const instanceId = instanceIds[i]!;
+      const promise = executeParallelPhase(
+        config,
+        state,
+        registry,
+        pt,
+        target.payload !== undefined ? normalizePayload(target.payload) : undefined,
+        instruction,
+        pt.isolated ? [] : contextSnapshot,
+        availablePhases,
+        instanceId,
+        groupId,
+        i,
+        targets.length,
+        fromPhaseId,
+      );
+      parallelTasks.set(instanceId, { promise, phaseId: target.phase });
+    }
+    const successfulResults = await waitForBackgroundTasks(parallelTasks);
+    previousResults = successfulResults.map((r) => ({ name: r.instanceId, output: r.payload }));
+    // The instruction belongs to the direct fan-out targets. Do not carry
+    // it across the implicit join into the next serial Phase.
+    pendingInstruction = undefined;
+  };
+
+  // Host-requested entry fan-out: several entry Phases run concurrently at
+  // Run start and join at the registry entry Phase.
+  if (!resumingSuspendedRun && state.entryPhases && state.entryPhases.length > 0) {
+    const entryPhases = state.entryPhases;
+    delete state.entryPhases;
+    for (const entry of entryPhases) {
+      if (!registry.phases.has(entry.phase)) throw new Error(`Phase "${entry.phase}" not found`);
+    }
+    if (entryPhases.length === 1) {
+      currentPhaseId = entryPhases[0]!.phase;
+      previousPayload = entryPhases[0]!.payload;
+    } else {
+      if (LoopGuard.checkAbort(config.signal).stopReason !== "none") {
+        return completeRun(config, state, createOutcome.aborted());
+      }
+      await dispatchParallel(entryPhases, undefined, registry.entryPhaseId!);
+      currentPhaseId = registry.entryPhaseId!;
+      previousPayload = undefined;
+    }
+  }
 
   type InputWaitResult =
     | { type: "continued" }
@@ -598,20 +676,6 @@ async function runPhaseLoop(
   };
 
   while (currentPhaseId) {
-    // Build available phases list for route tool from the explicit registry.
-    const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation'>[] = [];
-    for (const [, phase] of registry.phases) {
-      availablePhases.push({
-        name: phase.name,
-        description: phase.description,
-        tools: phase.tools,
-        skills: phase.skills,
-        input: phase.input,
-        isolated: phase.isolated,
-        disableAutoInvocation: phase.disableAutoInvocation,
-      });
-    }
-
     const abortResult = LoopGuard.checkAbort(config.signal);
     if (abortResult.stopReason !== "none") {
       removePhaseMessage(config.context.messages, previousPhaseMsgId);
@@ -757,6 +821,7 @@ async function runPhaseLoop(
     const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext };
     let output = await executePhase(runtime);
     delete state.initialPhasePayload;
+    delete state.entryPhases;
 
     // Extract and normalize a model route. Invalid targets are filtered, but
     // an explicit stop mixed with any other original target invalidates the
@@ -841,56 +906,8 @@ async function runPhaseLoop(
     }
 
     // Parallel dispatch: when route tool returns multiple targets, execute all concurrently.
-    // Each target gets its own PhaseContext (isolated=true → fresh, otherwise fork of current).
-    // After all complete, results are stashed as previousResults for the next iteration's
-    // phase entry injection (so the entry phase sees them inside its user context message).
     if (routeDecision && routeDecision.requestedCount > 1) {
-      const contextSnapshot = snapshotMessages(config.context.messages);
-      const parallelTasks = new Map<string, { promise: Promise<ParallelResult>; phaseId: string }>();
-
-      // Build instance IDs: unique phases get plain id, duplicates get #1, #2, ...
-      const instanceIds = buildInstanceIds(routeDecision.decision.map(t => t.phase));
-      const groupId = createId("phase-group");
-      const count = routeDecision.decision.length;
-
-      // Launch all targets concurrently — each as an independent execution
-      for (let i = 0; i < routeDecision.decision.length; i++) {
-        const target = routeDecision.decision[i];
-        const pt = registry.phases.get(target.phase);
-        if (!pt) continue;
-
-        const instanceId = instanceIds[i];
-        // isolated=true → empty context; otherwise fork current messages
-        const context = pt.isolated ? [] : contextSnapshot;
-        const payload = target.payload !== undefined ? normalizePayload(target.payload) : undefined;
-
-        const promise = executeParallelPhase(
-          config,
-          state,
-          registry,
-          pt,
-          payload,
-          routeDecision.instruction,
-          context,
-          availablePhases,
-          instanceId,
-          groupId,
-          i,
-          count,
-          currentPhaseId,
-        );
-        parallelTasks.set(instanceId, { promise, phaseId: target.phase });
-      }
-
-      // Wait for all parallel phases to complete
-      const successfulResults = await waitForBackgroundTasks(parallelTasks);
-
-      // Stash merged results + instruction; the next iteration's entry injection will
-      // assemble them into the entry phase's context message (under <prev_phase_outputs>).
-      previousResults = successfulResults.map(r => ({ name: r.instanceId, output: r.payload }));
-      // The instruction belongs to the direct fan-out targets. Do not carry
-      // it across the implicit join into the next serial Phase.
-      pendingInstruction = undefined;
+      await dispatchParallel(routeDecision.decision, routeDecision.instruction, currentPhaseId);
 
       // Determine entry phase: original phase's target > registry entry.
       // In parallel mode, the original phase's target field determines where to go after

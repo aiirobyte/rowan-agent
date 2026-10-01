@@ -24,7 +24,7 @@ import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
 import type { ThinkingLevel } from "@rowan-agent/models";
 import { assertJsonValue, canonicalJson, isJsonValue } from "./json";
-import type { ExecutionCheckpoint } from "./contracts";
+import type { EntryPhaseSpec, ExecutionCheckpoint } from "./contracts";
 import { createId } from "../utils";
 
 export const EXECUTION_CHECKPOINT_CODEC = "rowan.agent.execution";
@@ -48,6 +48,7 @@ export type OneShotExecutionInput = Readonly<{
   canonicalMessages: readonly AgentMessage[];
   /** Initial host payload, applied to the entry Phase only on the first attempt. */
   initialPhasePayload?: JsonValue;
+  entryPhases?: readonly EntryPhaseSpec[];
   /** Execution-local capabilities and prompts; messages are supplied separately. */
   context: ExecutionModelContext;
   /** Durable identity exposed to Phase callbacks. */
@@ -118,6 +119,7 @@ type CheckpointData = Readonly<{
   attempt: number;
   metrics: CheckpointMetrics;
   initialPhasePayload?: JsonValue;
+  entryPhases?: readonly EntryPhaseSpec[];
   continuation?: CheckpointContinuation;
   runInteractions?: RunInteractionState;
   phaseInteractions?: RunInteractionState;
@@ -176,6 +178,7 @@ export function encodeExecutionCheckpoint(state: ExecutionState): ExecutionCheck
     ...(continuation ? { continuation } : {}),
     ...(runInteractions === undefined ? {} : { runInteractions }),
     ...(state.initialPhasePayload === undefined ? {} : { initialPhasePayload: state.initialPhasePayload }),
+    ...(state.entryPhases === undefined ? {} : { entryPhases: state.entryPhases }),
   } as unknown as CheckpointData;
   assertJsonValue(data, "execution checkpoint");
   return {
@@ -204,6 +207,7 @@ export function decodeExecutionCheckpoint(checkpoint: ExecutionCheckpoint): Exec
     },
     status: "suspended",
     ...(checkpoint.data.initialPhasePayload === undefined ? {} : { initialPhasePayload: checkpoint.data.initialPhasePayload }),
+    ...(checkpoint.data.entryPhases === undefined ? {} : { entryPhases: checkpoint.data.entryPhases }),
     ...(checkpoint.data.continuation ? {
       continuation: {
         ...checkpoint.data.continuation,
@@ -245,6 +249,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     status: "running",
     metrics: createMetrics(),
     ...(input.initialPhasePayload === undefined ? {} : { initialPhasePayload: input.initialPhasePayload }),
+    ...(input.entryPhases === undefined ? {} : { entryPhases: input.entryPhases }),
   };
   if (input.interactionAnswers) {
     const existing = state.runInteractions ?? state.phaseInteractions;
@@ -347,10 +352,19 @@ function isCheckpointData(value: JsonValue): value is CheckpointData {
   if (!isRecord(value) || typeof value.currentPhase !== "string" || !Number.isInteger(value.attempt)) return false;
   if (!isMetrics(value.metrics)) return false;
   if (value.initialPhasePayload !== undefined && !isJsonValue(value.initialPhasePayload)) return false;
+  if (value.entryPhases !== undefined && !isEntryPhases(value.entryPhases)) return false;
   if (value.continuation !== undefined && !isContinuation(value.continuation)) return false;
   if (value.runInteractions !== undefined && !isRunInteractionState(value.runInteractions)) return false;
   if (value.phaseInteractions !== undefined && !isRunInteractionState(value.phaseInteractions)) return false;
   return true;
+}
+
+function isEntryPhases(value: unknown): value is readonly EntryPhaseSpec[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.every((item) => isRecord(item)
+    && typeof item.phase === "string"
+    && item.phase.trim().length > 0
+    && (item.payload === undefined || isJsonValue(item.payload)));
 }
 
 function isRunInteractionState(value: unknown): value is RunInteractionState {

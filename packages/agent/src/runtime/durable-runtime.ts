@@ -15,6 +15,7 @@ import type {
   AgentSummary,
   DurableConsumer,
   DurableRunEvent,
+  EntryPhaseSpec,
   EventCursor,
   Page,
   RunBoundary,
@@ -37,6 +38,7 @@ import type {
   Metadata,
 } from "./contracts";
 import {
+  assertEntryPhases,
   assertToolExecutionResult,
   thinkingLevelFromMessages,
 } from "./contracts";
@@ -346,8 +348,23 @@ export class AgentRuntime implements AgentRuntimeContract {
     return new DurableRun(this, run.id);
   }
 
-  async start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata; phasePayload?: JsonValue }): Promise<AgentRun> {
+  async start(
+    agentId: AgentId,
+    input: UserInput,
+    options: {
+      idempotencyKey: string;
+      metadata?: Metadata;
+      phasePayload?: JsonValue;
+      entryPhases?: ReadonlyArray<EntryPhaseSpec>;
+    },
+  ): Promise<AgentRun> {
     this.assertOpen();
+    if (options.phasePayload !== undefined && options.entryPhases !== undefined) {
+      throw new TypeError("phasePayload and entryPhases are mutually exclusive");
+    }
+    if (options.entryPhases !== undefined) {
+      assertEntryPhases(options.entryPhases);
+    }
     const agent = await this.requireAgent(agentId);
     if (!agent.activatedAt || !agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
     let phasePayload: JsonValue | undefined;
@@ -379,6 +396,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       input,
       ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
       ...(phasePayload === undefined ? {} : { phasePayload }),
+      ...(options.entryPhases === undefined ? {} : { entryPhases: options.entryPhases }),
       ...(pinnedConfigToken === agent.currentConfigToken ? {} : { pinnedConfigToken }),
       idempotencyKey: options.idempotencyKey,
     });
@@ -684,6 +702,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         maxAttempts: config.maxAttempts,
         checkpoint: claim!.run.checkpoint,
         ...(claim!.run.phasePayload === undefined ? {} : { initialPhasePayload: claim!.run.phasePayload }),
+        ...(claim!.run.entryPhases === undefined ? {} : { entryPhases: claim!.run.entryPhases }),
         interactionAnswers: claim!.run.interactionAnswers,
         signal: controller.signal,
         beforePhase: assembly.beforePhase,

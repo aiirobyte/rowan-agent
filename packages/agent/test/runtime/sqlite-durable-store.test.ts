@@ -313,3 +313,50 @@ test("SQLite DurableStore assigns terminal message sequence after durable Tool m
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("SqliteStore persists entryPhases and round-trips across store reopen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-sqlite-entry-phases-"));
+  const filename = join(directory, "runtime.sqlite");
+  try {
+    const store1 = new SqliteStore(filename);
+    let runId: string;
+    const entryPhases = [
+      { phase: "review", payload: { depth: 2 } },
+      { phase: "plan" },
+    ];
+    try {
+      const owner1 = await store1.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
+      const agent = await owner1.reserveAgent({ idempotencyKey: "agent-sqlite-fanout" });
+      await owner1.activateAgent(agent.id);
+
+      const run = await owner1.createRun({
+        agentId: agent.id,
+        input: "fan out work",
+        entryPhases,
+        idempotencyKey: "run-sqlite-fanout",
+      });
+      runId = run.id;
+      expect(run.entryPhases).toEqual(entryPhases);
+
+      const snap1 = await owner1.snapshotRun(run.id);
+      expect(snap1.entryPhases).toEqual(entryPhases);
+
+      await owner1.sealAndReleaseOwner();
+    } finally {
+      store1.close();
+    }
+
+    const store2 = new SqliteStore(filename);
+    try {
+      const owner2 = await store2.openOwner({ ownerId: "owner-2", leaseMs: 10_000 });
+      const snap2 = await owner2.snapshotRun(runId as never);
+      expect(snap2.entryPhases).toEqual(entryPhases);
+      await owner2.sealAndReleaseOwner();
+    } finally {
+      store2.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+

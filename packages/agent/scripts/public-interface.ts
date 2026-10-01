@@ -61,6 +61,7 @@ export const publicTypeExports = [
   "DurableStore",
   "DurableToolResult",
   "DefinitionLayer",
+  "EntryPhaseSpec",
   "ExtensionActivationError",
   "ExtensionActivationResult",
   "ExtensionDisposer",

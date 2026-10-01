@@ -244,6 +244,7 @@ export type ToolCallReservation = Readonly<{
 }>;
 export type ToolCommit = Readonly<{ run: RunRecord; toolCall: ToolCallSnapshot }>;
 export type ToolBatchCommit = Readonly<{ run: RunRecord; toolCalls: readonly ToolCallSnapshot[] }>;
+export type EntryPhaseSpec = Readonly<{ phase: string; payload?: JsonValue }>;
 export type RunRecord = Readonly<{
   id: RunId;
   agentId: AgentId;
@@ -256,6 +257,7 @@ export type RunRecord = Readonly<{
   invalidatedBy?: Readonly<{ messageId: MessageId; messageRevision: number }>;
   metadata?: Metadata;
   phasePayload?: JsonValue;
+  entryPhases?: readonly EntryPhaseSpec[];
   pinnedConfigToken?: ConfigToken;
   checkpoint?: ExecutionCheckpoint;
   currentPhaseId?: string;
@@ -294,6 +296,7 @@ export type RunSnapshotBase = Readonly<{
   metadata?: Metadata;
   /** Effective entry Phase payload the Run started with (defaults filled). */
   phasePayload?: JsonValue;
+  entryPhases?: readonly EntryPhaseSpec[];
   messageCount: number;
   toolCallCount: number;
   currentPhaseId?: string;
@@ -350,7 +353,7 @@ export interface OwnedStore {
   contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus>;
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
-  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
+  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord>;
@@ -464,7 +467,7 @@ export interface AgentRuntime {
     effectDigestConfirmation?: string;
   }): Promise<MessageRevisionResult>;
   compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
-  start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata; phasePayload?: JsonValue }): Promise<AgentRun>;
+  start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: ReadonlyArray<EntryPhaseSpec> }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
   contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
   compactContext(agentId: AgentId, options?: { input?: UserInput; instructions?: string; idempotencyKey?: string }): Promise<AgentRun>;
@@ -498,6 +501,19 @@ function isMetadata(value: unknown): value is Metadata {
 }
 function assertMetadata(value: unknown, argument: string): asserts value is Metadata {
   if (!isMetadata(value)) throw new TypeError(`${argument} must be a JSON-safe metadata object`);
+}
+export function assertEntryPhases(value: unknown, argument = "entryPhases"): asserts value is readonly EntryPhaseSpec[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${argument} must be a non-empty array`);
+  }
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.phase !== "string" || item.phase.trim() === "") {
+      throw new TypeError(`${argument} items must contain a non-blank phase name`);
+    }
+    if (item.payload !== undefined) {
+      assertJsonValue(item.payload, `${argument}.payload`);
+    }
+  }
 }
 function isText(value: unknown): boolean { return isRecord(value) && value.type === "text" && typeof value.text === "string"; }
 function isImage(value: unknown): boolean { return isRecord(value) && value.type === "image" && typeof value.data === "string" && typeof value.mimeType === "string"; }

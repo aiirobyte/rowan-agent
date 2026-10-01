@@ -13,6 +13,7 @@ import type {
   ContextStatus,
   ConsumerRegistration,
   DurableRunEvent,
+  EntryPhaseSpec,
   ExecutionCheckpoint,
   ExecutionId,
   ExecutionToken,
@@ -279,7 +280,7 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.commitContextCompaction(current, record));
   }
 
-  async createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> {
+  async createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> {
     return this.invoke(lease, (store, current) => store.createRun(current, input));
   }
 
@@ -710,7 +711,7 @@ class SqliteOwnedStore implements OwnedStore {
   contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus> { return this.store.contextStatus(this.lease, agentId, contextWindow); }
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]> { return Promise.resolve(this.store.contextMessages(this.lease, agentId, recentTokenBudget)); }
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> { return this.store.commitContextCompaction(this.lease, record); }
-  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
+  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }

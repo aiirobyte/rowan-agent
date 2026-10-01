@@ -14,6 +14,7 @@ import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
 import type { ContentBlock, ThinkingLevel } from "@rowan-agent/models";
 import type { JsonValue } from "../runtime-events";
+import type { EntryPhaseSpec } from "../runtime/contracts";
 
 export const DEFAULT_MAX_ATTEMPTS = 16;
 
@@ -71,6 +72,7 @@ export type ExecutionState = {
   metrics: LoopMetrics;
   status: "idle" | "running" | "suspended" | "completed" | "aborted" | "failed";
   initialPhasePayload?: JsonValue;
+  entryPhases?: readonly EntryPhaseSpec[];
   continuation?: ExecutionContinuationState;
   runInteractions?: RunInteractionState;
   phaseInteractions?: RunInteractionState;

@@ -12,6 +12,7 @@ import type {
   ConfigToken,
   DurableEventBase,
   DurableRunEvent,
+  EntryPhaseSpec,
   ExecutionCheckpoint,
   ExecutionId,
   ExecutionToken,
@@ -41,6 +42,7 @@ import type {
 import type { DurableStore, OwnedStore } from "./contracts";
 import type { JsonValue } from "../runtime-events";
 import {
+  assertEntryPhases,
   assertToolExecutionResult,
   isAssistantMessage,
 } from "./contracts";
@@ -564,13 +566,17 @@ export class InMemoryStore implements DurableStore {
     return record;
   }
 
-  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
+  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
     this.assertOwner(lease);
     this.requireAgent(input.agentId);
+    if (input.phasePayload !== undefined && input.entryPhases !== undefined) {
+      throw new TypeError("phasePayload and entryPhases are mutually exclusive");
+    }
     const normalizedInput = normalizeUserInput(input.input);
     if (input.phasePayload !== undefined) assertJsonValue(input.phasePayload, "run.phasePayload");
+    if (input.entryPhases !== undefined) assertEntryPhases(input.entryPhases, "run.entryPhases");
     const scope = createIdempotencyScope("start_run", input.agentId, input.idempotencyKey);
-    const payload = canonicalStartRunRequest(normalizedInput, input.metadata, input.phasePayload, input.pinnedConfigToken);
+    const payload = canonicalStartRunRequest(normalizedInput, input.metadata, input.phasePayload, input.pinnedConfigToken, input.entryPhases);
     const replay = this.replay(scope, payload);
     if (replay) return clone(replay as RunRecord);
 
@@ -637,6 +643,7 @@ export class InMemoryStore implements DurableStore {
       input: clone(normalizedInput),
       ...(input.metadata ? { metadata: clone(input.metadata) } : {}),
       ...(input.phasePayload === undefined ? {} : { phasePayload: clone(input.phasePayload) }),
+      ...(input.entryPhases === undefined ? {} : { entryPhases: clone(input.entryPhases) }),
       ...(input.pinnedConfigToken === undefined ? {} : { pinnedConfigToken: input.pinnedConfigToken }),
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -1226,6 +1233,7 @@ export class InMemoryStore implements DurableStore {
       input: clone(run.input),
       ...(run.metadata ? { metadata: clone(run.metadata) } : {}),
       ...(run.phasePayload === undefined ? {} : { phasePayload: clone(run.phasePayload) }),
+      ...(run.entryPhases === undefined ? {} : { entryPhases: clone(run.entryPhases) }),
       messageCount: this.messagesForRun(run.id).length,
       toolCallCount: [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id).length,
       ...(run.currentPhaseId === undefined ? {} : { currentPhaseId: run.currentPhaseId }),
@@ -1712,7 +1720,7 @@ class MemoryOwnedStore implements OwnedStore {
   async commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> {
     return this.store.commitContextCompaction(this.lease, record);
   }
-  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
+  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
