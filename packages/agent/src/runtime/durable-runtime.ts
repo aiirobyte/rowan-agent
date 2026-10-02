@@ -46,7 +46,7 @@ import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, Outc
 import { RuntimeError } from "./errors";
 import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
 import { pageAgents, pageRuns } from "./read-models";
-import { projectAssistantMessage, projectModelContext, renderInteractionText } from "./model-context";
+import { PARALLEL_PHASE_METADATA_KEY, projectAssistantMessage, projectModelContext, renderInteractionText } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
@@ -763,6 +763,38 @@ export class AgentRuntime implements AgentRuntimeContract {
             status,
           });
         },
+        onParallelPhaseOutput: (message, invocation) => {
+          // Serialised with Tool commits: concurrent Phases share one execution revision.
+          const task = toolQueue.then(async () => {
+            const active = this.executions.get(run.id);
+            if (
+              this.closed
+              || controller.signal.aborted
+              || active?.executionId !== claim!.execution.executionId
+            ) return;
+            const projected = projectAssistantMessage(message, run.agentId, run.id, 0);
+            const committed = await this.owned.commitPhaseOutput({
+              runId: run.id,
+              execution: claim!.execution,
+              expectedRevision: executionRevision,
+              message: {
+                ...projected,
+                metadata: {
+                  ...projected.metadata,
+                  [PARALLEL_PHASE_METADATA_KEY]: {
+                    groupId: invocation.groupId,
+                    instanceId: invocation.instanceId,
+                    index: invocation.index,
+                    count: invocation.count,
+                  },
+                },
+              },
+            });
+            executionRevision = committed.revision;
+          });
+          toolQueue = task.then(() => undefined, () => undefined);
+          return task;
+        },
         onMessageDelta: (event) => {
           const active = this.executions.get(run.id);
           if (
@@ -854,7 +886,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         }
       }
       if (this.cancellationRequested.has(run.id) || controller.signal.aborted) {
-        const output = latestAssistant(run, result.messages, modelMessages.length, true);
+        const output = latestAssistant(run, result.messages, executionContext.messages.length, true);
         const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
         await this.owned.cancelRun({
           runId: run.id,
@@ -887,7 +919,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           : latestAssistant(
               run,
               result.messages,
-              modelMessages.length,
+              executionContext.messages.length,
             );
         const prompt = isToolCallInteraction
           ? undefined
@@ -907,7 +939,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       if (result.type === "completed") {
-        const output = latestAssistant(run, result.messages, modelMessages.length);
+        const output = latestAssistant(run, result.messages, executionContext.messages.length);
         await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, outcome: durableOutcome(result.outcome), ...(output ? { output } : {}) });
         this.transientEvents.clear(run.id, claim.execution.executionId, true);
         return;

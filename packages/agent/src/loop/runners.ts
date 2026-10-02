@@ -1383,6 +1383,16 @@ function createPhaseExecution(
 // Parallel Phase Execution
 // ============================================================================
 
+/** The Phase's final assistant message when it is a plain, user-visible reply. */
+function parallelPhaseReply(produced: readonly AgentMessage[]): AgentMessage | undefined {
+  const last = [...produced].reverse().find((message) => message.role === "assistant");
+  if (!last) return undefined;
+  if (typeof last.content === "string") return last.content.trim() ? last : undefined;
+  // A message that requested Tools is already committed with its Tool Calls.
+  if (last.content.some((part) => part.type === "tool_use")) return undefined;
+  return last.content.some((part) => part.type === "text" && part.text.trim()) ? last : undefined;
+}
+
 type ParallelResult = {
   instanceId: string;
   phaseId: string;
@@ -1458,7 +1468,15 @@ async function executeParallelPhase(
   const execution = createPhaseExecution(config, state, phase, messageManager, toolExecutionManager, registry);
 
   const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry, context: phaseContext };
+  const phaseStart = messages.length;
   let output = await executePhase(runtime);
+
+  // The forked context is discarded at the join, so hand the Phase's reply to
+  // the host before it is gone.
+  const reply = parallelPhaseReply(messages.slice(phaseStart));
+  if (reply && config.onParallelPhaseOutput) {
+    await config.onParallelPhaseOutput(reply, { mode: "parallel", instanceId, groupId, index, count, sourcePhaseId });
+  }
 
   // Clean up injected phase message
   if (phaseMsgId) removePhaseMessage(messages, phaseMsgId);

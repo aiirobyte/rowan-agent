@@ -753,6 +753,33 @@ export class InMemoryStore implements DurableStore {
     return result;
   }
 
+  /** Commit a parallel Phase's reply while its Run is still running. */
+  commitPhaseOutput(lease: OwnerLease, input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): RunRecord {
+    this.assertOwner(lease);
+    const operationKey = `phase_output:${input.message.id}`;
+    const operationPayload = canonicalJson([input.runId, input.execution.executionId, input.expectedRevision, input.message] as never);
+    const replay = this.replayOperation(operationKey, operationPayload);
+    if (replay) return clone(replay as RunRecord);
+    const run = this.requireRun(input.runId);
+    this.assertExecution(run, input.execution, input.expectedRevision);
+    this.assertState(run, ["running"]);
+    if (this.messages.has(input.message.id)) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
+    const message: AssistantMessage = {
+      ...clone(input.message),
+      agentId: run.agentId,
+      runId: run.id,
+      role: "assistant",
+      sequenceWithinRun: this.nextMessageSequence(run.id),
+    };
+    this.messages.set(message.id, message);
+    run.revision += 1;
+    run.updatedAt = createTimestamp();
+    this.appendMessage(run, message);
+    const result = clone(run);
+    this.writeOperationReceipt(operationKey, operationPayload, result);
+    return result;
+  }
+
   commitInputRequired(lease: OwnerLease, input: {
     runId: RunId;
     execution: ExecutionToken;
@@ -1724,6 +1751,7 @@ class MemoryOwnedStore implements OwnedStore {
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
+  async commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> { return this.store.commitPhaseOutput(this.lease, input); }
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }

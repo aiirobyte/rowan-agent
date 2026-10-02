@@ -296,6 +296,10 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.commitPhaseEntered(current, input));
   }
 
+  async commitPhaseOutput(lease: OwnerLease, input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> {
+    return this.invoke(lease, (store, current) => store.commitPhaseOutput(current, input));
+  }
+
   async commitInputRequired(lease: OwnerLease, input: {
     runId: RunId;
     execution: ExecutionToken;
@@ -715,6 +719,7 @@ class SqliteOwnedStore implements OwnedStore {
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
+  commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> { return this.store.commitPhaseOutput(this.lease, input); }
   commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
   answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }

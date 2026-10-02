@@ -8,7 +8,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { PhaseContext, PhaseExecutionIdentity, PhaseOutput, PhaseStatus } from "../harness/phases/types";
+import type { PhaseContext, PhaseExecutionIdentity, PhaseInvocation, PhaseOutput, PhaseStatus } from "../harness/phases/types";
 import type { RunInteractionDriver, RunInteractionState } from "../harness/phases/interactions";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
@@ -105,6 +105,14 @@ export type AgentConfig = {
   onPhaseEntered?: (phaseId: string) => void | Promise<void>;
   onPhaseStatus?: (phaseId: string, status: PhaseStatus) => void | Promise<void>;
   onMessage?: (message: AgentMessage) => Promise<void>;
+  /**
+   * A parallel Phase finished with a user-visible reply. Its messages live in a
+   * forked context, so the host commits the reply here or it is lost.
+   */
+  onParallelPhaseOutput?: (
+    message: AgentMessage,
+    invocation: Extract<PhaseInvocation, { mode: "parallel" }>,
+  ) => Promise<void>;
   onMessageDelta?: (event: MessageDeltaNotification) => void;
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;

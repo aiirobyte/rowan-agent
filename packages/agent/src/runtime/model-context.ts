@@ -57,6 +57,16 @@ export function renderInteractionText(
     .replaceAll("{{reply}}", replyStr);
 }
 
+/**
+ * Message metadata key marking a parallel Phase's committed reply. The join Phase already
+ * received that reply as a previous Phase output, so it stays out of later model context.
+ */
+export const PARALLEL_PHASE_METADATA_KEY = "parallelPhase";
+
+function isParallelPhaseOutput(message: Message): boolean {
+  return message.role === "assistant" && message.metadata?.[PARALLEL_PHASE_METADATA_KEY] !== undefined;
+}
+
 /** Project durable Runtime messages and tools into the loop's provider-facing context. */
 export function projectModelContext(input: {
   context: ResolvedAgentContext;
@@ -79,6 +89,7 @@ export function projectModelContext(input: {
 
   const projectedMessages: AgentMessage[] = [];
   for (const message of input.messages) {
+    if (isParallelPhaseOutput(message)) continue;
     if (message.role === "interaction") {
       if (message.toolCallId !== undefined) {
         continue;

@@ -405,3 +405,78 @@ test("resume after suspension mid-run does not re-dispatch completed parallel en
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("model-backed parallel entry phases commit their replies and keep them out of later model context", async () => {
+  const requests: string[] = [];
+  const allRequests: string[] = [];
+  const reply = (text: string, routed: boolean) => (async function* () {
+    yield { type: "text_delta" as const, text, partial: { role: "assistant" as const, contentBlocks: [{ type: "text" as const, text }] } };
+    yield { type: "done" as const, response: routed ? stopResponse(text) : { content: text, stopReason: "stop" as const } };
+  })();
+  const stream: StreamFn = (request) => {
+    const transcript = JSON.stringify(request.messages);
+    requests.push(JSON.stringify(request));
+    allRequests.push(JSON.stringify(request));
+    if (transcript.includes("<prev_phase_outputs>")) return reply("joined summary", true);
+    if (transcript.includes("Worker A content")) return reply("reply from A", false);
+    if (transcript.includes("Worker B content")) return reply("reply from B", false);
+    return reply("later reply", true);
+  };
+  const phase = (name: string, content: string): Phase => ({
+    name, description: name, filePath: "<test>", baseDir: "<test>", content,
+  });
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 2 });
+  try {
+    const agentId = await agentWithPhases(
+      runtime,
+      stream,
+      {
+        phases: new Map([
+          ["worker-a", phase("worker-a", "Worker A content")],
+          ["worker-b", phase("worker-b", "Worker B content")],
+          ["join-phase", phase("join-phase", "Join content")],
+        ]),
+        entryPhaseId: "join-phase",
+      },
+      { idempotencyKey: "entry-fanout-model-agent" },
+    );
+
+    const run = await runtime.start(agentId, "fan out", {
+      idempotencyKey: "entry-fanout-model-run",
+      entryPhases: [{ phase: "worker-a" }, { phase: "worker-b" }],
+    });
+    expect((await run.wait()).type).toBe("completed");
+
+    const assistants = (await runtime.history(agentId))
+      .filter((message) => message.role === "assistant")
+      .map((message) => ({
+        text: typeof message.content === "string"
+          ? message.content
+          : message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join(""),
+        phase: message.metadata?.phase,
+        parallel: message.metadata?.parallelPhase !== undefined,
+      }));
+    expect(assistants).toHaveLength(3);
+    expect(assistants).toEqual(expect.arrayContaining([
+      { text: "reply from A", phase: "worker-a", parallel: true },
+      { text: "reply from B", phase: "worker-b", parallel: true },
+    ]));
+    expect(assistants.at(-1)).toEqual({ text: "joined summary", phase: "join-phase", parallel: false });
+
+    requests.length = 0;
+    const next = await runtime.start(agentId, "and then?", { idempotencyKey: "entry-fanout-model-next" });
+    expect((await next.wait()).type).toBe("completed");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain("joined summary");
+    expect(requests[0]).not.toContain("reply from A");
+    expect(requests[0]).not.toContain("reply from B");
+    // Rowan-owned metadata never reaches the provider request.
+    expect(allRequests).toHaveLength(4);
+    expect(allRequests.some((request) => request.includes("parallelPhase"))).toBe(false);
+    const later = (await runtime.history(agentId)).at(-1);
+    expect(later?.role).toBe("assistant");
+    expect(later?.runId).toBe(next.id);
+  } finally {
+    await runtime.close();
+  }
+});

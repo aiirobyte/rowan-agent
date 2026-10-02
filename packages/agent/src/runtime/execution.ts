@@ -11,6 +11,7 @@ import { snapshotMessages } from "../loop/state";
 import { startPhaseLoop } from "../loop/runners";
 import type {
   AfterPhaseHook,
+  AgentConfig,
   AgentRuntimePort,
   BeforePhaseHook,
   BeforePromptHook,
@@ -66,6 +67,7 @@ export type OneShotExecutionInput = Readonly<{
   afterPhase?: AfterPhaseHook;
   beforePrompt?: BeforePromptHook;
   onMessage?: (message: AgentMessage) => Promise<void>;
+  onParallelPhaseOutput?: AgentConfig["onParallelPhaseOutput"];
   onMessageDelta?: (event: MessageDeltaNotification) => void;
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onOutcome?: (outcome: Outcome) => Promise<void>;
@@ -278,6 +280,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     afterPhase: input.afterPhase,
     beforePrompt: input.beforePrompt,
     onMessage: input.onMessage,
+    onParallelPhaseOutput: input.onParallelPhaseOutput,
     onMessageDelta: input.onMessageDelta,
     onThinkingDelta: input.onThinkingDelta,
     onOutcome: input.onOutcome,
