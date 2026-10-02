@@ -378,12 +378,31 @@ function createToolResultContent(result: ToolResult): LlmContentPart[] {
   ];
 }
 
-function createRouteToolResultContent(toolCall: ToolCall, error?: string): LlmContentPart[] {
+function createRouteToolResultContent(
+  toolCall: ToolCall,
+  error?: string,
+  executionContext?: {
+    completedPhases?: readonly string[];
+    phaseTransitions?: readonly { from: string; to: string }[];
+  },
+): LlmContentPart[] {
+  const result: Record<string, unknown> = error
+    ? { ok: false, error }
+    : { ok: true };
+  if (!error && executionContext) {
+    const { completedPhases, phaseTransitions } = executionContext;
+    if (completedPhases && completedPhases.length > 0) {
+      result.completed_phases = completedPhases;
+    }
+    if (phaseTransitions && phaseTransitions.length > 0) {
+      result.route_history = phaseTransitions.map(({ from, to }) => `${from} → ${to}`);
+    }
+  }
   return [
     {
       type: "tool_result",
       toolUseId: toolCall.id,
-      content: error ? JSON.stringify({ ok: false, error }) : '{"ok": true}',
+      content: JSON.stringify(result),
       ...(error ? { isError: true } : {}),
     },
   ];
@@ -444,12 +463,16 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
 
       for (const toolCall of collected.toolCalls) {
         if (toolCall.name !== PhaseRouteTool) continue;
+        const hasOrdinaryTools = collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool);
         const messageId = ctx.messageManager.start(
           "tool",
           createRouteToolResultContent(
             toolCall,
-            collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
+            hasOrdinaryTools
               ? "Route must be called separately after ordinary tools finish; this route decision was ignored."
+              : undefined,
+            !hasOrdinaryTools
+              ? { completedPhases: ctx.completedPhases, phaseTransitions: ctx.state.metrics.phaseTransitions }
               : undefined,
           ),
           {
@@ -538,6 +561,9 @@ async function runPhaseLoop(
     ? state.continuation?.pendingInstruction
     : undefined;
 
+  // Track completed phases for route tool context.
+  const completedPhases: string[] = [];
+
   // Build available phases list for route tool from the explicit registry.
   const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation'>[] = [];
   for (const [, phase] of registry.phases) {
@@ -588,7 +614,17 @@ async function runPhaseLoop(
       parallelTasks.set(instanceId, { promise, phaseId: target.phase });
     }
     const successfulResults = await waitForBackgroundTasks(parallelTasks);
-    previousResults = successfulResults.map((r) => ({ name: r.instanceId, output: r.payload }));
+    previousResults = successfulResults.map((r) => ({
+      name: r.instanceId,
+      output: {
+        message: r.content,
+        ...(r.payload !== undefined ? { payload: r.payload } : {}),
+      },
+    }));
+    // Record completed parallel phases for route tool context.
+    for (const r of successfulResults) {
+      completedPhases.push(r.phaseId);
+    }
     // The instruction belongs to the direct fan-out targets. Do not carry
     // it across the implicit join into the next serial Phase.
     pendingInstruction = undefined;
@@ -818,7 +854,7 @@ async function runPhaseLoop(
     }
 
     // Execute phase
-    const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext };
+    const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext, completedPhases };
     let output = await executePhase(runtime);
     delete state.initialPhasePayload;
     delete state.entryPhases;
@@ -872,6 +908,12 @@ async function runPhaseLoop(
     // statuses and explicit reportStatus calls are already normalized.
     if (output.status) {
       await execution.reportStatus(output.status);
+    }
+
+    // Record this phase as completed for route tool context (skip continue
+    // iterations which re-execute the same phase without leaving it).
+    if (output.route !== "continue") {
+      completedPhases.push(currentPhaseId);
     }
 
     if (phase.name === STOP_PHASE_ID) {
@@ -1073,6 +1115,8 @@ interface PhaseRuntime {
   messageManager: PhaseMessageManager;
   registry: PhaseRegistry;
   context: PhaseContext;
+  /** Phases that have completed execution in this Run, used for route tool context. */
+  completedPhases?: readonly string[];
 }
 
 /** Execute phase code — factory (ExtensionAPI) or run (PhaseContext) or LLM-driven. */
