@@ -183,10 +183,12 @@ const agentId = await runtime.createAgent({
 Each `load*()` call replaces one source atomically; use `directory` or inline
 `values`. `resourceView` controls visibility, so same-name resources can live
 in isolated sources but collide when selected together. The Runtime supplies the
-core `read`/`bash`/`edit`/`write`/`route` Tools itself, and its `rowan.core`
-source — like an Extension's `rowan.extensions` — is implicit in every view, so
-a Definition can select a built-in Phase without naming that source. Core names
-cannot be claimed by another source.
+core `read`/`bash`/`edit`/`write` Tools and built-in `default`/`stop`/`compact` Phases.
+Host-defined resources (including Tools and Phases registered by Extensions) replace
+built-ins by name, retaining the built-in status (replaced Core Tools remain always
+available without explicit Definition selection; replaced Core Phases retain their
+built-in role). Reserved control names (`route` for Tools, `continue` for Phases)
+cannot be claimed by host sources.
 
 Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
 `bootstrap`; after initialization they are frozen until the Runtime closes.

@@ -5,7 +5,8 @@ import type {
 } from "../harness/definitions";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/core-phases";
+import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
+import { CORE_TOOL_NAMES } from "./core-tools";
 import type { ContextCandidate } from "./contracts";
 import { validateMaxAttempts } from "../loop/types";
 import {
@@ -72,7 +73,7 @@ export function resolveConfigurationSnapshot(
   const selectedContexts = selectNamedResources(input.contexts ?? [], base.contexts, "Context");
   const additionalContexts = deduplicateContexts(input.additionalContexts ?? [], selectedContexts);
   const definition = applyDefinitionLayer(base, layer);
-  const tools = selectNamedResources(resolved.tools, definition.tools, "Tool");
+  const tools = resolveTools(resolved.tools, definition.tools);
   const skills = mergeSkills(
     selectNamedResources(resolved.skills, definition.skills, "Skill"),
     definition.bundledSkills,
@@ -163,14 +164,36 @@ function intersectPhaseSelection(
   };
 }
 
+function resolveTools(
+  candidates: readonly import("./contracts").Tool[],
+  selection: readonly string[] | undefined,
+): import("./contracts").Tool[] {
+  const coreNames = CORE_TOOL_NAMES;
+  const core = candidates.filter((tool) => tool.core || coreNames.has(tool.name));
+  const authoredSelection = selection
+    ? selection.filter((name) => !coreNames.has(name))
+    : undefined;
+  const authored = candidates.filter((tool) => !coreNames.has(tool.name) && !tool.core);
+  return [
+    ...core.map((tool) => ({ ...tool, core: true })),
+    ...selectNamedResources(authored, authoredSelection, "Tool"),
+  ];
+}
+
 function resolvePhases(
   candidates: readonly Phase[],
   selection: PhaseRegistrySelection | undefined,
 ): PhaseRegistry | undefined {
-  const coreNames = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
+  const coreNames = CORE_PHASE_NAMES;
   const core = candidates.filter((phase) => phase.core || coreNames.has(phase.name));
+  const authoredSelection = selection?.phaseIds
+    ? selection.phaseIds.filter((name) => !coreNames.has(name))
+    : undefined;
   const authored = candidates.filter((phase) => !coreNames.has(phase.name) && !phase.core);
-  const selected = [...core, ...selectNamedResources(authored, selection?.phaseIds, "Phase")];
+  const selected = [
+    ...core.map((phase) => ({ ...phase, core: true })),
+    ...selectNamedResources(authored, authoredSelection, "Phase"),
+  ];
   const entryPhaseId = selection?.entryPhaseId ?? null;
   // The built-in default Phase is materialized by Runtime execution rather
   // than selected from a host source. It is therefore valid even when an

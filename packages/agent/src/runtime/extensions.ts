@@ -35,9 +35,16 @@ export function assembleRegisteredExtensions(
     ...(options.toolArchiveDir ? { archiveDir: options.toolArchiveDir } : {}),
   });
   const coreNames = new Set(coreTools.map((tool) => tool.name));
+  const replacingNames = new Set(
+    snapshot.resources.tools
+      .filter((tool) => coreNames.has(tool.name) || tool.core)
+      .map((tool) => tool.name),
+  );
   const tools = [
-    ...snapshot.resources.tools.filter((tool) => !coreNames.has(tool.name)),
-    ...coreTools,
+    ...snapshot.resources.tools.map((tool) =>
+      coreNames.has(tool.name) ? { ...tool, core: true } : tool,
+    ),
+    ...coreTools.filter((tool) => !replacingNames.has(tool.name)),
   ];
   const context = resolveDefinitionContext(snapshot, tools);
   return {
@@ -89,8 +96,11 @@ function resolveDefinitionContext(
 ): ResolvedAgentContext {
   const coreTools = assembled.filter((tool) => tool.core);
   const authoredTools = assembled.filter((tool) => !tool.core);
+  const authoredSelection = snapshot.definition.tools
+    ? snapshot.definition.tools.filter((name) => !assembled.some((t) => t.core && t.name === name))
+    : undefined;
   const tools = [
-    ...selectNamedResources(authoredTools, snapshot.definition.tools, "Tool"),
+    ...selectNamedResources(authoredTools, authoredSelection, "Tool"),
     ...coreTools,
   ];
   const skills = mergeSkills(
@@ -106,11 +116,14 @@ function resolveDefinitionContext(
   ];
   const phaseCandidates = [...(snapshot.resources.phases?.phases.values() ?? [])];
   const coreNames = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
+  const authoredPhaseIds = snapshot.definition.phases?.phaseIds
+    ? snapshot.definition.phases.phaseIds.filter((name) => !coreNames.has(name))
+    : undefined;
   const selectedPhases = [
-    ...phaseCandidates.filter((phase) => phase.core || coreNames.has(phase.name)),
+    ...phaseCandidates.filter((phase) => phase.core || coreNames.has(phase.name)).map((phase) => ({ ...phase, core: true })),
     ...selectNamedResources(
       phaseCandidates.filter((phase) => !phase.core && !coreNames.has(phase.name)),
-      snapshot.definition.phases?.phaseIds,
+      authoredPhaseIds,
       "Phase",
     ),
   ];

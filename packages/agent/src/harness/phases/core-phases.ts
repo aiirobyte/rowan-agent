@@ -4,6 +4,7 @@ import { contentBlocksToMessageContent, createMessage } from "../../types";
 export const DEFAULT_PHASE_ID = "default";
 export const STOP_PHASE_ID = "stop";
 export const COMPACT_PHASE_ID = "compact";
+export const CORE_PHASE_NAMES = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
 
 export function createDefaultPhase(): Phase {
   return {

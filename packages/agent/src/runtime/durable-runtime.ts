@@ -1913,23 +1913,28 @@ function isContextOverflowError(error: unknown): boolean {
 function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegistry {
   const core = createCorePhases();
   const coreNames = new Set(core.map(({ name }) => name));
-  for (const [name, phase] of registry?.phases ?? []) {
-    if (coreNames.has(name) && !phase.core) {
-      throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${name}".`);
-    }
-  }
   for (const [name] of registry?.phases ?? []) {
     if (name === "continue") {
       throw new TypeError(`Configured Phase name "${name}" is reserved by Rowan routing controls.`);
     }
   }
-  const authored = [...(registry?.phases ?? [])]
-    .filter(([name, phase]) => !coreNames.has(name) || phase.core === false);
+  const configuredPhases = registry?.phases ?? new Map<string, Phase>();
+  const phases = new Map<string, Phase>();
+  for (const corePhase of core) {
+    const configured = configuredPhases.get(corePhase.name);
+    if (configured) {
+      phases.set(corePhase.name, configured.core ? configured : { ...configured, core: true });
+    } else {
+      phases.set(corePhase.name, corePhase);
+    }
+  }
+  for (const [name, phase] of configuredPhases) {
+    if (!coreNames.has(name)) {
+      phases.set(name, phase);
+    }
+  }
   return {
-    phases: new Map([
-      ...core.map((phase) => [phase.name, phase] as const),
-      ...authored,
-    ]),
+    phases,
     entryPhaseId: registry?.entryPhaseId ?? DEFAULT_PHASE_ID,
   };
 }

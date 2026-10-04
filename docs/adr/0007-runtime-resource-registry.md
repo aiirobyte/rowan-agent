@@ -4,6 +4,11 @@ status: accepted
 
 # Put scoped Configuration Snapshot resolution behind the Runtime Resource Registry
 
+> **Amended by [ADR-0013](0013-host-defined-resources-replace-built-ins-by-name.md)**
+> for core resource precedence: host-defined and Extension-registered resources replace
+> Rowan built-ins (`read`, `edit`, `write`, `bash` Tools, and `default`, `stop`, `compact` Phases)
+> by name rather than colliding or being rejected.
+
 Rowan will expose one Runtime Resource Registry as the public seam for
 registering Agent Definitions, Tools, Skills, and Phases. A registration creates
 an atomically replaceable Resource Source; it does not create one Runtime-global
@@ -15,10 +20,11 @@ Each `load*` input has a stable `sourceId` and may include the supported
 resource-type directory, inline values, or both. A private Registry Source
 Transaction normalizes both forms, validates shared path-safe names, diagnoses
 invalid individual files, and atomically replaces the source's complete prior
-revision. A duplicate inside the merged source, or a collision with an implicit
-core resource, rejects the whole transaction and preserves the previous
-revision. Cross-source duplicates may be registered because they might never be
-visible together.
+revision. A duplicate inside the merged source, or a collision with a reserved
+control name (`route` for Tools, `continue` for Phases), rejects the whole
+transaction and preserves the previous revision (as amended by ADR-0013, host
+resources matching built-in core names replace the built-in rather than colliding).
+Cross-source duplicates may be registered because they might never be visible together.
 
 The Runtime Configuration interface accepts a registered Definition name, an
 explicit Resource View, Context Candidates, and normal execution options. It

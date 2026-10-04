@@ -339,27 +339,36 @@ test("parallel file Phases add their Bundle Skills to root Skills", async () => 
   }
 });
 
-test("Runtime rejects a Context Phase that collides with its built-in default", async () => {
+test("Runtime replaces its built-in default when a Context Phase names default", async () => {
+  let defaultExecuted = false;
   const stream: StreamFn = async function* () {
     yield { type: "done" };
   };
   const phase: Phase = {
     ...customPhase,
     name: "default",
+    run: async () => {
+      defaultExecuted = true;
+      return { message: "host default complete", route: "stop" };
+    },
   };
   const runtime = await AgentRuntime.init({
     store: new InMemoryStore(),
     concurrency: 1,
   });
   try {
-    // The registry refuses the reserved name at registration, before a Run exists.
-    await expect(phaseAgent(runtime, {
+    const agentId = await phaseAgent(runtime, {
       identity: "phase-normalization-collision-v1",
       stream,
       phases: new Map([[phase.name, phase]]),
       entryPhaseId: null,
       options: { idempotencyKey: "phase-normalization-collision-agent" },
-    })).rejects.toThrow(/reserved by Rowan core/);
+    });
+    const run = await runtime.start(agentId, "hello", {
+      idempotencyKey: "phase-normalization-collision-run",
+    });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(defaultExecuted).toBe(true);
   } finally {
     await runtime.close();
   }
