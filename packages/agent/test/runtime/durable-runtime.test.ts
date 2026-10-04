@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import type { AssistantMessage, RunId } from "../../src/runtime-events";
+import type { AssistantMessage, RunId, ToolCallDelta } from "../../src/runtime-events";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { configuration, createAgentWith, createPhaseAgent, seedResources, testDefinition } from "../fixtures/configuration";
@@ -598,12 +598,12 @@ test("AgentRun.observe streams ThinkingBlock deltas before the durable boundary"
 
 test("AgentRuntime routes Tool execution through durable lifecycle", async () => {
   let modelCalls = 0;
-  let toolContext: { runId: string; toolCallId: string } | undefined;
+  let toolContext: { runId: string; toolCallId: string; providerToolCallId?: string } | undefined;
   const tool = {
     name: "lookup",
     description: "Look up a value.",
     parameters: Type.Object({ query: Type.String() }),
-    async execute(_args: unknown, context: { runId: string; toolCallId: string }) {
+    async execute(_args: unknown, context: { runId: string; toolCallId: string; providerToolCallId?: string }) {
       toolContext = context;
       return { ok: true as const, content: { value: 42 } };
     },
@@ -636,11 +636,115 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
     expect(modelCalls).toBe(2);
     expect(toolContext?.runId).toBe(run.id);
     expect(toolContext?.toolCallId).toMatch(/^tool_/);
+    expect(toolContext?.providerToolCallId).toBe("call_lookup");
     const observed = [];
     for await (const event of run.observe()) observed.push(event);
     const toolEvents = observed.filter((event) => event.kind === "tool_state_changed");
     expect(toolEvents.map((event) => event.transition.to)).toEqual(["pending", "running", "completed"]);
     expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime streams tool_call_delta events with growing arguments and passes providerToolCallId to tool execution", async () => {
+  let modelCalls = 0;
+  let executedContext: ToolInvocationContext | undefined;
+  const tool = {
+    name: "edit",
+    description: "Edit a document.",
+    parameters: Type.Object({ path: Type.String(), newText: Type.String() }),
+    async execute(_args: unknown, context: ToolInvocationContext) {
+      executedContext = context;
+      return { ok: true as const, content: { applied: true } };
+    },
+  };
+
+  const id = "call_edit_abc123";
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const fragment1 = '{"path": "doc.txt", "newText": "hello ';
+      const fragment2 = "world";
+      const fragment3 = '"}';
+
+      const partial1 = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args: fragment1 }] };
+      const partial2 = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args: fragment1 + fragment2 }] };
+      const partial3 = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args: fragment1 + fragment2 + fragment3 }] };
+
+      yield { type: "tool_call_start", id, name: tool.name, partial: partial1 };
+      yield { type: "tool_call_delta", id, arguments: fragment1, partial: partial1 };
+      yield { type: "tool_call_delta", id, arguments: fragment2, partial: partial2 };
+      yield { type: "tool_call_delta", id, arguments: fragment3, partial: partial3 };
+      yield { type: "tool_call_end", id, name: tool.name, arguments: fragment1 + fragment2 + fragment3, partial: partial3 };
+      yield { type: "done" };
+      return;
+    }
+    const hasResult = request.messages.some((message) => Array.isArray(message.content) && message.content.some((part) => part.type === "tool_result"));
+    if (!hasResult) throw new Error("model did not receive the Tool result");
+    const text = "edit applied";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse("edit applied") };
+  };
+
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await simpleAgent(runtime, stream, {
+      idempotencyKey: "agent-tool-call-delta",
+    }, { tools: [tool] });
+    const run = await runtime.start(agentId, "edit the doc", { idempotencyKey: "run-tool-call-delta" });
+
+    const observed: RunEvent[] = [];
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    const boundary = run.wait();
+
+    while (true) {
+      const event = await iterator.next();
+      if (event.done) break;
+      observed.push(event.value);
+    }
+    await boundary;
+
+    const deltas = observed.filter((event): event is ToolCallDelta => event.kind === "tool_call_delta");
+    expect(deltas.length).toBe(3);
+
+    expect(deltas[0]).toMatchObject({
+      kind: "tool_call_delta",
+      durability: "transient",
+      runId: run.id,
+      providerToolCallId: id,
+      toolName: "edit",
+      arguments: '{"path": "doc.txt", "newText": "hello ',
+      args: { path: "doc.txt", newText: "hello " },
+    });
+
+    expect(deltas[1]).toMatchObject({
+      kind: "tool_call_delta",
+      durability: "transient",
+      runId: run.id,
+      providerToolCallId: id,
+      toolName: "edit",
+      arguments: '{"path": "doc.txt", "newText": "hello world',
+      args: { path: "doc.txt", newText: "hello world" },
+    });
+
+    expect(deltas[2]).toMatchObject({
+      kind: "tool_call_delta",
+      durability: "transient",
+      runId: run.id,
+      providerToolCallId: id,
+      toolName: "edit",
+      arguments: '{"path": "doc.txt", "newText": "hello world"}',
+      args: { path: "doc.txt", newText: "hello world" },
+    });
+
+    expect(deltas[0].arguments.length).toBeLessThan(deltas[1].arguments.length);
+    expect(deltas[1].arguments.length).toBeLessThan(deltas[2].arguments.length);
+
+    expect(executedContext).toBeDefined();
+    expect(executedContext?.providerToolCallId).toBe(id);
+    expect(executedContext?.toolCallId).toMatch(/^tool_/);
+    expect(executedContext?.providerToolCallId).toBe(deltas[0].providerToolCallId);
   } finally {
     await runtime.close();
   }

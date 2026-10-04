@@ -66,6 +66,7 @@ export type {
   Message,
   MessageDelta,
   ThinkingDelta,
+  ToolCallDelta,
   MessageBase,
   MessageCommitted,
   MessageContent,
@@ -168,6 +169,8 @@ export type ToolCallContext = Readonly<{
   agentMetadata?: Metadata;
   runMetadata?: Metadata;
   toolCallId: ToolCallId;
+  /** The model's id for this call, matching `tool_call_delta` events; absent when a host runs the tool itself. */
+  providerToolCallId?: string;
   scope?: import("../extensions").ScopeRef;
   turn?: JsonObject;
   reportProgress(progress: JsonValue): void;

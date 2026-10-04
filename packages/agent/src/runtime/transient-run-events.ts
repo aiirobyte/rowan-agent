@@ -4,10 +4,11 @@ import type {
   PhaseStatusEvent,
   RunId,
   ThinkingDelta,
+  ToolCallDelta,
   ToolProgress,
 } from "../runtime-events";
 
-export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolProgress | PhaseStatusEvent;
+export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent;
 
 const MAX_BUFFERED_EVENTS = 128;
 const MAX_BUFFERED_TEXT = 64 * 1024;
@@ -55,6 +56,14 @@ export class TransientRunEventSubscription {
         ...previous,
         text: previous.text + event.text,
       };
+    } else if (
+      // `arguments` accumulates, so the latest delta of a call replaces the one before.
+      previous?.kind === "tool_call_delta"
+      && event.kind === "tool_call_delta"
+      && previous.executionId === event.executionId
+      && previous.providerToolCallId === event.providerToolCallId
+    ) {
+      this.queue[this.queue.length - 1] = event;
     } else {
       if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
       this.queue.push(event);
@@ -89,7 +98,7 @@ export class TransientRunEventSubscription {
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {
       const event = this.queue[index];
       if (
-        (event?.kind === "message_delta" || event?.kind === "thinking_delta")
+        (event?.kind === "message_delta" || event?.kind === "thinking_delta" || event?.kind === "tool_call_delta")
         && event.messageId === messageId
       ) this.queue.splice(index, 1);
     }

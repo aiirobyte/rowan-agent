@@ -100,6 +100,7 @@ export const publicTypeExports = [
   "MessageContent",
   "MessageDelta",
   "ThinkingDelta",
+  "ToolCallDelta",
   "MessageId",
   "MessageRevised",
   "MessageRevisionResult",

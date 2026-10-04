@@ -12,7 +12,8 @@ import type {
   LlmResponse,
 } from "@rowan-agent/models";
 import type { ModelInvokeOutput, PhaseMessageManager } from "./execution";
-import type { ThinkingDeltaNotification } from "./types";
+import type { ThinkingDeltaNotification, ToolCallDeltaNotification } from "./types";
+import { parsePartialJson } from "./partial-json";
 import type { ModelTranscript } from "../protocol/turn";
 import { LoopGuard, EmptyResponseError, ModelOutputLimitError } from "./errors";
 
@@ -25,6 +26,7 @@ export type ModelInvokerInput = {
   phaseId: string;
   output?: "reply" | "internal";
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
+  onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
 };
 
 export type ModelInvokerResult = ModelInvokeOutput & {
@@ -45,6 +47,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     metadataPhase: input.phaseId,
     output: input.output,
     onThinkingDelta: input.onThinkingDelta,
+    onToolCallDelta: input.onToolCallDelta,
   });
 
   const response: LlmResponse = result.doneResponse ?? {
@@ -84,6 +87,7 @@ async function collectStreamResult(input: {
   metadataPhase: string;
   output?: "reply" | "internal";
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
+  onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
 }): Promise<StreamCollectionResult> {
   const persistAssistant = input.output !== "internal";
   let activeMessageId: string | undefined;
@@ -93,6 +97,8 @@ async function collectStreamResult(input: {
   let streamedOutputCharacters = 0;
   const toolCallsWithDeltas = new Set<string>();
   const thinkingOffsets = new Map<number, number>();
+  const toolNames = new Map<string, string>();
+  const toolArguments = new Map<string, string>();
 
   for await (const event of input.events) {
     if (event.type === "text_delta") {
@@ -151,6 +157,30 @@ async function collectStreamResult(input: {
         });
       }
       lastPartial = event.partial;
+    }
+
+    if (event.type === "tool_call_start") {
+      toolNames.set(event.id, event.name);
+    }
+
+    if (event.type === "tool_call_delta") {
+      const accumulated = (toolArguments.get(event.id) ?? "") + event.arguments;
+      toolArguments.set(event.id, accumulated);
+      const toolName = toolNames.get(event.id)
+        ?? event.partial.contentBlocks.find((b): b is ToolCallBlock => b.type === "tool_call" && b.id === event.id)?.name
+        ?? "";
+      if (toolName && !toolNames.has(event.id)) {
+        toolNames.set(event.id, toolName);
+      }
+      if (persistAssistant && activeMessageId) {
+        input.onToolCallDelta?.({
+          messageId: activeMessageId,
+          providerToolCallId: event.id,
+          toolName,
+          arguments: accumulated,
+          args: parsePartialJson(accumulated),
+        });
+      }
     }
 
     if (event.type === "thinking_delta") {

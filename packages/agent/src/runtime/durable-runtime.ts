@@ -885,6 +885,25 @@ export class AgentRuntime implements AgentRuntimeContract {
             text: event.text,
           });
         },
+        onToolCallDelta: (event) => {
+          const active = this.executions.get(run.id);
+          if (
+            this.closed
+            || controller.signal.aborted
+            || active?.executionId !== claim!.execution.executionId
+          ) return;
+          this.transientEvents.publish({
+            kind: "tool_call_delta",
+            durability: "transient",
+            runId: run.id,
+            executionId: claim!.execution.executionId,
+            messageId: event.messageId as MessageId,
+            providerToolCallId: event.providerToolCallId,
+            toolName: event.toolName,
+            arguments: event.arguments,
+            args: event.args,
+          });
+        },
         onContext: assembly.setContext,
         runtime: {
           tools: ({ toolCall, contentBlocks, driver }: ToolRunnerInput) => {
@@ -1140,6 +1159,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
           ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
           toolCallId,
+          providerToolCallId: toolCall.id,
           scope,
           turn,
           interaction: createRunInteractionDriver({
@@ -1233,6 +1253,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
             ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
             toolCallId,
+            providerToolCallId,
             scope,
             turn,
             interaction: createToolInteractionDriver(input.driver!, {
@@ -1409,6 +1430,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
         ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
         toolCallId,
+        providerToolCallId,
         scope,
         turn,
         interaction: createToolInteractionDriver(input.driver!, {

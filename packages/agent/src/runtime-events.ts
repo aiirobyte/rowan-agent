@@ -296,6 +296,18 @@ export type ThinkingDelta = Readonly<{
   text: string;
 }>;
 
+export type ToolCallDelta = Readonly<{
+  kind: "tool_call_delta";
+  durability: "transient";
+  runId: RunId;
+  executionId: ExecutionId;
+  messageId: MessageId;
+  providerToolCallId: string;
+  toolName: string;
+  arguments: string;
+  args: JsonValue | undefined;
+}>;
+
 export type ToolProgress = Readonly<{
   kind: "tool_progress";
   durability: "transient";
@@ -314,4 +326,4 @@ export type PhaseStatusEvent = Readonly<{
   status: PhaseStatus;
 }>;
 
-export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolProgress | PhaseStatusEvent;
+export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent;
