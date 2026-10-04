@@ -551,13 +551,7 @@ test("a before_tool_call handler that throws → the tool is not executed", asyn
 
 test("host reads contributed capabilities via AgentRuntime and receives change notifications", async () => {
   let capturedApi: any = null;
-  const hostReceived: Array<readonly any[]> = [];
   const runtimeReceived: Array<readonly any[]> = [];
-
-  const customHost = new InMemoryExtensionHost();
-  customHost.onCapabilitiesUpdate((caps) => {
-    hostReceived.push(caps);
-  });
 
   const remoteToolExt: LoadedExtension = {
     path: "remote-tool-ext",
@@ -575,7 +569,7 @@ test("host reads contributed capabilities via AgentRuntime and receives change n
 
   const runtime = await AgentRuntime.init({
     store: new InMemoryStore(),
-    host: customHost,
+    host: new InMemoryExtensionHost(),
     concurrency: 1,
     bootstrap: async (registry) => {
       await registry.loadExtensions([remoteToolExt]);
@@ -597,7 +591,6 @@ test("host reads contributed capabilities via AgentRuntime and receives change n
         description: "Execute a remote database query",
       },
     ]);
-    expect(customHost.getCapabilities()).toEqual(initialCaps);
 
     // 2. Dynamic contribution (e.g. after connecting to a remote server)
     const removeMutationTool = capturedApi.capabilities.contribute({
@@ -611,17 +604,20 @@ test("host reads contributed capabilities via AgentRuntime and receives change n
     expect(updatedCaps).toHaveLength(2);
     expect(updatedCaps.map((c: any) => c.name)).toEqual(["remote_query", "remote_mutate"]);
     expect(runtimeReceived.length).toBeGreaterThanOrEqual(1);
-    expect(hostReceived.length).toBeGreaterThanOrEqual(1);
+    expect(runtimeReceived[runtimeReceived.length - 1]?.map((c: any) => c.name)).toEqual([
+      "remote_query",
+      "remote_mutate",
+    ]);
 
     // 3. Dynamic removal of tool
     removeMutationTool();
     expect(runtime.listCapabilities()).toHaveLength(1);
     expect(runtime.listCapabilities()[0]!.name).toBe("remote_query");
-
-    unsubRuntime();
+    expect(runtimeReceived[runtimeReceived.length - 1]?.map((c: any) => c.name)).toEqual(["remote_query"]);
   } finally {
     // 4. Closing runtime removes all contributions
     await runtime.close();
-    expect(customHost.getCapabilities()).toHaveLength(0);
+    expect(runtimeReceived[runtimeReceived.length - 1]).toEqual([]);
+    unsubRuntime();
   }
 });

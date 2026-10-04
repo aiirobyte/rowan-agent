@@ -48,9 +48,6 @@ export interface ExtensionHost {
     agentId: string,
     key: string,
   ): Promise<void> | void;
-  onCapabilitiesChanged?(
-    capabilities: readonly ExtensionCapability[],
-  ): Promise<void> | void;
 }
 
 // ---------------------------------------------------------------------------

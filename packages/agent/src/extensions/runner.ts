@@ -868,25 +868,6 @@ export class ExtensionRunner {
         });
       }
     }
-    if (this.host.onCapabilitiesChanged) {
-      try {
-        void Promise.resolve(this.host.onCapabilitiesChanged(capabilities)).catch((error) => {
-          this.emitError({
-            extensionPath: "<host>",
-            event: "capabilities_changed",
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-          });
-        });
-      } catch (error) {
-        this.emitError({
-          extensionPath: "<host>",
-          event: "capabilities_changed",
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-      }
-    }
   }
 
   private async registerPhase(

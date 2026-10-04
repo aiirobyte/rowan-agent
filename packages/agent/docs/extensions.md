@@ -111,8 +111,7 @@ The host interface defines:
 - `getConfig(extensionId, scope?)`: Resolves the layered configuration for an extension.
 - `onConfigChanged(listener: (extensionId, scope) => void)`: Registers a listener to receive configuration change notifications for extensions.
 - `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.
-- `onCapabilitiesChanged?(capabilities: readonly ExtensionCapability[])`: Optional callback invoked whenever extension capabilities are contributed, updated, or removed.
 
-Hosts can also query and listen to capabilities directly on `AgentRuntime`:
+Hosts can query and listen to capabilities directly on `AgentRuntime`:
 - `runtime.listCapabilities()`: Returns the active array of capabilities (`{ extensionId, kind: "tool", name, description }`), readable at any time outside a Run.
 - `runtime.onCapabilitiesChanged(listener: (capabilities) => void)`: Subscribes to capability changes and returns an unsubscribe function.
