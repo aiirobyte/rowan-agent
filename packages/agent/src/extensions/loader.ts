@@ -35,6 +35,8 @@ function readManifestSync(dir: string): ExtensionManifest | undefined {
     const rowan = pkg.rowan;
     if (!rowan) return undefined;
     return {
+      id: rowan.id ?? pkg.name,
+      name: pkg.name,
       entry: rowan.extensions?.[0],
     };
   } catch {
@@ -140,6 +142,7 @@ export function loadExtensionFromFactory(
   factory: ExtensionFactory,
   cwd: string,
   extensionPath = "<inline>",
+  options: { id?: string; name?: string } = {},
 ): LoadedExtension {
   const resolvedCwd = resolve(cwd);
   const resolvedPath = isSyntheticPath(extensionPath)
@@ -147,15 +150,17 @@ export function loadExtensionFromFactory(
     : resolve(resolvedCwd, extensionPath);
 
   // Extract name from path
-  const name = isSyntheticPath(extensionPath)
+  const name = options.name ?? (isSyntheticPath(extensionPath)
     ? extensionPath
-    : basename(dirname(resolvedPath)) || "unknown";
+    : basename(dirname(resolvedPath)) || "unknown");
 
   // Read manifest from package.json in extension directory
   const manifestDir = isSyntheticPath(extensionPath) ? resolvedCwd : dirname(resolvedPath);
   const manifest = readManifestSync(manifestDir);
+  const id = options.id ?? manifest?.id ?? name;
 
   return {
+    id,
     path: resolvedPath,
     name,
     factory,

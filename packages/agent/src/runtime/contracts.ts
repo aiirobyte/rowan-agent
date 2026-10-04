@@ -168,6 +168,8 @@ export type ToolCallContext = Readonly<{
   agentMetadata?: Metadata;
   runMetadata?: Metadata;
   toolCallId: ToolCallId;
+  scope?: import("../extensions").ScopeRef;
+  turn?: JsonObject;
   reportProgress(progress: JsonValue): void;
 }>;
 export type ToolInvocationContext = ToolCallContext & Readonly<{
@@ -441,6 +443,7 @@ export type AgentRuntimeOptions = Readonly<{
   configs?: ConfigProvider;
   concurrency?: number;
   bootstrap?: (registry: RuntimeBootstrapRegistry) => void | Promise<void>;
+  host?: import("../extensions").ExtensionHost;
 }>;
 export type DurableConsumer = Readonly<{ caughtUp: Promise<void>; done: Promise<void>; stop(): void }>;
 export interface AgentRun {
@@ -452,6 +455,7 @@ export interface AgentRun {
   cancel(reason?: string): Promise<RunBoundary>;
 }
 export interface AgentRuntime {
+  readonly host: import("../extensions").ExtensionHost;
   loadAgents(input: LoadInput<AgentDefinition>): Promise<LoadResult>;
   loadSkills(input: LoadInput<Skill>): Promise<LoadResult>;
   loadPhases(input: LoadInput<import("../harness/phases/types").Phase>): Promise<LoadResult>;

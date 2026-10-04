@@ -46,7 +46,7 @@ export class RuntimeExtensionLifetime {
   private frozen = false;
   private closed = false;
 
-  constructor(options: { cwd?: string } = {}) {
+  constructor(options: { cwd?: string; host?: import("../extensions").ExtensionHost } = {}) {
     this.runner = createExtensionRunner(options);
   }
 
@@ -83,6 +83,14 @@ export class RuntimeExtensionLifetime {
     return this.runner;
   }
 
+  get extensionHost(): import("../extensions").ExtensionHost {
+    return this.runner.extensionHost;
+  }
+
+  dropRunState(runId: string): void {
+    this.runner.dropRunState(runId);
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -96,6 +104,10 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
 
   constructor(private readonly extensions: RuntimeExtensionLifetime = new RuntimeExtensionLifetime()) {
     super();
+  }
+
+  get extensionHost(): import("../extensions").ExtensionHost {
+    return this.extensions.extensionHost;
   }
 
   /** Install Rowan-owned implicit resources before any host source is read. */

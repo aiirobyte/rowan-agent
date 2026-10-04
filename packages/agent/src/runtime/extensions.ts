@@ -53,6 +53,8 @@ export function assembleRegisteredExtensions(
         toolCallId: input.context.toolCallId,
         metadata: input.context.runMetadata,
         answer: input.answer,
+        scope: input.context.scope,
+        turn: input.context.turn,
       });
       if (decision.interaction !== undefined) {
         return { interaction: decision.interaction };
@@ -69,6 +71,8 @@ export function assembleRegisteredExtensions(
           agentId: input.context.agentId,
           toolCallId: input.context.toolCallId,
           metadata: input.context.runMetadata,
+          scope: input.context.scope,
+          turn: input.context.turn,
         },
       );
       return fromLoopResult(result);

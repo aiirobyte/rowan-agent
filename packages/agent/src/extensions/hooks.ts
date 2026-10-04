@@ -1,6 +1,8 @@
 import type { Outcome, Tool, ToolResult } from "../types";
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { RunInteractionKind, RunInteractionRequest } from "../harness/phases/interactions";
+import type { JsonObject } from "../runtime-events";
+import type { ScopeRef } from "./types";
 
 export type { RunInteractionKind, RunInteractionRequest };
 
@@ -31,6 +33,8 @@ export interface BeforeToolCallEvent {
   readonly toolCallId?: string;
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly answer?: unknown;
+  readonly scope?: ScopeRef;
+  readonly turn?: JsonObject;
 }
 
 export interface AfterToolCallEvent {
@@ -41,6 +45,23 @@ export interface AfterToolCallEvent {
   readonly agentId?: string;
   readonly toolCallId?: string;
   readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly scope?: ScopeRef;
+  readonly turn?: JsonObject;
+}
+
+export interface RunStartEvent {
+  type: "run_start";
+  runId: string;
+  agentId: string;
+  metadata: Readonly<Record<string, unknown>>;
+  turn: JsonObject;
+}
+
+export interface RunEndEvent {
+  type: "run_end";
+  runId: string;
+  agentId: string;
+  outcome: unknown;
 }
 
 export type HookEvent =
@@ -48,7 +69,9 @@ export type HookEvent =
   | AfterPhaseEvent
   | BeforePromptEvent
   | BeforeToolCallEvent
-  | AfterToolCallEvent;
+  | AfterToolCallEvent
+  | RunStartEvent
+  | RunEndEvent;
 
 export interface BeforePhaseResult {
   abort?: Outcome;
@@ -82,6 +105,8 @@ export interface HookResultMap {
   before_prompt: BeforePromptResult | undefined;
   before_tool_call: BeforeToolCallResult | undefined;
   after_tool_call: AfterToolCallResult | undefined;
+  run_start: void;
+  run_end: void;
 }
 
 export type HookEventType = HookEvent["type"];

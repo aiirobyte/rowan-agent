@@ -35,6 +35,7 @@ export {
   createStopPhase,
 } from "./harness/phases/core-phases";
 export { loadExtensionsFromPath as loadExtensions } from "./extensions/loader";
+export { InMemoryExtensionHost } from "./extensions/host";
 export { parseAgentDefinition } from "./harness/definitions";
 export { parseFrontmatter } from "./harness/loader";
 
@@ -162,11 +163,16 @@ export type {
   ExtensionDisposer,
   ExtensionFactory,
   ExtensionFactoryResult,
+  ExtensionHost,
+  ExtensionStateStore,
   HookEvent,
   HookEventType,
   HookHandler,
   LoadExtensionsResult,
   LoadedExtension,
+  RunEndEvent,
+  RunStartEvent,
+  ScopeRef,
   ToolDefinition,
 } from "./extensions";
 

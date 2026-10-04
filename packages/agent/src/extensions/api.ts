@@ -3,6 +3,8 @@ import type {
   ToolDefinition,
   ExtensionRuntime,
   ExtensionManifest,
+  ScopeRef,
+  ExtensionStateStore,
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
@@ -11,6 +13,8 @@ import type {
   PhaseSettingsProvider,
 } from "../harness/phases/types";
 import type { ExtensionContext, ExtensionUtils } from "./context";
+import type { JsonObject } from "../runtime-events";
+import { assertJsonValue } from "../runtime/json";
 
 // ---------------------------------------------------------------------------
 // ExtensionAPI - Main API for extension developers
@@ -37,6 +41,22 @@ export interface ExtensionAPI {
 
   /** Unsubscribe from a hook event. */
   off<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
+
+  /** Extension configuration — read own layered config or listen for changes. */
+  config: {
+    /** Get the extension's own effective configuration block. */
+    get(scope?: ScopeRef): Promise<JsonObject | null>;
+    /** Listen for configuration changes for a scope. */
+    changed(handler: (scope: ScopeRef) => void): void;
+  };
+
+  /** Extension state — scoped to run (in-memory) or agent (durable). */
+  state: {
+    /** Run-scoped in-memory state; dropped when the Run ends. */
+    run(runId: string): ExtensionStateStore;
+    /** Agent-scoped durable state; persisted with the Agent record. */
+    agent(agentId: string): ExtensionStateStore;
+  };
 
   /** Tool capabilities — register and unregister custom tools. */
   tool: {
@@ -126,6 +146,14 @@ export function createExtensionAPI(
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
     trackCleanup?: (cleanup: () => void | Promise<void>) => void;
+    config?: {
+      get: (scope?: ScopeRef) => Promise<JsonObject | null>;
+      changed: (handler: (scope: ScopeRef) => void) => void;
+    };
+    state?: {
+      run: (runId: string) => ExtensionStateStore;
+      agent: (agentId: string) => ExtensionStateStore;
+    };
   },
   runtime?: ExtensionRuntime,
   eventBus?: EventBus,
@@ -173,6 +201,56 @@ export function createExtensionAPI(
     off: (eventType, handler) => {
       assertActive();
       hooks?.off(eventType, handler);
+    },
+    config: {
+      get: async (scope) => {
+        assertActive();
+        return (await options?.config?.get(scope)) ?? null;
+      },
+      changed: (handler) => {
+        assertActive();
+        options?.config?.changed(handler);
+      },
+    },
+    state: {
+      run: (runId) => {
+        assertActive();
+        const store = options?.state?.run(runId);
+        return {
+          get: async (key) => {
+            assertActive();
+            return store?.get(key);
+          },
+          set: async (key, value) => {
+            assertActive();
+            assertJsonValue(value);
+            return store?.set(key, value);
+          },
+          delete: async (key) => {
+            assertActive();
+            return store?.delete(key);
+          },
+        };
+      },
+      agent: (agentId) => {
+        assertActive();
+        const store = options?.state?.agent(agentId);
+        return {
+          get: async (key) => {
+            assertActive();
+            return store?.get(key);
+          },
+          set: async (key, value) => {
+            assertActive();
+            assertJsonValue(value);
+            return store?.set(key, value);
+          },
+          delete: async (key) => {
+            assertActive();
+            return store?.delete(key);
+          },
+        };
+      },
     },
     tool: {
       register: (tool) => {
