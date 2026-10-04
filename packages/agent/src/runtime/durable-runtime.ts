@@ -49,7 +49,7 @@ import { pageAgents, pageRuns } from "./read-models";
 import { PARALLEL_PHASE_METADATA_KEY, projectAssistantMessage, projectModelContext, renderInteractionText } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
-import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
+import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
@@ -1912,24 +1912,29 @@ function isContextOverflowError(error: unknown): boolean {
 
 function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegistry {
   const core = createCorePhases();
-  const coreNames = new Set(core.map(({ name }) => name));
-  for (const [name, phase] of registry?.phases ?? []) {
-    if (coreNames.has(name) && !phase.core) {
-      throw new TypeError(`Configured Phase collides with Rowan built-in Phase "${name}".`);
-    }
-  }
+  const coreNames = CORE_PHASE_NAMES;
   for (const [name] of registry?.phases ?? []) {
     if (name === "continue") {
       throw new TypeError(`Configured Phase name "${name}" is reserved by Rowan routing controls.`);
     }
   }
-  const authored = [...(registry?.phases ?? [])]
-    .filter(([name, phase]) => !coreNames.has(name) || phase.core === false);
+  const configuredPhases = registry?.phases ?? new Map<string, Phase>();
+  const phases = new Map<string, Phase>();
+  for (const corePhase of core) {
+    const configured = configuredPhases.get(corePhase.name);
+    if (configured) {
+      phases.set(corePhase.name, configured.core ? configured : { ...configured, core: true });
+    } else {
+      phases.set(corePhase.name, corePhase);
+    }
+  }
+  for (const [name, phase] of configuredPhases) {
+    if (!coreNames.has(name)) {
+      phases.set(name, phase);
+    }
+  }
   return {
-    phases: new Map([
-      ...core.map((phase) => [phase.name, phase] as const),
-      ...authored,
-    ]),
+    phases,
     entryPhaseId: registry?.entryPhaseId ?? DEFAULT_PHASE_ID,
   };
 }

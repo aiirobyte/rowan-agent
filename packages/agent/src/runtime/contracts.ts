@@ -181,6 +181,8 @@ export type Tool = Readonly<{
   core?: boolean;
   description: string;
   parameters: Type.TSchema;
+  promptSnippet?: string;
+  promptGuidelines?: readonly string[];
   execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
 }>;
 export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;

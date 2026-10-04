@@ -8,6 +8,8 @@ import type { Phase } from "../harness/phases/types";
 import { loadSkill } from "../harness/skills";
 import type { Skill } from "../protocol";
 import type { Tool } from "./contracts";
+import { CORE_PHASE_NAMES } from "../harness/phases/core-phases";
+import { CORE_TOOL_NAMES } from "./core-tools";
 
 export type { AgentDefinition } from "../harness/definitions";
 
@@ -210,8 +212,16 @@ export class ResourceRegistry {
 
   private withImplicit(kind: ResourceKind, sourceIds: readonly ResourceSourceId[]): ResourceSourceId[] {
     const combined = [...sourceIds];
+    let hasCore = false;
     for (const sourceId of this.implicitSources.get(kind) ?? []) {
-      if (!combined.includes(sourceId)) combined.push(sourceId);
+      if (sourceId === "rowan.core") {
+        hasCore = true;
+      } else if (!combined.includes(sourceId)) {
+        combined.push(sourceId);
+      }
+    }
+    if (hasCore && !combined.includes("rowan.core")) {
+      combined.push("rowan.core");
     }
     return combined;
   }
@@ -254,6 +264,12 @@ export class ResourceRegistry {
           `${capitalize(kind)} resource "${value.name}" is reserved by Rowan core.`,
         );
       }
+      if (kind === "phase" && value.name === "continue") {
+        throw new ResourceRegistryError(
+          "resource_collision",
+          `Phase resource "continue" is reserved by Rowan routing controls.`,
+        );
+      }
       if (names.has(value.name)) {
         throw new ResourceRegistryError(
           "resource_collision",
@@ -290,6 +306,12 @@ export class ResourceRegistry {
     for (const source of this.sourcesFor(kind, sourceIds)) {
       for (const value of source.values) {
         if (names.has(value.name)) {
+          if (source.sourceId === "rowan.core") {
+            continue;
+          }
+          if (source.sourceId === "rowan.extensions" && isCoreResourceName(kind, value.name)) {
+            continue;
+          }
           throw new ResourceRegistryError(
             "resource_collision",
             `Duplicate ${capitalize(kind)} resource "${value.name}" in Resource View.`,
@@ -311,7 +333,15 @@ export class ResourceRegistry {
     const refs: ResourceRef[] = [];
     for (const source of this.sourcesFor(kind, sourceIds)) {
       for (const value of source.values) {
-        if (seenNames.has(value.name)) throw new ResourceRegistryError("resource_collision", `Duplicate ${capitalize(kind)} resource "${value.name}" in Resource View.`);
+        if (seenNames.has(value.name)) {
+          if (source.sourceId === "rowan.core") {
+            continue;
+          }
+          if (source.sourceId === "rowan.extensions" && isCoreResourceName(kind, value.name)) {
+            continue;
+          }
+          throw new ResourceRegistryError("resource_collision", `Duplicate ${capitalize(kind)} resource "${value.name}" in Resource View.`);
+        }
         seenNames.add(value.name);
         refs.push({ kind, sourceId: source.sourceId, name: value.name });
       }
@@ -390,11 +420,14 @@ function capitalize(value: string): string {
 }
 
 /** Names reserved for Rowan's own execution machinery. The concrete route
- * Tool is assembled by the loop, while the default Phase is materialized by
- * Runtime execution; neither can be shadowed by a host source. */
+ * Tool is assembled by the loop and cannot be shadowed by a host source. */
 function isImplicitCoreName(kind: ResourceKind, name: string): boolean {
-  return (kind === "tool" && name === "route")
-    || (kind === "phase" && (name === "default" || name === "stop" || name === "compact"));
+  return kind === "tool" && name === "route";
+}
+
+function isCoreResourceName(kind: ResourceKind, name: string): boolean {
+  return (kind === "tool" && CORE_TOOL_NAMES.has(name))
+    || (kind === "phase" && CORE_PHASE_NAMES.has(name));
 }
 
 type DirectoryValues<T extends RegistryValue> = {

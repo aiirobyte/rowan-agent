@@ -164,6 +164,8 @@ function adaptExtensionTool(input: RegisteredTool): import("./contracts").Tool {
     name: definition.name,
     description: definition.description,
     parameters: definition.parameters as never,
+    ...(definition.promptSnippet ? { promptSnippet: definition.promptSnippet } : {}),
+    ...(definition.promptGuidelines ? { promptGuidelines: definition.promptGuidelines } : {}),
     execute: async (args, context, signal) => {
       const result = await definition.execute(args, context, signal);
       const content = JSON.parse(JSON.stringify(result.content));

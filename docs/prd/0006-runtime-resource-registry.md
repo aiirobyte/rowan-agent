@@ -182,8 +182,11 @@ does not interpret it.
   atomic replacement.
 - Repeating `(kind, sourceId)` replaces that source's entire contribution set;
   `unload` removes it. A failed transaction preserves its previous revision.
-- Reject a duplicate inside the merged source and any collision with implicit
-  core names. Permit same-kind duplicate names in distinct non-implicit sources.
+- Reject a duplicate inside the merged source and any collision with reserved
+  control names (`route` for Tools, `continue` for Phases). Host-defined resources
+  matching built-in core names (`read`, `bash`, `edit`, `write` Tools, or `default`,
+  `stop`, `compact` Phases) replace the built-in resource rather than colliding.
+  Permit same-kind duplicate names in distinct non-implicit sources.
 - Skip malformed individual directory items with structured diagnostics. A
   missing/unreadable root commits an empty source plus diagnostics.
 - Return an opaque committed revision, registered refs, and skipped diagnostics;

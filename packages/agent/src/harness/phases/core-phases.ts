@@ -4,6 +4,7 @@ import { contentBlocksToMessageContent, createMessage } from "../../types";
 export const DEFAULT_PHASE_ID = "default";
 export const STOP_PHASE_ID = "stop";
 export const COMPACT_PHASE_ID = "compact";
+export const CORE_PHASE_NAMES = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
 
 export function createDefaultPhase(): Phase {
   return {
@@ -63,8 +64,7 @@ export function createCompactPhase(): Phase {
       // recover details from spilled Tool Results when a bounded preview is
       // insufficient. Only read/bash are exposed and their calls stay
       // ephemeral: they are not appended as Conversation Messages.
-      const tools = context.tools.filter((tool) =>
-        tool.core && (tool.name === "read" || tool.name === "bash"));
+      const tools = context.tools.filter((tool) => tool.name === "read" || tool.name === "bash");
       const working = { ...context, tools, skills: [...context.skills], messages: [...context.messages] };
       const instructions = compactInstructions(context);
       if (instructions) {
