@@ -32,12 +32,21 @@ import type {
   RunState,
   RetentionResult,
   ToolCommit,
+  ToolCallSnapshot,
   UserInput,
   DurableStore,
   OwnedStore,
 } from "./contracts";
-import { InMemoryStore } from "./durable-store";
-import type { InMemoryStoreState } from "./durable-store";
+import {
+  InMemoryStore,
+  type InMemoryStoreState,
+  type StoredAgent,
+  type StoredRun,
+  type StoredToolCall,
+  type IdempotencyReceipt,
+  type StoreMutationRecorder,
+} from "./durable-store";
+import type { Statement } from "bun:sqlite";
 import { RuntimeError } from "./errors";
 import type { ToolCallId, ToolExecutionResult, JsonValue } from "../runtime-events";
 import type { RunInteraction } from "../harness/phases/interactions";
@@ -163,6 +172,121 @@ type EventRow = { payload_json: string };
 
 type SqliteOperation<T> = (store: InMemoryStore, lease: OwnerLease) => T;
 
+class ChangeTracker implements StoreMutationRecorder {
+  readonly upsertedAgents = new Map<AgentId, StoredAgent>();
+  readonly deletedAgentIds = new Set<AgentId>();
+
+  readonly upsertedRuns = new Map<RunId, StoredRun>();
+  readonly deletedRunIds = new Set<RunId>();
+
+  readonly insertedMessages = new Map<MessageId, Message>();
+  readonly deletedMessageIds = new Set<MessageId>();
+
+  readonly upsertedToolCalls = new Map<ToolCallId, StoredToolCall>();
+  readonly deletedToolCallIds = new Set<ToolCallId>();
+
+  readonly appendedEvents: DurableRunEvent[] = [];
+  readonly truncatedEventIds = new Set<string>();
+
+  readonly upsertedIdempotency = new Map<string, IdempotencyReceipt>();
+  readonly deletedIdempotencyScopes = new Set<string>();
+
+  readonly upsertedOperationReceipts = new Map<string, IdempotencyReceipt>();
+  readonly deletedOperationReceiptKeys = new Set<string>();
+
+  readonly upsertedConsumerCheckpoints = new Map<string, EventCursor>();
+  readonly deletedConsumerCheckpoints = new Set<string>();
+
+  readonly upsertedContextCompactions = new Map<AgentId, ContextCompactionRecord>();
+  retentionFloorChanged?: number;
+
+  onAgentUpsert(agent: StoredAgent): void {
+    this.deletedAgentIds.delete(agent.id);
+    this.upsertedAgents.set(agent.id, agent);
+  }
+
+  onAgentDelete(agentId: AgentId): void {
+    this.upsertedAgents.delete(agentId);
+    this.deletedAgentIds.add(agentId);
+  }
+
+  onRunUpsert(run: StoredRun): void {
+    this.deletedRunIds.delete(run.id);
+    this.upsertedRuns.set(run.id, run);
+  }
+
+  onRunDelete(runId: RunId): void {
+    this.upsertedRuns.delete(runId);
+    this.deletedRunIds.add(runId);
+  }
+
+  onMessageInsert(message: Message): void {
+    this.deletedMessageIds.delete(message.id);
+    this.insertedMessages.set(message.id, message);
+  }
+
+  onMessageDelete(messageId: MessageId): void {
+    this.insertedMessages.delete(messageId);
+    this.deletedMessageIds.add(messageId);
+  }
+
+  onToolCallUpsert(toolCall: StoredToolCall): void {
+    this.deletedToolCallIds.delete(toolCall.id);
+    this.upsertedToolCalls.set(toolCall.id, toolCall);
+  }
+
+  onToolCallDelete(toolCallId: ToolCallId): void {
+    this.upsertedToolCalls.delete(toolCallId);
+    this.deletedToolCallIds.add(toolCallId);
+  }
+
+  onEventAppend(event: DurableRunEvent): void {
+    this.appendedEvents.push(event);
+  }
+
+  onEventsTruncate(deletedEventIds: string[]): void {
+    for (const id of deletedEventIds) this.truncatedEventIds.add(id);
+  }
+
+  onIdempotencyUpsert(scope: string, receipt: IdempotencyReceipt): void {
+    this.deletedIdempotencyScopes.delete(scope);
+    this.upsertedIdempotency.set(scope, receipt);
+  }
+
+  onIdempotencyDelete(scope: string): void {
+    this.upsertedIdempotency.delete(scope);
+    this.deletedIdempotencyScopes.add(scope);
+  }
+
+  onOperationReceiptUpsert(key: string, receipt: IdempotencyReceipt): void {
+    this.deletedOperationReceiptKeys.delete(key);
+    this.upsertedOperationReceipts.set(key, receipt);
+  }
+
+  onOperationReceiptDelete(key: string): void {
+    this.upsertedOperationReceipts.delete(key);
+    this.deletedOperationReceiptKeys.add(key);
+  }
+
+  onConsumerCheckpointUpsert(consumerId: string, cursor: EventCursor): void {
+    this.deletedConsumerCheckpoints.delete(consumerId);
+    this.upsertedConsumerCheckpoints.set(consumerId, cursor);
+  }
+
+  onConsumerCheckpointDelete(consumerId: string): void {
+    this.upsertedConsumerCheckpoints.delete(consumerId);
+    this.deletedConsumerCheckpoints.add(consumerId);
+  }
+
+  onContextCompactionUpsert(agentId: AgentId, record: ContextCompactionRecord): void {
+    this.upsertedContextCompactions.set(agentId, record);
+  }
+
+  onRetentionFloorChange(floor: number): void {
+    this.retentionFloorChanged = floor;
+  }
+}
+
 export class SqliteStore implements DurableStore {
   private readonly database: Database;
   private readonly archiveRoot: string;
@@ -171,6 +295,26 @@ export class SqliteStore implements DurableStore {
   private mirroredAgents = new Set<string>();
   private closed = false;
   private configured = false;
+  private cachedMemory?: InMemoryStore;
+  private cachedOwner?: OwnerLease;
+  private isLegacyState = false;
+
+  private stmtUpsertAgent?: Statement;
+  private stmtDeleteAgent?: Statement;
+  private stmtUpsertRun?: Statement;
+  private stmtDeleteRun?: Statement;
+  private stmtInsertMessage?: Statement;
+  private stmtDeleteMessage?: Statement;
+  private stmtUpsertToolCall?: Statement;
+  private stmtDeleteToolCall?: Statement;
+  private stmtInsertEvent?: Statement;
+  private stmtDeleteEvent?: Statement;
+  private stmtUpsertIdempotency?: Statement;
+  private stmtDeleteIdempotency?: Statement;
+  private stmtUpsertCheckpoint?: Statement;
+  private stmtDeleteCheckpoint?: Statement;
+  private stmtUpdateMeta?: Statement;
+  private stmtUpdateState?: Statement;
 
   constructor(filename = ":memory:") {
     // Opening the SQLite handle is intentionally the only constructor side effect.
@@ -198,7 +342,26 @@ export class SqliteStore implements DurableStore {
         }
         const replay = ownerLease(row);
         this.writeOwner({ ...row, expires_at: now + input.leaseMs });
-        return { ...replay, expiresAt: new Date(now + input.leaseMs).toISOString() };
+        const newLease: OwnerLease = { ...replay, expiresAt: new Date(now + input.leaseMs).toISOString() };
+        if (!this.cachedMemory || this.cachedOwner?.epoch !== replay.epoch) {
+          const state = this.readState();
+          const memory = InMemoryStore.fromState(state);
+          memory.attachOwner(newLease);
+          const tracker = new ChangeTracker();
+          memory.setChangeRecorder(tracker);
+          try {
+            memory.dropSettledClaimReceipts();
+            memory.compactTerminalReceipts();
+          } finally {
+            memory.setChangeRecorder(undefined);
+          }
+          this.ensureTableBackedStorage(memory, tracker, this.isLegacyState);
+          this.cachedMemory = memory;
+        } else {
+          this.cachedMemory.attachOwner(newLease);
+        }
+        this.cachedOwner = newLease;
+        return newLease;
       }
 
       const state = this.readState();
@@ -218,14 +381,25 @@ export class SqliteStore implements DurableStore {
         released_epoch: row.released_epoch,
       };
       this.writeOwner(next);
-      memory.dropSettledClaimReceipts();
-      this.persistState(memory.exportState());
-      return {
+      const newLease: OwnerLease = {
         ownerId: input.ownerId,
         token,
         epoch,
         expiresAt: new Date(now + input.leaseMs).toISOString(),
-      } satisfies OwnerLease;
+      };
+      memory.attachOwner(newLease);
+      const tracker = new ChangeTracker();
+      memory.setChangeRecorder(tracker);
+      try {
+        memory.dropSettledClaimReceipts();
+        memory.compactTerminalReceipts();
+      } finally {
+        memory.setChangeRecorder(undefined);
+      }
+      this.ensureTableBackedStorage(memory, tracker, this.isLegacyState);
+      this.cachedMemory = memory;
+      this.cachedOwner = newLease;
+      return newLease;
     });
     return new SqliteOwnedStore(this, lease);
   }
@@ -233,7 +407,17 @@ export class SqliteStore implements DurableStore {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.cachedMemory = undefined;
+    this.cachedOwner = undefined;
     this.database.close();
+  }
+
+  exportState(): InMemoryStoreState {
+    if (this.cachedMemory) {
+      return this.cachedMemory.exportState();
+    }
+    const state = this.readState();
+    return InMemoryStore.fromState(state).exportState();
   }
 
   /** Filesystem location owned by this Store for one Agent's readable archive. */
@@ -371,33 +555,7 @@ export class SqliteStore implements DurableStore {
 
   async listEvents(lease: OwnerLease, input: { after?: EventCursor } = {}): Promise<readonly DurableRunEvent[]> {
     this.assertOpen();
-    return this.readTransaction(() => {
-      this.requireMatchingOwner(lease, true);
-      const retentionRow = this.database.query(
-        "SELECT value FROM runtime_meta WHERE key = ?",
-      ).get(RETENTION_FLOOR_KEY) as { value: string } | null;
-      const retentionFloor = Math.max(1, Number(retentionRow?.value ?? "1"));
-      const after = input.after ? parseEventCursor(lease, input.after) : retentionFloor - 1;
-      if (input.after && after < retentionFloor - 1) {
-        throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "expired" });
-      }
-      if (input.after) {
-        const latest = this.database.query(
-          "SELECT max(sequence) AS sequence FROM run_events",
-        ).get() as { sequence: number | null };
-        const waterline = latest.sequence ?? 0;
-        if (after > waterline) {
-          throw new RuntimeError("invalid_cursor", { cursorType: "event", reason: "beyond_waterline" });
-        }
-        if (after === waterline) return [];
-      }
-      const rows = this.database.query(
-        "SELECT payload_json FROM run_events ORDER BY sequence",
-      ).all() as EventRow[];
-      return rows
-        .map((row) => JSON.parse(row.payload_json) as DurableRunEvent)
-        .filter((event) => parseEventCursor(lease, event.cursor) > after);
-    });
+    return this.read(lease, (memory) => memory.listEvents(lease, input));
   }
 
   async openConsumer(lease: OwnerLease, consumerId: string): Promise<ConsumerRegistration> {
@@ -428,7 +586,12 @@ export class SqliteStore implements DurableStore {
       const row = this.requireMatchingOwner(lease, false);
       const expiresAt = Date.now() + leaseMs;
       this.writeOwner({ ...row, expires_at: expiresAt });
-      return { ...lease, expiresAt: new Date(expiresAt).toISOString() };
+      const nextLease = { ...lease, expiresAt: new Date(expiresAt).toISOString() };
+      if (this.cachedOwner && this.cachedOwner.token === lease.token) {
+        this.cachedOwner = nextLease;
+        this.cachedMemory?.attachOwner(nextLease);
+      }
+      return nextLease;
     });
   }
 
@@ -440,27 +603,77 @@ export class SqliteStore implements DurableStore {
       if (row.owner_id !== lease.ownerId || row.owner_token !== lease.token || row.epoch !== lease.epoch) {
         throw ownershipLost(lease, row);
       }
-      const memory = InMemoryStore.fromState(this.readState());
-      memory.attachOwner(lease);
-      memory.interruptOwner(lease.epoch, "The Runtime owner was sealed.");
-      this.persistState(memory.exportState());
+      if (!this.cachedMemory || this.cachedOwner?.epoch !== lease.epoch) {
+        this.cachedMemory = InMemoryStore.fromState(this.readState());
+        this.cachedOwner = lease;
+      }
+      const tracker = new ChangeTracker();
+      this.cachedMemory.setChangeRecorder(tracker);
+      try {
+        this.cachedMemory.attachOwner(lease);
+        this.cachedMemory.interruptOwner(lease.epoch, "The Runtime owner was sealed.");
+      } finally {
+        this.cachedMemory.setChangeRecorder(undefined);
+      }
+      this.persistChanges(tracker, this.cachedMemory);
+      this.mirrorChanges(tracker);
       this.writeOwner({ ...row, owner_id: null, owner_token: null, expires_at: null, released_epoch: lease.epoch });
+      this.cachedMemory = undefined;
+      this.cachedOwner = undefined;
+    });
+  }
+
+  private read<T>(lease: OwnerLease, operation: (store: InMemoryStore) => T): T {
+    this.assertOpen();
+    this.requireMatchingOwner(lease, true);
+    if (!this.cachedMemory || this.cachedOwner?.epoch !== lease.epoch) {
+      this.cachedMemory = InMemoryStore.fromState(this.readState());
+      this.cachedMemory.attachOwner(lease);
+      this.cachedOwner = lease;
+    } else {
+      this.cachedMemory.attachOwner(lease);
+    }
+    return operation(this.cachedMemory);
+  }
+
+  private write<T>(lease: OwnerLease, operation: (store: InMemoryStore) => T): T {
+    this.assertOpen();
+    return this.immediateTransaction(() => {
+      this.requireMatchingOwner(lease, true);
+      if (!this.cachedMemory || this.cachedOwner?.epoch !== lease.epoch) {
+        this.cachedMemory = InMemoryStore.fromState(this.readState());
+        this.cachedMemory.attachOwner(lease);
+        this.cachedOwner = lease;
+      } else {
+        this.cachedMemory.attachOwner(lease);
+      }
+      const tracker = new ChangeTracker();
+      this.cachedMemory.setChangeRecorder(tracker);
+      let result: T;
+      try {
+        result = operation(this.cachedMemory);
+      } catch (error) {
+        this.cachedMemory.setChangeRecorder(undefined);
+        this.cachedMemory = undefined;
+        throw error;
+      }
+      this.cachedMemory.setChangeRecorder(undefined);
+      try {
+        this.persistChanges(tracker, this.cachedMemory);
+        this.mirrorChanges(tracker);
+      } catch (error) {
+        this.cachedMemory = undefined;
+        throw error;
+      }
+      return result;
     });
   }
 
   private invoke<T>(lease: OwnerLease, operation: SqliteOperation<T>, persist = true): T {
-    this.assertOpen();
-    return this.immediateTransaction(() => {
-      this.requireMatchingOwner(lease, true);
-      const memory = InMemoryStore.fromState(this.readState());
-      memory.attachOwner(lease);
-      const result = operation(memory, lease);
-      if (persist) {
-        this.requireMatchingOwner(lease, true);
-        this.persistState(memory.exportState());
-      }
-      return result;
-    });
+    if (persist) {
+      return this.write(lease, (memory) => operation(memory, lease));
+    }
+    return this.read(lease, (memory) => operation(memory, lease));
   }
 
   private ensureSchema(): void {
@@ -479,7 +692,7 @@ export class SqliteStore implements DurableStore {
         this.database.run("INSERT INTO runtime_meta (key, value) VALUES (?, ?)", [RETENTION_FLOOR_KEY, "1"]);
         const state = new InMemoryStore();
         this.database.run("INSERT INTO runtime_owner (singleton, epoch) VALUES (?, ?)", [STATE_ROW, 0]);
-        this.database.run("INSERT INTO runtime_state (singleton, state_json) VALUES (?, ?)", [STATE_ROW, JSON.stringify(state.exportState())]);
+        this.database.run("INSERT INTO runtime_state (singleton, state_json) VALUES (?, ?)", [STATE_ROW, JSON.stringify(state.exportMetadata())]);
       });
       return;
     }
@@ -524,15 +737,312 @@ export class SqliteStore implements DurableStore {
   private readState(): InMemoryStoreState {
     const row = this.database.query("SELECT state_json FROM runtime_state WHERE singleton = ?").get(STATE_ROW) as StateRow | null;
     if (!row) throw new RuntimeError("store_unavailable", { operation: "read_state", retryable: false, reason: "runtime_state row is missing" });
-    return JSON.parse(row.state_json) as InMemoryStoreState;
+    const parsed = JSON.parse(row.state_json);
+    if (parsed.agents && Array.isArray(parsed.agents)) {
+      this.isLegacyState = true;
+      return parsed as InMemoryStoreState;
+    }
+    this.isLegacyState = false;
+    return this.loadTableBackedState(parsed);
   }
 
-  private writeState(state: InMemoryStoreState): void {
-    this.database.run("UPDATE runtime_state SET state_json = ? WHERE singleton = ?", [JSON.stringify(state), STATE_ROW]);
+  private loadTableBackedState(metadata: any): InMemoryStoreState {
+    const agentRows = this.database.query(
+      "SELECT id, metadata_json, config_token, config_identity, created_at, activated_at, updated_at FROM agents ORDER BY created_at"
+    ).all() as Array<{
+      id: string;
+      metadata_json: string | null;
+      config_token: string | null;
+      config_identity: string | null;
+      created_at: string;
+      activated_at: string | null;
+      updated_at: string;
+    }>;
+    const agents: AgentRecord[] = agentRows.map((row) => ({
+      id: row.id as AgentId,
+      ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) } : {}),
+      ...(row.config_token ? { currentConfigToken: row.config_token as ConfigToken } : {}),
+      ...(row.config_identity ? { currentConfigIdentity: row.config_identity } : {}),
+      createdAt: row.created_at,
+      ...(row.activated_at ? { activatedAt: row.activated_at } : {}),
+      updatedAt: row.updated_at,
+    }));
+
+    const runRows = this.database.query("SELECT payload_json FROM runs").all() as Array<{ payload_json: string }>;
+    const runs: RunRecord[] = runRows.map((r) => JSON.parse(r.payload_json));
+
+    const messageRows = this.database.query("SELECT payload_json FROM messages ORDER BY run_id, sequence_within_run").all() as Array<{ payload_json: string }>;
+    const messages: Message[] = messageRows.map((m) => JSON.parse(m.payload_json));
+
+    const toolRows = this.database.query("SELECT payload_json FROM tool_calls").all() as Array<{ payload_json: string }>;
+    const toolCalls: ToolCallSnapshot[] = toolRows.map((t) => JSON.parse(t.payload_json));
+
+    const eventRows = this.database.query("SELECT payload_json FROM run_events ORDER BY sequence").all() as Array<{ payload_json: string }>;
+    const events: DurableRunEvent[] = eventRows.map((e) => JSON.parse(e.payload_json));
+
+    const idempotencyRows = this.database.query("SELECT scope, payload_json, result_json FROM idempotency").all() as Array<{ scope: string; payload_json: string; result_json: string }>;
+    const idempotency: [string, IdempotencyReceipt][] = [];
+    const operationReceipts: [string, IdempotencyReceipt][] = [];
+    for (const row of idempotencyRows) {
+      const receipt: IdempotencyReceipt = { payload: row.payload_json, result: JSON.parse(row.result_json) };
+      if (row.scope.startsWith("operation:")) {
+        operationReceipts.push([row.scope.slice("operation:".length), receipt]);
+      } else {
+        idempotency.push([row.scope, receipt]);
+      }
+    }
+
+    const cpRows = this.database.query("SELECT consumer_id, sequence FROM consumer_checkpoints").all() as Array<{ consumer_id: string; sequence: number }>;
+    const consumerCheckpoints: [string, EventCursor][] = cpRows.map((r) => [r.consumer_id, `${metadata.incarnation}:${r.sequence}` as EventCursor]);
+
+    const retentionRow = this.database.query("SELECT value FROM runtime_meta WHERE key = ?").get(RETENTION_FLOOR_KEY) as { value: string } | null;
+    const retentionFloor = Math.max(1, Number(retentionRow?.value ?? metadata.retentionFloor ?? "1"));
+
+    return {
+      incarnation: metadata.incarnation,
+      agents,
+      runs,
+      messages,
+      toolCalls,
+      events,
+      idempotency,
+      operationReceipts,
+      historySeeds: metadata.historySeeds ?? [],
+      consumerCheckpoints,
+      retentionFloor,
+      nextAgentSequence: metadata.nextAgentSequence ?? [],
+      nextReadySequence: metadata.nextReadySequence ?? [],
+      eventSequence: metadata.eventSequence ?? 0,
+      contextCompactions: metadata.contextCompactions ?? [],
+    };
   }
 
-  private persistState(state: InMemoryStoreState): void {
-    this.writeState(state);
+  private ensureTableBackedStorage(memory: InMemoryStore, tracker: ChangeTracker, isLegacy: boolean): void {
+    if (isLegacy) {
+      this.writeFullStateToTables(memory);
+      this.isLegacyState = false;
+    } else {
+      this.persistChanges(tracker, memory);
+      this.mirrorChanges(tracker);
+    }
+  }
+
+  private getStmtUpsertAgent(): Statement {
+    return (this.stmtUpsertAgent ??= this.database.prepare(
+      `INSERT INTO agents (id, metadata_json, config_token, config_identity, created_at, activated_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         metadata_json = excluded.metadata_json,
+         config_token = excluded.config_token,
+         config_identity = excluded.config_identity,
+         activated_at = excluded.activated_at,
+         updated_at = excluded.updated_at`,
+    ));
+  }
+
+  private getStmtDeleteAgent(): Statement {
+    return (this.stmtDeleteAgent ??= this.database.prepare("DELETE FROM agents WHERE id = ?"));
+  }
+
+  private getStmtUpsertRun(): Statement {
+    return (this.stmtUpsertRun ??= this.database.prepare(
+      `INSERT INTO runs (id, agent_id, agent_sequence, state, revision, payload_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         state = excluded.state,
+         revision = excluded.revision,
+         payload_json = excluded.payload_json,
+         updated_at = excluded.updated_at`,
+    ));
+  }
+
+  private getStmtDeleteRun(): Statement {
+    return (this.stmtDeleteRun ??= this.database.prepare("DELETE FROM runs WHERE id = ?"));
+  }
+
+  private getStmtInsertMessage(): Statement {
+    return (this.stmtInsertMessage ??= this.database.prepare(
+      `INSERT INTO messages (id, run_id, sequence_within_run, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json`,
+    ));
+  }
+
+  private getStmtDeleteMessage(): Statement {
+    return (this.stmtDeleteMessage ??= this.database.prepare("DELETE FROM messages WHERE id = ?"));
+  }
+
+  private getStmtUpsertToolCall(): Statement {
+    return (this.stmtUpsertToolCall ??= this.database.prepare(
+      `INSERT INTO tool_calls (id, run_id, execution_id, state, payload_json)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET state = excluded.state, payload_json = excluded.payload_json`,
+    ));
+  }
+
+  private getStmtDeleteToolCall(): Statement {
+    return (this.stmtDeleteToolCall ??= this.database.prepare("DELETE FROM tool_calls WHERE id = ?"));
+  }
+
+  private getStmtInsertEvent(): Statement {
+    return (this.stmtInsertEvent ??= this.database.prepare(
+      "INSERT INTO run_events (id, run_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
+    ));
+  }
+
+  private getStmtDeleteEvent(): Statement {
+    return (this.stmtDeleteEvent ??= this.database.prepare("DELETE FROM run_events WHERE id = ?"));
+  }
+
+  private getStmtUpsertIdempotency(): Statement {
+    return (this.stmtUpsertIdempotency ??= this.database.prepare(
+      `INSERT INTO idempotency (scope, payload_json, result_json)
+       VALUES (?, ?, ?)
+       ON CONFLICT(scope) DO UPDATE SET payload_json = excluded.payload_json, result_json = excluded.result_json`,
+    ));
+  }
+
+  private getStmtDeleteIdempotency(): Statement {
+    return (this.stmtDeleteIdempotency ??= this.database.prepare("DELETE FROM idempotency WHERE scope = ?"));
+  }
+
+  private getStmtUpsertCheckpoint(): Statement {
+    return (this.stmtUpsertCheckpoint ??= this.database.prepare(
+      `INSERT INTO consumer_checkpoints (consumer_id, sequence, event_id, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(consumer_id) DO UPDATE SET sequence = excluded.sequence, updated_at = excluded.updated_at`,
+    ));
+  }
+
+  private getStmtDeleteCheckpoint(): Statement {
+    return (this.stmtDeleteCheckpoint ??= this.database.prepare("DELETE FROM consumer_checkpoints WHERE consumer_id = ?"));
+  }
+
+  private getStmtUpdateMeta(): Statement {
+    return (this.stmtUpdateMeta ??= this.database.prepare(
+      "INSERT INTO runtime_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ));
+  }
+
+  private getStmtUpdateState(): Statement {
+    return (this.stmtUpdateState ??= this.database.prepare(
+      "UPDATE runtime_state SET state_json = ? WHERE singleton = ?",
+    ));
+  }
+
+  private persistChanges(tracker: ChangeTracker, memory: InMemoryStore): void {
+    for (const agent of tracker.upsertedAgents.values()) {
+      this.getStmtUpsertAgent().run(
+        agent.id,
+        agent.metadata === undefined ? null : JSON.stringify(agent.metadata),
+        agent.currentConfigToken ?? null,
+        agent.currentConfigIdentity ?? null,
+        agent.createdAt,
+        agent.activatedAt ?? null,
+        agent.updatedAt,
+      );
+    }
+    for (const agentId of tracker.deletedAgentIds) {
+      this.getStmtDeleteAgent().run(agentId);
+    }
+
+    for (const run of tracker.upsertedRuns.values()) {
+      this.getStmtUpsertRun().run(
+        run.id,
+        run.agentId,
+        run.agentSequence,
+        run.state,
+        run.revision,
+        JSON.stringify(run),
+        run.createdAt,
+        run.updatedAt,
+      );
+    }
+    for (const runId of tracker.deletedRunIds) {
+      this.getStmtDeleteRun().run(runId);
+    }
+
+    for (const message of tracker.insertedMessages.values()) {
+      this.getStmtInsertMessage().run(
+        message.id,
+        message.runId,
+        message.sequenceWithinRun,
+        JSON.stringify(message),
+        message.createdAt,
+      );
+    }
+    for (const messageId of tracker.deletedMessageIds) {
+      this.getStmtDeleteMessage().run(messageId);
+    }
+
+    for (const toolCall of tracker.upsertedToolCalls.values()) {
+      this.getStmtUpsertToolCall().run(
+        toolCall.id,
+        toolCall.runId,
+        toolCall.executionId,
+        toolCall.state,
+        JSON.stringify(toolCall),
+      );
+    }
+    for (const toolCallId of tracker.deletedToolCallIds) {
+      this.getStmtDeleteToolCall().run(toolCallId);
+    }
+
+    for (const event of tracker.appendedEvents) {
+      this.getStmtInsertEvent().run(
+        event.id,
+        event.runId,
+        JSON.stringify(event),
+        event.createdAt,
+      );
+    }
+    for (const eventId of tracker.truncatedEventIds) {
+      this.getStmtDeleteEvent().run(eventId);
+    }
+
+    for (const [scope, receipt] of tracker.upsertedIdempotency) {
+      this.getStmtUpsertIdempotency().run(
+        scope,
+        receipt.payload,
+        JSON.stringify(receipt.result),
+      );
+    }
+    for (const scope of tracker.deletedIdempotencyScopes) {
+      this.getStmtDeleteIdempotency().run(scope);
+    }
+
+    for (const [key, receipt] of tracker.upsertedOperationReceipts) {
+      this.getStmtUpsertIdempotency().run(
+        `operation:${key}`,
+        receipt.payload,
+        JSON.stringify(receipt.result),
+      );
+    }
+    for (const key of tracker.deletedOperationReceiptKeys) {
+      this.getStmtDeleteIdempotency().run(`operation:${key}`);
+    }
+
+    for (const [consumerId, cursor] of tracker.upsertedConsumerCheckpoints) {
+      this.getStmtUpsertCheckpoint().run(
+        consumerId,
+        Number(String(cursor).split(":").at(-1)),
+        null,
+        new Date().toISOString(),
+      );
+    }
+    for (const consumerId of tracker.deletedConsumerCheckpoints) {
+      this.getStmtDeleteCheckpoint().run(consumerId);
+    }
+
+    if (tracker.retentionFloorChanged !== undefined) {
+      this.getStmtUpdateMeta().run(RETENTION_FLOOR_KEY, String(tracker.retentionFloorChanged));
+    }
+
+    this.getStmtUpdateState().run(JSON.stringify(memory.exportMetadata()), STATE_ROW);
+  }
+
+  private writeFullStateToTables(memory: InMemoryStore): void {
+    const state = memory.exportState();
     this.database.run(
       "INSERT INTO runtime_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       [RETENTION_FLOOR_KEY, String(Math.max(1, state.retentionFloor ?? 1))],
@@ -541,58 +1051,153 @@ export class SqliteStore implements DurableStore {
       this.database.run(`DELETE FROM ${table}`);
     }
     for (const agent of state.agents) {
-      this.database.run(
-        "INSERT INTO agents (id, metadata_json, config_token, config_identity, created_at, activated_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [agent.id, agent.metadata === undefined ? null : JSON.stringify(agent.metadata), agent.currentConfigToken ?? null, agent.currentConfigIdentity ?? null, agent.createdAt, agent.activatedAt ?? null, agent.updatedAt],
+      this.getStmtUpsertAgent().run(
+        agent.id,
+        agent.metadata === undefined ? null : JSON.stringify(agent.metadata),
+        agent.currentConfigToken ?? null,
+        agent.currentConfigIdentity ?? null,
+        agent.createdAt,
+        agent.activatedAt ?? null,
+        agent.updatedAt,
       );
     }
     for (const run of state.runs) {
-      this.database.run(
-        "INSERT INTO runs (id, agent_id, agent_sequence, state, revision, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [run.id, run.agentId, run.agentSequence, run.state, run.revision, JSON.stringify(run), run.createdAt, run.updatedAt],
+      this.getStmtUpsertRun().run(
+        run.id,
+        run.agentId,
+        run.agentSequence,
+        run.state,
+        run.revision,
+        JSON.stringify(run),
+        run.createdAt,
+        run.updatedAt,
       );
     }
     for (const message of state.messages) {
-      this.database.run(
-        "INSERT INTO messages (id, run_id, sequence_within_run, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
-        [message.id, message.runId, message.sequenceWithinRun, JSON.stringify(message), message.createdAt],
+      this.getStmtInsertMessage().run(
+        message.id,
+        message.runId,
+        message.sequenceWithinRun,
+        JSON.stringify(message),
+        message.createdAt,
       );
     }
     for (const toolCall of state.toolCalls) {
-      this.database.run(
-        "INSERT INTO tool_calls (id, run_id, execution_id, state, payload_json) VALUES (?, ?, ?, ?, ?)",
-        [toolCall.id, toolCall.runId, toolCall.executionId, toolCall.state, JSON.stringify(toolCall)],
+      this.getStmtUpsertToolCall().run(
+        toolCall.id,
+        toolCall.runId,
+        toolCall.executionId,
+        toolCall.state,
+        JSON.stringify(toolCall),
       );
     }
     for (const event of state.events) {
-      this.database.run(
-        "INSERT INTO run_events (id, run_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
-        [event.id, event.runId, JSON.stringify(event), event.createdAt],
+      this.getStmtInsertEvent().run(
+        event.id,
+        event.runId,
+        JSON.stringify(event),
+        event.createdAt,
       );
     }
     for (const [scope, receipt] of state.idempotency) {
-      this.database.run(
-        "INSERT INTO idempotency (scope, payload_json, result_json) VALUES (?, ?, ?)",
-        [scope, receipt.payload, JSON.stringify(receipt.result)],
+      this.getStmtUpsertIdempotency().run(
+        scope,
+        receipt.payload,
+        JSON.stringify(receipt.result),
       );
     }
     for (const [scope, receipt] of state.operationReceipts) {
-      this.database.run(
-        "INSERT INTO idempotency (scope, payload_json, result_json) VALUES (?, ?, ?)",
-        [`operation:${scope}`, receipt.payload, JSON.stringify(receipt.result)],
+      this.getStmtUpsertIdempotency().run(
+        `operation:${scope}`,
+        receipt.payload,
+        JSON.stringify(receipt.result),
       );
     }
     for (const [consumerId, cursor] of state.consumerCheckpoints ?? []) {
-      this.database.run(
-        "INSERT INTO consumer_checkpoints (consumer_id, sequence, event_id, updated_at) VALUES (?, ?, ?, ?)",
-        [consumerId, Number(String(cursor).split(":").at(-1)), null, new Date().toISOString()],
+      this.getStmtUpsertCheckpoint().run(
+        consumerId,
+        Number(String(cursor).split(":").at(-1)),
+        null,
+        new Date().toISOString(),
       );
     }
-    this.mirrorState(state);
+    this.getStmtUpdateState().run(JSON.stringify(memory.exportMetadata()), STATE_ROW);
+    this.mirrorInitialState(state);
+  }
+
+  private mirrorChanges(tracker: ChangeTracker): void {
+    for (const agentId of tracker.deletedAgentIds) {
+      const idStr = String(agentId);
+      rmSync(join(this.archiveRoot, idStr), { recursive: true, force: true });
+      this.mirroredEventIds.delete(idStr);
+      this.mirroredCompactionIds.delete(idStr);
+      this.mirroredAgents.delete(idStr);
+    }
+
+    for (const agent of tracker.upsertedAgents.values()) {
+      const idStr = String(agent.id);
+      this.mirroredAgents.add(idStr);
+      const archiveDir = join(this.archiveRoot, idStr);
+      const toolDir = join(archiveDir, "tool-results");
+      mkdirSync(toolDir, { recursive: true, mode: 0o700 });
+      chmodSync(archiveDir, 0o700);
+      chmodSync(toolDir, 0o700);
+    }
+
+    if (tracker.appendedEvents.length > 0) {
+      mkdirSync(this.archiveRoot, { recursive: true, mode: 0o700 });
+      chmodSync(this.archiveRoot, 0o700);
+      const eventsByAgent = new Map<string, DurableRunEvent[]>();
+      for (const event of tracker.appendedEvents) {
+        const agentId = String(event.agentId);
+        let list = eventsByAgent.get(agentId);
+        if (!list) {
+          list = [];
+          eventsByAgent.set(agentId, list);
+        }
+        list.push(event);
+      }
+      for (const [agentId, events] of eventsByAgent) {
+        const archiveDir = join(this.archiveRoot, agentId);
+        const toolDir = join(archiveDir, "tool-results");
+        mkdirSync(toolDir, { recursive: true, mode: 0o700 });
+        chmodSync(archiveDir, 0o700);
+        chmodSync(toolDir, 0o700);
+        const sessionPath = join(archiveDir, "session.jsonl");
+        try { chmodSync(sessionPath, 0o600); } catch { /* created below */ }
+        const known = this.mirroredEventIds.get(agentId) ?? new Set<string>();
+        const newEvents = events.filter((e) => !known.has(String(e.id)));
+        if (newEvents.length > 0) {
+          const lines = newEvents
+            .map((e) => JSON.stringify({ schemaVersion: 1, kind: "rowan_event", event: e }) + "\n")
+            .join("");
+          appendFileSync(sessionPath, lines, { encoding: "utf8", mode: 0o600 });
+          chmodSync(sessionPath, 0o600);
+          for (const e of newEvents) known.add(String(e.id));
+          this.mirroredEventIds.set(agentId, known);
+        }
+      }
+    }
+
+    if (tracker.upsertedContextCompactions.size > 0) {
+      for (const [agentId, record] of tracker.upsertedContextCompactions) {
+        const idStr = String(agentId);
+        const archiveDir = join(this.archiveRoot, idStr);
+        const sessionPath = join(archiveDir, "session.jsonl");
+        const knownCompactions = this.mirroredCompactionIds.get(idStr) ?? new Set<string>();
+        if (!knownCompactions.has(record.id)) {
+          const line = JSON.stringify({ schemaVersion: 1, kind: "context_compacted", record }) + "\n";
+          appendFileSync(sessionPath, line, { encoding: "utf8", mode: 0o600 });
+          chmodSync(sessionPath, 0o600);
+          knownCompactions.add(record.id);
+          this.mirroredCompactionIds.set(idStr, knownCompactions);
+        }
+      }
+    }
   }
 
   /** Append the semantic durable event mirror and remove deleted Agent sidecars. */
-  private mirrorState(state: InMemoryStoreState): void {
+  private mirrorInitialState(state: InMemoryStoreState): void {
     mkdirSync(this.archiveRoot, { recursive: true, mode: 0o700 });
     chmodSync(this.archiveRoot, 0o700);
     const currentAgents = new Set(state.agents.map((agent) => String(agent.id)));
@@ -648,6 +1253,7 @@ export class SqliteStore implements DurableStore {
     }
     this.mirroredAgents = currentAgents;
   }
+
 
   private requireMatchingOwner(lease: OwnerLease, requireLive: boolean): OwnerRow {
     const row = this.readOwner();

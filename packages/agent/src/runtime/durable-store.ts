@@ -66,11 +66,11 @@ import type {
 import type { HistorySeed } from "./contracts";
 import type { RunInteraction } from "../harness/phases/interactions";
 
-type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
-type StoredAgent = Mutable<AgentRecord>;
-type StoredRun = Mutable<RunRecord>;
-type StoredOwner = Mutable<OwnerLease>;
-type StoredToolCall = {
+export type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
+export type StoredAgent = Mutable<AgentRecord>;
+export type StoredRun = Mutable<RunRecord>;
+export type StoredOwner = Mutable<OwnerLease>;
+export type StoredToolCall = {
   id: ToolCallId;
   providerToolCallId: string;
   agentId: AgentId;
@@ -87,9 +87,30 @@ type StoredToolCall = {
   updatedAt: string;
 };
 
-type IdempotencyReceipt = {
+export type IdempotencyReceipt = {
   payload: string;
   result: unknown;
+};
+
+export type StoreMutationRecorder = {
+  onAgentUpsert(agent: StoredAgent): void;
+  onAgentDelete(agentId: AgentId): void;
+  onRunUpsert(run: StoredRun): void;
+  onRunDelete(runId: RunId): void;
+  onMessageInsert(message: Message): void;
+  onMessageDelete(messageId: MessageId): void;
+  onToolCallUpsert(toolCall: StoredToolCall): void;
+  onToolCallDelete(toolCallId: ToolCallId): void;
+  onEventAppend(event: DurableRunEvent): void;
+  onEventsTruncate(deletedEventIds: string[]): void;
+  onIdempotencyUpsert(scope: string, receipt: IdempotencyReceipt): void;
+  onIdempotencyDelete(scope: string): void;
+  onOperationReceiptUpsert(key: string, receipt: IdempotencyReceipt): void;
+  onOperationReceiptDelete(key: string): void;
+  onConsumerCheckpointUpsert(consumerId: string, cursor: EventCursor): void;
+  onConsumerCheckpointDelete(consumerId: string): void;
+  onContextCompactionUpsert(agentId: AgentId, record: ContextCompactionRecord): void;
+  onRetentionFloorChange(floor: number): void;
 };
 
 export type InMemoryStoreState = Readonly<{
@@ -102,7 +123,7 @@ export type InMemoryStoreState = Readonly<{
   idempotency: readonly (readonly [string, IdempotencyReceipt])[];
   operationReceipts: readonly (readonly [string, IdempotencyReceipt])[];
   historySeeds?: readonly (readonly [AgentId, readonly Message[]])[];
-  consumerCheckpoints: readonly (readonly [string, EventCursor])[];
+  consumerCheckpoints?: readonly (readonly [string, EventCursor])[];
   retentionFloor?: number;
   nextAgentSequence: readonly (readonly [AgentId, number])[];
   nextReadySequence: readonly (readonly [AgentId, number])[];
@@ -128,9 +149,92 @@ export class InMemoryStore implements DurableStore {
   private eventSequence = 0;
   private retentionFloor = 1;
   private readonly contextCompactions = new Map<AgentId, ContextCompactionRecord>();
+  private recorder?: StoreMutationRecorder;
+  private readonly runReceiptKeys = new Map<RunId, Set<string>>();
 
   constructor(options: { incarnation?: string } = {}) {
     this.incarnation = options.incarnation ?? createId("store");
+  }
+
+  setChangeRecorder(recorder?: StoreMutationRecorder): void {
+    this.recorder = recorder;
+  }
+
+  private touchAgent(agent: StoredAgent): void {
+    this.recorder?.onAgentUpsert(agent);
+  }
+
+  private touchRun(run: StoredRun): void {
+    this.recorder?.onRunUpsert(run);
+  }
+
+  private storeMessage(message: Message): void {
+    this.messages.set(message.id, message);
+    this.recorder?.onMessageInsert(message);
+  }
+
+  private storeToolCall(toolCall: StoredToolCall): void {
+    this.toolCalls.set(toolCall.id, toolCall);
+    this.recorder?.onToolCallUpsert(toolCall);
+  }
+
+  private appendEvent(event: DurableRunEvent): void {
+    this.events.push(event);
+    this.recorder?.onEventAppend(event);
+  }
+
+  inferRunIdForReceipt(key: string, payload: string): RunId | undefined {
+    const parts = key.split(":");
+    const prefix = parts[0];
+    if (["queued_failure", "phase_entered", "input_required", "interaction_answer", "outcome", "cancel"].includes(prefix!) && parts[1]) {
+      return parts[1] as RunId;
+    }
+    const match = payload.match(/^\[\s*"([^"]+)"/);
+    if (match && match[1]) {
+      const candidate = match[1] as RunId;
+      if (this.runs.has(candidate) || candidate.startsWith("run_") || candidate.startsWith("run-")) {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  dropRunOperationReceipts(runId: RunId): void {
+    const keys = this.runReceiptKeys.get(runId);
+    if (keys && keys.size > 0) {
+      for (const key of keys) {
+        this.operationReceipts.delete(key);
+        this.recorder?.onOperationReceiptDelete(key);
+      }
+      this.runReceiptKeys.delete(runId);
+    }
+    for (const [key] of this.operationReceipts.entries()) {
+      if (key.includes(`:${runId}:`) || key.endsWith(`:${runId}`) || key.startsWith(`phase_output:${runId}`) || key.startsWith(`tool_reserve_batch:${runId}`)) {
+        this.operationReceipts.delete(key);
+        this.recorder?.onOperationReceiptDelete(key);
+      }
+    }
+  }
+
+  compactTerminalReceipts(): number {
+    let count = 0;
+    for (const [key, receipt] of [...this.operationReceipts.entries()]) {
+      const runId = this.inferRunIdForReceipt(key, receipt.payload);
+      if (runId) {
+        const run = this.runs.get(runId);
+        if (!run || ["completed", "failed", "cancelled"].includes(run.state)) {
+          this.operationReceipts.delete(key);
+          const keys = this.runReceiptKeys.get(runId);
+          if (keys) {
+            keys.delete(key);
+            if (keys.size === 0) this.runReceiptKeys.delete(runId);
+          }
+          this.recorder?.onOperationReceiptDelete(key);
+          count += 1;
+        }
+      }
+    }
+    return count;
   }
 
   static fromState(state: InMemoryStoreState): InMemoryStore {
@@ -150,6 +254,7 @@ export class InMemoryStore implements DurableStore {
         clonedRun.updatedAt = createTimestamp();
         store.runs.set(clonedRun.id, clonedRun);
         store.appendTransition(clonedRun, "input_required", "cancelled", { reason: clonedRun.cancellationReason });
+        store.dropRunOperationReceipts(clonedRun.id);
       } else {
         store.runs.set(clonedRun.id, clonedRun);
       }
@@ -158,7 +263,18 @@ export class InMemoryStore implements DurableStore {
     for (const toolCall of state.toolCalls ?? []) store.toolCalls.set(toolCall.id, clone(toolCall));
     store.events.push(...clone(state.events));
     for (const [key, receipt] of state.idempotency) store.idempotency.set(key, clone(receipt));
-    for (const [key, receipt] of state.operationReceipts) store.operationReceipts.set(key, clone(receipt));
+    for (const [key, receipt] of state.operationReceipts) {
+      store.operationReceipts.set(key, clone(receipt));
+      const runId = store.inferRunIdForReceipt(key, receipt.payload);
+      if (runId) {
+        let keys = store.runReceiptKeys.get(runId);
+        if (!keys) {
+          keys = new Set();
+          store.runReceiptKeys.set(runId, keys);
+        }
+        keys.add(key);
+      }
+    }
     for (const [agentId, messages] of state.historySeeds ?? []) store.historySeeds.set(agentId, clone(messages));
     for (const [consumerId, cursor] of state.consumerCheckpoints ?? []) store.consumerCheckpoints.set(consumerId, cursor);
     for (const [agentId, sequence] of state.nextAgentSequence) store.nextAgentSequence.set(agentId, sequence);
@@ -193,6 +309,17 @@ export class InMemoryStore implements DurableStore {
     });
   }
 
+  exportMetadata(): Record<string, unknown> {
+    return {
+      incarnation: this.incarnation,
+      eventSequence: this.eventSequence,
+      nextAgentSequence: [...this.nextAgentSequence.entries()],
+      nextReadySequence: [...this.nextReadySequence.entries()],
+      historySeeds: [...this.historySeeds.entries()],
+      contextCompactions: [...this.contextCompactions.entries()],
+    };
+  }
+
   attachOwner(lease: OwnerLease): void {
     this.owner = clone(lease);
     this.ownerEpoch = Math.max(this.ownerEpoch, lease.epoch);
@@ -219,6 +346,7 @@ export class InMemoryStore implements DurableStore {
       run.revision += 1;
       run.updatedAt = createTimestamp();
       this.appendTransition(run, "running", "failed", { failure });
+      this.dropRunOperationReceipts(run.id);
     }
   }
 
@@ -238,6 +366,7 @@ export class InMemoryStore implements DurableStore {
 
     if (this.owner) this.interruptOwner(this.owner.epoch);
     this.dropSettledClaimReceipts();
+    this.compactTerminalReceipts();
     this.ownerEpoch += 1;
     this.owner = {
       ownerId: input.ownerId,
@@ -293,6 +422,7 @@ export class InMemoryStore implements DurableStore {
       updatedAt: timestamp,
     };
     this.agents.set(agent.id, agent);
+    this.touchAgent(agent);
     if (input.historySeed && input.historySeed.length > 0) this.historySeeds.set(agent.id, materializeHistorySeed(agent.id, input.historySeed));
     this.nextAgentSequence.set(agent.id, 0);
     this.nextReadySequence.set(agent.id, 0);
@@ -307,6 +437,7 @@ export class InMemoryStore implements DurableStore {
     if (configToken !== undefined) agent.currentConfigToken = configToken;
     if (configIdentity !== undefined) agent.currentConfigIdentity = configIdentity;
     agent.updatedAt = createTimestamp();
+    this.touchAgent(agent);
     return clone(agent);
   }
 
@@ -320,6 +451,7 @@ export class InMemoryStore implements DurableStore {
     agent.currentConfigToken = input.token;
     if (input.configIdentity !== undefined) agent.currentConfigIdentity = input.configIdentity;
     agent.updatedAt = createTimestamp();
+    this.touchAgent(agent);
     this.writeReceipt(scope, payload, agent);
     return clone(agent);
   }
@@ -342,24 +474,48 @@ export class InMemoryStore implements DurableStore {
     }
     const runIds = new Set(runs.map((run) => run.id));
     this.agents.delete(agent.id);
+    this.recorder?.onAgentDelete(agent.id);
     this.nextAgentSequence.delete(agent.id);
     this.nextReadySequence.delete(agent.id);
     this.historySeeds.delete(agent.id);
-    for (const run of runs) this.runs.delete(run.id);
+    for (const run of runs) {
+      this.runs.delete(run.id);
+      this.runReceiptKeys.delete(run.id);
+      this.recorder?.onRunDelete(run.id);
+    }
     for (const [messageId, message] of this.messages) {
-      if (runIds.has(message.runId)) this.messages.delete(messageId);
+      if (runIds.has(message.runId)) {
+        this.messages.delete(messageId);
+        this.recorder?.onMessageDelete(messageId);
+      }
     }
     for (const [toolCallId, toolCall] of this.toolCalls) {
-      if (runIds.has(toolCall.runId)) this.toolCalls.delete(toolCallId);
+      if (runIds.has(toolCall.runId)) {
+        this.toolCalls.delete(toolCallId);
+        this.recorder?.onToolCallDelete(toolCallId);
+      }
     }
+    const deletedEventIds: string[] = [];
     for (let index = this.events.length - 1; index >= 0; index -= 1) {
-      if (this.events[index]!.agentId === agent.id) this.events.splice(index, 1);
+      if (this.events[index]!.agentId === agent.id) {
+        deletedEventIds.push(this.events[index]!.id);
+        this.events.splice(index, 1);
+      }
+    }
+    if (deletedEventIds.length > 0) {
+      this.recorder?.onEventsTruncate(deletedEventIds);
     }
     for (const [key] of this.idempotency) {
-      if (key.includes(String(agent.id)) || [...runIds].some((runId) => key.includes(String(runId)))) this.idempotency.delete(key);
+      if (key.includes(String(agent.id)) || [...runIds].some((runId) => key.includes(String(runId)))) {
+        this.idempotency.delete(key);
+        this.recorder?.onIdempotencyDelete(key);
+      }
     }
     for (const [key] of this.operationReceipts) {
-      if (key.includes(String(agent.id)) || [...runIds].some((runId) => key.includes(String(runId)))) this.operationReceipts.delete(key);
+      if (key.includes(String(agent.id)) || [...runIds].some((runId) => key.includes(String(runId)))) {
+        this.operationReceipts.delete(key);
+        this.recorder?.onOperationReceiptDelete(key);
+      }
     }
   }
 
@@ -491,15 +647,20 @@ export class InMemoryStore implements DurableStore {
         run.revision += 1;
         run.updatedAt = timestamp;
         this.appendTransition(run, previousState, "cancelled", { reason: run.cancellationReason });
+        this.dropRunOperationReceipts(run.id);
       } else {
         run.revision += 1;
         run.updatedAt = timestamp;
+        this.touchRun(run);
       }
     }
 
     for (const [messageId, message] of this.messages) {
       if (!affectedRunSet.has(message.runId)) continue;
-      if (message.runId !== original.runId || message.sequenceWithinRun > original.sequenceWithinRun) this.messages.delete(messageId);
+      if (message.runId !== original.runId || message.sequenceWithinRun > original.sequenceWithinRun) {
+        this.messages.delete(messageId);
+        this.recorder?.onMessageDelete(messageId);
+      }
     }
     if (isSeedMessage) {
       const targetIndex = seed.findIndex(({ id }) => id === original.id);
@@ -513,10 +674,11 @@ export class InMemoryStore implements DurableStore {
       sequenceWithinRun: 0,
       createdAt: timestamp,
     };
-    this.messages.set(revisedMessage.id, revisedMessage);
+    this.storeMessage(revisedMessage);
     this.runs.set(replacementRun.id, replacementRun);
+    this.touchRun(replacementRun);
     this.appendTransition(replacementRun, null, "queued");
-    this.events.push({
+    this.appendEvent({
       ...this.baseEvent(replacementRun),
       kind: "message_revised",
       message: revisedMessage,
@@ -532,7 +694,7 @@ export class InMemoryStore implements DurableStore {
       affectedToolCallIds: affectedTools.map((toolCall) => toolCall.id),
       ...(effectDigest === undefined ? {} : { effectDigest }),
     };
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, replacementRun.id);
     return clone(result);
   }
 
@@ -561,7 +723,7 @@ export class InMemoryStore implements DurableStore {
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: now,
     };
-    this.messages.set(record.id, record);
+    this.storeMessage(record);
     this.appendMessage(run, record);
     return record;
   }
@@ -620,13 +782,14 @@ export class InMemoryStore implements DurableStore {
         sequenceWithinRun: this.nextMessageSequence(waitingRun.id),
         createdAt: now,
       };
-      this.messages.set(message.id, message);
+      this.storeMessage(message);
       this.appendMessage(waitingRun, message);
 
       waitingRun.readySequence = this.nextReady(waitingRun.agentId);
       waitingRun.state = "queued";
       waitingRun.revision += 1;
       waitingRun.updatedAt = now;
+      this.touchRun(waitingRun);
       this.appendTransition(waitingRun, "input_required", "queued");
       this.writeReceipt(scope, payload, waitingRun);
       return clone(waitingRun);
@@ -649,6 +812,7 @@ export class InMemoryStore implements DurableStore {
       updatedAt: timestamp,
     };
     this.runs.set(run.id, run);
+    this.touchRun(run);
     this.appendTransition(run, null, "queued");
     this.writeReceipt(scope, payload, run);
     return clone(run);
@@ -695,7 +859,7 @@ export class InMemoryStore implements DurableStore {
         sequenceWithinRun: this.nextMessageSequence(run.id),
         createdAt: createTimestamp(),
       };
-      this.messages.set(message.id, message);
+      this.storeMessage(message);
       committedMessages.push(message);
     }
     const execution: ExecutionToken = {
@@ -707,10 +871,11 @@ export class InMemoryStore implements DurableStore {
     run.execution = execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
+    this.touchRun(run);
     for (const message of committedMessages) this.appendMessage(run, message);
     this.appendTransition(run, "queued", "running");
     const result = { run: clone(run), execution: clone(execution), history: this.activeHistory(run.agentId, run.agentSequence) };
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -727,9 +892,11 @@ export class InMemoryStore implements DurableStore {
     run.failure = clone(input.failure);
     run.revision += 1;
     run.updatedAt = createTimestamp();
+    this.touchRun(run);
     this.appendTransition(run, "queued", "failed", { failure: input.failure });
+    this.dropRunOperationReceipts(run.id);
     const result = clone(run);
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -746,10 +913,11 @@ export class InMemoryStore implements DurableStore {
     run.currentPhaseId = input.phaseId;
     run.revision += 1;
     run.updatedAt = createTimestamp();
+    this.touchRun(run);
     const visit = this.events.filter((event) => event.runId === run.id && event.kind === "phase_entered").length + 1;
-    this.events.push(this.baseEvent(run, { kind: "phase_entered", executionId: input.execution.executionId, phaseId: input.phaseId, visit } as import("../runtime-events").PhaseEntered) as import("../runtime-events").PhaseEntered);
+    this.appendEvent(this.baseEvent(run, { kind: "phase_entered", executionId: input.execution.executionId, phaseId: input.phaseId, visit } as import("../runtime-events").PhaseEntered) as import("../runtime-events").PhaseEntered);
     const result = clone(run);
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -771,12 +939,13 @@ export class InMemoryStore implements DurableStore {
       role: "assistant",
       sequenceWithinRun: this.nextMessageSequence(run.id),
     };
-    this.messages.set(message.id, message);
+    this.storeMessage(message);
     run.revision += 1;
     run.updatedAt = createTimestamp();
+    this.touchRun(run);
     this.appendMessage(run, message);
     const result = clone(run);
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -809,7 +978,7 @@ export class InMemoryStore implements DurableStore {
         ...clone(input.prompt),
         sequenceWithinRun: this.nextMessageSequence(run.id),
       };
-      this.messages.set(prompt.id, prompt);
+      this.storeMessage(prompt);
     }
     run.state = "input_required";
     run.checkpoint = clone(input.checkpoint);
@@ -824,12 +993,13 @@ export class InMemoryStore implements DurableStore {
     delete run.execution;
     run.revision += 1;
     run.updatedAt = createTimestamp();
+    this.touchRun(run);
     if (prompt) {
       this.appendMessage(run, prompt);
     }
     this.appendTransition(run, "running", "input_required", { prompt, interactions, answers: run.interactionAnswers ?? {} });
     const result = clone(run);
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -887,8 +1057,9 @@ export class InMemoryStore implements DurableStore {
       run.state = "queued";
       this.appendTransition(run, "input_required", "queued");
     }
+    this.touchRun(run);
     const result = clone(run);
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -981,17 +1152,18 @@ export class InMemoryStore implements DurableStore {
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: timestamp,
     };
-    for (const toolCall of toolCalls) this.toolCalls.set(toolCall.id, toolCall);
-    this.messages.set(requestMessage.id, requestMessage);
+    for (const toolCall of toolCalls) this.storeToolCall(toolCall);
+    this.storeMessage(requestMessage);
     run.revision += 1;
     run.updatedAt = timestamp;
+    this.touchRun(run);
     this.appendMessage(run, requestMessage);
     for (const toolCall of toolCalls) this.appendToolTransition(run, { from: null, to: "pending" }, toolCall);
     const result: ToolBatchCommit = {
       run: clone(run),
       toolCalls: toolCalls.map((toolCall) => clone(toolCall) as unknown as ToolCallSnapshot),
     };
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -1012,13 +1184,14 @@ export class InMemoryStore implements DurableStore {
     if (toolCall.state !== "pending") throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     toolCall.state = "running";
     toolCall.executionId = input.execution.executionId;
-    toolCall.executionId = input.execution.executionId;
     toolCall.updatedAt = createTimestamp();
+    this.storeToolCall(toolCall);
     run.revision += 1;
     run.updatedAt = toolCall.updatedAt;
+    this.touchRun(run);
     this.appendToolTransition(run, { from: "pending", to: "running" }, toolCall);
     const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -1041,11 +1214,13 @@ export class InMemoryStore implements DurableStore {
     }
     toolCall.state = "pending";
     toolCall.updatedAt = createTimestamp();
+    this.storeToolCall(toolCall);
     run.revision += 1;
     run.updatedAt = toolCall.updatedAt;
+    this.touchRun(run);
     this.appendToolTransition(run, { from: "running", to: "pending" }, toolCall);
     const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -1086,15 +1261,17 @@ export class InMemoryStore implements DurableStore {
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: createTimestamp(),
     };
-    this.messages.set(message.id, message);
+    this.storeMessage(message);
     toolCall.state = input.state;
     toolCall.result = durableResult;
     toolCall.resultMessageId = resultMessageId;
     if (input.state === "indeterminate") toolCall.reason = input.reason!;
     else delete toolCall.reason;
     toolCall.updatedAt = message.createdAt;
+    this.storeToolCall(toolCall);
     run.revision += 1;
     run.updatedAt = message.createdAt;
+    this.touchRun(run);
     this.appendToolTransition(run, { from: from as "pending" | "running", to: input.state }, toolCall);
     this.appendMessage(run, message);
     if (input.state === "indeterminate") {
@@ -1116,10 +1293,12 @@ export class InMemoryStore implements DurableStore {
       delete run.execution;
       run.revision += 1;
       run.updatedAt = createTimestamp();
+      this.touchRun(run);
       this.appendTransition(run, "running", "failed", { failure });
+      this.dropRunOperationReceipts(run.id);
     }
     const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
-    this.writeOperationReceipt(operationKey, operationPayload, result);
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
   }
 
@@ -1147,7 +1326,7 @@ export class InMemoryStore implements DurableStore {
       ? { ...clone(input.output), sequenceWithinRun: this.nextMessageSequence(run.id) }
       : undefined;
     if (output) {
-      this.messages.set(output.id, output);
+      this.storeMessage(output);
       this.appendMessage(run, output);
     }
     run.state = nextState;
@@ -1159,9 +1338,10 @@ export class InMemoryStore implements DurableStore {
     delete run.interactionAnswers;
     run.revision += 1;
     run.updatedAt = createTimestamp();
+    this.touchRun(run);
     this.appendTransition(run, "running", nextState, { outcome: input.outcome, failure: input.failure, output });
+    this.dropRunOperationReceipts(run.id);
     const result = clone(run);
-    this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
   }
 
@@ -1182,7 +1362,6 @@ export class InMemoryStore implements DurableStore {
     }
     if (["completed", "failed", "cancelled"].includes(run.state)) {
       const result = clone(run);
-      if (input.expectedRevision !== undefined) this.writeOperationReceipt(operationKey, operationPayload, result);
       return result;
     }
     const from = run.state;
@@ -1207,7 +1386,7 @@ export class InMemoryStore implements DurableStore {
     for (const toolCall of activeToolCalls) this.interruptToolCall(run, toolCall, input.reason ?? "The Run was cancelled.");
     if (input.output && (typeof input.output.content === "string" ? input.output.content.length > 0 : input.output.content.length > 0)) {
       const output = { ...clone(input.output), sequenceWithinRun: this.nextMessageSequence(run.id) };
-      this.messages.set(output.id, output);
+      this.storeMessage(output);
       this.appendMessage(run, output);
     }
     if (run.openInteractions && run.openInteractions.length > 0) {
@@ -1230,9 +1409,10 @@ export class InMemoryStore implements DurableStore {
       delete run.interactionAnswers;
       run.revision += 1;
       run.updatedAt = createTimestamp();
+      this.touchRun(run);
       this.appendTransition(run, from, "failed", { failure });
+      this.dropRunOperationReceipts(run.id);
       const result = clone(run);
-      if (input.expectedRevision !== undefined) this.writeOperationReceipt(operationKey, operationPayload, result);
       return result;
     }
     run.state = "cancelled";
@@ -1243,9 +1423,10 @@ export class InMemoryStore implements DurableStore {
     delete run.interactionAnswers;
     run.revision += 1;
     run.updatedAt = createTimestamp();
+    this.touchRun(run);
     this.appendTransition(run, from, "cancelled", { reason: input.reason });
+    this.dropRunOperationReceipts(run.id);
     const result = clone(run);
-    if (input.expectedRevision !== undefined) this.writeOperationReceipt(operationKey, operationPayload, result);
     return result;
   }
 
@@ -1332,6 +1513,7 @@ export class InMemoryStore implements DurableStore {
     const previous = this.consumerCheckpoints.get(input.consumerId);
     if (previous !== undefined && next <= this.parseCursor(previous)) return;
     this.consumerCheckpoints.set(input.consumerId, input.cursor);
+    this.recorder?.onConsumerCheckpointUpsert(input.consumerId, input.cursor);
   }
 
   compact(lease: OwnerLease, input: { now?: string; retentionMs?: number } = {}): RetentionResult {
@@ -1380,11 +1562,17 @@ export class InMemoryStore implements DurableStore {
       ? this.events.filter((event) => this.parseCursor(event.cursor) <= deleteThrough)
       : [];
     if (deleteThrough >= this.retentionFloor) {
+      const deletedEventIds = this.events
+        .filter((event) => this.parseCursor(event.cursor) <= deleteThrough)
+        .map((event) => event.id);
       this.events.splice(0, this.events.length, ...this.events.filter((event) => this.parseCursor(event.cursor) > deleteThrough));
       this.retentionFloor = deleteThrough + 1;
+      this.recorder?.onRetentionFloorChange(this.retentionFloor);
+      this.recorder?.onEventsTruncate(deletedEventIds);
       for (const [consumerId, cursor] of this.consumerCheckpoints) {
         if (this.parseCursor(cursor) < this.retentionFloor - 1) {
           this.consumerCheckpoints.delete(consumerId);
+          this.recorder?.onConsumerCheckpointDelete(consumerId);
         }
       }
     }
@@ -1402,11 +1590,21 @@ export class InMemoryStore implements DurableStore {
     const deletedRunIds = deletableRuns.map((run) => run.id);
     const deletedRunSet = new Set(deletedRunIds);
     const deletedTools = [...this.toolCalls.values()].filter((tool) => deletedRunSet.has(tool.runId));
-    for (const runId of deletedRunIds) this.runs.delete(runId);
-    for (const [messageId, message] of this.messages) {
-      if (deletedRunSet.has(message.runId)) this.messages.delete(messageId);
+    for (const runId of deletedRunIds) {
+      this.runs.delete(runId);
+      this.runReceiptKeys.delete(runId);
+      this.recorder?.onRunDelete(runId);
     }
-    for (const tool of deletedTools) this.toolCalls.delete(tool.id);
+    for (const [messageId, message] of this.messages) {
+      if (deletedRunSet.has(message.runId)) {
+        this.messages.delete(messageId);
+        this.recorder?.onMessageDelete(messageId);
+      }
+    }
+    for (const tool of deletedTools) {
+      this.toolCalls.delete(tool.id);
+      this.recorder?.onToolCallDelete(tool.id);
+    }
     return {
       deletedRunIds,
       deletedToolCallIds: deletedTools.map((tool) => tool.id),
@@ -1432,7 +1630,10 @@ export class InMemoryStore implements DurableStore {
   }
 
   private writeReceipt(scope: readonly string[], payload: string, result: unknown): void {
-    this.idempotency.set(encodeIdempotencyScope(this.incarnation, scope as never), { payload, result: clone(result) });
+    const key = encodeIdempotencyScope(this.incarnation, scope as never);
+    const receipt = { payload, result: clone(result) };
+    this.idempotency.set(key, receipt);
+    this.recorder?.onIdempotencyUpsert(key, receipt);
   }
 
   private replayOperation(key: string, payload: string): unknown | undefined {
@@ -1442,8 +1643,19 @@ export class InMemoryStore implements DurableStore {
     return receipt.result;
   }
 
-  private writeOperationReceipt(key: string, payload: string, result: unknown): void {
-    this.operationReceipts.set(key, { payload, result: clone(result) });
+  private writeOperationReceipt(key: string, payload: string, result: unknown, runId?: RunId): void {
+    const receipt = { payload, result: clone(result) };
+    this.operationReceipts.set(key, receipt);
+    const resolvedRunId = runId ?? this.inferRunIdForReceipt(key, payload);
+    if (resolvedRunId) {
+      let keys = this.runReceiptKeys.get(resolvedRunId);
+      if (!keys) {
+        keys = new Set();
+        this.runReceiptKeys.set(resolvedRunId, keys);
+      }
+      keys.add(key);
+    }
+    this.recorder?.onOperationReceiptUpsert(key, receipt);
   }
 
   /**
@@ -1452,7 +1664,11 @@ export class InMemoryStore implements DurableStore {
    * one history snapshot per Agent instead of one per Attempt.
    */
   private dropClaimReceipt(execution: ExecutionToken | undefined): void {
-    if (execution) this.operationReceipts.delete(`claim:${execution.executionId}`);
+    if (execution) {
+      const key = `claim:${execution.executionId}`;
+      this.operationReceipts.delete(key);
+      this.recorder?.onOperationReceiptDelete(key);
+    }
   }
 
   /**
@@ -1469,6 +1685,7 @@ export class InMemoryStore implements DurableStore {
     for (const key of [...this.operationReceipts.keys()]) {
       if (key.startsWith("claim:") && !liveExecutions.has(key.slice("claim:".length))) {
         this.operationReceipts.delete(key);
+        this.recorder?.onOperationReceiptDelete(key);
       }
     }
   }
@@ -1513,14 +1730,16 @@ export class InMemoryStore implements DurableStore {
     };
     const from = toolCall.state as "pending" | "running";
     const to = from === "running" ? "indeterminate" : "failed";
-    this.messages.set(message.id, message);
+    this.storeMessage(message);
     toolCall.state = to;
     toolCall.result = durableResult;
     toolCall.resultMessageId = message.id;
     if (to === "indeterminate") toolCall.reason = reason;
     toolCall.updatedAt = message.createdAt;
+    this.storeToolCall(toolCall);
     run.revision += 1;
     run.updatedAt = message.createdAt;
+    this.touchRun(run);
     this.appendToolTransition(run, { from, to }, toolCall);
     this.appendMessage(run, message);
   }
@@ -1638,6 +1857,7 @@ export class InMemoryStore implements DurableStore {
     if (existing?.id === record.id) return clone(existing);
     const next = clone(record);
     this.contextCompactions.set(record.agentId, next);
+    this.recorder?.onContextCompactionUpsert(record.agentId, next);
     return clone(next);
   }
 
@@ -1652,7 +1872,7 @@ export class InMemoryStore implements DurableStore {
   }
 
   private appendMessage(run: StoredRun, message: Message): void {
-    this.events.push(this.baseEvent(run, {
+    this.appendEvent(this.baseEvent(run, {
       kind: "message_committed",
       message,
     } as MessageCommitted) as MessageCommitted);
@@ -1682,14 +1902,17 @@ export class InMemoryStore implements DurableStore {
       ...(to === "failed" && options?.failure ? { failure: options.failure as never } : {}),
       ...(to === "cancelled" && options?.reason ? { reason: options.reason } : {}),
     } as RunStateChanged;
-    this.events.push(transition);
+    // A transition always rewrites the Run, so record it here rather than
+    // relying on every caller to remember the incremental-persist hook.
+    this.touchRun(run);
+    this.appendEvent(transition);
   }
 
   private appendToolTransition(run: StoredRun, transition: { from: null | "pending" | "running"; to: "pending" | "running" | "completed" | "failed" | "indeterminate" }, toolCall: StoredToolCall): void {
-    this.events.push(this.baseEvent(run, {
+    this.appendEvent(this.baseEvent(run, {
       kind: "tool_state_changed",
       transition,
-      toolCall: toolCall as unknown as ToolCallSnapshot,
+      toolCall: clone(toolCall) as unknown as ToolCallSnapshot,
     } as ToolStateChanged) as ToolStateChanged);
   }
 

@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryStore, SqliteStore } from "../../src/runtime";
 import type { ConfigToken, MessageId, Message, RunId } from "../../src/runtime-events";
 
@@ -127,6 +130,44 @@ test("SQLite DurableStore persists the active revised Message projection", async
   const replacement = await owner.claimRun({ runId: revised.replacementRun.id, expectedRevision: revised.replacementRun.revision, configToken: token });
   expect(replacement.history[0]).toMatchObject({ id: claimed.history[0]!.id, content: "new", messageRevision: 1 });
   store.close();
+});
+
+test("SQLite DurableStore keeps a Run superseded by Message revision cancelled after reopen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-revision-reopen-"));
+  const filename = join(directory, "revision.sqlite");
+  const store = new SqliteStore(filename);
+  let supersededId: RunId;
+  try {
+    const owner = await store.openOwner({ ownerId: "revision-reopen", leaseMs: 10_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent" });
+    await owner.activateAgent(agent.id, token, "revision-config");
+    const run = await owner.createRun({ agentId: agent.id, input: "old", idempotencyKey: "run" });
+    const claimed = await owner.claimRun({ runId: run.id, expectedRevision: run.revision, configToken: token });
+    await owner.reviseMessage({
+      agentId: agent.id,
+      messageId: claimed.history[0]!.id,
+      expectedMessageRevision: 0,
+      content: "new",
+      operationId: "edit-reopen",
+    });
+    supersededId = run.id;
+    await owner.sealAndReleaseOwner();
+  } finally {
+    store.close();
+  }
+
+  const reopened = new SqliteStore(filename);
+  try {
+    const owner = await reopened.openOwner({ ownerId: "revision-reopen-2", leaseMs: 10_000 });
+    expect(await owner.snapshotRun(supersededId)).toMatchObject({
+      state: "cancelled",
+      reason: "Run superseded by Message revision.",
+    });
+    await owner.sealAndReleaseOwner();
+  } finally {
+    reopened.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("history seed copies active context with fresh identities and no Run", async () => {

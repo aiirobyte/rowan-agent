@@ -360,3 +360,345 @@ test("SqliteStore persists entryPhases and round-trips across store reopen", asy
   }
 });
 
+test("SQLite DurableStore read operations do not reparse state while owner lease is held", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "read-cache.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent-1" });
+    const run = await owner.createRun({ agentId: agent.id, input: "hello", idempotencyKey: "run-1" });
+
+    const readStateSpy = spyOn(store as any, "readState");
+    expect(readStateSpy).toHaveBeenCalledTimes(0);
+
+    // Perform multiple read operations
+    await owner.snapshotRun(run.id);
+    await owner.history(agent.id);
+    await owner.listRuns();
+    await owner.listAgents();
+    await owner.contextStatus(agent.id, 8000);
+    await owner.contextMessages(agent.id);
+    await owner.openConsumer("consumer-1");
+    await owner.listEvents();
+
+    expect(readStateSpy).toHaveBeenCalledTimes(0);
+    readStateSpy.mockRestore();
+
+    await owner.sealAndReleaseOwner();
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore incremental persist survives reopen with identical exported state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "reopen-parity.sqlite");
+  const store1 = new SqliteStore(filename);
+  let exportedBefore: any;
+  try {
+    const owner1 = await store1.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
+    const agent = await owner1.reserveAgent({ idempotencyKey: "agent-reopen" });
+    await owner1.activateAgent(agent.id);
+    const run = await owner1.createRun({
+      agentId: agent.id,
+      input: "test input",
+      idempotencyKey: "run-reopen",
+    });
+    const claim = await owner1.claimRun({ runId: run.id, expectedRevision: run.revision });
+    const reserved = await owner1.reserveToolCall({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: claim.run.revision,
+      requestMessageId: "msg-tool-req" as MessageId,
+      toolCallId: "tool-call-1" as ToolCallId,
+      name: "calculator",
+      args: { a: 1, b: 2 },
+    });
+    const started = await owner1.startToolCall({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: reserved.run.revision,
+      toolCallId: reserved.toolCall.id,
+    });
+    const completed = await owner1.commitToolResult({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: started.run.revision,
+      toolCallId: reserved.toolCall.id,
+      result: { ok: true, content: { answer: 3 } },
+      state: "completed",
+    });
+    await owner1.commitOutcome({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: completed.run.revision,
+      outcome: { id: "out-1" as OutcomeId, message: "done" },
+    });
+    const consumer = await owner1.openConsumer("c-1");
+    await owner1.advanceConsumerCheckpoint({
+      consumerId: "c-1",
+      cursor: consumer.waterline,
+    });
+
+    exportedBefore = store1.exportState();
+    await owner1.sealAndReleaseOwner();
+  } finally {
+    store1.close();
+  }
+
+  const store2 = new SqliteStore(filename);
+  try {
+    const owner2 = await store2.openOwner({ ownerId: "owner-2", leaseMs: 10_000 });
+    const exportedAfter = store2.exportState();
+
+    expect(exportedAfter.agents.length).toBe(exportedBefore.agents.length);
+    expect(exportedAfter.runs.length).toBe(exportedBefore.runs.length);
+    expect(exportedAfter.messages.length).toBe(exportedBefore.messages.length);
+    expect(exportedAfter.toolCalls.length).toBe(exportedBefore.toolCalls.length);
+    expect(exportedAfter.events.length).toBe(exportedBefore.events.length);
+    expect(exportedAfter.consumerCheckpoints).toEqual(exportedBefore.consumerCheckpoints);
+
+    expect(exportedAfter.agents).toEqual(exportedBefore.agents);
+    expect(exportedAfter.runs).toEqual(exportedBefore.runs);
+    expect(exportedAfter.messages).toEqual(exportedBefore.messages);
+    expect(exportedAfter.toolCalls).toEqual(exportedBefore.toolCalls);
+    expect(exportedAfter.events).toEqual(exportedBefore.events);
+
+    await owner2.sealAndReleaseOwner();
+  } finally {
+    store2.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore failed write leaves no in-memory divergence from disk", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "failed-write.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent-fail" });
+    const run = await owner.createRun({ agentId: agent.id, input: "ok", idempotencyKey: "run-fail" });
+
+    const claim = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
+    await expect(
+      owner.commitOutcome({
+        runId: run.id,
+        execution: claim.execution,
+        expectedRevision: 9999,
+        outcome: { id: "out-bad" as OutcomeId, message: "bad" },
+      }),
+    ).rejects.toThrow();
+
+    const snap = await owner.snapshotRun(run.id);
+    expect(snap.state).toBe("running");
+    expect(snap.revision).toBe(claim.run.revision);
+
+    await owner.sealAndReleaseOwner();
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore drops operation receipts for terminal runs and compacts on openOwner", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "terminal-receipts.sqlite");
+  const store1 = new SqliteStore(filename);
+  try {
+    const owner1 = await store1.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
+    const agent = await owner1.reserveAgent({ idempotencyKey: "agent-term" });
+    const run1 = await owner1.createRun({ agentId: agent.id, input: "run1", idempotencyKey: "run-term-1" });
+    const claim1 = await owner1.claimRun({ runId: run1.id, expectedRevision: run1.revision });
+    const reserved1 = await owner1.reserveToolCall({
+      runId: run1.id,
+      execution: claim1.execution,
+      expectedRevision: claim1.run.revision,
+      requestMessageId: "msg-term-req" as MessageId,
+      toolCallId: "tool-term-1" as ToolCallId,
+      name: "search",
+      args: { q: "term" },
+    });
+    const started1 = await owner1.startToolCall({
+      runId: run1.id,
+      execution: claim1.execution,
+      expectedRevision: reserved1.run.revision,
+      toolCallId: reserved1.toolCall.id,
+    });
+    const completed1 = await owner1.commitToolResult({
+      runId: run1.id,
+      execution: claim1.execution,
+      expectedRevision: started1.run.revision,
+      toolCallId: reserved1.toolCall.id,
+      result: { ok: true, content: "ok" },
+      state: "completed",
+    });
+
+    let exported = store1.exportState();
+    expect(exported.operationReceipts.length).toBeGreaterThan(0);
+
+    // Complete run 1 -> terminal state drops operation receipts
+    await owner1.commitOutcome({
+      runId: run1.id,
+      execution: claim1.execution,
+      expectedRevision: completed1.run.revision,
+      outcome: { id: "out-done" as OutcomeId, message: "done" },
+    });
+
+    exported = store1.exportState();
+    const run1Receipts = exported.operationReceipts.filter(([key]) => key.includes(run1.id));
+    expect(run1Receipts.length).toBe(0);
+
+    // Artificially insert legacy terminal receipts into sqlite database to simulate bloated DB
+    const db = (store1 as any).database as Database;
+    for (let i = 0; i < 20; i++) {
+      db.run(
+        "INSERT INTO idempotency (scope, payload_json, result_json) VALUES (?, ?, ?)",
+        [`operation:tool_commit:${run1.id}:extra_${i}`, JSON.stringify([run1.id, i]), JSON.stringify({ cached: true })],
+      );
+    }
+    const countBeforeCompaction = (db.query("SELECT count(*) as count FROM idempotency WHERE scope LIKE 'operation:%'").get() as any).count;
+    expect(countBeforeCompaction).toBeGreaterThanOrEqual(20);
+
+    await owner1.sealAndReleaseOwner();
+  } finally {
+    store1.close();
+  }
+
+  // Reopen with store2: openOwner must run compactTerminalReceipts and purge terminal receipts
+  const store2 = new SqliteStore(filename);
+  try {
+    const owner2 = await store2.openOwner({ ownerId: "owner-2", leaseMs: 10_000 });
+    const db2 = (store2 as any).database as Database;
+    const countAfterCompaction = (db2.query("SELECT count(*) as count FROM idempotency WHERE scope LIKE 'operation:%'").get() as any).count;
+    expect(countAfterCompaction).toBe(0);
+
+    await owner2.sealAndReleaseOwner();
+  } finally {
+    store2.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore allows idempotent replay of live-run receipts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "replay-receipt.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-1", leaseMs: 10_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent-replay" });
+    const run = await owner.createRun({ agentId: agent.id, input: "replay test", idempotencyKey: "run-replay" });
+    const claim = await owner.claimRun({ runId: run.id, expectedRevision: run.revision });
+
+    const reserved = await owner.reserveToolCall({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: claim.run.revision,
+      requestMessageId: "msg-replay-req" as MessageId,
+      toolCallId: "tool-replay-1" as ToolCallId,
+      name: "read_file",
+      args: { path: "foo.txt" },
+    });
+    const started = await owner.startToolCall({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: reserved.run.revision,
+      toolCallId: reserved.toolCall.id,
+    });
+
+    const commit1 = await owner.commitToolResult({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: started.run.revision,
+      toolCallId: reserved.toolCall.id,
+      result: { ok: true, content: "bar" },
+      state: "completed",
+    });
+
+    const commit2 = await owner.commitToolResult({
+      runId: run.id,
+      execution: claim.execution,
+      expectedRevision: started.run.revision,
+      toolCallId: reserved.toolCall.id,
+      result: { ok: true, content: "bar" },
+      state: "completed",
+    });
+
+    expect(commit2).toEqual(commit1);
+
+    await owner.sealAndReleaseOwner();
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore benchmark fixture with 500 receipts and 800 events achieves snapshotRun < 5ms", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "benchmark-fixture.sqlite");
+  const store = new SqliteStore(filename);
+  try {
+    const owner = await store.openOwner({ ownerId: "owner-bm", leaseMs: 60_000 });
+    const agent = await owner.reserveAgent({ idempotencyKey: "agent-bm" });
+    const run = await owner.createRun({ agentId: agent.id, input: "bench", idempotencyKey: "run-bm" });
+
+    const db = (store as any).database as Database;
+    db.run("BEGIN IMMEDIATE");
+    for (let i = 0; i < 800; i++) {
+      db.run(
+        "INSERT INTO run_events (id, run_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
+        [
+          `evt_${i}`,
+          run.id,
+          JSON.stringify({
+            id: `evt_${i}`,
+            runId: run.id,
+            agentId: agent.id,
+            sequence: i + 1,
+            type: "phase_progress",
+            data: { step: i, payload: "x".repeat(200) },
+            createdAt: new Date().toISOString(),
+          }),
+          new Date().toISOString(),
+        ],
+      );
+    }
+    for (let i = 0; i < 500; i++) {
+      db.run(
+        "INSERT INTO idempotency (scope, payload_json, result_json) VALUES (?, ?, ?)",
+        [
+          `operation:tool_commit:${run.id}:call_${i}`,
+          JSON.stringify([run.id, `call_${i}`, "res"]),
+          JSON.stringify({ result: { output: "ok", blob: "y".repeat(500) } }),
+        ],
+      );
+    }
+    db.run("COMMIT");
+
+    // Invalidate cachedMemory so it reloads with the 800 events and 500 receipts
+    (store as any).cachedMemory = undefined;
+
+    // Warmup
+    const firstSnap = await owner.snapshotRun(run.id);
+    expect(firstSnap.runId).toBe(run.id);
+
+    // Measure snapshotRun latency across 50 iterations
+    const iterations = 50;
+    const start = performance.now();
+    for (let i = 0; i < iterations; i++) {
+      await owner.snapshotRun(run.id);
+    }
+    const totalMs = performance.now() - start;
+    const avgMs = totalMs / iterations;
+
+    expect(avgMs).toBeLessThan(5);
+
+    await owner.sealAndReleaseOwner();
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
