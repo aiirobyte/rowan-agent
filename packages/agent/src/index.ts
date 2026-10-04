@@ -160,6 +160,9 @@ export type {
 
 export type {
   ExtensionAPI,
+  ExtensionCapability,
+  ExtensionCapabilityContribution,
+  ExtensionToolContribution,
   ExtensionDisposer,
   ExtensionFactory,
   ExtensionFactoryResult,

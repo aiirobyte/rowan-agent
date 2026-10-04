@@ -1,11 +1,13 @@
 import type { JsonObject, JsonValue } from "../runtime-events";
 import { assertJsonValue } from "../runtime/json";
-import type { ExtensionHost, ScopeRef } from "./types";
+import type { ExtensionCapability, ExtensionHost, ScopeRef } from "./types";
 
 export class InMemoryExtensionHost implements ExtensionHost {
   private readonly configs = new Map<string, Map<string, JsonObject>>();
   private readonly agentState = new Map<string, Map<string, Map<string, JsonValue>>>();
   private readonly listeners = new Set<(extensionId: string, scope: ScopeRef) => void>();
+  private currentCapabilities: readonly ExtensionCapability[] = [];
+  private readonly capabilityListeners = new Set<(capabilities: readonly ExtensionCapability[]) => void>();
 
   constructor(options: {
     configs?: Record<string, Record<string, JsonObject>>;
@@ -108,6 +110,26 @@ export class InMemoryExtensionHost implements ExtensionHost {
 
   deleteAgentState(extensionId: string, agentId: string, key: string): void {
     this.agentState.get(agentId)?.get(extensionId)?.delete(key);
+  }
+
+  getCapabilities(): readonly ExtensionCapability[] {
+    return this.currentCapabilities;
+  }
+
+  onCapabilitiesChanged(capabilities: readonly ExtensionCapability[]): void {
+    this.currentCapabilities = capabilities;
+    for (const listener of this.capabilityListeners) {
+      try {
+        listener(capabilities);
+      } catch {
+        // Listener failure must not stop other notifications
+      }
+    }
+  }
+
+  onCapabilitiesUpdate(listener: (capabilities: readonly ExtensionCapability[]) => void): () => void {
+    this.capabilityListeners.add(listener);
+    return () => this.capabilityListeners.delete(listener);
   }
 }
 

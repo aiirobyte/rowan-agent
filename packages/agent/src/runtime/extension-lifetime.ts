@@ -3,6 +3,7 @@ import {
   type ExtensionRunner,
 } from "../extensions";
 import type {
+  ExtensionCapability,
   LoadedExtension,
   RegisteredTool,
 } from "../extensions";
@@ -79,6 +80,14 @@ export class RuntimeExtensionLifetime {
     return this.runner.getPhases();
   }
 
+  capabilities(): readonly ExtensionCapability[] {
+    return this.runner.getCapabilities();
+  }
+
+  onCapabilitiesChanged(listener: (capabilities: readonly ExtensionCapability[]) => void): () => void {
+    return this.runner.onCapabilitiesChanged(listener);
+  }
+
   get extensionRunner(): ExtensionRunner {
     return this.runner;
   }
@@ -152,6 +161,8 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
   get extensionTools(): readonly RegisteredTool[] { return this.extensions.tools(); }
 
   get extensionPhases(): readonly Phase[] { return this.extensions.phases(); }
+
+  get extensionCapabilities(): readonly ExtensionCapability[] { return this.extensions.capabilities(); }
 
   async closeExtensions(): Promise<void> {
     await this.extensions.close();
