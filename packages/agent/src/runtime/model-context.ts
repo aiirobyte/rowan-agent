@@ -248,6 +248,8 @@ export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): 
     ...(tool.core ? { core: true } : {}),
     description: tool.description,
     parameters: tool.parameters,
+    ...(tool.promptSnippet ? { promptSnippet: tool.promptSnippet } : {}),
+    ...(tool.promptGuidelines ? { promptGuidelines: [...tool.promptGuidelines] } : {}),
     execute: async (args, context, signal): Promise<ToolResult> => {
       const result = await tool.execute(args as JsonValue, {
         agentId,

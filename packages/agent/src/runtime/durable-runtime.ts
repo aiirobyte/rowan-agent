@@ -49,7 +49,7 @@ import { pageAgents, pageRuns } from "./read-models";
 import { PARALLEL_PHASE_METADATA_KEY, projectAssistantMessage, projectModelContext, renderInteractionText } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
-import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
+import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
@@ -1912,7 +1912,7 @@ function isContextOverflowError(error: unknown): boolean {
 
 function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegistry {
   const core = createCorePhases();
-  const coreNames = new Set(core.map(({ name }) => name));
+  const coreNames = CORE_PHASE_NAMES;
   for (const [name] of registry?.phases ?? []) {
     if (name === "continue") {
       throw new TypeError(`Configured Phase name "${name}" is reserved by Rowan routing controls.`);

@@ -164,36 +164,35 @@ function intersectPhaseSelection(
   };
 }
 
+function resolveCoreResources<T extends { name: string; core?: boolean }>(
+  candidates: readonly T[],
+  selection: readonly string[] | undefined,
+  coreNames: ReadonlySet<string>,
+  kind: "Tool" | "Phase",
+): T[] {
+  const core = candidates.filter((item) => item.core || coreNames.has(item.name));
+  const authoredSelection = selection
+    ? selection.filter((name) => !coreNames.has(name))
+    : undefined;
+  const authored = candidates.filter((item) => !coreNames.has(item.name) && !item.core);
+  return [
+    ...core.map((item) => (item.core ? item : { ...item, core: true })),
+    ...selectNamedResources(authored, authoredSelection, kind),
+  ];
+}
+
 function resolveTools(
   candidates: readonly import("./contracts").Tool[],
   selection: readonly string[] | undefined,
 ): import("./contracts").Tool[] {
-  const coreNames = CORE_TOOL_NAMES;
-  const core = candidates.filter((tool) => tool.core || coreNames.has(tool.name));
-  const authoredSelection = selection
-    ? selection.filter((name) => !coreNames.has(name))
-    : undefined;
-  const authored = candidates.filter((tool) => !coreNames.has(tool.name) && !tool.core);
-  return [
-    ...core.map((tool) => ({ ...tool, core: true })),
-    ...selectNamedResources(authored, authoredSelection, "Tool"),
-  ];
+  return resolveCoreResources(candidates, selection, CORE_TOOL_NAMES, "Tool");
 }
 
 function resolvePhases(
   candidates: readonly Phase[],
   selection: PhaseRegistrySelection | undefined,
 ): PhaseRegistry | undefined {
-  const coreNames = CORE_PHASE_NAMES;
-  const core = candidates.filter((phase) => phase.core || coreNames.has(phase.name));
-  const authoredSelection = selection?.phaseIds
-    ? selection.phaseIds.filter((name) => !coreNames.has(name))
-    : undefined;
-  const authored = candidates.filter((phase) => !coreNames.has(phase.name) && !phase.core);
-  const selected = [
-    ...core.map((phase) => ({ ...phase, core: true })),
-    ...selectNamedResources(authored, authoredSelection, "Phase"),
-  ];
+  const selected = resolveCoreResources(candidates, selection?.phaseIds, CORE_PHASE_NAMES, "Phase");
   const entryPhaseId = selection?.entryPhaseId ?? null;
   // The built-in default Phase is materialized by Runtime execution rather
   // than selected from a host source. It is therefore valid even when an

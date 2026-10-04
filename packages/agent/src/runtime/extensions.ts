@@ -1,4 +1,4 @@
-import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID } from "../harness/phases/core-phases";
+import { DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import { buildContextDescription } from "../harness/context/resource-formatter";
 import type { ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolExecutionResult } from "./contracts";
@@ -34,16 +34,13 @@ export function assembleRegisteredExtensions(
     root: snapshot.cwd,
     ...(options.toolArchiveDir ? { archiveDir: options.toolArchiveDir } : {}),
   });
-  const coreNames = new Set(coreTools.map((tool) => tool.name));
   const replacingNames = new Set(
     snapshot.resources.tools
-      .filter((tool) => coreNames.has(tool.name) || tool.core)
+      .filter((tool) => tool.core)
       .map((tool) => tool.name),
   );
   const tools = [
-    ...snapshot.resources.tools.map((tool) =>
-      coreNames.has(tool.name) ? { ...tool, core: true } : tool,
-    ),
+    ...snapshot.resources.tools,
     ...coreTools.filter((tool) => !replacingNames.has(tool.name)),
   ];
   const context = resolveDefinitionContext(snapshot, tools);
@@ -115,17 +112,14 @@ function resolveDefinitionContext(
     ...snapshot.additionalContexts,
   ];
   const phaseCandidates = [...(snapshot.resources.phases?.phases.values() ?? [])];
-  const coreNames = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
+  const corePhases = phaseCandidates.filter((phase) => phase.core);
+  const authoredPhases = phaseCandidates.filter((phase) => !phase.core);
   const authoredPhaseIds = snapshot.definition.phases?.phaseIds
-    ? snapshot.definition.phases.phaseIds.filter((name) => !coreNames.has(name))
+    ? snapshot.definition.phases.phaseIds.filter((name) => !corePhases.some((p) => p.name === name))
     : undefined;
   const selectedPhases = [
-    ...phaseCandidates.filter((phase) => phase.core || coreNames.has(phase.name)).map((phase) => ({ ...phase, core: true })),
-    ...selectNamedResources(
-      phaseCandidates.filter((phase) => !phase.core && !coreNames.has(phase.name)),
-      authoredPhaseIds,
-      "Phase",
-    ),
+    ...corePhases,
+    ...selectNamedResources(authoredPhases, authoredPhaseIds, "Phase"),
   ];
   const phases = new Map(selectedPhases.map((phase) => [phase.name, phase]));
   const requestedEntry = snapshot.definition.phases

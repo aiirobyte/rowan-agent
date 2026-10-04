@@ -153,6 +153,10 @@ export interface ToolDefinition {
   description: string;
   /** Parameter schema (JSON Schema) */
   parameters: Record<string, unknown>;
+  /** Optional: one-line snippet shown in the system prompt tool list */
+  promptSnippet?: string;
+  /** Optional: additional guidelines appended to system prompt */
+  promptGuidelines?: string[];
   /** Execute the tool */
   execute: (args: unknown, context: import("../runtime/contracts").ToolInvocationContext, signal?: AbortSignal) => Promise<ToolExecutionResult>;
   /** Optional: per-tool execution mode override */

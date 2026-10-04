@@ -10,6 +10,8 @@ export function createRuntimeCoreTools(input: CoreToolContext = {}): Tool[] {
     core: true,
     description: tool.description,
     parameters: tool.parameters,
+    ...(tool.promptSnippet ? { promptSnippet: tool.promptSnippet } : {}),
+    ...(tool.promptGuidelines ? { promptGuidelines: tool.promptGuidelines } : {}),
     execute: async (args: JsonValue, context: ToolInvocationContext, signal: AbortSignal) => {
       const result = await tool.execute(args, { skills: [], toolCallId: context.toolCallId }, signal);
       return result.ok
