@@ -51,6 +51,25 @@ export interface ExtensionHost {
 }
 
 // ---------------------------------------------------------------------------
+// Capability contributions
+// ---------------------------------------------------------------------------
+
+export type ExtensionToolContribution = {
+  kind: "tool";
+  name: string;
+  description: string;
+};
+
+export type ExtensionCapabilityContribution = ExtensionToolContribution;
+
+export type ExtensionCapability = {
+  extensionId: string;
+  kind: "tool";
+  name: string;
+  description: string;
+};
+
+// ---------------------------------------------------------------------------
 // Source info — tracks where an extension registration came from.
 // ---------------------------------------------------------------------------
 
@@ -215,6 +234,7 @@ export interface Extension {
   /** Tools registered by this extension */
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
+  capabilities: Map<string, ExtensionCapabilityContribution>;
   cleanup: Array<() => void | Promise<void>>;
   disposer?: ExtensionDisposer;
   runtime: ExtensionRuntime;

@@ -21,6 +21,8 @@ import type {
   ExecOptions,
   ExecResult,
   Extension,
+  ExtensionCapability,
+  ExtensionCapabilityContribution,
   ExtensionError,
   ExtensionErrorListener,
   ExtensionHost,
@@ -209,6 +211,9 @@ export class ExtensionRunner {
   // Error listeners
   private readonly errorListeners = new Set<ExtensionErrorListener>();
 
+  // Capability change listeners
+  private readonly capabilityListeners = new Set<(capabilities: readonly ExtensionCapability[]) => void>();
+
   /** Current agent context — set by the agent before each phase */
   currentContext?: AgentContext;
 
@@ -331,6 +336,7 @@ export class ExtensionRunner {
         path: ext.path,
         tools: new Map(),
         phases: new Set(),
+        capabilities: new Map(),
         cleanup: [],
         runtime: createExtensionRuntime(),
       };
@@ -341,6 +347,9 @@ export class ExtensionRunner {
 
         this.extensions.push(extension);
         this._phaseCache = null;
+        if (extension.capabilities.size > 0) {
+          this.notifyCapabilitiesChanged();
+        }
       } catch (error) {
         await this.rollbackExtension(extension);
         const message = error instanceof Error ? error.message : String(error);
@@ -368,6 +377,7 @@ export class ExtensionRunner {
       await this.disposeExtension(extension, "This Extension Runtime has been closed.");
     }
     this.extensions.length = 0;
+    this.capabilityListeners.clear();
     this.phases.clear();
     this._phaseCache = null;
     this.runtime.invalidate("This Extension Runtime has been closed.");
@@ -448,6 +458,35 @@ export class ExtensionRunner {
       if (tool) return tool.definition;
     }
     return undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Capability management
+  // ---------------------------------------------------------------------------
+
+  /** Get all contributed capabilities across all extensions. */
+  getCapabilities(): readonly ExtensionCapability[] {
+    const result: ExtensionCapability[] = [];
+    for (const ext of this.extensions) {
+      for (const contrib of ext.capabilities.values()) {
+        result.push({
+          extensionId: ext.id,
+          kind: contrib.kind,
+          name: contrib.name,
+          description: contrib.description,
+        });
+      }
+    }
+    return Object.freeze(result);
+  }
+
+  /**
+   * Subscribe to capability changes (contributions added, removed, or extensions disposed).
+   * Returns an unsubscribe function.
+   */
+  onCapabilitiesChanged(listener: (capabilities: readonly ExtensionCapability[]) => void): () => void {
+    this.capabilityListeners.add(listener);
+    return () => this.capabilityListeners.delete(listener);
   }
 
   // ---------------------------------------------------------------------------
@@ -714,6 +753,8 @@ export class ExtensionRunner {
       unregisterProvider: (name) => this.unregisterProvider(name),
       registerTool: (tool) => this.registerTool(extension, tool),
       unregisterTool: (toolName) => this.unregisterTool(extension, toolName),
+      contributeCapability: (contribution) =>
+        this.contributeCapability(extension, contribution),
       context: extContext,
       manifest,
       trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
@@ -780,6 +821,52 @@ export class ExtensionRunner {
   private unregisterTool(extension: Extension, toolName: string): void {
     if (extension.tools.has(toolName)) {
       extension.tools.delete(toolName);
+    }
+  }
+
+  private contributeCapability(
+    extension: Extension,
+    contribution: ExtensionCapabilityContribution,
+  ): () => void {
+    const key = `${contribution.kind}:${contribution.name}`;
+    const entry: ExtensionCapabilityContribution = {
+      kind: contribution.kind,
+      name: contribution.name,
+      description: contribution.description,
+    };
+    extension.capabilities.set(key, entry);
+    if (this.extensions.includes(extension)) {
+      this.notifyCapabilitiesChanged();
+    }
+
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      if (extension.capabilities.get(key) === entry) {
+        extension.capabilities.delete(key);
+        if (this.extensions.includes(extension)) {
+          this.notifyCapabilitiesChanged();
+        }
+      }
+    };
+    extension.cleanup.push(dispose);
+    return dispose;
+  }
+
+  private notifyCapabilitiesChanged(): void {
+    const capabilities = this.getCapabilities();
+    for (const listener of this.capabilityListeners) {
+      try {
+        listener(capabilities);
+      } catch (error) {
+        this.emitError({
+          extensionPath: "<runtime>",
+          event: "capabilities_changed",
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
     }
   }
 
@@ -886,6 +973,8 @@ export class ExtensionRunner {
   private async disposeExtension(extension: Extension, message: string): Promise<void> {
     extension.runtime.invalidate(message);
     for (const name of extension.phases) this.phases.delete(name);
+    const hadCapabilities = extension.capabilities.size > 0;
+    extension.capabilities.clear();
     for (const cleanup of [...extension.cleanup].reverse()) {
       await Promise.resolve().then(() => cleanup()).catch(() => undefined);
     }
@@ -893,6 +982,9 @@ export class ExtensionRunner {
       await Promise.resolve().then(() => extension.disposer!()).catch(() => undefined);
     }
     this._phaseCache = null;
+    if (hadCapabilities) {
+      this.notifyCapabilitiesChanged();
+    }
   }
 }
 

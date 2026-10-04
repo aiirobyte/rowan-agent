@@ -548,3 +548,76 @@ test("a before_tool_call handler that throws → the tool is not executed", asyn
     await runtime.close();
   }
 });
+
+test("host reads contributed capabilities via AgentRuntime and receives change notifications", async () => {
+  let capturedApi: any = null;
+  const runtimeReceived: Array<readonly any[]> = [];
+
+  const remoteToolExt: LoadedExtension = {
+    path: "remote-tool-ext",
+    id: "remote-tool-ext",
+    name: "remote-tool-ext",
+    factory: (api) => {
+      capturedApi = api;
+      api.capabilities.contribute({
+        kind: "tool",
+        name: "remote_query",
+        description: "Execute a remote database query",
+      });
+    },
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    host: new InMemoryExtensionHost(),
+    concurrency: 1,
+    bootstrap: async (registry) => {
+      await registry.loadExtensions([remoteToolExt]);
+    },
+  });
+
+  const unsubRuntime = runtime.onCapabilitiesChanged((caps) => {
+    runtimeReceived.push(caps);
+  });
+
+  try {
+    // 1. Host-side read outside a Run
+    const initialCaps = runtime.listCapabilities();
+    expect(initialCaps).toEqual([
+      {
+        extensionId: "remote-tool-ext",
+        kind: "tool",
+        name: "remote_query",
+        description: "Execute a remote database query",
+      },
+    ]);
+
+    // 2. Dynamic contribution (e.g. after connecting to a remote server)
+    const removeMutationTool = capturedApi.capabilities.contribute({
+      kind: "tool",
+      name: "remote_mutate",
+      description: "Execute a remote database mutation",
+    });
+
+    // Check runtime list outside a Run
+    const updatedCaps = runtime.listCapabilities();
+    expect(updatedCaps).toHaveLength(2);
+    expect(updatedCaps.map((c: any) => c.name)).toEqual(["remote_query", "remote_mutate"]);
+    expect(runtimeReceived.length).toBeGreaterThanOrEqual(1);
+    expect(runtimeReceived[runtimeReceived.length - 1]?.map((c: any) => c.name)).toEqual([
+      "remote_query",
+      "remote_mutate",
+    ]);
+
+    // 3. Dynamic removal of tool
+    removeMutationTool();
+    expect(runtime.listCapabilities()).toHaveLength(1);
+    expect(runtime.listCapabilities()[0]!.name).toBe("remote_query");
+    expect(runtimeReceived[runtimeReceived.length - 1]?.map((c: any) => c.name)).toEqual(["remote_query"]);
+  } finally {
+    // 4. Closing runtime removes all contributions
+    await runtime.close();
+    expect(runtimeReceived[runtimeReceived.length - 1]).toEqual([]);
+    unsubRuntime();
+  }
+});

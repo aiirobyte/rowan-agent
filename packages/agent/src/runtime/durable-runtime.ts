@@ -510,6 +510,16 @@ export class AgentRuntime implements AgentRuntimeContract {
     return { caughtUp: subscription.caughtUp.promise, done: subscription.done.promise, stop: () => controller.abort() };
   }
 
+  listCapabilities(): readonly import("../extensions").ExtensionCapability[] {
+    this.assertOpen();
+    return this.resources.extensionRunner.getCapabilities();
+  }
+
+  onCapabilitiesChanged(listener: (capabilities: readonly import("../extensions").ExtensionCapability[]) => void): () => void {
+    this.assertOpen();
+    return this.resources.extensionRunner.onCapabilitiesChanged(listener);
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;

@@ -46,6 +46,10 @@ export default extension;
 - `state.agent(agentId)`: Access durable key-value state private to the
   extension for a specific agent, persisted via the host.
 - `tool.register(tool)` / `tool.unregister(toolName)`: Register or remove a tool that the LLM can call.
+- `capabilities.contribute({ kind: "tool", name, description })`: Contribute a
+  capability (such as a tool) to the host. Returns a disposer function to remove
+  the contribution. Contributions are automatically removed when the extension is
+  disposed.
 - `phase.register(path | Phase)` / `phase.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
   directory contains `PHASE.md` and may contain direct child Skill Bundles.
 - `registerProvider(provider)` / `unregisterProvider(id)`: Register or remove
@@ -107,3 +111,7 @@ The host interface defines:
 - `getConfig(extensionId, scope?)`: Resolves the layered configuration for an extension.
 - `onConfigChanged(listener: (extensionId, scope) => void)`: Registers a listener to receive configuration change notifications for extensions.
 - `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.
+
+Hosts can query and listen to capabilities directly on `AgentRuntime`:
+- `runtime.listCapabilities()`: Returns the active array of capabilities (`{ extensionId, kind: "tool", name, description }`), readable at any time outside a Run.
+- `runtime.onCapabilitiesChanged(listener: (capabilities) => void)`: Subscribes to capability changes and returns an unsubscribe function.

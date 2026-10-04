@@ -343,3 +343,75 @@ test("ExtensionAPI phase namespace registers and unregisters programmatic Phase 
   expect(runner.getPhase("custom-programmatic-phase")).toBeUndefined();
 });
 
+test("ExtensionAPI capabilities namespace contributes, updates, unregisters, and disposes tool capabilities", async () => {
+  const runner = createExtensionRunner();
+  let capturedApi: ExtensionAPI | null = null;
+  const notifications: Array<readonly any[]> = [];
+
+  runner.onCapabilitiesChanged((caps) => {
+    notifications.push(caps);
+  });
+
+  const ext: LoadedExtension = {
+    path: "<test:capabilities>",
+    name: "test-capabilities",
+    id: "cap-ext-1",
+    factory: (api) => {
+      capturedApi = api;
+      api.capabilities.contribute({
+        kind: "tool",
+        name: "remote_tool_1",
+        description: "First remote tool",
+      });
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+
+  // Initial contribution during load
+  const caps = runner.getCapabilities();
+  expect(caps).toHaveLength(1);
+  expect(caps[0]).toEqual({
+    extensionId: "cap-ext-1",
+    kind: "tool",
+    name: "remote_tool_1",
+    description: "First remote tool",
+  });
+  expect(notifications.length).toBeGreaterThanOrEqual(1);
+
+  // Dynamic contribution after load
+  const removeSecond = capturedApi!.capabilities.contribute({
+    kind: "tool",
+    name: "remote_tool_2",
+    description: "Second remote tool",
+  });
+
+  expect(runner.getCapabilities()).toHaveLength(2);
+  expect(runner.getCapabilities().map((c) => c.name)).toEqual(["remote_tool_1", "remote_tool_2"]);
+
+  // Updating an existing capability by name
+  capturedApi!.capabilities.contribute({
+    kind: "tool",
+    name: "remote_tool_1",
+    description: "Updated first remote tool",
+  });
+
+  expect(runner.getCapabilities()).toHaveLength(2);
+  expect(runner.getCapabilities().find((c) => c.name === "remote_tool_1")?.description).toBe("Updated first remote tool");
+
+  // Remove via returned disposer
+  removeSecond();
+  expect(runner.getCapabilities()).toHaveLength(1);
+  expect(runner.getCapabilities()[0]!.name).toBe("remote_tool_1");
+
+  // Validation
+  expect(() => capturedApi!.capabilities.contribute({} as any)).toThrow(TypeError);
+  expect(() => capturedApi!.capabilities.contribute({ kind: "invalid" as any, name: "x", description: "y" })).toThrow(TypeError);
+  expect(() => capturedApi!.capabilities.contribute({ kind: "tool", name: "", description: "y" })).toThrow(TypeError);
+  expect(() => capturedApi!.capabilities.contribute({ kind: "tool", name: "x", description: 123 as any })).toThrow(TypeError);
+
+  // Close runner removes contributions
+  await runner.close();
+  expect(runner.getCapabilities()).toHaveLength(0);
+});
+

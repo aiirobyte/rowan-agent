@@ -5,6 +5,7 @@ import type {
   ExtensionManifest,
   ScopeRef,
   ExtensionStateStore,
+  ExtensionCapabilityContribution,
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
@@ -64,6 +65,12 @@ export interface ExtensionAPI {
     register(tool: ToolDefinition): void;
     /** Unregister a previously registered tool by name. */
     unregister(toolName: string): void;
+  };
+
+  /** Capability contributions — advertise tools or features to the host. */
+  capabilities: {
+    /** Contribute a capability to the host. Returns a disposer to remove the contribution. */
+    contribute(contribution: ExtensionCapabilityContribution): () => void;
   };
 
   /** Register a model provider. */
@@ -154,6 +161,7 @@ export function createExtensionAPI(
       run: (runId: string) => ExtensionStateStore;
       agent: (agentId: string) => ExtensionStateStore;
     };
+    contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
   },
   runtime?: ExtensionRuntime,
   eventBus?: EventBus,
@@ -260,6 +268,24 @@ export function createExtensionAPI(
       unregister: (toolName) => {
         assertActive();
         options?.unregisterTool?.(toolName);
+      },
+    },
+    capabilities: {
+      contribute: (contribution) => {
+        assertActive();
+        if (!contribution || typeof contribution !== "object") {
+          throw new TypeError("Capability contribution must be an object.");
+        }
+        if (contribution.kind !== "tool") {
+          throw new TypeError(`Unsupported capability contribution kind: "${(contribution as any).kind}".`);
+        }
+        if (typeof contribution.name !== "string" || contribution.name.trim() === "") {
+          throw new TypeError("Capability contribution requires a non-empty name.");
+        }
+        if (typeof contribution.description !== "string") {
+          throw new TypeError("Capability contribution requires a description string.");
+        }
+        return options?.contributeCapability ? options.contributeCapability(contribution) : () => {};
       },
     },
     registerProvider: (config) => {
