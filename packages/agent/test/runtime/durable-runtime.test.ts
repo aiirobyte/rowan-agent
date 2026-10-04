@@ -670,7 +670,7 @@ test("AgentRuntime spills large custom Tool Results to the Agent archive", async
     }
     const toolResult = request.messages.flatMap((message) => Array.isArray(message.content) ? message.content : [])
       .find((part) => part.type === "tool_result");
-    expect(toolResult && "content" in toolResult ? toolResult.content : "").toContain("Full result:");
+    expect(toolResult && "content" in toolResult ? toolResult.content : "").toContain("[Full result:");
     yield { type: "text_delta", text: "large lookup complete", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "large lookup complete" }] } };
     yield { type: "done", response: stopResponse("large lookup complete") };
   };
@@ -691,10 +691,62 @@ test("AgentRuntime spills large custom Tool Results to the Agent archive", async
       ? toolMessage.content[0]?.result.content
       : undefined;
     const path = typeof content === "string"
-      ? content.match(/Full result: (.+)/)?.[1]?.split("\n")[0]
+      ? content.match(/\[Full result: ([^,]+), offset 0\]/)?.[1]
       : undefined;
     expect(path).toBeDefined();
     expect(await readFile(path!, "utf8")).toBe(payload);
+  } finally {
+    await runtime.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("AgentRuntime does not double-spill tool results that already have a spill footer", async () => {
+  let modelCalls = 0;
+  const directory = await mkdtemp(join(tmpdir(), "rowan-tool-archive-"));
+  const existingPath = join(directory, "mock-existing.log");
+  const payload = "preview-data\n" + "y".repeat(20_000) + `\n\n[Full result: ${existingPath}, offset 0]`;
+  const tool = {
+    name: "pre_spilled_lookup",
+    description: "Return an already spilled result.",
+    parameters: Type.Object({}),
+    async execute() {
+      return { ok: true as const, content: payload };
+    },
+  };
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const id = "call_pre_spilled_lookup";
+      const args = "{}";
+      const partial = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args }] };
+      yield { type: "tool_call_start", id, name: tool.name, partial };
+      yield { type: "tool_call_end", id, name: tool.name, arguments: args, partial };
+      yield { type: "done" };
+      return;
+    }
+    const toolResult = request.messages.flatMap((message) => Array.isArray(message.content) ? message.content : [])
+      .find((part) => part.type === "tool_result");
+    expect(toolResult && "content" in toolResult ? toolResult.content : "").toContain("[Full result:");
+    yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };
+    yield { type: "done", response: stopResponse("done") };
+  };
+  const store = new SqliteStore(join(directory, "runtime.sqlite"));
+  const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "runtime-test-v1",
+      stream,
+      tools: [tool],
+      options: { idempotencyKey: "pre-spilled-agent" },
+    });
+    const run = await runtime.start(agentId, "use pre-spilled lookup", { idempotencyKey: "pre-spilled-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    const toolMessage = (await runtime.history(agentId)).find((message) => message.role === "tool");
+    const content = toolMessage && Array.isArray(toolMessage.content)
+      ? toolMessage.content[0]?.result.content
+      : undefined;
+    expect(content).toBe(payload);
   } finally {
     await runtime.close();
     await rm(directory, { recursive: true, force: true });

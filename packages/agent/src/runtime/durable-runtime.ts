@@ -169,7 +169,7 @@ async function spillLargeToolResult(
     : JSON.stringify(result.content, null, 2);
   if (serialized === undefined) return result;
   const bytes = new TextEncoder().encode(serialized);
-  if (bytes.byteLength <= MAX_INLINE_TOOL_RESULT_BYTES || /\nFull result:\s+\S+/.test(serialized)) {
+  if (bytes.byteLength <= MAX_INLINE_TOOL_RESULT_BYTES || /(?:\[Full result:\s+[^\]]+\]|\nFull result:\s+\S+)/.test(serialized)) {
     return result;
   }
   const toolDir = archiveDir;
@@ -182,7 +182,7 @@ async function spillLargeToolResult(
   const preview = new TextDecoder().decode(bytes.subarray(0, MAX_INLINE_TOOL_RESULT_BYTES));
   return {
     ...result,
-    content: `${preview}\n[truncated]\nFull result: ${path}\nOffset: 0`,
+    content: `${preview}\n[truncated]\n\n[Full result: ${path}, offset 0]`,
   };
 }
 

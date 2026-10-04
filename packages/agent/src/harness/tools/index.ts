@@ -456,7 +456,7 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
       const truncated = preview.truncated || lineTruncated;
       let content = truncated ? `${formatted}\n[truncated]` : formatted;
       const archivePath = await spillResult(context, "read", fullFormatted);
-      content += `\nFull result: ${archivePath}\nOffset: 0`;
+      content += `\n\n[Full result: ${archivePath}, offset 0]`;
       if (lineTruncated) {
         content += `\nShowing lines ${requestedOffset}-${selectedLineEnd} of ${sourceLines.length}. Use offset=${selectedLineEnd + 1} to continue.`;
       }
@@ -629,7 +629,7 @@ export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArg
         const preview = boundedPreview(output, maxOutputBytes);
         let content = preview.truncated ? `${preview.text}\n[truncated]` : output;
         const archivePath = await spillResult(context, "bash", output);
-        content += `\nFull result: ${archivePath}\nOffset: 0`;
+        content += `\n\n[Full result: ${archivePath}, offset 0]`;
 
         return toolResult({
           context: toolContext,

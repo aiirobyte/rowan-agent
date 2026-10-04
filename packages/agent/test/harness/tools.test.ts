@@ -86,17 +86,39 @@ test("large read and bash results spill the complete result and leave a bounded 
     const bash = tools.find((tool) => tool.name === "bash")!;
     const readResult = await read.execute({ path: sourcePath }, invocationContext, new AbortController().signal);
     expect(readResult.ok).toBe(true);
-    expect(String(readResult.content)).toContain("Full result:");
-    const readSpill = String(readResult.content).match(/Full result: (.+)/)?.[1]?.split("\n")[0];
+    expect(String(readResult.content)).toContain("[Full result:");
+    const readSpill = String(readResult.content).match(/\[Full result: ([^,]+), offset 0\]/)?.[1];
     expect(readSpill).toBeTruthy();
     expect(await readFile(readSpill!, "utf8")).toContain("line-2100");
 
     const bashResult = await bash.execute({ command: "printf '0123456789%.0s' {1..400}" }, invocationContext, new AbortController().signal);
     expect(bashResult.ok).toBe(true);
-    expect(String(bashResult.content)).toContain("Full result:");
-    const bashSpill = String(bashResult.content).match(/Full result: (.+)/)?.[1]?.split("\n")[0];
+    expect(String(bashResult.content)).toContain("[Full result:");
+    const bashSpill = String(bashResult.content).match(/\[Full result: ([^,]+), offset 0\]/)?.[1];
     expect(bashSpill).toBeTruthy();
     expect((await readFile(bashSpill!, "utf8")).length).toBeGreaterThan(1_024);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("read result separates spill footer from file content ending in newline", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "rowan-read-footer-"));
+  const archiveDir = join(tempRoot, "tool-results");
+  const sourcePath = join(tempRoot, "trailing-newline.md");
+  const fileContent = "明天忘了吧，忘得干净。\n";
+
+  try {
+    await writeFile(sourcePath, fileContent, "utf8");
+    const tools = createCoreTools({ root: tempRoot, archiveDir });
+    const read = tools.find((tool) => tool.name === "read")!;
+    const readResult = await read.execute({ path: sourcePath }, invocationContext, new AbortController().signal);
+
+    expect(readResult.ok).toBe(true);
+    const content = String(readResult.content);
+    expect(content.startsWith(fileContent)).toBe(true);
+    const afterFile = content.slice(fileContent.length);
+    expect(afterFile).toMatch(/^\n\n\[Full result: .+, offset 0\]$/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
