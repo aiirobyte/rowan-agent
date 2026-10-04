@@ -52,7 +52,12 @@ export type {
   BeforePromptResult,
   BeforeToolCallResult,
   AfterToolCallResult,
+  RunStartEvent,
+  RunEndEvent,
 } from "./hooks";
+
+// Host
+export { InMemoryExtensionHost, scopeToKey, resolveScopeFromMetadata } from "./host";
 
 // Runner
 export { ExtensionRunner, createExtensionRunner } from "./runner";
@@ -71,10 +76,13 @@ export type {
   ExecOptions,
   ExecResult,
   ExtensionPackageManifest,
+  ExtensionHost,
+  ExtensionStateStore,
   PhaseRegistration,
   PhaseRun,
   PhaseDefinition,
   RegisteredPhase,
+  ScopeRef,
   ToolDefinition,
   ToolExecutionResult,
   RegisteredTool,

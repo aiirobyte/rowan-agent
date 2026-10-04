@@ -42,7 +42,7 @@ import {
   assertToolExecutionResult,
   thinkingLevelFromMessages,
 } from "./contracts";
-import type { AgentId, AssistantMessage, ExecutionId, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
+import type { AgentId, AssistantMessage, ExecutionId, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
 import { pageAgents, pageRuns } from "./read-models";
@@ -62,7 +62,9 @@ import {
   type LoadResult,
   type ResourceKind,
 } from "./resource-registry";
-import { RuntimeBootstrapRegistry } from "./extension-lifetime";
+import { RuntimeBootstrapRegistry, RuntimeExtensionLifetime } from "./extension-lifetime";
+import { InMemoryExtensionHost, resolveScopeFromMetadata } from "../extensions/host";
+import type { ExtensionHost } from "../extensions/types";
 import type { AgentDefinition } from "../harness/definitions";
 import type { Phase } from "../harness/phases/types";
 import type { Skill } from "../protocol";
@@ -197,16 +199,19 @@ export class AgentRuntime implements AgentRuntimeContract {
   private readonly autoCompactionRuns = new Set<RunId>();
   private readonly consumers = new Map<string, ConsumerSubscription>();
   private readonly transientEvents = new TransientRunEventHub();
+  readonly host: ExtensionHost;
   private readonly resources: RuntimeBootstrapRegistry;
+  private readonly startedRuns = new Set<string>();
   private heartbeat?: ReturnType<typeof setInterval>;
   private pumping = false;
   private closed = false;
 
   private constructor(
-    options: AgentRuntimeOptions & { configs: import("./contracts").ConfigProvider },
+    options: AgentRuntimeOptions & { configs: import("./contracts").ConfigProvider; host: ExtensionHost },
     owned: import("./contracts").OwnedStore,
     resources: RuntimeBootstrapRegistry,
   ) {
+    this.host = options.host;
     this.owned = owned;
     this.commands = new ConfigCommandService(owned, options.configs, String(owned.lease.token).split(":")[0]!);
     this.storeIncarnation = String(owned.lease.token).split(":")[0]!;
@@ -217,10 +222,12 @@ export class AgentRuntime implements AgentRuntimeContract {
   static async init(options: AgentRuntimeOptions): Promise<AgentRuntime> {
     if (!options.store) throw new TypeError("AgentRuntime requires a DurableStore");
     const configs = options.configs ?? new InMemoryConfigProvider();
+    const host = options.host ?? new InMemoryExtensionHost();
     const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
     if (!Number.isInteger(concurrency) || concurrency <= 0) throw new TypeError("concurrency must be a positive integer");
     const owned = await options.store.openOwner({ ownerId: createId("owner"), leaseMs: OWNER_LEASE_MS });
-    const runtime = new AgentRuntime({ ...options, configs, concurrency }, owned, new RuntimeBootstrapRegistry());
+    const extensions = new RuntimeExtensionLifetime({ host });
+    const runtime = new AgentRuntime({ ...options, configs, concurrency, host }, owned, new RuntimeBootstrapRegistry(extensions));
     try {
       await runtime.resources.ensureCoreResources();
       await options.bootstrap?.(runtime.resources);
@@ -232,6 +239,22 @@ export class AgentRuntime implements AgentRuntimeContract {
       await owned.sealAndReleaseOwner().catch(() => undefined);
       throw error;
     }
+  }
+
+  private async handleRunEnd(runId: RunId, agentId: AgentId, outcome: unknown): Promise<void> {
+    if (this.startedRuns.has(runId)) {
+      this.startedRuns.delete(runId);
+      try {
+        await this.resources.extensionRunner.emitRunEnd({
+          runId,
+          agentId,
+          outcome,
+        });
+      } catch {
+        // A failing extension must not stop the runtime
+      }
+    }
+    this.resources.extensionRunner.dropRunState(runId);
   }
 
   async loadAgents(input: LoadInput<AgentDefinition>): Promise<LoadResult> {
@@ -534,6 +557,11 @@ export class AgentRuntime implements AgentRuntimeContract {
     const active = this.executions.get(runId);
     if (active) this.transientEvents.clear(runId, active.executionId);
     active?.controller.abort();
+    if (this.startedRuns.has(runId)) {
+      await this.handleRunEnd(runId, snapshot.agentId, { id: createId("out"), status: "cancelled", message: reason ?? "Agent run stopped." });
+    } else {
+      this.resources.extensionRunner.dropRunState(runId);
+    }
     return boundaryFromSnapshot(await this.owned.snapshotRun(runId));
   }
 
@@ -649,6 +677,23 @@ export class AgentRuntime implements AgentRuntimeContract {
       const controller = new AbortController();
       this.executions.set(run.id, { controller, executionId });
       if (this.cancellationRequested.has(run.id)) controller.abort();
+      if (!this.startedRuns.has(run.id)) {
+        this.startedRuns.add(run.id);
+        const turn: JsonObject =
+          typeof run.input === "object" && run.input !== null && !Array.isArray(run.input)
+            ? (run.input as JsonObject)
+            : {};
+        try {
+          await this.resources.extensionRunner.emitRunStart({
+            runId: run.id,
+            agentId: run.agentId,
+            metadata: (run.metadata ?? {}) as Readonly<Record<string, unknown>>,
+            turn,
+          });
+        } catch {
+          // Extension failures must not stop the run
+        }
+      }
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(run.agentId),
       });
@@ -895,6 +940,11 @@ export class AgentRuntime implements AgentRuntimeContract {
           ...(output && hasVisibleAssistantText(output) ? { output } : {}),
         });
         this.transientEvents.clear(run.id, claim.execution.executionId);
+        await this.handleRunEnd(run.id, run.agentId, {
+          id: createId("out"),
+          status: "cancelled",
+          message: reason,
+        });
         return;
       }
       if (result.type === "input_required") {
@@ -942,32 +992,52 @@ export class AgentRuntime implements AgentRuntimeContract {
         const output = latestAssistant(run, result.messages, executionContext.messages.length);
         await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, outcome: durableOutcome(result.outcome), ...(output ? { output } : {}) });
         this.transientEvents.clear(run.id, claim.execution.executionId, true);
+        await this.handleRunEnd(run.id, run.agentId, result.outcome);
         return;
       }
       const failure: RunFailure = { code: "execution_failed", message: result.error instanceof Error ? result.error.message : "Execution failed." };
       await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, failure });
       this.transientEvents.clear(run.id, claim.execution.executionId);
+      await this.handleRunEnd(run.id, run.agentId, {
+        id: createId("out"),
+        status: "failed",
+        message: failure.message,
+        error: failure,
+      });
     } catch (error) {
       if (!claim && error instanceof RuntimeError && ["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) return;
       if (claim) {
         if (this.cancellationRequested.has(run.id)) {
+          const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
           await this.owned.cancelRun({
             runId: run.id,
             expectedRevision: executionRevision,
-            reason: this.cancellationReasons.get(run.id) ?? "Agent run stopped.",
+            reason,
           }).catch(() => undefined);
+          await this.handleRunEnd(run.id, run.agentId, {
+            id: createId("out"),
+            status: "cancelled",
+            message: reason,
+          });
           return;
         }
+        const failureMessage = error instanceof Error ? error.message : "Execution failed.";
         await this.owned.commitOutcome({
           runId: run.id,
           execution: claim.execution,
           expectedRevision: executionRevision,
-          failure: { code: "execution_failed", message: error instanceof Error ? error.message : "Execution failed." },
+          failure: { code: "execution_failed", message: failureMessage },
         }).catch(async (commitError) => {
           await this.owned.cancelRun({
             runId: run.id,
             reason: commitError instanceof Error ? commitError.message : "Run failure could not be committed.",
           }).catch(() => undefined);
+        });
+        await this.handleRunEnd(run.id, run.agentId, {
+          id: createId("out"),
+          status: "failed",
+          message: failureMessage,
+          error: { code: "execution_failed", message: failureMessage },
         });
         return;
       }
@@ -1016,6 +1086,11 @@ export class AgentRuntime implements AgentRuntimeContract {
     driver?: RunInteractionDriver;
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
+    const scope = resolveScopeFromMetadata(input.run.metadata);
+    const turn: JsonObject =
+      typeof input.run.input === "object" && input.run.input !== null && !Array.isArray(input.run.input)
+        ? (input.run.input as JsonObject)
+        : {};
     const checkpoint = input.driver?.checkpoint();
     const isSuspensionResume = checkpoint && typeof checkpoint === "object" && (checkpoint as any).kind === "tool_call_suspension";
     const suspension = isSuspensionResume ? (checkpoint as {
@@ -1055,6 +1130,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
           ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
           toolCallId,
+          scope,
+          turn,
           interaction: createRunInteractionDriver({
             currentPhase: "default",
             attempt: 0,
@@ -1146,6 +1223,8 @@ export class AgentRuntime implements AgentRuntimeContract {
             ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
             ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
             toolCallId,
+            scope,
+            turn,
             interaction: createToolInteractionDriver(input.driver!, {
               toolCallId,
               toolCallIds,
@@ -1320,6 +1399,8 @@ export class AgentRuntime implements AgentRuntimeContract {
         ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
         ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
         toolCallId,
+        scope,
+        turn,
         interaction: createToolInteractionDriver(input.driver!, {
           toolCallId,
           ...(suspension?.toolCallIds === undefined ? {} : { toolCallIds: suspension.toolCallIds }),

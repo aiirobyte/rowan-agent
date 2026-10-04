@@ -5,8 +5,51 @@
 import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
+import type { JsonObject, JsonValue } from "../runtime-events";
 
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
+
+// ---------------------------------------------------------------------------
+// Host & scope types
+// ---------------------------------------------------------------------------
+
+export type ScopeRef =
+  | { kind: "global" }
+  | { kind: "team"; teamId: string }
+  | { kind: "project"; teamId: string; projectId: string };
+
+export interface ExtensionStateStore {
+  get(key: string): Promise<JsonValue | undefined> | JsonValue | undefined;
+  set(key: string, value: JsonValue): Promise<void> | void;
+  delete(key: string): Promise<void> | void;
+}
+
+export interface ExtensionHost {
+  getConfig(
+    extensionId: string,
+    scope?: ScopeRef,
+  ): Promise<JsonObject | null> | JsonObject | null;
+  onConfigChanged?(
+    listener: (scope: ScopeRef) => void,
+  ): (() => void) | void;
+  notifyConfigChanged?(scope: ScopeRef): void;
+  getAgentState(
+    extensionId: string,
+    agentId: string,
+    key: string,
+  ): Promise<JsonValue | undefined> | JsonValue | undefined;
+  setAgentState(
+    extensionId: string,
+    agentId: string,
+    key: string,
+    value: JsonValue,
+  ): Promise<void> | void;
+  deleteAgentState(
+    extensionId: string,
+    agentId: string,
+    key: string,
+  ): Promise<void> | void;
+}
 
 // ---------------------------------------------------------------------------
 // Source info — tracks where an extension registration came from.
@@ -59,7 +102,9 @@ export type RegisteredPhase = {
 // ---------------------------------------------------------------------------
 
 export type ExtensionPackageManifest = {
+  name?: string;
   rowan?: {
+    id?: string;
     extensions?: string[];
   };
 };
@@ -165,6 +210,7 @@ export type ExecResult = {
  * Tracks the tools registered by each extension for attribution and cleanup.
  */
 export interface Extension {
+  id: string;
   /** Extension path (may be synthetic like `<inline>`) */
   path: string;
   /** Tools registered by this extension */
@@ -229,6 +275,7 @@ export type LoadExtensionsResult = {
  * Runner.loadExtensions() calls the factory and creates the full Extension object.
  */
 export interface LoadedExtension {
+  id?: string;
   path: string;
   name: string;
   factory: ExtensionFactory;
@@ -237,6 +284,7 @@ export interface LoadedExtension {
 
 /** Extension manifest from package.json `rowan` field. */
 export interface ExtensionManifest {
+  id?: string;
   entry?: string;
   name?: string;
 }

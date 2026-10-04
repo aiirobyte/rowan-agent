@@ -23,13 +23,18 @@ import type {
   Extension,
   ExtensionError,
   ExtensionErrorListener,
+  ExtensionHost,
   ExtensionRuntime,
   PhaseRegistration,
   RegisteredPhase,
   RegisteredTool,
+  ScopeRef,
   ToolDefinition,
 } from "./types";
 import { createExtensionRuntime } from "./types";
+import { InMemoryExtensionHost, resolveScopeFromMetadata } from "./host";
+import type { JsonObject, JsonValue } from "../runtime-events";
+import { assertJsonValue } from "../runtime/json";
 import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import { HooksManager } from "./hooks";
@@ -137,6 +142,7 @@ function applyProviderUnregistration(name: string): void {
 export type ExtensionRunnerOptions = {
   entryPhaseId?: string | null;
   cwd?: string;
+  host?: ExtensionHost;
 };
 
 /**
@@ -173,6 +179,7 @@ export class ExtensionRunner {
   readonly hooks: HooksManager;
   readonly runtime: ExtensionRuntime;
   readonly events: EventBus;
+  readonly host: ExtensionHost;
 
   private readonly cwd: string;
   private readonly abortController = new AbortController();
@@ -180,6 +187,13 @@ export class ExtensionRunner {
 
   // Per-extension tracking
   private readonly extensions: Extension[] = [];
+
+  // Run state: runId -> extensionId -> key -> value
+  private readonly runState = new Map<string, Map<string, Map<string, JsonValue>>>();
+
+  // Config change listeners
+  private readonly configChangeListeners = new Set<(scope: ScopeRef) => void>();
+  private readonly hostUnsubscribers: Array<() => void> = [];
 
   // Phase management
   private readonly phases = new Map<string, RegisteredPhase>();
@@ -203,6 +217,16 @@ export class ExtensionRunner {
     this.runtime = createExtensionRuntime();
     this.events = createEventBus();
     this.cwd = options?.cwd ?? process.cwd();
+    this.host = options?.host ?? new InMemoryExtensionHost();
+
+    if (this.host.onConfigChanged) {
+      const unsub = this.host.onConfigChanged((scope) => {
+        this.notifyConfigChanged(scope);
+      });
+      if (typeof unsub === "function") {
+        this.hostUnsubscribers.push(unsub);
+      }
+    }
   }
 
   /** Whether the agent is currently idle (not streaming). */
@@ -301,7 +325,9 @@ export class ExtensionRunner {
    */
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
+      const extensionId = ext.id ?? ext.manifest?.id ?? ext.name;
       const extension: Extension = {
+        id: extensionId,
         path: ext.path,
         tools: new Map(),
         phases: new Set(),
@@ -332,6 +358,12 @@ export class ExtensionRunner {
   /** Dispose all active Extensions in reverse activation order. */
   async close(): Promise<void> {
     this.abortController.abort();
+    for (const unsub of this.hostUnsubscribers) {
+      try { unsub(); } catch {}
+    }
+    this.hostUnsubscribers.length = 0;
+    this.configChangeListeners.clear();
+    this.runState.clear();
     for (const extension of [...this.extensions].reverse()) {
       await this.disposeExtension(extension, "This Extension Runtime has been closed.");
     }
@@ -339,6 +371,53 @@ export class ExtensionRunner {
     this.phases.clear();
     this._phaseCache = null;
     this.runtime.invalidate("This Extension Runtime has been closed.");
+  }
+
+  get extensionHost(): ExtensionHost {
+    return this.host;
+  }
+
+  notifyConfigChanged(scope: ScopeRef): void {
+    for (const listener of this.configChangeListeners) {
+      try {
+        listener(scope);
+      } catch (error) {
+        this.emitError({
+          extensionPath: "<runtime>",
+          event: "config_changed",
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
+    }
+  }
+
+  getRunState(runId: string, extensionId: string, key: string): JsonValue | undefined {
+    const val = this.runState.get(runId)?.get(extensionId)?.get(key);
+    return val !== undefined ? structuredClone(val) : undefined;
+  }
+
+  setRunState(runId: string, extensionId: string, key: string, value: JsonValue): void {
+    assertJsonValue(value);
+    let runMap = this.runState.get(runId);
+    if (!runMap) {
+      runMap = new Map();
+      this.runState.set(runId, runMap);
+    }
+    let extMap = runMap.get(extensionId);
+    if (!extMap) {
+      extMap = new Map();
+      runMap.set(extensionId, extMap);
+    }
+    extMap.set(key, structuredClone(value));
+  }
+
+  deleteRunState(runId: string, extensionId: string, key: string): void {
+    this.runState.get(runId)?.get(extensionId)?.delete(key);
+  }
+
+  dropRunState(runId: string): void {
+    this.runState.delete(runId);
   }
 
   // ---------------------------------------------------------------------------
@@ -488,6 +567,47 @@ export class ExtensionRunner {
     return result?.input ?? input;
   }
 
+  async emitRunStart(event: {
+    runId: string;
+    agentId: string;
+    metadata: Readonly<Record<string, unknown>>;
+    turn: JsonObject;
+  }): Promise<void> {
+    try {
+      await this.hooks.emit("run_start", {
+        type: "run_start",
+        ...event,
+      });
+    } catch (error) {
+      this.emitError({
+        extensionPath: "<runtime>",
+        event: "run_start",
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
+  }
+
+  async emitRunEnd(event: {
+    runId: string;
+    agentId: string;
+    outcome: unknown;
+  }): Promise<void> {
+    try {
+      await this.hooks.emit("run_end", {
+        type: "run_end",
+        ...event,
+      });
+    } catch (error) {
+      this.emitError({
+        extensionPath: "<runtime>",
+        event: "run_end",
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
+  }
+
   async emitBeforeToolCall(
     tool: Tool,
     args: unknown,
@@ -497,19 +617,35 @@ export class ExtensionRunner {
       toolCallId?: string;
       metadata?: Readonly<Record<string, unknown>>;
       answer?: unknown;
+      scope?: ScopeRef;
+      turn?: JsonObject;
     },
   ): Promise<BeforeToolCallResult> {
-    const result = await this.emitHook("before_tool_call", {
-      type: "before_tool_call",
-      tool,
-      args,
-      ...(context?.runId !== undefined ? { runId: context.runId } : {}),
-      ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
-      ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
-      ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
-      ...(context?.answer !== undefined ? { answer: context.answer } : {}),
-    });
-    return result ?? { allow: true };
+    const scope = context?.scope ?? resolveScopeFromMetadata(context?.metadata);
+    const turn = context?.turn ?? {};
+    try {
+      const result = await this.emitHook("before_tool_call", {
+        type: "before_tool_call",
+        tool,
+        args,
+        ...(context?.runId !== undefined ? { runId: context.runId } : {}),
+        ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
+        ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
+        ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
+        ...(context?.answer !== undefined ? { answer: context.answer } : {}),
+        scope,
+        turn,
+      });
+      return result ?? { allow: true };
+    } catch (error) {
+      this.emitError({
+        extensionPath: "<unknown>",
+        event: "before_tool_call",
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      return { allow: true };
+    }
   }
 
   async emitAfterToolCall(
@@ -520,18 +656,34 @@ export class ExtensionRunner {
       agentId?: string;
       toolCallId?: string;
       metadata?: Readonly<Record<string, unknown>>;
+      scope?: ScopeRef;
+      turn?: JsonObject;
     },
   ): Promise<ToolResult> {
-    const hookResult = await this.emitHook("after_tool_call", {
-      type: "after_tool_call",
-      tool,
-      result,
-      ...(context?.runId !== undefined ? { runId: context.runId } : {}),
-      ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
-      ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
-      ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
-    });
-    return hookResult?.result ?? result;
+    const scope = context?.scope ?? resolveScopeFromMetadata(context?.metadata);
+    const turn = context?.turn ?? {};
+    try {
+      const hookResult = await this.emitHook("after_tool_call", {
+        type: "after_tool_call",
+        tool,
+        result,
+        ...(context?.runId !== undefined ? { runId: context.runId } : {}),
+        ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
+        ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
+        ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
+        scope,
+        turn,
+      });
+      return hookResult?.result ?? result;
+    } catch (error) {
+      this.emitError({
+        extensionPath: "<unknown>",
+        event: "after_tool_call",
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      return result;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -583,6 +735,31 @@ export class ExtensionRunner {
       context: extContext,
       manifest,
       trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
+      config: {
+        get: async (scope) => {
+          const effectiveScope = scope ?? { kind: "global" };
+          const res = await runner.host.getConfig(extension.id, effectiveScope);
+          return res ?? null;
+        },
+        changed: (handler) => {
+          runner.configChangeListeners.add(handler);
+          extension.cleanup.push(() => {
+            runner.configChangeListeners.delete(handler);
+          });
+        },
+      },
+      state: {
+        run: (runId) => ({
+          get: (key) => runner.getRunState(runId, extension.id, key),
+          set: (key, value) => runner.setRunState(runId, extension.id, key, value),
+          delete: (key) => runner.deleteRunState(runId, extension.id, key),
+        }),
+        agent: (agentId) => ({
+          get: (key) => runner.host.getAgentState(extension.id, agentId, key),
+          set: (key, value) => runner.host.setAgentState(extension.id, agentId, key, value),
+          delete: (key) => runner.host.deleteAgentState(extension.id, agentId, key),
+        }),
+      },
     }, extension.runtime, this.events);
   }
 
