@@ -217,16 +217,16 @@ export function createExtensionAPI(
         assertActive();
         const store = options?.state?.run(runId);
         return {
-          get: (key) => {
+          get: async (key) => {
             assertActive();
             return store?.get(key);
           },
-          set: (key, value) => {
+          set: async (key, value) => {
             assertActive();
             assertJsonValue(value);
             return store?.set(key, value);
           },
-          delete: (key) => {
+          delete: async (key) => {
             assertActive();
             return store?.delete(key);
           },
@@ -236,16 +236,16 @@ export function createExtensionAPI(
         assertActive();
         const store = options?.state?.agent(agentId);
         return {
-          get: (key) => {
+          get: async (key) => {
             assertActive();
             return store?.get(key);
           },
-          set: (key, value) => {
+          set: async (key, value) => {
             assertActive();
             assertJsonValue(value);
             return store?.set(key, value);
           },
-          delete: (key) => {
+          delete: async (key) => {
             assertActive();
             return store?.delete(key);
           },

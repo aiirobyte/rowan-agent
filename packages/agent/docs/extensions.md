@@ -105,5 +105,5 @@ const runtime = await AgentRuntime.init({ host, store });
 
 The host interface defines:
 - `getConfig(extensionId, scope?)`: Resolves the layered configuration for an extension.
-- `onConfigChanged(listener)` / `notifyConfigChanged(scope)`: Propagates configuration change notifications.
+- `onConfigChanged(listener: (extensionId, scope) => void)`: Registers a listener to receive configuration change notifications for extensions.
 - `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.

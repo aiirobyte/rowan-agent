@@ -191,8 +191,8 @@ export class ExtensionRunner {
   // Run state: runId -> extensionId -> key -> value
   private readonly runState = new Map<string, Map<string, Map<string, JsonValue>>>();
 
-  // Config change listeners
-  private readonly configChangeListeners = new Set<(scope: ScopeRef) => void>();
+  // Config change listeners: extensionId -> Set of handlers
+  private readonly configChangeListeners = new Map<string, Set<(scope: ScopeRef) => void>>();
   private readonly hostUnsubscribers: Array<() => void> = [];
 
   // Phase management
@@ -220,8 +220,8 @@ export class ExtensionRunner {
     this.host = options?.host ?? new InMemoryExtensionHost();
 
     if (this.host.onConfigChanged) {
-      const unsub = this.host.onConfigChanged((scope) => {
-        this.notifyConfigChanged(scope);
+      const unsub = this.host.onConfigChanged((extensionId, scope) => {
+        this.notifyConfigChanged(extensionId, scope);
       });
       if (typeof unsub === "function") {
         this.hostUnsubscribers.push(unsub);
@@ -377,8 +377,10 @@ export class ExtensionRunner {
     return this.host;
   }
 
-  notifyConfigChanged(scope: ScopeRef): void {
-    for (const listener of this.configChangeListeners) {
+  notifyConfigChanged(extensionId: string, scope: ScopeRef): void {
+    const listeners = this.configChangeListeners.get(extensionId);
+    if (!listeners) return;
+    for (const listener of listeners) {
       try {
         listener(scope);
       } catch (error) {
@@ -623,29 +625,19 @@ export class ExtensionRunner {
   ): Promise<BeforeToolCallResult> {
     const scope = context?.scope ?? resolveScopeFromMetadata(context?.metadata);
     const turn = context?.turn ?? {};
-    try {
-      const result = await this.emitHook("before_tool_call", {
-        type: "before_tool_call",
-        tool,
-        args,
-        ...(context?.runId !== undefined ? { runId: context.runId } : {}),
-        ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
-        ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
-        ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
-        ...(context?.answer !== undefined ? { answer: context.answer } : {}),
-        scope,
-        turn,
-      });
-      return result ?? { allow: true };
-    } catch (error) {
-      this.emitError({
-        extensionPath: "<unknown>",
-        event: "before_tool_call",
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      return { allow: true };
-    }
+    const result = await this.emitHook("before_tool_call", {
+      type: "before_tool_call",
+      tool,
+      args,
+      ...(context?.runId !== undefined ? { runId: context.runId } : {}),
+      ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
+      ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
+      ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
+      ...(context?.answer !== undefined ? { answer: context.answer } : {}),
+      scope,
+      turn,
+    });
+    return result ?? { allow: true };
   }
 
   async emitAfterToolCall(
@@ -662,28 +654,18 @@ export class ExtensionRunner {
   ): Promise<ToolResult> {
     const scope = context?.scope ?? resolveScopeFromMetadata(context?.metadata);
     const turn = context?.turn ?? {};
-    try {
-      const hookResult = await this.emitHook("after_tool_call", {
-        type: "after_tool_call",
-        tool,
-        result,
-        ...(context?.runId !== undefined ? { runId: context.runId } : {}),
-        ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
-        ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
-        ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
-        scope,
-        turn,
-      });
-      return hookResult?.result ?? result;
-    } catch (error) {
-      this.emitError({
-        extensionPath: "<unknown>",
-        event: "after_tool_call",
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      return result;
-    }
+    const hookResult = await this.emitHook("after_tool_call", {
+      type: "after_tool_call",
+      tool,
+      result,
+      ...(context?.runId !== undefined ? { runId: context.runId } : {}),
+      ...(context?.agentId !== undefined ? { agentId: context.agentId } : {}),
+      ...(context?.toolCallId !== undefined ? { toolCallId: context.toolCallId } : {}),
+      ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
+      scope,
+      turn,
+    });
+    return hookResult?.result ?? result;
   }
 
   // ---------------------------------------------------------------------------
@@ -742,22 +724,30 @@ export class ExtensionRunner {
           return res ?? null;
         },
         changed: (handler) => {
-          runner.configChangeListeners.add(handler);
+          let listeners = runner.configChangeListeners.get(extension.id);
+          if (!listeners) {
+            listeners = new Set();
+            runner.configChangeListeners.set(extension.id, listeners);
+          }
+          listeners.add(handler);
           extension.cleanup.push(() => {
-            runner.configChangeListeners.delete(handler);
+            listeners?.delete(handler);
+            if (listeners && listeners.size === 0) {
+              runner.configChangeListeners.delete(extension.id);
+            }
           });
         },
       },
       state: {
         run: (runId) => ({
-          get: (key) => runner.getRunState(runId, extension.id, key),
-          set: (key, value) => runner.setRunState(runId, extension.id, key, value),
-          delete: (key) => runner.deleteRunState(runId, extension.id, key),
+          get: async (key) => runner.getRunState(runId, extension.id, key),
+          set: async (key, value) => runner.setRunState(runId, extension.id, key, value),
+          delete: async (key) => runner.deleteRunState(runId, extension.id, key),
         }),
         agent: (agentId) => ({
-          get: (key) => runner.host.getAgentState(extension.id, agentId, key),
-          set: (key, value) => runner.host.setAgentState(extension.id, agentId, key, value),
-          delete: (key) => runner.host.deleteAgentState(extension.id, agentId, key),
+          get: async (key) => runner.host.getAgentState(extension.id, agentId, key),
+          set: async (key, value) => runner.host.setAgentState(extension.id, agentId, key, value),
+          delete: async (key) => runner.host.deleteAgentState(extension.id, agentId, key),
         }),
       },
     }, extension.runtime, this.events);

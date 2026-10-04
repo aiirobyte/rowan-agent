@@ -19,9 +19,9 @@ export type ScopeRef =
   | { kind: "project"; teamId: string; projectId: string };
 
 export interface ExtensionStateStore {
-  get(key: string): Promise<JsonValue | undefined> | JsonValue | undefined;
-  set(key: string, value: JsonValue): Promise<void> | void;
-  delete(key: string): Promise<void> | void;
+  get(key: string): Promise<JsonValue | undefined>;
+  set(key: string, value: JsonValue): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 export interface ExtensionHost {
@@ -30,9 +30,8 @@ export interface ExtensionHost {
     scope?: ScopeRef,
   ): Promise<JsonObject | null> | JsonObject | null;
   onConfigChanged?(
-    listener: (scope: ScopeRef) => void,
+    listener: (extensionId: string, scope: ScopeRef) => void,
   ): (() => void) | void;
-  notifyConfigChanged?(scope: ScopeRef): void;
   getAgentState(
     extensionId: string,
     agentId: string,

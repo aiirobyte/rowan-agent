@@ -70,7 +70,8 @@ test("config get scoped to own id and changed fires on scope change", async () =
   let alphaTeamConfig: unknown;
   let alphaProjectConfig: unknown;
   let betaGlobalConfig: unknown;
-  const changedScopes: ScopeRef[] = [];
+  const alphaChangedScopes: ScopeRef[] = [];
+  const betaChangedScopes: ScopeRef[] = [];
 
   const alphaExt: LoadedExtension = {
     path: "alpha-ext",
@@ -78,7 +79,7 @@ test("config get scoped to own id and changed fires on scope change", async () =
     name: "alpha-ext",
     factory: (api) => {
       api.config.changed((scope) => {
-        changedScopes.push(scope);
+        alphaChangedScopes.push(scope);
       });
       api.on("run_start", async () => {
         alphaGlobalConfig = await api.config.get();
@@ -97,6 +98,9 @@ test("config get scoped to own id and changed fires on scope change", async () =
     id: "beta-ext",
     name: "beta-ext",
     factory: (api) => {
+      api.config.changed((scope) => {
+        betaChangedScopes.push(scope);
+      });
       api.on("run_start", async () => {
         betaGlobalConfig = await api.config.get();
       });
@@ -134,9 +138,14 @@ test("config get scoped to own id and changed fires on scope change", async () =
     // Verify beta extension gets its own config only
     expect(betaGlobalConfig).toEqual({ setting: "beta-global" });
 
-    // Verify change notification fires
+    // Verify change notification fires ONLY for the changed extension
     host.setConfig("alpha-ext", { newSetting: true }, { kind: "team", teamId: "team-1" });
-    expect(changedScopes).toEqual([{ kind: "team", teamId: "team-1" }]);
+    expect(alphaChangedScopes).toEqual([{ kind: "team", teamId: "team-1" }]);
+    expect(betaChangedScopes).toEqual([]);
+
+    host.setConfig("beta-ext", { updatedBeta: true }, { kind: "global" });
+    expect(betaChangedScopes).toEqual([{ kind: "global" }]);
+    expect(alphaChangedScopes).toHaveLength(1);
   } finally {
     await runtime.close();
   }
@@ -155,12 +164,12 @@ test("run state is isolated per extension and dropped after run end", async () =
     name: "ext-1",
     factory: (api) => {
       ext1ApiRef = api;
-      api.on("run_start", (event) => {
+      api.on("run_start", async (event) => {
         capturedRunId = event.runId;
-        api.state.run(event.runId).set("key1", "val1");
+        await api.state.run(event.runId).set("key1", "val1");
       });
-      api.on("run_end", (event) => {
-        ext1RunEndState = api.state.run(event.runId).get("key1");
+      api.on("run_end", async (event) => {
+        ext1RunEndState = await api.state.run(event.runId).get("key1");
       });
     },
   };
@@ -170,9 +179,9 @@ test("run state is isolated per extension and dropped after run end", async () =
     id: "ext-2",
     name: "ext-2",
     factory: (api) => {
-      api.on("run_start", (event) => {
-        ext1SeenByExt2 = api.state.run(event.runId).get("key1");
-        api.state.run(event.runId).set("key1", "ext2-val");
+      api.on("run_start", async (event) => {
+        ext1SeenByExt2 = await api.state.run(event.runId).get("key1");
+        await api.state.run(event.runId).set("key1", "ext2-val");
       });
     },
   };
@@ -197,7 +206,7 @@ test("run state is isolated per extension and dropped after run end", async () =
     expect(ext1RunEndState).toBe("val1");
 
     // After run completes, run state is dropped
-    ext1PostEndState = ext1ApiRef?.state.run(capturedRunId).get("key1");
+    ext1PostEndState = await ext1ApiRef?.state.run(capturedRunId).get("key1");
     expect(ext1PostEndState).toBeUndefined();
   } finally {
     await runtime.close();
@@ -213,13 +222,13 @@ test("agent state persists through the host and is private per extension", async
     id: "ext-x",
     name: "ext-x",
     factory: (api) => {
-      api.on("run_start", (event) => {
-        const current = api.state.agent(event.agentId).get("counter");
+      api.on("run_start", async (event) => {
+        const current = await api.state.agent(event.agentId).get("counter");
         if (current === undefined) {
-          api.state.agent(event.agentId).set("counter", 100);
+          await api.state.agent(event.agentId).set("counter", 100);
         } else {
           extXSeenCounterRun2 = current;
-          api.state.agent(event.agentId).set("counter", (current as number) + 50);
+          await api.state.agent(event.agentId).set("counter", (current as number) + 50);
         }
       });
     },
@@ -230,8 +239,8 @@ test("agent state persists through the host and is private per extension", async
     id: "ext-y",
     name: "ext-y",
     factory: (api) => {
-      api.on("run_start", (event) => {
-        extYSeenCounter = api.state.agent(event.agentId).get("counter");
+      api.on("run_start", async (event) => {
+        extYSeenCounter = await api.state.agent(event.agentId).get("counter");
       });
     },
   };
@@ -420,8 +429,8 @@ test("default in-memory host works when host is omitted", async () => {
     factory: (api) => {
       api.on("run_start", async (event) => {
         extSeenHostConfig = await api.config.get();
-        api.state.agent(event.agentId).set("default_key", "default_val");
-        extSeenAgentState = api.state.agent(event.agentId).get("default_key");
+        await api.state.agent(event.agentId).set("default_key", "default_val");
+        extSeenAgentState = await api.state.agent(event.agentId).get("default_key");
       });
     },
   };
@@ -449,7 +458,7 @@ test("default in-memory host works when host is omitted", async () => {
   }
 });
 
-test("throwing extension does not stop the run", async () => {
+test("throwing extension in run_start and run_end does not stop the run", async () => {
   let toolExecuted = false;
 
   const faultyExt: LoadedExtension = {
@@ -459,7 +468,7 @@ test("throwing extension does not stop the run", async () => {
     factory: (api) => {
       api.tool.register({
         name: "resilient_tool",
-        description: "A tool that executes even if hooks fail",
+        description: "A tool that executes even if lifecycle hooks fail",
         parameters: { type: "object", properties: {} },
         execute: async () => {
           toolExecuted = true;
@@ -468,12 +477,6 @@ test("throwing extension does not stop the run", async () => {
       });
       api.on("run_start", () => {
         throw new Error("Failure in run_start hook");
-      });
-      api.on("before_tool_call", () => {
-        throw new Error("Failure in before_tool_call hook");
-      });
-      api.on("after_tool_call", () => {
-        throw new Error("Failure in after_tool_call hook");
       });
       api.on("run_end", () => {
         throw new Error("Failure in run_end hook");
@@ -497,6 +500,50 @@ test("throwing extension does not stop the run", async () => {
 
     expect(result.type).toBe("completed");
     expect(toolExecuted).toBe(true);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a before_tool_call handler that throws → the tool is not executed", async () => {
+  let toolExecuted = false;
+
+  const gateExt: LoadedExtension = {
+    path: "gate-ext",
+    id: "gate-ext",
+    name: "gate-ext",
+    factory: (api) => {
+      api.tool.register({
+        name: "guarded_tool",
+        description: "A tool that must not execute if gate throws",
+        parameters: { type: "object", properties: {} },
+        execute: async () => {
+          toolExecuted = true;
+          return { content: [{ type: "text", text: "executed" }] };
+        },
+      });
+      api.on("before_tool_call", () => {
+        throw new Error("Gate rejection error");
+      });
+    },
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => {
+      await registry.loadExtensions([gateExt]);
+    },
+  });
+
+  try {
+    const stream = createToolStream("guarded_tool");
+    const agentId = await simpleAgent(runtime, stream);
+    const run = await runtime.start(agentId, "test", { idempotencyKey: "run-gate-throw-1" });
+    const result = await run.wait();
+
+    expect(result.type).toBe("completed");
+    expect(toolExecuted).toBe(false);
   } finally {
     await runtime.close();
   }

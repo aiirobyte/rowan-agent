@@ -5,7 +5,7 @@ import type { ExtensionHost, ScopeRef } from "./types";
 export class InMemoryExtensionHost implements ExtensionHost {
   private readonly configs = new Map<string, Map<string, JsonObject>>();
   private readonly agentState = new Map<string, Map<string, Map<string, JsonValue>>>();
-  private readonly listeners = new Set<(scope: ScopeRef) => void>();
+  private readonly listeners = new Set<(extensionId: string, scope: ScopeRef) => void>();
 
   constructor(options: {
     configs?: Record<string, Record<string, JsonObject>>;
@@ -49,7 +49,7 @@ export class InMemoryExtensionHost implements ExtensionHost {
       assertJsonValue(config);
       scopeConfigs.set(extensionId, structuredClone(config));
     }
-    this.notifyConfigChanged(scope);
+    this.notifyConfigChanged(extensionId, scope);
   }
 
   getConfig(extensionId: string, scope: ScopeRef = { kind: "global" }): JsonObject | null {
@@ -71,15 +71,15 @@ export class InMemoryExtensionHost implements ExtensionHost {
     return merged ? (structuredClone(merged) as JsonObject) : null;
   }
 
-  onConfigChanged(listener: (scope: ScopeRef) => void): () => void {
+  onConfigChanged(listener: (extensionId: string, scope: ScopeRef) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  notifyConfigChanged(scope: ScopeRef = { kind: "global" }): void {
+  notifyConfigChanged(extensionId: string, scope: ScopeRef = { kind: "global" }): void {
     for (const listener of this.listeners) {
       try {
-        listener(scope);
+        listener(extensionId, scope);
       } catch {
         // Listener failure must not stop other notifications
       }
