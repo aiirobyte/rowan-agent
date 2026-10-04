@@ -532,3 +532,73 @@ test("Existing Scope override behaviour for non-core resources is unchanged: pee
   expect(() => registry.resolveView({ agents: [], tools: ["scope-a", "scope-b"], skills: [], phases: [] }))
     .toThrow(/Duplicate Tool resource "shared_tool"/);
 });
+
+test("Regression: with no host replacement, system prompt contains built-in Core Tools snippets, guidelines, and Extension tool promptSnippet", async () => {
+  let observedRequest: import("@rowan-agent/models").LlmRequest | undefined;
+
+  const extension = {
+    ...loadExtensionFromFactory((api) => {
+      api.tool.register({
+        name: "custom_lookup",
+        description: "Search project documents.",
+        promptSnippet: "Search project documents.",
+        promptGuidelines: ["Use specific keywords when looking up documentation."],
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      });
+    }, process.cwd()),
+    name: "lookup-extension",
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => {
+      await registry.loadExtensions([extension]);
+    },
+  });
+
+  try {
+    const stream: StreamFn = async function* (request) {
+      observedRequest = request;
+      yield {
+        type: "done",
+        response: stopResponse("done"),
+      };
+    };
+
+    const agentId = await createAgentWith(runtime, {
+      identity: "regression-prompt-snippets-v1",
+      definition: {
+        name: "standard-agent",
+        description: "Standard agent without host tool replacement",
+        prompt: "You are a helpful assistant.",
+      },
+      stream,
+      options: { idempotencyKey: "regression-prompt-snippets-agent" },
+    });
+
+    const run = await runtime.start(agentId, "hello", {
+      idempotencyKey: "regression-prompt-snippets-run",
+    });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+
+    // Built-in Core Tools snippets reach system prompt
+    expect(observedRequest?.system).toContain("- edit: Apply exact text replacements.");
+    expect(observedRequest?.system).toContain("- read: Read file contents.");
+    expect(observedRequest?.system).toContain("- write: Create or overwrite files.");
+    expect(observedRequest?.system).toContain("- bash: Run shell commands.");
+
+    // Built-in Core Tools guidelines reach system prompt
+    expect(observedRequest?.system).toContain("- Read the file first; each oldText must match exactly once.");
+    expect(observedRequest?.system).toContain("- Read files before editing them.");
+    expect(observedRequest?.system).toContain("- Use edit for partial changes.");
+    expect(observedRequest?.system).toContain("- Use read/write/edit for file operations.");
+
+    // Extension-registered non-core Tool snippet and guideline reach system prompt
+    expect(observedRequest?.system).toContain("- custom_lookup: Search project documents.");
+    expect(observedRequest?.system).toContain("- Use specific keywords when looking up documentation.");
+  } finally {
+    await runtime.close();
+  }
+});
