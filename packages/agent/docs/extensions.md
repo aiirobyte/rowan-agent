@@ -38,13 +38,22 @@ export default extension;
 
 ## API
 
+- `config.get(scope?)` / `config.changed(handler)`: Read the extension's own
+  effective configuration block resolved across scopes (`global`, `team`,
+  `project`), and listen for configuration change events.
+- `state.run(runId)`: Access in-memory key-value state private to the extension
+  for a specific run. Run state is dropped when the run ends.
+- `state.agent(agentId)`: Access durable key-value state private to the
+  extension for a specific agent, persisted via the host.
 - `tool.register(tool)` / `tool.unregister(toolName)`: Register or remove a tool that the LLM can call.
 - `phase.register(path | Phase)` / `phase.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
   directory contains `PHASE.md` and may contain direct child Skill Bundles.
 - `registerProvider(provider)` / `unregisterProvider(id)`: Register or remove
   a model provider configuration.
-- `on()` / `off()`: Register `before_phase`, `after_phase`, `before_prompt`,
-  `before_tool_call`, and `after_tool_call` hooks.
+- `on()` / `off()`: Register lifecycle hooks (`run_start`, `run_end`) and
+  execution hooks (`before_phase`, `after_phase`, `before_prompt`,
+  `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
+  `scope` and per-turn input `turn`.
 - `context`: Access the working directory, `AbortSignal`, command execution,
   and the current resource summary.
 - `phase`: Read or set the current phase payload, output messages, and next
@@ -73,3 +82,28 @@ Hooks are only used to modify decisions for the current execution. Durable run
 events are not delivered through extension hooks. Read them using
 `run.observe()` or `runtime.consume()`; the durable store is responsible for
 ordering and replay.
+
+## Host integration
+
+Hosts integrate with extensions by providing an `ExtensionHost` implementation to
+`AgentRuntime.init({ host })`. Rowan provides `InMemoryExtensionHost` as the
+default in-memory host when `host` is omitted.
+
+```ts
+import { AgentRuntime, InMemoryExtensionHost } from "@rowan-agent/agent";
+
+const host = new InMemoryExtensionHost({
+  configs: {
+    global: {
+      "my-extension": { apiKey: "secret" },
+    },
+  },
+});
+
+const runtime = await AgentRuntime.init({ host, store });
+```
+
+The host interface defines:
+- `getConfig(extensionId, scope?)`: Resolves the layered configuration for an extension.
+- `onConfigChanged(listener)` / `notifyConfigChanged(scope)`: Propagates configuration change notifications.
+- `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.
