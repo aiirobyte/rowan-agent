@@ -14,7 +14,7 @@
     },
     "packages/agent": {
       "name": "@rowan-agent/agent",
-      "version": "0.15.1",
+      "version": "0.18.0",
       "dependencies": {
         "@rowan-agent/models": "workspace:*",
         "jiti": "2.7.0",
@@ -27,7 +27,7 @@
     },
     "packages/cli": {
       "name": "@rowan-agent/cli",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "bin": {
         "rowan": "./src/cli.ts",
       },
@@ -48,7 +48,7 @@
     },
     "packages/models": {
       "name": "@rowan-agent/models",
-      "version": "0.7.1",
+      "version": "0.8.0",
       "devDependencies": {
         "tsup": "^8.5.1",
       },
