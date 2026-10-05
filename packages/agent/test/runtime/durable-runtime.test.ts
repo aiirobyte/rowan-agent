@@ -1050,6 +1050,15 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
     name: "progress_lookup",
     description: "Look up a value with progress.",
     parameters: Type.Object({}),
+    present(call: any) {
+      if (call.status === "in_progress" && call.progress) {
+        return {
+          title: `Progress ${(call.progress as any).stage}`,
+          _meta: { progress: call.progress },
+        };
+      }
+      return undefined;
+    },
     async execute(_args: unknown, context: ToolInvocationContext) {
       context.reportProgress({ stage: "halfway" });
       await toolReady;
@@ -1095,15 +1104,21 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
     const progress = next();
     releaseModel();
     let progressResult = await progress;
-    while (!progressResult.done && progressResult.value.kind !== "tool_progress") {
+    while (!progressResult.done && !(progressResult.value.kind === "tool_state_changed" && progressResult.value.durability === "transient" && progressResult.value.toolCall.title === "Progress halfway")) {
       progressResult = await next();
     }
     releaseTool();
     await run.wait();
     while (!(await next()).done) {}
 
-    expect(observed.find((event) => event.kind === "tool_progress")).toMatchObject({
-      progress: { stage: "halfway" },
+    expect(observed.find((event) => event.kind === "tool_state_changed" && event.durability === "transient" && (event.toolCall as any).title === "Progress halfway")).toMatchObject({
+      kind: "tool_state_changed",
+      durability: "transient",
+      transition: { from: "in_progress", to: "in_progress" },
+      toolCall: expect.objectContaining({
+        title: "Progress halfway",
+        _meta: { progress: { stage: "halfway" } },
+      }),
     });
   } finally {
     releaseModel();

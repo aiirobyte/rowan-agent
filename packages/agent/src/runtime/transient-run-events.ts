@@ -6,15 +6,14 @@ import type {
   RunId,
   ThinkingDelta,
   ToolCallDelta,
-  ToolProgress,
   ToolStateChanged,
 } from "../runtime-events";
+import { mergeToolCall } from "./tool-call-merge";
 
 export type TransientRunEvent =
   | MessageDelta
   | ThinkingDelta
   | ToolCallDelta
-  | ToolProgress
   | PhaseStatusEvent
   | ModelRetry
   | Extract<ToolStateChanged, { durability: "transient" }>;
@@ -90,10 +89,12 @@ export class TransientRunEventSubscription {
       }
       if (index !== -1) {
         const existing = this.queue[index] as Extract<ToolStateChanged, { durability: "transient" }>;
+        const mergedCall = { ...existing.toolCall };
+        mergeToolCall(mergedCall, event.toolCall);
         this.queue[index] = {
           ...existing,
           transition: { from: existing.transition.from, to: event.transition.to },
-          toolCall: { ...existing.toolCall, ...event.toolCall },
+          toolCall: mergedCall,
         };
       } else {
         if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
@@ -146,8 +147,7 @@ export class TransientRunEventSubscription {
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {
       const event = this.queue[index];
       if (
-        (event?.kind === "tool_progress" && event.toolCallId === toolCallId)
-        || (event?.kind === "tool_state_changed" && event.toolCall.toolCallId === toolCallId)
+        event?.kind === "tool_state_changed" && event.toolCall.toolCallId === toolCallId
       ) this.queue.splice(index, 1);
     }
     this.notify();

@@ -296,6 +296,15 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
     name: "lookup",
     description: "Look up a value.",
     parameters: Type.Object({}),
+    present(call: any) {
+      if (call.status === "in_progress" && call.progress) {
+        return {
+          title: `Lookup (${(call.progress as any).stage})`,
+          _meta: { stage: (call.progress as any).stage },
+        };
+      }
+      return undefined;
+    },
     async execute(_args: unknown, context: ToolInvocationContext) {
       retainedReporter = context.reportProgress;
       context.reportProgress({ stage: "active" });
@@ -311,8 +320,19 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
 
     await nextMatching(iterator, (event) => event.kind === "run_state_changed" && event.to === "running");
     releaseToolRequest();
-    const activeProgress = await nextMatching(iterator, (event) => event.kind === "tool_progress");
-    expect(activeProgress).toMatchObject({ kind: "tool_progress", progress: { stage: "active" } });
+    const activeProgress = await nextMatching(
+      iterator,
+      (event) => event.kind === "tool_state_changed" && event.durability === "transient" && event.toolCall.title === "Lookup (active)",
+    );
+    expect(activeProgress).toMatchObject({
+      kind: "tool_state_changed",
+      durability: "transient",
+      transition: { from: "in_progress", to: "in_progress" },
+      toolCall: expect.objectContaining({
+        title: "Lookup (active)",
+        _meta: { stage: "active" },
+      }),
+    });
     releaseTool();
     await nextMatching(
       iterator,
@@ -327,11 +347,8 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
     for await (const event of { [Symbol.asyncIterator]: () => iterator }) remaining.push(event);
 
     expect(remaining.some(
-      (event) => event.kind === "tool_progress"
-        && typeof event.progress === "object"
-        && event.progress !== null
-        && !Array.isArray(event.progress)
-        && (event.progress as Readonly<Record<string, unknown>>).stage === "late",
+      (event) => event.kind === "tool_state_changed"
+        && (event.toolCall as any)?._meta?.stage === "late",
     )).toBe(false);
     expect(remaining.at(-1)).toMatchObject({ kind: "run_state_changed", to: "completed" });
   } finally {
@@ -374,7 +391,7 @@ test("a slow AgentRun observer does not backpressure execution and terminal is l
     const firstTransient = (async () => {
       while (true) {
         const event = await iterator.next();
-        if (event.done || event.value.kind === "message_delta" || event.value.kind === "thinking_delta" || event.value.kind === "tool_progress" || event.value.kind === "phase_status") return event;
+        if (event.done || event.value.kind === "message_delta" || event.value.kind === "thinking_delta" || event.value.kind === "phase_status") return event;
       }
     })();
     releaseDeltas();

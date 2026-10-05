@@ -47,6 +47,17 @@ export default extension;
 - `state.agent(agentId)`: Access durable key-value state private to the
   extension for a specific agent, persisted via the host.
 - `tools.register(tool)` / `tools.unregister(toolName)`: Register or remove a tool that the LLM can call.
+  Tools can specify `kind`, `annotations`, MCP-standard `_meta?: JsonObject` (passed untouched to `tools.list()` summaries for hosts and i18n), and an optional pure presentation function:
+  ```ts
+  present?(call: {
+    status: ToolCallStatus;
+    args: JsonValue;
+    progress?: JsonValue;
+    result?: ToolExecutionResult;
+  }): { title?: string; content?: ToolCallContent[]; locations?: ToolCallLocation[]; _meta?: JsonObject } | void | Promise<...>;
+  ```
+  Rowan calls `present` at call reservation (`pending`), start of execution (`in_progress`), on each progress report via `ctx.reportProgress(data)` (`status: "in_progress", progress: data`), and on completion/failure (`status: "completed" | "failed", result`). Outputs are merged using `mergeToolCall`. When omitted or on error, Rowan falls back to default presentation without failing the tool call.
+  During execution, tools can report progress data using `context.reportProgress(data: JsonValue)`, which triggers `present({ status: "in_progress", args, progress: data })` and emits transient `tool_state_changed` updates.
 - `capabilities.contribute({ kind: "tool", name, description })`: Contribute a
   capability (such as a tool) to the host. Returns a disposer function to remove
   the contribution. Contributions are automatically removed when the extension is

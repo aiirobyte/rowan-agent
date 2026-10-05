@@ -38,7 +38,6 @@ import type {
   QueuedRunFailure,
   ToolCallId,
   ToolCallSnapshot,
-  ToolProgress,
   ToolExecutionResult,
   UserContent,
   UserMessage,
@@ -97,7 +96,6 @@ export type {
   ThinkingContent,
   ToolCallId,
   ToolCallSnapshot,
-  ToolProgress,
   ToolCallState,
   ToolExecutionResult,
   ToolMessage,
@@ -176,6 +174,12 @@ export type ToolCallContext = Readonly<{
 export type ToolInvocationContext = ToolCallContext & Readonly<{
   interaction: RunInteractionDriver;
 }>;
+export type {
+  ToolCallPresentationInput,
+  ToolCallPresentationOutput,
+} from "./tool-call-merge";
+export { mergeToolCall, isValidPresentationOutput } from "./tool-call-merge";
+
 export type Tool = Readonly<{
   name: string;
   /** Rowan-owned Core Tool; Core Tools bypass Definition/Phase filtering. */
@@ -186,17 +190,18 @@ export type Tool = Readonly<{
   promptGuidelines?: readonly string[];
   kind?: ToolKind;
   annotations?: ToolAnnotations;
-  present?(args: JsonValue, result?: ToolExecutionResult): {
+  _meta?: JsonObject;
+  present?(call: import("./tool-call-merge").ToolCallPresentationInput): {
     title?: string;
     content?: ToolCallContent[];
     locations?: ToolCallLocation[];
     _meta?: JsonObject;
-  } | Promise<{
+  } | undefined | void | Promise<{
     title?: string;
     content?: ToolCallContent[];
     locations?: ToolCallLocation[];
     _meta?: JsonObject;
-  }>;
+  } | undefined | void>;
   execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
 }>;
 export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;

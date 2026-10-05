@@ -48,7 +48,8 @@ export type {
   Tool as RuntimeTool,
   ToolCallContext,
   ToolInvocationContext,
-  ToolProgress,
+  ToolCallPresentationInput,
+  ToolCallPresentationOutput,
   UserInput,
 } from "./contracts";
 export type {
@@ -90,6 +91,8 @@ export {
   isRunFailure,
   normalizeUserInput,
   projectToolDefinition,
+  mergeToolCall,
+  isValidPresentationOutput,
 } from "./contracts";
 export * from "./errors";
 export * from "./idempotency";

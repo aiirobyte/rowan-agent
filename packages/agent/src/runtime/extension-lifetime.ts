@@ -168,6 +168,7 @@ function adaptExtensionTool(input: RegisteredTool): import("./contracts").Tool {
     ...(definition.promptGuidelines ? { promptGuidelines: definition.promptGuidelines } : {}),
     ...(definition.kind ? { kind: definition.kind } : {}),
     ...(definition.annotations ? { annotations: definition.annotations } : {}),
+    ...(definition._meta !== undefined ? { _meta: definition._meta } : {}),
     ...(definition.present ? { present: definition.present } : {}),
     execute: async (args, context, signal) => definition.execute(args, context, signal),
   };

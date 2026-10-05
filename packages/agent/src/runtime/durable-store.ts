@@ -61,6 +61,7 @@ import { createIdempotencyScope, encodeIdempotencyScope, canonicalStartRunReques
 import { TOOL_VALUE_JSON_BYTES } from "./idempotency";
 import { assertJsonValue, assertUtf8ByteLimit, canonicalJson } from "./json";
 import { normalizeUserInput } from "./contracts";
+import { mergeToolCall } from "./tool-call-merge";
 import type {
   AssistantContent,
   DurableToolResult,
@@ -1250,7 +1251,12 @@ export class InMemoryStore implements DurableStore {
     if (input.kind !== undefined) toolCall.kind = input.kind;
     if (input.locations !== undefined) toolCall.locations = clone(input.locations);
     if (input.content !== undefined) toolCall.content = clone(input.content);
-    if (input._meta !== undefined) toolCall._meta = clone(input._meta);
+    if (input._meta !== undefined) {
+      toolCall._meta = {
+        ...(toolCall._meta ?? {}),
+        ...clone(input._meta),
+      };
+    }
     toolCall.updatedAt = createTimestamp();
     this.storeToolCall(toolCall);
     run.revision += 1;
@@ -1343,10 +1349,15 @@ export class InMemoryStore implements DurableStore {
     if (input.kind !== undefined) toolCall.kind = input.kind;
     if (input.locations !== undefined) toolCall.locations = clone(input.locations);
     if (input.content !== undefined) toolCall.content = clone(input.content);
-    else toolCall.content = defaultToolCallContent(input.result);
+    else if (toolCall.content === undefined) toolCall.content = defaultToolCallContent(input.result);
     if (input.rawOutput !== undefined) toolCall.rawOutput = clone(input.rawOutput);
-    else toolCall.rawOutput = "structuredContent" in input.result && input.result.structuredContent !== undefined ? clone(input.result.structuredContent) : clone((input.result as any).content);
-    if (input._meta !== undefined) toolCall._meta = clone(input._meta);
+    else if (toolCall.rawOutput === undefined) toolCall.rawOutput = "structuredContent" in input.result && input.result.structuredContent !== undefined ? clone(input.result.structuredContent) : clone((input.result as any).content);
+    if (input._meta !== undefined) {
+      toolCall._meta = {
+        ...(toolCall._meta ?? {}),
+        ...clone(input._meta),
+      };
+    }
     toolCall.result = durableResult;
     toolCall.resultMessageId = resultMessageId;
     if (input.state === "indeterminate") toolCall.reason = input.reason!;
@@ -1551,15 +1562,9 @@ export class InMemoryStore implements DurableStore {
 
     let stored: StoredToolCall;
     if (existing) {
-      if ("title" in input.update && input.update.title !== undefined) existing.title = input.update.title;
-      if ("kind" in input.update && input.update.kind !== undefined) existing.kind = input.update.kind;
+      mergeToolCall(existing, input.update);
       existing.status = toStatus;
       existing.state = toStatus;
-      if ("content" in input.update && input.update.content !== undefined) existing.content = clone(input.update.content);
-      if ("locations" in input.update && input.update.locations !== undefined) existing.locations = clone(input.update.locations);
-      if ("rawInput" in input.update && input.update.rawInput !== undefined) existing.rawInput = clone(input.update.rawInput);
-      if ("rawOutput" in input.update && input.update.rawOutput !== undefined) existing.rawOutput = clone(input.update.rawOutput);
-      if ("_meta" in input.update && input.update._meta !== undefined) existing._meta = clone(input.update._meta);
       if (input.external !== undefined) existing.external = input.external;
       existing.updatedAt = timestamp;
       stored = existing;
@@ -1575,15 +1580,11 @@ export class InMemoryStore implements DurableStore {
         kind: ("kind" in input.update && input.update.kind) ? input.update.kind : "other",
         status: toStatus,
         state: toStatus,
-        content: ("content" in input.update && input.update.content) ? clone(input.update.content) : undefined,
-        locations: ("locations" in input.update && input.update.locations) ? clone(input.update.locations) : undefined,
-        rawInput: ("rawInput" in input.update && input.update.rawInput !== undefined) ? clone(input.update.rawInput) : undefined,
-        rawOutput: ("rawOutput" in input.update && input.update.rawOutput !== undefined) ? clone(input.update.rawOutput) : undefined,
-        _meta: ("_meta" in input.update && input.update._meta) ? clone(input.update._meta) : undefined,
         external: input.external ?? false,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
+      mergeToolCall(stored, input.update);
       this.toolCalls.set(stored.id, stored);
     }
     this.storeToolCall(stored);

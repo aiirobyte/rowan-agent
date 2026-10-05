@@ -419,6 +419,7 @@ export type ToolDefinitionSummary = Readonly<{
   name: string;
   description: string;
   parameters?: JsonValue;
+  _meta?: JsonObject;
 }>;
 
 export type ToolCallOutcome =

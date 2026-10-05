@@ -21,6 +21,7 @@ export { InMemoryStore } from "./runtime/durable-store";
 export { SqliteStore } from "./runtime/sqlite-durable-store";
 export { InMemoryConfigProvider, brandConfigToken } from "./runtime/config-provider";
 export { RuntimeError, isRuntimeError } from "./runtime/errors";
+export { mergeToolCall } from "./runtime/contracts";
 export { loadSkill, loadSkills } from "./harness/skills";
 export { loadPhase } from "./harness/phases/loader";
 export { loadPhases } from "./harness/phases/loader";
@@ -116,7 +117,8 @@ export type {
   ToolExecutionResult,
   ToolCallContext,
   ToolInvocationContext,
-  ToolProgress,
+  ToolCallPresentationInput,
+  ToolCallPresentationOutput,
   ToolMessage,
   ToolMessageContent,
   ToolResultContent,

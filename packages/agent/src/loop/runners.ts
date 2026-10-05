@@ -1362,6 +1362,7 @@ function createPhaseExecution(
               name: t.name,
               description: t.description,
               parameters: t.parameters as JsonValue | undefined,
+              ...(t._meta !== undefined ? { _meta: t._meta } : {}),
             }));
           },
           call: async (name: string, args: JsonValue): Promise<ToolCallOutcome> => {

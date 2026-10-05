@@ -31,6 +31,7 @@ export const publicValueExports = [
   "parseFrontmatter",
   "RunInteractionBoundary",
   "RunInteractionCancelledError",
+  "mergeToolCall",
 ] as const;
 
 export const publicTypeExports = [
@@ -194,7 +195,8 @@ export const publicTypeExports = [
   "ToolExecutionResult",
   "ToolCallContext",
   "ToolInvocationContext",
-  "ToolProgress",
+  "ToolCallPresentationInput",
+  "ToolCallPresentationOutput",
   "ToolMessage",
   "ToolMessageContent",
   "ToolResultContent",

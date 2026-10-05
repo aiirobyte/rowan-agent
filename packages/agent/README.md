@@ -112,13 +112,15 @@ When an external side effect cannot be confirmed, the Tool must become
 `indeterminate`; the Run then fails and is never automatically retried.
 
 While running, a Tool may call `context.reportProgress(progress)` with a
-JSON-safe value. Progress is live-only and may be dropped.
+JSON-safe value. Progress reports trigger the tool's presentation function and emit
+transient `tool_state_changed` updates. Progress is live-only and may be dropped;
+the final completed or failed tool call state is durably persisted.
 
 ## Events
 
 `run.observe()` delivers `RunEvent` values for live presentation:
 
-- transient `message_delta` and `tool_progress` events are live-only and
+- transient `message_delta` and `tool_state_changed` (progress) events are live-only and
   best-effort;
 - durable `message_committed`, `run_state_changed`, and `tool_state_changed`
   events are replayable;

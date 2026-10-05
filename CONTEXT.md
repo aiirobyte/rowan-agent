@@ -213,7 +213,7 @@ An immutable replayable fact committed atomically with the Run aggregate change 
 _Avoid_: Agent Input, Transient Run Event, command
 
 **Transient Run Event**:
-A lossy live observation such as a Message delta or Tool progress update. It is never authoritative for control flow or recovery.
+A lossy live observation such as a Message delta or transient Tool state update (e.g. progress). It is never authoritative for control flow or recovery.
 _Avoid_: Durable Run Event, Canonical Message
 
 **Run Metadata**:
@@ -247,6 +247,10 @@ Execution Attempt. Its Rowan ID is canonical and fences persistence and
 external idempotency; a stored provider correlation maps both Tool-use and
 Tool-result blocks only at the Model Context boundary.
 _Avoid_: Shell command, Tool Event
+
+**Tool Presentation**:
+A pure description function executed across tool call states (`pending`, `in_progress`, progress reports via `reportProgress`, and `completed` / `failed`). Updates are merged via `mergeToolCall` (replacing specified fields, merging `_meta` per top-level key). Tool definition `_meta` is preserved untouched for hosts. Presentation failures fall back to default presentation without failing the tool call.
+_Avoid_: Provider Activity, Tool Formatting Adapter, Imperative Presentation Hook
 
 **Indeterminate Tool Call**:
 A Tool Call whose external effect may have happened but whose determinate result was not durably committed. It terminates the Run and is never retried automatically.

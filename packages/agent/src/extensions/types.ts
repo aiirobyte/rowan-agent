@@ -188,20 +188,23 @@ export interface ToolDefinition {
   promptGuidelines?: string[];
   kind?: ToolKind;
   annotations?: ToolAnnotations;
-  present?: (
-    args: JsonValue,
-    result?: ToolExecutionResult,
-  ) => {
+  _meta?: JsonObject;
+  present?: (call: {
+    status: ToolCallStatus;
+    args: JsonValue;
+    progress?: JsonValue;
+    result?: ToolExecutionResult;
+  }) => {
     title?: string;
     content?: ToolCallContent[];
     locations?: ToolCallLocation[];
     _meta?: JsonObject;
-  } | Promise<{
+  } | undefined | void | Promise<{
     title?: string;
     content?: ToolCallContent[];
     locations?: ToolCallLocation[];
     _meta?: JsonObject;
-  }>;
+  } | undefined | void>;
   /** Execute the tool */
   execute: (args: unknown, context: import("../runtime/contracts").ToolInvocationContext, signal?: AbortSignal) => Promise<ToolExecutionResult>;
   /** Optional: per-tool execution mode override */

@@ -5,7 +5,7 @@ import type {
   ToolResult,
 } from "./protocol";
 import type { PhaseRegistry } from "./harness/phases/types";
-import type { ContentBlock, LlmContentPart } from "@rowan-agent/models";
+import type { ContentBlock, JsonObject, LlmContentPart } from "@rowan-agent/models";
 import { createId, createTimestamp } from "./utils";
 
 export type {
@@ -45,6 +45,7 @@ export type Tool<TArgs = unknown> = {
   promptGuidelines?: string[];
   /** Whether this tool can run concurrently with others. Default: "parallel". */
   executionMode?: ToolExecutionMode;
+  _meta?: JsonObject;
   execute(args: TArgs, context: ToolContext, signal?: AbortSignal): Promise<ToolResult>;
 };
 

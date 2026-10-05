@@ -752,7 +752,7 @@ async function promptWithLog(input: {
           }
           continue;
         }
-        if (event.kind === "tool_progress" || event.kind === "thinking_delta" || event.kind === "tool_call_delta" || event.kind === "model_retry" || event.kind === "phase_status") continue;
+        if (event.kind === "thinking_delta" || event.kind === "tool_call_delta" || event.kind === "model_retry" || event.kind === "phase_status") continue;
         if (event.durability === "durable") {
           runEventLogger(event);
         }

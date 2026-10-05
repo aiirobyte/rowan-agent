@@ -300,15 +300,6 @@ export type ToolCallDelta = Readonly<{
   args: JsonValue | undefined;
 }>;
 
-export type ToolProgress = Readonly<{
-  kind: "tool_progress";
-  durability: "transient";
-  runId: RunId;
-  executionId: ExecutionId;
-  toolCallId: ToolCallId;
-  progress: JsonValue;
-}>;
-
 export type PhaseStatusEvent = Readonly<{
   kind: "phase_status";
   durability: "transient";
@@ -334,7 +325,6 @@ export type RunEvent =
   | MessageDelta
   | ThinkingDelta
   | ToolCallDelta
-  | ToolProgress
   | PhaseStatusEvent
   | ModelRetry
   | Extract<ToolStateChanged, { durability: "transient" }>;

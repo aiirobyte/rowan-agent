@@ -63,6 +63,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
           name: t.name,
           description: t.description,
           parameters: t.parameters as JsonValue | undefined,
+          ...(t._meta !== undefined ? { _meta: t._meta } : {}),
         }));
       },
       call: async () => {
