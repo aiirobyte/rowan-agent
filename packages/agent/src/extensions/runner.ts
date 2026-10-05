@@ -825,6 +825,11 @@ export class ExtensionRunner {
           set: async (key, value) => runner.host.setAgentState(extension.id, agentId, key, value),
           delete: async (key) => runner.host.deleteAgentState(extension.id, agentId, key),
         }),
+        global: () => ({
+          get: async (key) => runner.host.getGlobalState(extension.id, key),
+          set: async (key, value) => runner.host.setGlobalState(extension.id, key, value),
+          delete: async (key) => runner.host.deleteGlobalState(extension.id, key),
+        }),
       },
     }, extension.runtime, this.events);
   }

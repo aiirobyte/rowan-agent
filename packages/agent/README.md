@@ -198,6 +198,9 @@ cannot be claimed by host sources.
 
 Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
 `bootstrap`; after initialization they are frozen until the Runtime closes.
+Extensions can manage run-scoped in-memory state (`api.state.run(runId)`), agent-scoped
+durable state (`api.state.agent(agentId)`), and extension-scoped durable state
+(`api.state.global()`) via the configured `ExtensionHost`.
 Definition name lists narrow the selected Tools, Skills, and Phases: omission
 inherits all candidates, `[]` selects none, and missing names are skipped. The
 same rule applies to `definition.contexts`.

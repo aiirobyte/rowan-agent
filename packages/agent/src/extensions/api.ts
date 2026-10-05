@@ -52,12 +52,14 @@ export interface ExtensionAPI {
     changed(handler: (scope: ScopeRef) => void): void;
   };
 
-  /** Extension state — scoped to run (in-memory) or agent (durable). */
+  /** Extension state — scoped to run (in-memory) or agent (durable) or global (durable). */
   state: {
     /** Run-scoped in-memory state; dropped when the Run ends. */
     run(runId: string): ExtensionStateStore;
     /** Agent-scoped durable state; persisted with the Agent record. */
     agent(agentId: string): ExtensionStateStore;
+    /** Extension-scoped durable state; survives process restarts. */
+    global(): ExtensionStateStore;
   };
 
   /** Tool capabilities — register and unregister custom tools. */
@@ -165,6 +167,7 @@ export function createExtensionAPI(
     state?: {
       run: (runId: string) => ExtensionStateStore;
       agent: (agentId: string) => ExtensionStateStore;
+      global: () => ExtensionStateStore;
     };
     contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
   },
@@ -249,6 +252,25 @@ export function createExtensionAPI(
       agent: (agentId) => {
         assertActive();
         const store = options?.state?.agent(agentId);
+        return {
+          get: async (key) => {
+            assertActive();
+            return store?.get(key);
+          },
+          set: async (key, value) => {
+            assertActive();
+            assertJsonValue(value);
+            return store?.set(key, value);
+          },
+          delete: async (key) => {
+            assertActive();
+            return store?.delete(key);
+          },
+        };
+      },
+      global: () => {
+        assertActive();
+        const store = options?.state?.global();
         return {
           get: async (key) => {
             assertActive();

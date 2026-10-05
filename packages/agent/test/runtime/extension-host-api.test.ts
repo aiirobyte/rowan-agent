@@ -4,6 +4,7 @@ import {
   AgentRuntime,
   InMemoryExtensionHost,
   InMemoryStore,
+  type ExtensionFactory,
   type LoadedExtension,
   type RunEndEvent,
   type RunStartEvent,
@@ -274,6 +275,79 @@ test("agent state persists through the host and is private per extension", async
   } finally {
     await runtime.close();
   }
+});
+
+test("api.state.global() values are read back through a new extension instance on the same host and isolated per extension id", async () => {
+  let ext1FirstRunRead: any;
+  let ext2FirstRunRead: any;
+  let ext1SecondInstanceRead: any;
+  let ext2SecondInstanceRead: any;
+
+  const ext1Factory: ExtensionFactory = async (api) => {
+    ext1FirstRunRead = await api.state.global().get("registry");
+    await api.state.global().set("registry", { endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  };
+
+  const ext2Factory: ExtensionFactory = async (api) => {
+    ext2FirstRunRead = await api.state.global().get("registry");
+    await api.state.global().set("registry", { endpoint: "https://ext2.example.com", models: ["m3"] });
+  };
+
+  const host = new InMemoryExtensionHost();
+
+  // Instance 1: boot runtime with ext1 and ext2, writing their global state
+  const runtime1 = await AgentRuntime.init({
+    host,
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => {
+      await registry.loadExtensions([
+        { path: "ext-1", id: "ext-1", name: "ext-1", factory: ext1Factory },
+        { path: "ext-2", id: "ext-2", name: "ext-2", factory: ext2Factory },
+      ]);
+    },
+  });
+
+  await runtime1.close();
+
+  // Verify host received values under respective extension IDs
+  expect(ext1FirstRunRead).toBeUndefined();
+  expect(ext2FirstRunRead).toBeUndefined();
+  expect(host.getGlobalState("ext-1", "registry")).toEqual({ endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  expect(host.getGlobalState("ext-2", "registry")).toEqual({ endpoint: "https://ext2.example.com", models: ["m3"] });
+
+  // Instance 2: boot a new runtime instance sharing the same host
+  const ext1NewInstance: ExtensionFactory = async (api) => {
+    ext1SecondInstanceRead = await api.state.global().get("registry");
+  };
+
+  const ext2NewInstance: ExtensionFactory = async (api) => {
+    ext2SecondInstanceRead = await api.state.global().get("registry");
+    // Verify delete works on global state
+    await api.state.global().delete("registry");
+  };
+
+  const runtime2 = await AgentRuntime.init({
+    host,
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => {
+      await registry.loadExtensions([
+        { path: "ext-1", id: "ext-1", name: "ext-1", factory: ext1NewInstance },
+        { path: "ext-2", id: "ext-2", name: "ext-2", factory: ext2NewInstance },
+      ]);
+    },
+  });
+
+  await runtime2.close();
+
+  // Values are read back through the new extension instances and isolated per extension id
+  expect(ext1SecondInstanceRead).toEqual({ endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  expect(ext2SecondInstanceRead).toEqual({ endpoint: "https://ext2.example.com", models: ["m3"] });
+
+  // Ext-2 delete did not affect ext-1
+  expect(host.getGlobalState("ext-1", "registry")).toEqual({ endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  expect(host.getGlobalState("ext-2", "registry")).toBeUndefined();
 });
 
 test("run_start and run_end fire with specified payloads", async () => {

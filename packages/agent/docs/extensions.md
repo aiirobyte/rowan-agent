@@ -46,6 +46,8 @@ export default extension;
   for a specific run. Run state is dropped when the run ends.
 - `state.agent(agentId)`: Access durable key-value state private to the
   extension for a specific agent, persisted via the host.
+- `state.global()`: Access extension-wide durable key-value state private to the
+  extension, surviving process restarts and not tied to an Agent, persisted via the host.
 - `tools.register(tool)` / `tools.unregister(toolName)`: Register or remove a tool that the LLM can call.
   Tools can specify `kind`, `annotations`, MCP-standard `_meta?: JsonObject` (passed untouched to `tools.list()` summaries for hosts and i18n), and an optional pure presentation function:
   ```ts
@@ -130,6 +132,7 @@ The host interface defines:
 - `getConfig(extensionId, scope?)`: Resolves the layered configuration for an extension.
 - `onConfigChanged(listener: (extensionId, scope) => void)`: Registers a listener to receive configuration change notifications for extensions.
 - `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.
+- `getGlobalState(extensionId, key)`, `setGlobalState(extensionId, key, value)`, `deleteGlobalState(extensionId, key)`: Manages extension-wide durable state.
 
 Hosts can query and listen to capabilities and UI contributions directly on `AgentRuntime`:
 - `runtime.listCapabilities()`: Returns the active array of capabilities (`{ extensionId, kind: "tool", name, description }`), readable at any time outside a Run.

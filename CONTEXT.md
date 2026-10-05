@@ -93,6 +93,10 @@ Scheduler becomes ready. It is implicit in every Resource View, remains active
 for the Runtime lifetime, and is never selected by a Definition or Phase.
 _Avoid_: Resource Candidate, Agent Extension, Scoped Extension
 
+**Extension State**:
+State storage exposed to an Extension through `api.state`: run-scoped in-memory state (`run(runId)`), agent-scoped durable state (`agent(agentId)`), and extension-scoped durable state (`global()`) that survives process restarts and is isolated per Extension ID.
+_Avoid_: Static module state, global process variables, Agent Configuration mutation
+
 ## Conversation
 
 **Agent Input**:

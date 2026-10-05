@@ -79,6 +79,19 @@ export interface ExtensionHost {
     agentId: string,
     key: string,
   ): Promise<void> | void;
+  getGlobalState(
+    extensionId: string,
+    key: string,
+  ): Promise<JsonValue | undefined> | JsonValue | undefined;
+  setGlobalState(
+    extensionId: string,
+    key: string,
+    value: JsonValue,
+  ): Promise<void> | void;
+  deleteGlobalState(
+    extensionId: string,
+    key: string,
+  ): Promise<void> | void;
 }
 
 // ---------------------------------------------------------------------------

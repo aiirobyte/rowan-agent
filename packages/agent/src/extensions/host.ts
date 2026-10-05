@@ -5,11 +5,13 @@ import type { ExtensionHost, ScopeRef } from "./types";
 export class InMemoryExtensionHost implements ExtensionHost {
   private readonly configs = new Map<string, Map<string, JsonObject>>();
   private readonly agentState = new Map<string, Map<string, Map<string, JsonValue>>>();
+  private readonly globalState = new Map<string, Map<string, JsonValue>>();
   private readonly listeners = new Set<(extensionId: string, scope: ScopeRef) => void>();
 
   constructor(options: {
     configs?: Record<string, Record<string, JsonObject>>;
     agentState?: Record<string, Record<string, Record<string, JsonValue>>>;
+    globalState?: Record<string, Record<string, JsonValue>>;
   } = {}) {
     if (options.configs) {
       for (const [scopeKey, extMap] of Object.entries(options.configs)) {
@@ -33,6 +35,16 @@ export class InMemoryExtensionHost implements ExtensionHost {
           agentMap.set(extId, map);
         }
         this.agentState.set(agentId, agentMap);
+      }
+    }
+    if (options.globalState) {
+      for (const [extId, stateMap] of Object.entries(options.globalState)) {
+        const map = new Map<string, JsonValue>();
+        for (const [key, val] of Object.entries(stateMap)) {
+          assertJsonValue(val);
+          map.set(key, structuredClone(val));
+        }
+        this.globalState.set(extId, map);
       }
     }
   }
@@ -106,6 +118,25 @@ export class InMemoryExtensionHost implements ExtensionHost {
 
   deleteAgentState(extensionId: string, agentId: string, key: string): void {
     this.agentState.get(agentId)?.get(extensionId)?.delete(key);
+  }
+
+  getGlobalState(extensionId: string, key: string): JsonValue | undefined {
+    const val = this.globalState.get(extensionId)?.get(key);
+    return val !== undefined ? structuredClone(val) : undefined;
+  }
+
+  setGlobalState(extensionId: string, key: string, value: JsonValue): void {
+    assertJsonValue(value);
+    let extMap = this.globalState.get(extensionId);
+    if (!extMap) {
+      extMap = new Map();
+      this.globalState.set(extensionId, extMap);
+    }
+    extMap.set(key, structuredClone(value));
+  }
+
+  deleteGlobalState(extensionId: string, key: string): void {
+    this.globalState.get(extensionId)?.delete(key);
   }
 }
 
