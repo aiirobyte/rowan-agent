@@ -280,7 +280,29 @@ export type ToolStateChanged = DurableEventBase & (
     }>
 );
 
-export type DurableRunEvent = PhaseEntered | MessageCommitted | MessageRevised | RunStateChanged | ToolStateChanged;
+export type ProviderActivityEvent =
+  | (DurableEventBase & Readonly<{
+      kind: "provider_activity";
+      executionId?: ExecutionId;
+      turn: JsonObject;
+      activity: import("@rowan-agent/models").ProviderActivity;
+    }>)
+  | Readonly<{
+      kind: "provider_activity";
+      durability: "transient";
+      runId: RunId;
+      executionId?: ExecutionId;
+      turn: JsonObject;
+      activity: import("@rowan-agent/models").ProviderActivity;
+    }>;
+
+export type DurableRunEvent =
+  | PhaseEntered
+  | MessageCommitted
+  | MessageRevised
+  | RunStateChanged
+  | ToolStateChanged
+  | Extract<ProviderActivityEvent, { durability: "durable" }>;
 
 export type MessageDelta = Readonly<{
   kind: "message_delta";
@@ -344,12 +366,13 @@ export type ModelRetry = Readonly<{
   error: string;
 }>;
 
-export type ProviderActivityEvent = Readonly<{
-  kind: "provider_activity";
-  durability: "transient";
-  runId: RunId;
-  turn: JsonObject;
-  activity: import("@rowan-agent/models").ProviderActivity;
-}>;
+export type RunEvent =
+  | DurableRunEvent
+  | MessageDelta
+  | ThinkingDelta
+  | ToolCallDelta
+  | ToolProgress
+  | PhaseStatusEvent
+  | ModelRetry
+  | Extract<ProviderActivityEvent, { durability: "transient" }>;
 
-export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry | ProviderActivityEvent;

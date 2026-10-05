@@ -18,6 +18,7 @@ import type {
   ExecutionId,
   ExecutionToken,
   EventCursor,
+  JsonObject,
   Message,
   MessageId,
   Metadata,
@@ -537,6 +538,18 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.cancelRun(current, input));
   }
 
+  async recordProviderActivity(
+    lease: OwnerLease,
+    input: {
+      runId: RunId;
+      execution?: ExecutionToken;
+      turn: JsonObject;
+      activity: import("@rowan-agent/models").ProviderActivity;
+    },
+  ): Promise<DurableRunEvent> {
+    return this.invoke(lease, (store, current) => store.recordProviderActivity(current, input));
+  }
+
   async snapshotRun(lease: OwnerLease, runId: RunId): Promise<RunSnapshot> {
     return this.invoke(lease, (store, current) => store.snapshotRun(current, runId), false);
   }
@@ -886,7 +899,9 @@ export class SqliteStore implements DurableStore {
 
   private getStmtInsertEvent(): Statement {
     return (this.stmtInsertEvent ??= this.database.prepare(
-      "INSERT INTO run_events (id, run_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
+      `INSERT INTO run_events (id, run_id, payload_json, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json`,
     ));
   }
 
@@ -1335,6 +1350,7 @@ class SqliteOwnedStore implements OwnedStore {
   suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
   commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
+  recordProviderActivity(input: { runId: RunId; execution?: ExecutionToken; turn: JsonObject; activity: import("@rowan-agent/models").ProviderActivity }): Promise<DurableRunEvent> { return this.store.recordProviderActivity(this.lease, input); }
   snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> { return this.store.history(this.lease, agentId); }
   listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }

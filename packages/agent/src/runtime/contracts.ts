@@ -316,6 +316,7 @@ export type RunSnapshotBase = Readonly<{
   createdAt: string;
   updatedAt: string;
   cursor: EventCursor;
+  activities?: readonly import("@rowan-agent/models").ProviderActivity[];
 }>;
 export type RunSnapshot = RunSnapshotBase & (
   | Readonly<{ state: "queued" | "running"; currentPhaseId?: string; interactions?: readonly RunInteraction[] }>
@@ -438,6 +439,12 @@ export interface OwnedStore {
     reason?: string;
   }): Promise<ToolCommit>;
   cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord>;
+  recordProviderActivity(input: {
+    runId: RunId;
+    execution?: ExecutionToken;
+    turn: JsonObject;
+    activity: import("@rowan-agent/models").ProviderActivity;
+  }): Promise<DurableRunEvent>;
   snapshotRun(runId: RunId): Promise<RunSnapshot>;
   history(agentId: AgentId): Promise<readonly Message[]>;
   listAgents(): Promise<readonly AgentRecord[]>;

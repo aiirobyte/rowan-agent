@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createModelStream, type ProviderCallContext, type ProviderStreamFn, type StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
@@ -322,6 +325,155 @@ test("provider emit produces provider_activity event with tool_call replacement 
     });
   } finally {
     await runtime.close();
+  }
+});
+
+test("durable provider activity survives runtime reload / SQLite persistence and keeps latest state per tool_call id and plan", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-activity-"));
+  const dbPath = join(directory, "store.sqlite");
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    // Plan update 1
+    ctx.emit({
+      type: "plan",
+      entries: [{ content: "Initial plan", status: "in_progress" }],
+    });
+
+    // Plan update 2 (in same turn -> replaces earlier plan)
+    ctx.emit({
+      type: "plan",
+      entries: [{ content: "Refined plan", status: "in_progress" }],
+    });
+
+    // Tool call 1 initial
+    ctx.emit({
+      type: "tool_call",
+      id: "call-1",
+      title: "Tool 1 running",
+      status: "in_progress",
+    });
+
+    // Tool call 1 updated (same id -> replaces earlier tool call)
+    ctx.emit({
+      type: "tool_call",
+      id: "call-1",
+      title: "Tool 1 finished",
+      status: "completed",
+    });
+
+    // Tool call 2
+    ctx.emit({
+      type: "tool_call",
+      id: "call-2",
+      title: "Tool 2 finished",
+      status: "completed",
+    });
+
+    yield {
+      type: "text_delta",
+      text: "Turn 1 finished",
+      partial: { role: "assistant", contentBlocks: [{ type: "text", text: "Turn 1 finished" }] },
+    };
+    yield { type: "done", response: stopResponse("Turn 1 finished") };
+  };
+
+  try {
+    const store1 = new SqliteStore(dbPath);
+    const runtime1 = await AgentRuntime.init({
+      store: store1,
+      concurrency: 1,
+    });
+
+    const agentId = await createAgentWith(runtime1, {
+      identity: "agent-durable-activity",
+      stream,
+      options: { idempotencyKey: "agent-durable-activity-key" },
+    });
+
+    const run = await runtime1.start(agentId, "do something", {
+      idempotencyKey: "run-durable-activity-key",
+    });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    await runtime1.close();
+
+    // Reload with a completely new store instance and runtime instance reading the same SQLite DB
+    const store2 = new SqliteStore(dbPath);
+    const runtime2 = await AgentRuntime.init({
+      store: store2,
+      concurrency: 1,
+    });
+
+    try {
+      // 1. Snapshot preserves deduplicated activities
+      const snapshot = await runtime2.snapshot(run.id);
+      expect(snapshot.activities).toBeDefined();
+      expect(snapshot.activities).toEqual([
+        {
+          type: "plan",
+          entries: [{ content: "Refined plan", status: "in_progress" }],
+        },
+        {
+          type: "tool_call",
+          id: "call-1",
+          title: "Tool 1 finished",
+          status: "completed",
+        },
+        {
+          type: "tool_call",
+          id: "call-2",
+          title: "Tool 2 finished",
+          status: "completed",
+        },
+      ]);
+
+      // Replay via runtime.observe after reload
+      const observedEvents: any[] = [];
+      for await (const event of runtime2.observe(run.id)) {
+        observedEvents.push(event);
+      }
+      const observedActivityEvents = observedEvents.filter((e) => e.kind === "provider_activity");
+      expect(observedActivityEvents).toHaveLength(3);
+    } finally {
+      await runtime2.close();
+    }
+
+    // 2. Replay events via owner.listEvents preserves ordering relative to assistant message
+    const owner = await store2.openOwner({ ownerId: "test-verifier", leaseMs: 30_000 });
+    const events = await owner.listEvents();
+    await owner.sealAndReleaseOwner();
+
+    const runEvents = events.filter((e) => e.runId === run.id);
+    const activityEvents = runEvents.filter((e): e is Extract<typeof e, { kind: "provider_activity" }> => e.kind === "provider_activity");
+
+    expect(activityEvents).toHaveLength(3);
+    expect(activityEvents.every((e) => e.durability === "durable")).toBe(true);
+    expect(activityEvents.map((e) => e.activity)).toEqual([
+      {
+        type: "plan",
+        entries: [{ content: "Refined plan", status: "in_progress" }],
+      },
+      {
+        type: "tool_call",
+        id: "call-1",
+        title: "Tool 1 finished",
+        status: "completed",
+      },
+      {
+        type: "tool_call",
+        id: "call-2",
+        title: "Tool 2 finished",
+        status: "completed",
+      },
+    ]);
+
+    // Verify that activity events appear before the assistant message committed event of the turn
+    const assistantMessageIndex = runEvents.findIndex((e) => e.kind === "message_committed" && e.message.role === "assistant");
+    const lastActivityIndex = runEvents.map((e) => e.kind).lastIndexOf("provider_activity");
+    expect(assistantMessageIndex).toBeGreaterThan(lastActivityIndex);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

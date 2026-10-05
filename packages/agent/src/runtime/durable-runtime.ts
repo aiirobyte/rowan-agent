@@ -733,6 +733,7 @@ export class AgentRuntime implements AgentRuntimeContract {
   private async execute(run: RunRecord): Promise<void> {
     let claim: import("./contracts").RunClaim | undefined;
     let executionRevision = run.revision;
+    let toolQueue = Promise.resolve();
     try {
       const agent = await this.requireAgent(run.agentId);
       let token = run.pinnedConfigToken ?? agent.currentConfigToken;
@@ -824,7 +825,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(run.agentId),
       });
-      let toolQueue = Promise.resolve();
+      toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream
         ? config.model as ModelRef
         : { provider: config.model.provider, id: config.model.id } satisfies ModelRef;
@@ -1053,6 +1054,21 @@ export class AgentRuntime implements AgentRuntimeContract {
             turn: event.turn,
             activity: event.activity,
           });
+          const task = toolQueue.then(async () => {
+            const active = this.executions.get(run.id);
+            if (
+              this.closed
+              || controller.signal.aborted
+              || active?.executionId !== claim!.execution.executionId
+            ) return;
+            await this.owned.recordProviderActivity({
+              runId: run.id,
+              execution: claim!.execution,
+              turn: event.turn,
+              activity: event.activity,
+            });
+          });
+          toolQueue = task.then(() => undefined, () => undefined);
         },
         retryDelayMs: this.retryDelayMs,
         onContext: assembly.setContext,
@@ -1111,6 +1127,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           result = await executeModel(executionContext);
         }
       }
+      await toolQueue;
       if (this.cancellationRequested.has(run.id) || controller.signal.aborted) {
         const output = latestAssistant(run, result.messages, executionContext.messages.length, true);
         const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
@@ -1195,6 +1212,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     } catch (error) {
       if (!claim && error instanceof RuntimeError && ["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) return;
       if (claim) {
+        await toolQueue;
         if (this.cancellationRequested.has(run.id)) {
           const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
           await this.owned.cancelRun({
@@ -1923,6 +1941,10 @@ export class AgentRuntime implements AgentRuntimeContract {
             subscription.clearMessage(event.message.id);
           } else if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
             subscription.clearTool(event.toolCall.id);
+          } else if (event.kind === "provider_activity") {
+            if (event.activity.type === "tool_call") {
+              subscription.clearProviderActivity(event.activity.id);
+            }
           }
           if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) {
             // Phase.Status and other live progress facts are transient, so

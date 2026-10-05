@@ -10,7 +10,14 @@ import type {
   ToolProgress,
 } from "../runtime-events";
 
-export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry | ProviderActivityEvent;
+export type TransientRunEvent =
+  | MessageDelta
+  | ThinkingDelta
+  | ToolCallDelta
+  | ToolProgress
+  | PhaseStatusEvent
+  | ModelRetry
+  | Extract<ProviderActivityEvent, { durability: "transient" }>;
 
 const MAX_BUFFERED_EVENTS = 128;
 const MAX_BUFFERED_TEXT = 64 * 1024;
@@ -91,6 +98,29 @@ export class TransientRunEventSubscription {
         if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
         this.queue.push(event);
       }
+    } else if (
+      event.kind === "provider_activity"
+      && event.activity.type === "plan"
+    ) {
+      let index = -1;
+      for (let i = this.queue.length - 1; i >= 0; i -= 1) {
+        const existing = this.queue[i];
+        if (
+          existing
+          && existing.kind === "provider_activity"
+          && existing.runId === event.runId
+          && existing.activity.type === "plan"
+        ) {
+          index = i;
+          break;
+        }
+      }
+      if (index !== -1) {
+        this.queue[index] = event;
+      } else {
+        if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
+        this.queue.push(event);
+      }
     } else {
       if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
       this.queue.push(event);
@@ -138,6 +168,19 @@ export class TransientRunEventSubscription {
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {
       const event = this.queue[index];
       if (event?.kind === "tool_progress" && event.toolCallId === toolCallId) this.queue.splice(index, 1);
+    }
+    this.notify();
+  }
+
+  clearProviderActivity(activityId?: string): void {
+    for (let index = this.queue.length - 1; index >= 0; index -= 1) {
+      const event = this.queue[index];
+      if (
+        event?.kind === "provider_activity"
+        && (!activityId || (event.activity.type === "tool_call" && event.activity.id === activityId))
+      ) {
+        this.queue.splice(index, 1);
+      }
     }
     this.notify();
   }
@@ -231,6 +274,10 @@ export class TransientRunEventHub {
 
   clearTool(runId: RunId, toolCallId: ToolProgress["toolCallId"]): void {
     for (const subscription of this.subscriptions.get(runId) ?? []) subscription.clearTool(toolCallId);
+  }
+
+  clearProviderActivity(runId: RunId, activityId?: string): void {
+    for (const subscription of this.subscriptions.get(runId) ?? []) subscription.clearProviderActivity(activityId);
   }
 
   close(): void {

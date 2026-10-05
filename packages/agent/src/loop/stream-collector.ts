@@ -54,12 +54,14 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
         ?? "",
     },
     emit: (activity) => {
-      const turn: JsonObject =
-        typeof input.config.execution.input === "object"
-        && input.config.execution.input !== null
-        && !Array.isArray(input.config.execution.input)
-          ? (input.config.execution.input as unknown as JsonObject)
-          : {};
+      const turn: JsonObject = {
+        ...(typeof input.config.execution.input === "object"
+          && input.config.execution.input !== null
+          && !Array.isArray(input.config.execution.input)
+            ? (input.config.execution.input as unknown as JsonObject)
+            : {}),
+        turnIndex: 0,
+      };
       input.config.onProviderActivity?.({
         runId: input.config.execution.runId as RunId,
         turn,

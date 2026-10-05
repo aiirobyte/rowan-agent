@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ContentBlock } from "@rowan-agent/models";
+import type { ContentBlock, ProviderActivity } from "@rowan-agent/models";
 import { createId, createTimestamp } from "../utils";
 import type {
   AgentId,
@@ -56,6 +56,7 @@ import type {
   DurableToolResult,
   EventId,
   InteractionRecord,
+  JsonObject,
   ToolCallId,
   ToolCallSnapshot,
   ToolExecutionResult,
@@ -1434,9 +1435,110 @@ export class InMemoryStore implements DurableStore {
     return result;
   }
 
+  recordProviderActivity(
+    lease: OwnerLease,
+    input: {
+      runId: RunId;
+      execution?: ExecutionToken;
+      turn: JsonObject;
+      activity: ProviderActivity;
+    },
+  ): DurableRunEvent {
+    this.assertOwner(lease);
+    const run = this.requireRun(input.runId);
+    if (input.execution) {
+      if (
+        run.state !== "running"
+        || !run.execution
+        || run.execution.executionId !== input.execution.executionId
+        || run.execution.ownerEpoch !== input.execution.ownerEpoch
+      ) {
+        throw new RuntimeError("runtime_ownership_lost", {
+          reason: "epoch_advanced",
+          expectedEpoch: input.execution.ownerEpoch,
+          actualEpoch: this.ownerEpoch,
+        });
+      }
+    }
+    const { activity, turn } = input;
+    let existingIndex = -1;
+
+    if (activity.type === "tool_call") {
+      const toolCallId = activity.id;
+      for (let i = this.events.length - 1; i >= 0; i--) {
+        const ev = this.events[i];
+        if (
+          ev.runId === run.id
+          && ev.kind === "provider_activity"
+          && ev.activity.type === "tool_call"
+          && ev.activity.id === toolCallId
+        ) {
+          existingIndex = i;
+          break;
+        }
+      }
+    } else if (activity.type === "plan") {
+      const turnIndex = typeof turn?.turnIndex === "number" ? turn.turnIndex : undefined;
+      for (let i = this.events.length - 1; i >= 0; i--) {
+        const ev = this.events[i];
+        if (ev.runId === run.id) {
+          if (ev.kind === "provider_activity" && ev.activity.type === "plan") {
+            const evTurnIndex = typeof ev.turn?.turnIndex === "number" ? ev.turn.turnIndex : undefined;
+            if (turnIndex !== undefined && evTurnIndex !== undefined) {
+              if (evTurnIndex === turnIndex) {
+                existingIndex = i;
+                break;
+              }
+            } else {
+              let assistantMessageBetween = false;
+              for (let j = i + 1; j < this.events.length; j++) {
+                const intermediate = this.events[j];
+                if (intermediate.runId === run.id && intermediate.kind === "message_committed" && intermediate.message.role === "assistant") {
+                  assistantMessageBetween = true;
+                  break;
+                }
+              }
+              if (!assistantMessageBetween) {
+                existingIndex = i;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (existingIndex !== -1) {
+      const existing = this.events[existingIndex] as Extract<DurableRunEvent, { kind: "provider_activity" }>;
+      const updated: Extract<DurableRunEvent, { kind: "provider_activity" }> = {
+        ...existing,
+        turn: clone(turn),
+        activity: clone(activity),
+      };
+      this.events[existingIndex] = updated;
+      this.recorder?.onEventAppend(updated);
+      return updated;
+    }
+
+    const event = this.baseEvent(run, {
+      kind: "provider_activity",
+      executionId: input.execution?.executionId,
+      turn: clone(turn),
+      activity: clone(activity),
+    } as Extract<DurableRunEvent, { kind: "provider_activity" }>) as Extract<DurableRunEvent, { kind: "provider_activity" }>;
+
+    this.appendEvent(event);
+    return event;
+  }
+
   snapshotRun(lease: OwnerLease, runId: RunId): RunSnapshot {
     this.assertOwner(lease);
     const run = this.requireRun(runId);
+    const activities = this.events
+      .filter((event): event is Extract<DurableRunEvent, { kind: "provider_activity" }> =>
+        event.runId === run.id && event.kind === "provider_activity"
+      )
+      .map((event) => clone(event.activity));
     const base = {
       runId: run.id,
       agentId: run.agentId,
@@ -1448,6 +1550,7 @@ export class InMemoryStore implements DurableStore {
       ...(run.entryPhases === undefined ? {} : { entryPhases: clone(run.entryPhases) }),
       messageCount: this.messagesForRun(run.id).length,
       toolCallCount: [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id).length,
+      ...(activities.length > 0 ? { activities } : {}),
       ...(run.currentPhaseId === undefined ? {} : { currentPhaseId: run.currentPhaseId }),
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
@@ -2016,6 +2119,7 @@ class MemoryOwnedStore implements OwnedStore {
   async suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
   async commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
+  async recordProviderActivity(input: { runId: RunId; execution?: ExecutionToken; turn: JsonObject; activity: ProviderActivity }): Promise<DurableRunEvent> { return this.store.recordProviderActivity(this.lease, input); }
   async snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   async history(agentId: AgentId): Promise<readonly Message[]> { return this.store.history(this.lease, agentId); }
   async listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }

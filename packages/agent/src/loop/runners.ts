@@ -1350,12 +1350,14 @@ function createPhaseExecution(
           cwd,
         },
         emit: (activity: ProviderActivity) => {
-          const turn: JsonObject =
-            typeof config.execution.input === "object"
-            && config.execution.input !== null
-            && !Array.isArray(config.execution.input)
-              ? (config.execution.input as unknown as JsonObject)
-              : {};
+          const turn: JsonObject = {
+            ...(typeof config.execution.input === "object"
+              && config.execution.input !== null
+              && !Array.isArray(config.execution.input)
+                ? (config.execution.input as unknown as JsonObject)
+                : {}),
+            turnIndex: state.metrics.iterations,
+          };
           config.onProviderActivity?.({
             runId: config.execution.runId as RunId,
             turn,
