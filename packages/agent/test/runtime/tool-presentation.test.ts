@@ -16,6 +16,13 @@ test("Tool present function customizes title, locations, content, and kind in to
     description: "Applies a patch.",
     parameters: Type.Object({ path: Type.String(), patch: Type.String() }),
     present(args: any, result?: any) {
+      if (!result) {
+        return {
+          title: `Starting edit of ${args?.path}`,
+          locations: [{ path: args?.path, line: 1 }],
+          _meta: { phase: "starting", hostCustom: 123 },
+        };
+      }
       return {
         title: `Editing ${args?.path}`,
         locations: [{ path: args?.path, line: 42 }],
@@ -27,6 +34,7 @@ test("Tool present function customizes title, locations, content, and kind in to
             newText: "new code",
           },
         ],
+        _meta: { phase: "completed", hostCustom: 456 },
       };
     },
     async execute(_args: unknown) {
@@ -71,6 +79,17 @@ test("Tool present function customizes title, locations, content, and kind in to
     const observed = [];
     for await (const event of run.observe()) observed.push(event);
 
+    const inProgressToolEvent = observed.find(
+      (e) => e.kind === "tool_state_changed" && e.transition.to === "in_progress",
+    );
+    expect(inProgressToolEvent).toBeDefined();
+    if (inProgressToolEvent && inProgressToolEvent.kind === "tool_state_changed") {
+      expect(inProgressToolEvent.toolCall.title).toBe("Starting edit of src/index.ts");
+      expect(inProgressToolEvent.toolCall.kind).toBe("edit");
+      expect(inProgressToolEvent.toolCall.locations).toEqual([{ path: "src/index.ts", line: 1 }]);
+      expect(inProgressToolEvent.toolCall._meta).toEqual({ phase: "starting", hostCustom: 123 });
+    }
+
     const completedToolEvent = observed.find(
       (e) => e.kind === "tool_state_changed" && e.transition.to === "completed",
     );
@@ -89,6 +108,7 @@ test("Tool present function customizes title, locations, content, and kind in to
       ]);
       expect(completedToolEvent.toolCall.rawInput).toEqual({ path: "src/index.ts", patch: "+new" });
       expect(completedToolEvent.toolCall.rawOutput).toEqual({ applied: true, linesChanged: 1 });
+      expect(completedToolEvent.toolCall._meta).toEqual({ phase: "completed", hostCustom: 456 });
     }
   } finally {
     await runtime.close();
@@ -169,6 +189,95 @@ test("Tool without present function defaults title to annotations.title ?? name 
     expect(secondRequest).toBeDefined();
     const toolMsg = secondRequest?.messages.find((m) => m.role === "tool");
     expect(toolMsg).toBeDefined();
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("Tool present function omitting content defaults to wrapped MCP content blocks while preserving _meta", async () => {
+  const tool = {
+    name: "read_resource",
+    kind: "read" as const,
+    description: "Reads a resource.",
+    parameters: Type.Object({ id: Type.String() }),
+    present(args: any, result?: any) {
+      if (!result) {
+        return {
+          title: `Reading ${args?.id}`,
+          _meta: { step: "reading", bytes: 0 },
+        };
+      }
+      return {
+        title: `Read ${args?.id}`,
+        _meta: { step: "done", bytes: 42 },
+      };
+    },
+    async execute(_args: unknown) {
+      return {
+        content: [
+          { type: "text" as const, text: "resource content" },
+        ],
+        structuredContent: { bytes: 42 },
+      };
+    },
+  };
+
+  let modelCalls = 0;
+  const toolCallId = "call_read_789";
+  const stream: StreamFn = async function* () {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const args = JSON.stringify({ id: "res_1" });
+      const partial = {
+        role: "assistant" as const,
+        contentBlocks: [{ type: "tool_call" as const, id: toolCallId, name: tool.name, args }],
+      };
+      yield { type: "tool_call_start", id: toolCallId, name: tool.name, partial };
+      yield { type: "tool_call_end", id: toolCallId, name: tool.name, arguments: args, partial };
+      yield { type: "done" };
+      return;
+    }
+    yield { type: "text_delta", text: "finished", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "finished" }] } };
+    yield { type: "done", response: stopResponse("finished") };
+  };
+
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-read-present-test",
+      stream,
+      tools: [tool],
+      options: { idempotencyKey: "agent-read-present-key" },
+    });
+
+    const run = await runtime.start(agentId, "read it", { idempotencyKey: "run-read-present-key" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+
+    const observed = [];
+    for await (const event of run.observe()) observed.push(event);
+
+    const inProgressEvent = observed.find(
+      (e) => e.kind === "tool_state_changed" && e.transition.to === "in_progress",
+    );
+    expect(inProgressEvent).toBeDefined();
+    if (inProgressEvent && inProgressEvent.kind === "tool_state_changed") {
+      expect(inProgressEvent.toolCall.title).toBe("Reading res_1");
+      expect(inProgressEvent.toolCall._meta).toEqual({ step: "reading", bytes: 0 });
+    }
+
+    const completedEvent = observed.find(
+      (e) => e.kind === "tool_state_changed" && e.transition.to === "completed",
+    );
+    expect(completedEvent).toBeDefined();
+    if (completedEvent && completedEvent.kind === "tool_state_changed") {
+      expect(completedEvent.toolCall.title).toBe("Read res_1");
+      expect(completedEvent.toolCall.kind).toBe("read");
+      expect(completedEvent.toolCall._meta).toEqual({ step: "done", bytes: 42 });
+      expect(completedEvent.toolCall.content).toEqual([
+        { type: "content", content: { type: "text", text: "resource content" } },
+      ]);
+      expect(completedEvent.toolCall.rawOutput).toEqual({ bytes: 42 });
+    }
   } finally {
     await runtime.close();
   }

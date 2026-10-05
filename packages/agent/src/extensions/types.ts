@@ -195,7 +195,13 @@ export interface ToolDefinition {
     title?: string;
     content?: ToolCallContent[];
     locations?: ToolCallLocation[];
-  };
+    _meta?: JsonObject;
+  } | Promise<{
+    title?: string;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    _meta?: JsonObject;
+  }>;
   /** Execute the tool */
   execute: (args: unknown, context: import("../runtime/contracts").ToolInvocationContext, signal?: AbortSignal) => Promise<ToolExecutionResult>;
   /** Optional: per-tool execution mode override */

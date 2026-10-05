@@ -190,7 +190,13 @@ export type Tool = Readonly<{
     title?: string;
     content?: ToolCallContent[];
     locations?: ToolCallLocation[];
-  };
+    _meta?: JsonObject;
+  } | Promise<{
+    title?: string;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    _meta?: JsonObject;
+  }>;
   execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
 }>;
 export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
@@ -253,6 +259,11 @@ export type ToolCallReservation = Readonly<{
   name: string;
   args: JsonValue;
   toolCallId?: ToolCallId;
+  title?: string;
+  kind?: ToolKind;
+  locations?: ToolCallLocation[];
+  content?: ToolCallContent[];
+  _meta?: JsonObject;
 }>;
 export type ToolCommit = Readonly<{ run: RunRecord; toolCall: ToolCallSnapshot }>;
 export type ToolBatchCommit = Readonly<{ run: RunRecord; toolCalls: readonly ToolCallSnapshot[] }>;
@@ -409,6 +420,11 @@ export interface OwnedStore {
     args: JsonValue;
     toolCallId?: ToolCallId;
     providerToolCallId?: string;
+    title?: string;
+    kind?: ToolKind;
+    locations?: ToolCallLocation[];
+    content?: ToolCallContent[];
+    _meta?: JsonObject;
   }): Promise<ToolCommit>;
   reserveToolCalls(input: {
     runId: RunId;
@@ -424,6 +440,11 @@ export interface OwnedStore {
     execution: ExecutionToken;
     expectedRevision: number;
     toolCallId: ToolCallId;
+    title?: string;
+    kind?: ToolKind;
+    locations?: ToolCallLocation[];
+    content?: ToolCallContent[];
+    _meta?: JsonObject;
   }): Promise<ToolCommit>;
   suspendToolCall(input: {
     runId: RunId;

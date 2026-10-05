@@ -112,10 +112,15 @@ export type StoredToolCall = {
 
 export function defaultToolCallContent(result: ToolExecutionResult): ToolCallContent[] {
   if ("content" in result && Array.isArray(result.content)) {
-    return (result.content as readonly ContentBlock[]).map((block) => ({
-      type: "content",
-      content: block,
-    }));
+    return (result.content as readonly (ContentBlock | ToolCallContent)[]).map((block) => {
+      if (typeof block === "object" && block !== null && "type" in block && (block.type === "content" || block.type === "diff" || block.type === "terminal")) {
+        return block as ToolCallContent;
+      }
+      return {
+        type: "content",
+        content: block as ContentBlock,
+      };
+    });
   }
   const content = (result as { content?: JsonValue }).content;
   if (typeof content === "string") {
@@ -1222,6 +1227,11 @@ export class InMemoryStore implements DurableStore {
     execution: ExecutionToken;
     expectedRevision: number;
     toolCallId: ToolCallId;
+    title?: string;
+    kind?: ToolKind;
+    locations?: ToolCallLocation[];
+    content?: ToolCallContent[];
+    _meta?: JsonObject;
   }): ToolCommit {
     this.assertOwner(lease);
     const operationKey = `tool_start:${input.toolCallId}:${input.execution.executionId}`;
@@ -1236,6 +1246,11 @@ export class InMemoryStore implements DurableStore {
     toolCall.status = "in_progress";
     toolCall.state = "in_progress";
     toolCall.executionId = input.execution.executionId;
+    if (input.title !== undefined) toolCall.title = input.title;
+    if (input.kind !== undefined) toolCall.kind = input.kind;
+    if (input.locations !== undefined) toolCall.locations = clone(input.locations);
+    if (input.content !== undefined) toolCall.content = clone(input.content);
+    if (input._meta !== undefined) toolCall._meta = clone(input._meta);
     toolCall.updatedAt = createTimestamp();
     this.storeToolCall(toolCall);
     run.revision += 1;
@@ -1324,14 +1339,14 @@ export class InMemoryStore implements DurableStore {
     this.storeMessage(message);
     toolCall.status = toStatus;
     toolCall.state = toStatus;
-    if (input.title) toolCall.title = input.title;
-    if (input.kind) toolCall.kind = input.kind;
-    if (input.locations) toolCall.locations = clone(input.locations);
-    if (input.content) toolCall.content = clone(input.content);
+    if (input.title !== undefined) toolCall.title = input.title;
+    if (input.kind !== undefined) toolCall.kind = input.kind;
+    if (input.locations !== undefined) toolCall.locations = clone(input.locations);
+    if (input.content !== undefined) toolCall.content = clone(input.content);
     else toolCall.content = defaultToolCallContent(input.result);
     if (input.rawOutput !== undefined) toolCall.rawOutput = clone(input.rawOutput);
     else toolCall.rawOutput = "structuredContent" in input.result && input.result.structuredContent !== undefined ? clone(input.result.structuredContent) : clone((input.result as any).content);
-    if (input._meta) toolCall._meta = clone(input._meta);
+    if (input._meta !== undefined) toolCall._meta = clone(input._meta);
     toolCall.result = durableResult;
     toolCall.resultMessageId = resultMessageId;
     if (input.state === "indeterminate") toolCall.reason = input.reason!;
@@ -2192,9 +2207,9 @@ class MemoryOwnedStore implements OwnedStore {
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
-  async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
-  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[]; contentBlocks?: readonly ContentBlock[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
-  async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
+  async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
+  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly import("./contracts").ToolCallReservation[]; contentBlocks?: readonly ContentBlock[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
+  async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   async suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
   async commitToolResult(input: {
     runId: RunId;
