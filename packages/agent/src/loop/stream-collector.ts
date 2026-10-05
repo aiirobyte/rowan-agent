@@ -66,7 +66,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
           ...(t._meta !== undefined ? { _meta: t._meta } : {}),
         }));
       },
-      call: async () => {
+      call: async (_name, _args, _options) => {
         throw new Error("Tool calling is not available in standalone stream collector without callContext.");
       },
       report: (update) => {

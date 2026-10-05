@@ -64,6 +64,13 @@ export default extension;
   disposed.
 - `providers.register(config)` / `providers.unregister(id)`: Register or remove
   a model provider configuration. Registering with an existing ID replaces it.
+  Provider stream functions receive a `ProviderCallContext` with `signal`, `run` metadata,
+  `interact()`, and `tools`:
+  - `tools.list()`: Inspect registered tools and their MCP-standard `_meta`.
+  - `tools.call(name, args, options?)`: Invoke a registered tool. Accepts `options`:
+    - `signal?: AbortSignal`: Aborts that single tool call without cancelling the Run.
+    - `onUpdate?(toolCall: ToolCall): void`: Receives the merged `ToolCall` on every state change (start, progress-driven `present` updates, final state).
+  - `tools.report(update)`: Report external tool execution states and progress.
 - `phases.register(path | Phase)` / `phases.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
   directory contains `PHASE.md` and may contain direct child Skill Bundles. Also provides
   `getPayload`, `setPayload`, `setMessage`, `getCurrentPhase`, `setNextPhase`, `getNextPhase`, `getMessage`.

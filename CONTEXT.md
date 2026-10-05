@@ -252,6 +252,10 @@ _Avoid_: Shell command, Tool Event
 A pure description function executed across tool call states (`pending`, `in_progress`, progress reports via `reportProgress`, and `completed` / `failed`). Updates are merged via `mergeToolCall` (replacing specified fields, merging `_meta` per top-level key). Tool definition `_meta` is preserved untouched for hosts. Presentation failures fall back to default presentation without failing the tool call.
 _Avoid_: Provider Activity, Tool Formatting Adapter, Imperative Presentation Hook
 
+**Tool Invocation Options**:
+Per-call options (`ToolCallOptions`) provided when calling `ProviderCallContext.tools.call(name, args, options?)`. Rowan supports per-call cancellation via `signal` (settling only that tool call as failed without aborting the Run) and continuous execution observation via `onUpdate` (receiving the merged `ToolCall` on every state change: start, progress-driven `present` updates, and completion/failure).
+_Avoid_: Run-level abort for single tool failure, polling tool state
+
 **Indeterminate Tool Call**:
 A Tool Call whose external effect may have happened but whose determinate result was not durably committed. It terminates the Run and is never retried automatically.
 _Avoid_: Failed Tool Call, retryable error

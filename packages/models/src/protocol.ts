@@ -426,6 +426,11 @@ export type ToolCallOutcome =
   | Readonly<{ ok: true; content: JsonValue }>
   | Readonly<{ ok: false; error: string; content?: JsonValue }>;
 
+export type ToolCallOptions = {
+  signal?: AbortSignal;
+  onUpdate?(toolCall: ToolCall): void;
+};
+
 export type ProviderCallContext = {
   signal: AbortSignal;
   run: { id: string; agentId: string; scope: ScopeRef; cwd: string };
@@ -434,7 +439,7 @@ export type ProviderCallContext = {
   /** The tools this Run would give the model, and ways to call or report tool execution. */
   tools: {
     list(): readonly ToolDefinitionSummary[];
-    call(name: string, args: JsonValue): Promise<ToolCallOutcome>;
+    call(name: string, args: JsonValue, options?: ToolCallOptions): Promise<ToolCallOutcome>;
     /** Report execution of an external tool call or an update to one. */
     report(update: ToolCall | ToolCallUpdate): void;
   };
@@ -465,7 +470,7 @@ export function createProviderCallContext(
     interact: overrides?.interact ?? (async () => null),
     tools: {
       list: () => overrides?.tools?.list() ?? [],
-      call: async (name, args) => overrides?.tools?.call?.(name, args) ?? { ok: true, content: null },
+      call: async (name, args, options) => overrides?.tools?.call?.(name, args, options) ?? { ok: true, content: null },
       report: (update) => overrides?.tools?.report?.(update),
     },
   };

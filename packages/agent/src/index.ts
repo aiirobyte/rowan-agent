@@ -168,6 +168,7 @@ export type {
   ToolCall,
   ToolCallContent,
   ToolCallLocation,
+  ToolCallOptions,
   ToolCallOutcome,
   ToolCallStatus,
   ToolCallUpdate,

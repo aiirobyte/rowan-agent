@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createModelStream } from "@rowan-agent/models";
 import type { AgentMessage, ModelRef } from "../protocol";
 import type { StreamFn } from "@rowan-agent/models";
-import { createId } from "../utils";
+import { createId, combineSignals, withAbort } from "../utils";
 import { executeOnce } from "./execution";
 import { ConfigCommandService } from "./config-commands";
 import type {
@@ -49,6 +49,7 @@ import type {
   ToolCall as AcpToolCall,
   ToolCallContent,
   ToolCallLocation,
+  ToolCallOptions,
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,
@@ -1157,7 +1158,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         onContext: assembly.setContext,
         runtime: {
           interact: (request) => this.liveInteract(run.id, request, controller.signal),
-          tools: ({ toolCall, contentBlocks, driver }: ToolRunnerInput) => {
+          tools: ({ toolCall, contentBlocks, driver, options }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -1169,6 +1170,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 contentBlocks,
                 signal: controller.signal,
                 driver,
+                options,
                 onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
@@ -1177,7 +1179,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
           },
-          toolsBatch: ({ toolCalls, contentBlocks, driver }: Parameters<ToolBatchRunner>[0]) => {
+          toolsBatch: ({ toolCalls, contentBlocks, driver, options }: Parameters<ToolBatchRunner>[0]) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -1189,6 +1191,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 contentBlocks,
                 signal: controller.signal,
                 driver,
+                options,
                 onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
@@ -1374,6 +1377,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     contentBlocks?: readonly ContentBlock[];
     signal: AbortSignal;
     driver?: RunInteractionDriver;
+    options?: ToolCallOptions;
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
     const scope = input.run.scope ?? [];
@@ -1570,6 +1574,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             signal: input.signal,
             afterToolCall: input.toolConfig.afterToolCall,
             currentToolState,
+            options: input.options,
           });
           results.push(toolResult);
         }
@@ -1757,6 +1762,19 @@ export class AgentRuntime implements AgentRuntimeContract {
               _meta: currentToolState._meta,
             });
             setRevision(failed.run.revision);
+            if (input.options?.onUpdate) {
+              try {
+                input.options.onUpdate(createMergedToolCall(
+                  toolCallId,
+                  "failed",
+                  currentToolState,
+                  durableTool.annotations?.title ?? durableTool.name,
+                  durableTool.kind ?? "other",
+                ));
+              } catch (err) {
+                console.warn(`Error in tool call onUpdate callback:`, err);
+              }
+            }
             results.push(protocolFailure(decision.reason));
             continue;
           }
@@ -1797,6 +1815,19 @@ export class AgentRuntime implements AgentRuntimeContract {
           _meta: currentToolState._meta,
         });
         setRevision(failed.run.revision);
+        if (input.options?.onUpdate) {
+          try {
+            input.options.onUpdate(createMergedToolCall(
+              toolCallId,
+              "failed",
+              currentToolState,
+              durableTool.annotations?.title ?? durableTool.name,
+              durableTool.kind ?? "other",
+            ));
+          } catch (err) {
+            console.warn(`Error in tool call onUpdate callback:`, err);
+          }
+        }
         results.push(protocolFailure(reason));
         continue;
       }
@@ -1861,6 +1892,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         signal: input.signal,
         afterToolCall: input.toolConfig.afterToolCall,
         currentToolState,
+        options: input.options,
       });
       results.push(toolResult);
     }
@@ -1892,16 +1924,39 @@ export class AgentRuntime implements AgentRuntimeContract {
     signal: AbortSignal;
     afterToolCall?: AfterToolCall;
     currentToolState: ToolCallMergeTarget;
+    options?: ToolCallOptions;
   }): Promise<ToolResult> {
     let progressActive = true;
     let progressQueue: Promise<void> = Promise.resolve();
+
+    const notifyUpdate = (toolCall: AcpToolCall) => {
+      if (input.options?.onUpdate) {
+        try {
+          input.options.onUpdate(toolCall);
+        } catch (err) {
+          console.warn(`Error in tool call onUpdate callback:`, err);
+        }
+      }
+    };
+
+    // 1. Notify start update
+    const startToolCall = createMergedToolCall(
+      input.toolCallId,
+      "in_progress",
+      input.currentToolState,
+      input.durableTool.annotations?.title ?? input.durableTool.name,
+      input.durableTool.kind ?? "other",
+    );
+    notifyUpdate(startToolCall);
+
+    const effectiveSignal = combineSignals(input.signal, input.options?.signal);
 
     const baseDriver = input.driver ?? createRunInteractionDriver({
       currentPhase: "default",
       attempt: 0,
       status: "running",
       metrics: { iterations: 0, phaseTransitions: [], compactionCount: 0, retryCount: 0, startedAt: new Date().toISOString(), startedAtMs: Date.now() },
-    }, "default", input.signal);
+    }, "default", effectiveSignal);
     const interactionDriver = createToolInteractionDriver(baseDriver, {
       toolCallId: input.toolCallId,
       ...(input.toolCallIds === undefined ? {} : { toolCallIds: input.toolCallIds }),
@@ -1926,7 +1981,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         if (
           !progressActive
           || this.closed
-          || input.signal.aborted
+          || effectiveSignal.aborted
           || active?.executionId !== input.execution.executionId
           || !isJsonValue(progress)
         ) return;
@@ -1938,7 +1993,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           return;
         }
         progressQueue = progressQueue.then(async () => {
-          if (!progressActive || this.closed || input.signal.aborted) return;
+          if (!progressActive || this.closed || effectiveSignal.aborted) return;
           const pres = await presentToolCall(input.durableTool, {
             status: "in_progress",
             args: toJsonValue(input.toolCall.args),
@@ -1946,24 +2001,22 @@ export class AgentRuntime implements AgentRuntimeContract {
           });
           if (pres) {
             mergeToolCall(input.currentToolState, pres);
+            const progressToolCall = createMergedToolCall(
+              input.toolCallId,
+              "in_progress",
+              input.currentToolState,
+              input.durableTool.annotations?.title ?? input.durableTool.name,
+              input.durableTool.kind ?? "other",
+            );
             this.transientEvents.publish({
               kind: "tool_state_changed",
               durability: "transient",
               runId: input.runId,
               executionId: input.execution.executionId,
               transition: { from: "in_progress", to: "in_progress" },
-              toolCall: {
-                toolCallId: input.toolCallId,
-                title: input.currentToolState.title ?? input.durableTool.annotations?.title ?? input.durableTool.name,
-                kind: input.currentToolState.kind ?? input.durableTool.kind ?? "other",
-                status: "in_progress",
-                ...(input.currentToolState.locations !== undefined ? { locations: input.currentToolState.locations } : {}),
-                ...(input.currentToolState.content !== undefined ? { content: input.currentToolState.content } : {}),
-                ...(input.currentToolState.rawInput !== undefined ? { rawInput: input.currentToolState.rawInput } : {}),
-                ...(input.currentToolState.rawOutput !== undefined ? { rawOutput: input.currentToolState.rawOutput } : {}),
-                ...(input.currentToolState._meta !== undefined ? { _meta: input.currentToolState._meta } : {}),
-              },
+              toolCall: progressToolCall,
             });
+            notifyUpdate(progressToolCall);
           }
         }).catch((err) => {
           console.warn(`Error handling progress report for tool "${input.durableTool.name}":`, err);
@@ -1972,14 +2025,26 @@ export class AgentRuntime implements AgentRuntimeContract {
     } as const;
 
     try {
-      let result = await input.durableTool.execute(toJsonValue(input.toolCall.args), context, input.signal);
+      if (input.options?.signal?.aborted) {
+        const error = input.options.signal.reason instanceof Error
+          ? input.options.signal.reason
+          : new DOMException(
+              typeof input.options.signal.reason === "string" ? input.options.signal.reason : "Tool execution aborted.",
+              "AbortError",
+            );
+        throw error;
+      }
+      let result = await withAbort(
+        input.durableTool.execute(toJsonValue(input.toolCall.args), context, effectiveSignal),
+        input.options?.signal,
+      );
       assertToolExecutionResult(result);
       if (input.afterToolCall) {
         result = await input.afterToolCall({
           tool: input.durableTool,
           result,
           context,
-          signal: input.signal,
+          signal: effectiveSignal,
         });
       }
       assertToolExecutionResult(result);
@@ -1991,8 +2056,9 @@ export class AgentRuntime implements AgentRuntimeContract {
 
       await progressQueue.catch(() => {});
 
+      const finalState = result.ok ? "completed" : "failed";
       const completionPres = await presentToolCall(input.durableTool, {
-        status: result.ok ? "completed" : "failed",
+        status: finalState,
         args: toJsonValue(input.toolCall.args),
         result,
       });
@@ -2003,22 +2069,35 @@ export class AgentRuntime implements AgentRuntimeContract {
       const rawOutput = "structuredContent" in result && result.structuredContent !== undefined
         ? toJsonValue(result.structuredContent)
         : toJsonValue(result.content);
+      if (input.currentToolState.rawOutput === undefined) {
+        input.currentToolState.rawOutput = rawOutput;
+      }
 
       const committed = await this.owned.commitToolResult({
         runId: input.runId,
         execution: input.execution,
         expectedRevision: input.revision,
         toolCallId: input.toolCallId,
-        state: result.ok ? "completed" : "failed",
+        state: finalState,
         result,
         title: input.currentToolState.title ?? input.durableTool.annotations?.title ?? input.durableTool.name,
         kind: input.currentToolState.kind ?? input.durableTool.kind ?? "other",
         locations: input.currentToolState.locations,
         content: input.currentToolState.content,
-        rawOutput: input.currentToolState.rawOutput ?? rawOutput,
+        rawOutput: input.currentToolState.rawOutput,
         _meta: input.currentToolState._meta,
       });
       input.setRevision(committed.run.revision);
+
+      const finalToolCall = createMergedToolCall(
+        input.toolCallId,
+        finalState,
+        input.currentToolState,
+        input.durableTool.annotations?.title ?? input.durableTool.name,
+        input.durableTool.kind ?? "other",
+      );
+      notifyUpdate(finalToolCall);
+
       const projectedResult = await this.foldToolInteractionRecords(result, input.toolCallId, input.agentId);
       const ok = "ok" in projectedResult && typeof projectedResult.ok === "boolean"
         ? projectedResult.ok
@@ -2041,7 +2120,11 @@ export class AgentRuntime implements AgentRuntimeContract {
         throw error;
       }
       if (error instanceof RunInteractionCancelledError) throw error;
-      const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
+
+      const isPerCallAbort = Boolean(input.options?.signal?.aborted && !input.signal.aborted);
+      const reason = error instanceof Error
+        ? error.message
+        : (isPerCallAbort ? "Tool execution aborted." : "Tool execution outcome is indeterminate.");
 
       await progressQueue.catch(() => {});
       const failurePres = await presentToolCall(input.durableTool, {
@@ -2053,13 +2136,14 @@ export class AgentRuntime implements AgentRuntimeContract {
         mergeToolCall(input.currentToolState, failurePres);
       }
 
-      const indeterminate = await this.owned.commitToolResult({
+      const commitState = isPerCallAbort ? "failed" : "indeterminate";
+      const committed = await this.owned.commitToolResult({
         runId: input.runId,
         execution: input.execution,
         expectedRevision: input.revision,
         toolCallId: input.toolCallId,
-        state: "indeterminate",
-        reason,
+        state: commitState,
+        ...(isPerCallAbort ? {} : { reason }),
         result: { ok: false, content: null, error: reason },
         title: input.currentToolState.title ?? input.durableTool.annotations?.title ?? input.durableTool.name,
         kind: input.currentToolState.kind ?? input.durableTool.kind ?? "other",
@@ -2067,7 +2151,17 @@ export class AgentRuntime implements AgentRuntimeContract {
         content: input.currentToolState.content,
         _meta: input.currentToolState._meta,
       });
-      input.setRevision(indeterminate.run.revision);
+      input.setRevision(committed.run.revision);
+
+      const finalToolCall = createMergedToolCall(
+        input.toolCallId,
+        "failed",
+        input.currentToolState,
+        input.durableTool.annotations?.title ?? input.durableTool.name,
+        input.durableTool.kind ?? "other",
+      );
+      notifyUpdate(finalToolCall);
+
       return {
         toolCallId: input.providerToolCallId,
         toolName: input.toolCall.name,
@@ -2422,6 +2516,25 @@ function abortError(): Error { const error = new Error("Operation aborted."); er
 function toJsonValue(value: unknown): JsonValue {
   assertJsonValue(value, "tool arguments");
   return value;
+}
+function createMergedToolCall(
+  toolCallId: string,
+  status: ToolCallStatus,
+  current: ToolCallMergeTarget,
+  fallbackTitle: string,
+  fallbackKind: ToolKind = "other",
+): AcpToolCall {
+  return {
+    toolCallId,
+    title: current.title ?? fallbackTitle,
+    kind: current.kind ?? fallbackKind,
+    status,
+    ...(current.locations !== undefined ? { locations: current.locations as ToolCallLocation[] } : {}),
+    ...(current.content !== undefined ? { content: current.content as ToolCallContent[] } : {}),
+    ...(current.rawInput !== undefined ? { rawInput: current.rawInput } : {}),
+    ...(current.rawOutput !== undefined ? { rawOutput: current.rawOutput } : {}),
+    ...(current._meta !== undefined ? { _meta: current._meta } : {}),
+  };
 }
 function deferred<T = void>(): Deferred<T> {
   let resolve!: (value?: T | PromiseLike<T>) => void;

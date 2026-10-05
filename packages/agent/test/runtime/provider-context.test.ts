@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModelStream, type ProviderCallContext, type ProviderStreamFn, type StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime";
+import { createModelStream, type ProviderCallContext, type ProviderStreamFn, type StreamFn, type ToolCall, type ToolCallOutcome } from "@rowan-agent/models";
+import Type from "typebox";
+import { AgentRuntime, InMemoryStore, SqliteStore, type ToolCallPresentationInput, type ToolCallPresentationOutput } from "../../src";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
@@ -587,3 +588,247 @@ test("ui contributions list, change notification, dispose, and triggerUiAction",
     await runtime.close();
   }
 });
+
+test("ctx.tools.call options.onUpdate receives start, progress update, and final state", async () => {
+  const tool = {
+    name: "progress_tool",
+    description: "A tool that reports progress and provides presentation",
+    parameters: Type.Object({ text: Type.String() }),
+    kind: "execute" as const,
+    _meta: { key: "initial_meta" },
+    present(call: ToolCallPresentationInput): ToolCallPresentationOutput | void {
+      if (call.status === "in_progress") {
+        if (call.progress) {
+          return {
+            title: `Progress: ${(call.progress as any).percent}%`,
+            locations: [{ path: "file.txt", line: 42 }],
+            _meta: { step: (call.progress as any).percent },
+          };
+        }
+        return {
+          title: "Starting tool...",
+          locations: [{ path: "file.txt" }],
+        };
+      }
+      if (call.status === "completed") {
+        return {
+          title: "Tool finished successfully",
+          _meta: { done: true },
+        };
+      }
+    },
+    async execute(args: any, ctx: any) {
+      ctx.reportProgress({ percent: 50 });
+      return { ok: true, content: [{ type: "text" as const, text: `Processed ${args.text}` }] };
+    },
+  };
+
+  const updates: ToolCall[] = [];
+  let callOutcome: ToolCallOutcome | undefined;
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    callOutcome = await ctx.tools.call(
+      "progress_tool",
+      { text: "hello" },
+      { onUpdate: (tc) => updates.push({ ...tc }) },
+    );
+
+    yield {
+      type: "text_delta",
+      text: "done",
+      partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] },
+    };
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-tools-call-onupdate",
+      stream,
+      tools: [tool],
+      options: { idempotencyKey: "agent-tools-call-onupdate-key" },
+    });
+
+    const run = await runtime.start(agentId, "test onUpdate", {
+      idempotencyKey: "run-tools-call-onupdate-key",
+    });
+
+    // Capture live events (including transient progress events)
+    const observedEvents: any[] = [];
+    const observePromise = (async () => {
+      for await (const event of run.observe()) {
+        if (event.kind === "tool_state_changed") {
+          observedEvents.push(event);
+        }
+      }
+    })();
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    await observePromise;
+
+    expect(callOutcome).toEqual({
+      ok: true,
+      content: [{ type: "text", text: "Processed hello" }],
+    });
+
+    // onUpdate must have received start, progress, and final updates
+    expect(updates.length).toBe(3);
+
+    // 1. Start update
+    expect(updates[0]!.status).toBe("in_progress");
+    expect(updates[0]!.title).toBe("Starting tool...");
+    expect(updates[0]!.locations).toEqual([{ path: "file.txt" }]);
+    expect(updates[0]!.kind).toBe("execute");
+
+    // 2. Progress update
+    expect(updates[1]!.status).toBe("in_progress");
+    expect(updates[1]!.title).toBe("Progress: 50%");
+    expect(updates[1]!.locations).toEqual([{ path: "file.txt", line: 42 }]);
+    expect(updates[1]!._meta).toEqual({ step: 50 });
+
+    // 3. Final update
+    expect(updates[2]!.status).toBe("completed");
+    expect(updates[2]!.title).toBe("Tool finished successfully");
+    expect(updates[2]!._meta).toEqual({ step: 50, done: true });
+
+    // Match observed tool_state_changed events with onUpdate updates
+    const startEvent = observedEvents.find(
+      (e) => e.transition.from === "pending" && e.transition.to === "in_progress",
+    );
+    const progressEvent = observedEvents.find(
+      (e) => e.transition.from === "in_progress" && e.transition.to === "in_progress",
+    );
+    const completedEvent = observedEvents.find(
+      (e) => e.transition.to === "completed",
+    );
+
+    expect(startEvent).toBeDefined();
+    expect(progressEvent).toBeDefined();
+    expect(completedEvent).toBeDefined();
+
+    expect(startEvent!.toolCall.title).toBe(updates[0]!.title);
+    expect(progressEvent!.toolCall.title).toBe(updates[1]!.title);
+    expect(completedEvent!.toolCall.title).toBe(updates[2]!.title);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("ctx.tools.call per-call abort cancels only that call while the Run continues", async () => {
+  let cancellableToolStarted = false;
+  let cancellableToolAborted = false;
+
+  const cancellableTool = {
+    name: "cancellable_tool",
+    description: "A tool that waits to be aborted",
+    parameters: Type.Object({}),
+    async execute(_args: any, _ctx: any, signal: AbortSignal) {
+      cancellableToolStarted = true;
+      return new Promise<any>((_, reject) => {
+        signal.addEventListener("abort", () => {
+          cancellableToolAborted = true;
+          reject(new DOMException("Cancelled by caller", "AbortError"));
+        });
+      });
+    },
+  };
+
+  const secondTool = {
+    name: "second_tool",
+    description: "A second tool called after aborting the first",
+    parameters: Type.Object({}),
+    async execute() {
+      return { ok: true, content: [{ type: "text" as const, text: "second tool output" }] };
+    },
+  };
+
+  let firstCallOutcome: ToolCallOutcome | undefined;
+  let secondCallOutcome: ToolCallOutcome | undefined;
+  const updates: ToolCall[] = [];
+  let providerSignalAbortedDuringExecution: boolean | undefined;
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+
+    const perCallController = new AbortController();
+    const callPromise = ctx.tools.call("cancellable_tool", {}, {
+      signal: perCallController.signal,
+      onUpdate: (tc) => updates.push({ ...tc }),
+    });
+
+    // Wait until the tool starts executing
+    while (!cancellableToolStarted) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    // Abort ONLY this single tool call
+    perCallController.abort("User cancelled tool");
+
+    firstCallOutcome = await callPromise;
+    providerSignalAbortedDuringExecution = ctx.signal.aborted;
+
+    // Call the second tool: it should succeed, showing the Run and provider context remain active
+    secondCallOutcome = await ctx.tools.call("second_tool", {});
+
+    yield {
+      type: "text_delta",
+      text: "all finished",
+      partial: { role: "assistant", contentBlocks: [{ type: "text", text: "all finished" }] },
+    };
+    yield { type: "done", response: stopResponse("all finished") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-per-call-abort",
+      stream,
+      tools: [cancellableTool, secondTool],
+      options: { idempotencyKey: "agent-per-call-abort-key" },
+    });
+
+    const run = await runtime.start(agentId, "test per-call abort", {
+      idempotencyKey: "run-per-call-abort-key",
+    });
+
+    const boundary = await run.wait();
+    expect(boundary).toMatchObject({ type: "completed" });
+
+    // The tool actually received the abort
+    expect(cancellableToolAborted).toBe(true);
+
+    // The first tool call settled as failed
+    expect(firstCallOutcome).toBeDefined();
+    expect(firstCallOutcome?.ok).toBe(false);
+    if (firstCallOutcome && !firstCallOutcome.ok) {
+      expect(firstCallOutcome.error).toBeDefined();
+    }
+
+    // The provider's ctx.signal was NOT aborted
+    expect(providerSignalAbortedDuringExecution).toBe(false);
+
+    // The second tool call executed and succeeded
+    expect(secondCallOutcome).toEqual({
+      ok: true,
+      content: [{ type: "text", text: "second tool output" }],
+    });
+
+    // onUpdate for the aborted call received start and failed state
+    expect(updates.length).toBeGreaterThanOrEqual(2);
+    expect(updates[0]!.status).toBe("in_progress");
+    expect(updates.at(-1)!.status).toBe("failed");
+  } finally {
+    await runtime.close();
+  }
+});
+

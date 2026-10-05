@@ -15,6 +15,7 @@ export type {
   ToolAnnotations,
   ToolCallContent,
   ToolCallLocation,
+  ToolCallOptions,
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,

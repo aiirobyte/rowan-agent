@@ -148,6 +148,7 @@ export type ToolRunnerInput = {
   /** The model response's blocks, so a managed Runtime can commit them with the Tool Call. */
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
+  options?: import("@rowan-agent/models").ToolCallOptions;
 };
 
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
@@ -156,6 +157,7 @@ export type ToolBatchRunner = (input: {
   toolCalls: readonly ToolCall[];
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
+  options?: import("@rowan-agent/models").ToolCallOptions;
 }) => Promise<readonly ToolResult[]>;
 
 export type AgentRuntimePort = {

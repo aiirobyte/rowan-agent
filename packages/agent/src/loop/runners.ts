@@ -1,4 +1,4 @@
-import type { ContentBlock, ProviderCallContext, RunInteractionRequest, ToolCallOutcome } from "@rowan-agent/models";
+import type { ContentBlock, ProviderCallContext, RunInteractionRequest, ToolCallOptions, ToolCallOutcome } from "@rowan-agent/models";
 import type { JsonObject, JsonValue, RunId } from "../runtime-events";
 import type {
   AgentMessage,
@@ -9,7 +9,7 @@ import type {
   ToolResult,
 } from "../types";
 import { createMessage } from "../types";
-import { createId, createTimestamp } from "../utils";
+import { createId, createTimestamp, combineSignals } from "../utils";
 import type { ExecutionState, AgentConfig, InputRequestPrompt, MessageDeltaNotification } from "./types";
 import { DEFAULT_MAX_ATTEMPTS, validateMaxAttempts } from "./types";
 
@@ -1188,6 +1188,7 @@ async function executeToolCall(input: {
   toolCall: ToolCall;
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
+  options?: ToolCallOptions;
 }): Promise<ToolResult> {
   let result: ToolResult;
   if (input.config.runtime?.tools) {
@@ -1196,6 +1197,7 @@ async function executeToolCall(input: {
       toolCall: input.toolCall,
       contentBlocks: input.contentBlocks,
       driver: input.driver,
+      options: input.options,
     });
   } else {
     const toolContext = {
@@ -1208,7 +1210,7 @@ async function executeToolCall(input: {
       toolContext,
       beforeToolCall: input.config.beforeToolCall,
       afterToolCall: input.config.afterToolCall,
-      signal: input.config.signal,
+      signal: combineSignals(input.config.signal, input.options?.signal),
     });
   }
 
@@ -1262,7 +1264,11 @@ function createPhaseExecution(
   registry: PhaseRegistry,
 ): PhaseExecution {
   const interaction = createRunInteractionDriver(state, phase.name, config.signal);
-  const executePhaseTool = async (phaseContext: AgentContext, toolCall: ToolCall): Promise<ToolResult> => {
+  const executePhaseTool = async (
+    phaseContext: AgentContext,
+    toolCall: ToolCall,
+    options?: ToolCallOptions,
+  ): Promise<ToolResult> => {
     return runTurn(async () => {
       await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
       const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
@@ -1278,6 +1284,7 @@ function createPhaseExecution(
         tools,
         toolCall,
         driver: interaction,
+        options,
       });
       await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
       return result;
@@ -1365,14 +1372,14 @@ function createPhaseExecution(
               ...(t._meta !== undefined ? { _meta: t._meta } : {}),
             }));
           },
-          call: async (name: string, args: JsonValue): Promise<ToolCallOutcome> => {
+          call: async (name: string, args: JsonValue, options?: ToolCallOptions): Promise<ToolCallOutcome> => {
             const toolCallId = createId("call");
             const toolCall: ToolCall = {
               id: toolCallId,
               name,
               args,
             };
-            const res = await executePhaseTool(phaseContext, toolCall);
+            const res = await executePhaseTool(phaseContext, toolCall, options);
             return res.ok
               ? { ok: true, content: res.content as JsonValue }
               : { ok: false, error: res.error ?? "Tool execution failed", ...(res.content !== undefined ? { content: res.content as JsonValue } : {}) };

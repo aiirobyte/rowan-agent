@@ -60,6 +60,18 @@ type StreamFn = (
 ) => AsyncIterable<LlmStreamEvent>;
 ```
 
+### ProviderCallContext
+
+Stream functions receive a `ProviderCallContext` with:
+- `signal: AbortSignal` — the run-level cancellation signal.
+- `run: { id, agentId, scope, cwd }` — active execution metadata.
+- `interact(request): Promise<JsonValue>` — request live interaction from the user.
+- `tools.list(): readonly ToolDefinitionSummary[]` — registered tool definitions with metadata.
+- `tools.call(name, args, options?): Promise<ToolCallOutcome>` — invoke a registered tool.
+  - `options.signal?: AbortSignal` — aborts that single tool call without cancelling the Run.
+  - `options.onUpdate?(toolCall: ToolCall): void` — receives the merged ToolCall every time it changes during execution (start, each progress-driven `present` update, final).
+- `tools.report(update: ToolCall | ToolCallUpdate): void` — report external tool execution.
+
 ## Source structure
 
 ```
