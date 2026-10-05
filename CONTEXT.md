@@ -150,11 +150,8 @@ _Avoid_: Phase Interaction, Tool Call Interaction, Input Request, ACP Message, P
 The execution-scoped Rowan capability through which a Phase or Tool requests interactions, reads resolved answers, checkpoints continuation state, suspends, and observes cancellation. It is protocol-neutral and does not know Providers, processes, or host business domains.
 _Avoid_: Phase Interaction Driver, ACP Client, Provider Adapter, Tool Registry
 
-**Phase Settings Definition**:
-A JSON-safe, host-neutral declaration registered by a Phase bundle through the
-`ExtensionAPI.phase.settings` namespace. Rowan collects the provider registered
-with `api.phase.settings.register(provider)` but does not render the definition
-or interpret its domain fields; the host owns presentation and persistence.
+**Settings Definition**:
+A JSON-safe, host-neutral declaration registered by an extension as a declarative UI contribution through `api.ui.contribute({ slot: "settings", ... })`. Rowan collects the contribution but does not render the definition or interpret its domain fields; the host owns presentation and persistence through the extension's config block.
 _Avoid_: ACP Settings page, host-specific configuration model
 
 **Interaction Record**:

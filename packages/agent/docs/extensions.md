@@ -10,7 +10,7 @@ Run persistence, or lifecycle state.
 import type { ExtensionFactory } from "@rowan-agent/agent";
 
 const extension: ExtensionFactory = async (api) => {
-  api.tool.register({
+  api.tools.register({
     name: "search_docs",
     description: "Search project documentation.",
     parameters: {
@@ -23,9 +23,9 @@ const extension: ExtensionFactory = async (api) => {
     }),
   });
 
-  await api.phase.register("./review-phase");
+  await api.phases.register("./review-phase");
 
-  api.on("before_tool_call", ({ tool, args }) => {
+  api.hooks.on("before_tool_call", ({ tool, args }) => {
     if (tool.name === "search_docs" && !args) {
       return { allow: false, reason: "query is required" };
     }
@@ -45,23 +45,23 @@ export default extension;
   for a specific run. Run state is dropped when the run ends.
 - `state.agent(agentId)`: Access durable key-value state private to the
   extension for a specific agent, persisted via the host.
-- `tool.register(tool)` / `tool.unregister(toolName)`: Register or remove a tool that the LLM can call.
+- `tools.register(tool)` / `tools.unregister(toolName)`: Register or remove a tool that the LLM can call.
 - `capabilities.contribute({ kind: "tool", name, description })`: Contribute a
   capability (such as a tool) to the host. Returns a disposer function to remove
   the contribution. Contributions are automatically removed when the extension is
   disposed.
-- `phase.register(path | Phase)` / `phase.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
-  directory contains `PHASE.md` and may contain direct child Skill Bundles.
-- `registerProvider(provider)` / `unregisterProvider(id)`: Register or remove
-  a model provider configuration.
-- `on()` / `off()`: Register lifecycle hooks (`run_start`, `run_end`) and
+- `providers.register(config)` / `providers.unregister(id)`: Register or remove
+  a model provider configuration. Registering with an existing ID replaces it.
+- `phases.register(path | Phase)` / `phases.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
+  directory contains `PHASE.md` and may contain direct child Skill Bundles. Also provides
+  `getPayload`, `setPayload`, `setMessage`, `getCurrentPhase`, `setNextPhase`, `getNextPhase`, `getMessage`.
+- `ui.contribute(contribution)`: Contribute declarative UI elements (`settings`, `model-picker`).
+- `hooks.on()` / `hooks.off()`: Register lifecycle hooks (`run_start`, `run_end`) and
   execution hooks (`before_phase`, `after_phase`, `before_prompt`,
   `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
   `scope` and per-turn input `turn`.
 - `context`: Access the working directory, `AbortSignal`, command execution,
   and the current resource summary.
-- `phase`: Read or set the current phase payload, output messages, and next
-  destination.
 - `events`: Publish custom events between extensions.
 
 ## Loading
@@ -112,6 +112,9 @@ The host interface defines:
 - `onConfigChanged(listener: (extensionId, scope) => void)`: Registers a listener to receive configuration change notifications for extensions.
 - `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.
 
-Hosts can query and listen to capabilities directly on `AgentRuntime`:
+Hosts can query and listen to capabilities and UI contributions directly on `AgentRuntime`:
 - `runtime.listCapabilities()`: Returns the active array of capabilities (`{ extensionId, kind: "tool", name, description }`), readable at any time outside a Run.
 - `runtime.onCapabilitiesChanged(listener: (capabilities) => void)`: Subscribes to capability changes and returns an unsubscribe function.
+- `runtime.listUiContributions()`: Returns the active array of declarative UI contributions (`UiContribution`), readable at any time outside a Run.
+- `runtime.onUiContributionsChanged(listener: (contributions) => void)`: Subscribes to UI contribution changes and returns an unsubscribe function.
+- `runtime.triggerUiAction({ contributionId, actionId, scope })`: Dispatches a UI action event (`ui.action`) to the contributing extension.
