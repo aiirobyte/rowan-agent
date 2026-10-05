@@ -6,9 +6,6 @@ import type {
   PhaseFrontmatter,
   PhaseInput,
   PhaseRegistry,
-  PhaseSettingsContext,
-  PhaseSettingsDefinition,
-  PhaseSettingsProvider,
 } from "./types";
 import { parsePhaseInput } from "./input";
 import type { PhaseOutput } from "./types";
@@ -128,26 +125,7 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   return phase;
 }
 
-/**
- * Collect and evaluate the Settings provider registered through the Phase's
- * ExtensionAPI namespace. Settings discovery never reads a direct module
- * export; the Phase contributes through `api.phase.settings.register()`.
- */
-export async function loadPhaseSettings(
-  phase: Phase,
-  context: PhaseSettingsContext,
-): Promise<PhaseSettingsDefinition | undefined> {
-  if (!phase.factory) return undefined;
 
-  let provider: PhaseSettingsProvider | undefined;
-  const api = createExtensionAPI(undefined, {
-    registerSettings: (candidate) => {
-      provider = candidate;
-    },
-  });
-  await phase.factory(api);
-  return provider ? provider(context) : undefined;
-}
 
 /**
  * Load the Skills owned by a Phase bundle.

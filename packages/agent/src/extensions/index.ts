@@ -10,11 +10,11 @@
  * import type { ExtensionAPI } from "@rowan-agent/agent";
  *
  * export default function(api: ExtensionAPI) {
- *   api.on("before_tool_call", (event) => {
+ *   api.hooks.on("before_tool_call", (event) => {
  *     return { allow: true };
  *   });
  *
- *   await api.phase.register("./phase");
+ *   await api.phases.register("./phase");
  * }
  * ```
  */
@@ -89,6 +89,8 @@ export type {
   ToolDefinition,
   ToolExecutionResult,
   RegisteredTool,
+  UiSlot,
+  UiContribution,
   ExtensionError,
   ExtensionErrorListener,
   Extension,

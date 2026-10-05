@@ -10,12 +10,15 @@ import type {
   ToolCallBlock,
   LlmRequest,
   LlmResponse,
+  ProviderCallContext,
 } from "@rowan-agent/models";
 import type { ModelInvokeOutput, PhaseMessageManager } from "./execution";
 import type { ThinkingDeltaNotification, ToolCallDeltaNotification } from "./types";
 import { parsePartialJson } from "./partial-json";
 import type { ModelTranscript } from "../protocol/turn";
 import { LoopGuard, EmptyResponseError, ModelOutputLimitError } from "./errors";
+import { resolveScopeFromMetadata } from "../extensions/host";
+import type { JsonObject, JsonValue, RunId } from "../runtime-events";
 
 const MAX_STREAMED_OUTPUT_CHARACTERS = 1024 * 1024;
 
@@ -27,6 +30,7 @@ export type ModelInvokerInput = {
   output?: "reply" | "internal";
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
+  callContext?: ProviderCallContext;
 };
 
 export type ModelInvokerResult = ModelInvokeOutput & {
@@ -39,7 +43,50 @@ export type ModelInvokerResult = ModelInvokeOutput & {
  * falls back to partial accumulation otherwise.
  */
 export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvokerResult> {
-  const events = input.config.stream(input.request, { signal: input.config.signal });
+  const callContext: ProviderCallContext = input.callContext ?? {
+    signal: input.config.signal ?? new AbortController().signal,
+    run: {
+      id: input.config.execution.runId,
+      agentId: input.config.execution.agentId,
+      scope: resolveScopeFromMetadata(input.config.execution.runMetadata),
+      cwd: (typeof input.config.execution.runMetadata?.cwd === "string" ? input.config.execution.runMetadata.cwd : undefined)
+        ?? input.config.context.cwd
+        ?? "",
+    },
+    emit: (activity) => {
+      const turn: JsonObject =
+        typeof input.config.execution.input === "object"
+        && input.config.execution.input !== null
+        && !Array.isArray(input.config.execution.input)
+          ? (input.config.execution.input as unknown as JsonObject)
+          : {};
+      input.config.onProviderActivity?.({
+        runId: input.config.execution.runId as RunId,
+        turn,
+        activity,
+      });
+    },
+    interact: async (request) => {
+      const handler = input.config.runtime?.interact ?? input.config.interact;
+      if (!handler) {
+        throw new Error("Run interactions are not supported in this runtime.");
+      }
+      return handler(request);
+    },
+    tools: {
+      list: () => {
+        return input.config.context.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters as JsonValue | undefined,
+        }));
+      },
+      call: async () => {
+        throw new Error("Tool calling is not available in standalone stream collector without callContext.");
+      },
+    },
+  };
+  const events = input.config.stream(input.request, callContext);
   const result = await collectStreamResult({
     config: input.config,
     message: input.message,

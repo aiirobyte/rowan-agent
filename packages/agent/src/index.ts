@@ -23,7 +23,6 @@ export { InMemoryConfigProvider, brandConfigToken } from "./runtime/config-provi
 export { RuntimeError, isRuntimeError } from "./runtime/errors";
 export { loadSkill, loadSkills } from "./harness/skills";
 export { loadPhase } from "./harness/phases/loader";
-export { loadPhaseSettings } from "./harness/phases/loader";
 export { loadPhases } from "./harness/phases/loader";
 export {
   COMPACT_PHASE_ID,
@@ -86,6 +85,7 @@ export type {
   ThinkingDelta,
   ToolCallDelta,
   ModelRetry,
+  ProviderActivityEvent,
   MessageId,
   MessageRevisionResult,
   MessageRevised,
@@ -156,7 +156,19 @@ export type {
   RuntimeErrorDetails,
 } from "./runtime/errors";
 
-export type { ModelConfig, ModelRef, StreamFn, ThinkingLevel } from "@rowan-agent/models";
+export type {
+  ModelConfig,
+  ModelRef,
+  StreamFn,
+  ThinkingLevel,
+  ProviderCallContext,
+  ProviderActivity,
+  ProviderStreamFn,
+  ToolDefinitionSummary,
+  ToolCallOutcome,
+  ProviderConfig,
+  ProviderModelConfig,
+} from "@rowan-agent/models";
 export type {
   Skill,
 } from "./protocol";
@@ -180,6 +192,8 @@ export type {
   RunStartEvent,
   ScopeRef,
   ToolDefinition,
+  UiSlot,
+  UiContribution,
 } from "./extensions";
 
 export type {
@@ -193,14 +207,12 @@ export type {
   PhaseStatus,
   PhaseRegistry,
   PhaseState,
-  PhaseSettingsBadge,
-  PhaseSettingsContext,
-  PhaseSettingsControl,
-  PhaseSettingsDefinition,
-  PhaseSettingsItem,
-  PhaseSettingsOption,
-  PhaseSettingsProvider,
-  PhaseSettingsSection,
+  SettingsBadge,
+  SettingsControl,
+  SettingsDefinition,
+  SettingsItem,
+  SettingsOption,
+  SettingsSection,
 } from "./harness/phases/types";
 export type { PhaseExecution, PhaseMessageManager } from "./loop/execution";
 export type {

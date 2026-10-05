@@ -20,6 +20,7 @@ import type {
   MessageRevised,
   Metadata,
   ModelRetry,
+  ProviderActivityEvent,
   OwnerToken,
   Outcome,
   RunFailure,
@@ -70,6 +71,7 @@ export type {
   ThinkingDelta,
   ToolCallDelta,
   ModelRetry,
+  ProviderActivityEvent,
   MessageBase,
   MessageCommitted,
   MessageContent,
@@ -316,7 +318,7 @@ export type RunSnapshotBase = Readonly<{
   cursor: EventCursor;
 }>;
 export type RunSnapshot = RunSnapshotBase & (
-  | Readonly<{ state: "queued" | "running"; currentPhaseId?: string }>
+  | Readonly<{ state: "queued" | "running"; currentPhaseId?: string; interactions?: readonly RunInteraction[] }>
   | Readonly<{
       state: "input_required";
       interactions: readonly RunInteraction[];
@@ -494,6 +496,9 @@ export interface AgentRuntime {
   consume(input: { consumerId: string; signal: AbortSignal; onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void> }): Promise<DurableConsumer>;
   listCapabilities(): readonly import("../extensions").ExtensionCapability[];
   onCapabilitiesChanged(listener: (capabilities: readonly import("../extensions").ExtensionCapability[]) => void): () => void;
+  listUiContributions(): readonly import("../extensions").UiContribution[];
+  onUiContributionsChanged(listener: (contributions: readonly import("../extensions").UiContribution[]) => void): () => void;
+  triggerUiAction(event: { contributionId: string; actionId: string; scope?: import("../extensions").ScopeRef }): void;
   close(): Promise<void>;
 }
 export type ConsumerRegistration = Readonly<{ cursor?: EventCursor; waterline: EventCursor }>;

@@ -137,6 +137,7 @@ function resolveDefinitionContext(
     tools,
     skills,
     phases: { phases, entryPhaseId },
+    ...(snapshot.cwd ? { cwd: snapshot.cwd } : {}),
   };
 }
 

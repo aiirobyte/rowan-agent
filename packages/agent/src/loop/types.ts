@@ -132,6 +132,8 @@ export type AgentConfig = {
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
   onModelRetry?: (event: ModelRetryNotification) => void;
+  onProviderActivity?: (event: { runId: import("../runtime-events").RunId; turn: import("../runtime-events").JsonObject; activity: import("@rowan-agent/models").ProviderActivity }) => void;
+  interact?: (request: import("@rowan-agent/models").RunInteractionRequest) => Promise<import("../runtime-events").JsonValue>;
   /** Internal / testing only: retry delay in milliseconds. */
   retryDelayMs?: number;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
@@ -159,4 +161,5 @@ export type ToolBatchRunner = (input: {
 export type AgentRuntimePort = {
   tools?: ToolRunner;
   toolsBatch?: ToolBatchRunner;
+  interact?: (request: import("@rowan-agent/models").RunInteractionRequest) => Promise<import("../runtime-events").JsonValue>;
 };

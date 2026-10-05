@@ -58,8 +58,8 @@ export type RunInteractionDriver = Readonly<{
 export class RunInteractionCancelledError extends Error {
   readonly code = "run_interaction_cancelled" as const;
 
-  constructor() {
-    super("Run interaction work was cancelled.");
+  constructor(message = "Run interaction work was cancelled.") {
+    super(message);
     this.name = "RunInteractionCancelledError";
   }
 }

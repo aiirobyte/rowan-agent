@@ -1,4 +1,6 @@
-import type { ContentBlock } from "@rowan-agent/models";
+import type { ContentBlock, ProviderCallContext, ProviderActivity, RunInteractionRequest, ToolCallOutcome } from "@rowan-agent/models";
+import { resolveScopeFromMetadata } from "../extensions/host";
+import type { JsonObject, JsonValue, RunId } from "../runtime-events";
 import type {
   AgentMessage,
   AgentContext,
@@ -1170,10 +1172,10 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
     });
     await phase.factory(api);
     return {
-      message: api.phase.getMessage() ?? `${phase.name} phase completed.`,
-      route: api.phase.getNextPhase() || "stop",
+      message: api.phases.getMessage() ?? `${phase.name} phase completed.`,
+      route: api.phases.getNextPhase() || "stop",
       phase: phase.name,
-      payload: api.phase.getPayload(),
+      payload: api.phases.getPayload(),
     };
   }
 
@@ -1261,6 +1263,27 @@ function createPhaseExecution(
   registry: PhaseRegistry,
 ): PhaseExecution {
   const interaction = createRunInteractionDriver(state, phase.name, config.signal);
+  const executePhaseTool = async (phaseContext: AgentContext, toolCall: ToolCall): Promise<ToolResult> => {
+    return runTurn(async () => {
+      await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
+      const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
+      const result = await executeToolCall({
+        config: {
+          ...config,
+          context: {
+            ...config.context,
+            tools,
+            skills: phaseContext.skills,
+          },
+        },
+        tools,
+        toolCall,
+        driver: interaction,
+      });
+      await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
+      return result;
+    });
+  };
   return {
     interaction,
     messages: messageManager,
@@ -1314,6 +1337,62 @@ function createPhaseExecution(
         }
       }
 
+      const scope = resolveScopeFromMetadata(config.execution.runMetadata);
+      const cwd = (typeof config.execution.runMetadata?.cwd === "string" ? config.execution.runMetadata.cwd : undefined)
+        ?? config.context.cwd
+        ?? "";
+      const callContext: ProviderCallContext = {
+        signal: config.signal ?? new AbortController().signal,
+        run: {
+          id: config.execution.runId,
+          agentId: config.execution.agentId,
+          scope,
+          cwd,
+        },
+        emit: (activity: ProviderActivity) => {
+          const turn: JsonObject =
+            typeof config.execution.input === "object"
+            && config.execution.input !== null
+            && !Array.isArray(config.execution.input)
+              ? (config.execution.input as unknown as JsonObject)
+              : {};
+          config.onProviderActivity?.({
+            runId: config.execution.runId as RunId,
+            turn,
+            activity,
+          });
+        },
+        interact: async (interactionReq: RunInteractionRequest) => {
+          const handler = config.runtime?.interact ?? config.interact;
+          if (!handler) {
+            throw new Error("Run interactions are not supported in this runtime.");
+          }
+          return handler(interactionReq);
+        },
+        tools: {
+          list: () => {
+            const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
+            return tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters as JsonValue | undefined,
+            }));
+          },
+          call: async (name: string, args: JsonValue): Promise<ToolCallOutcome> => {
+            const toolCallId = createId("call");
+            const toolCall: ToolCall = {
+              id: toolCallId,
+              name,
+              args,
+            };
+            const res = await executePhaseTool(phaseContext, toolCall);
+            return res.ok
+              ? { ok: true, content: res.content as JsonValue }
+              : { ok: false, error: res.error ?? "Tool execution failed", ...(res.content !== undefined ? { content: res.content as JsonValue } : {}) };
+          },
+        },
+      };
+
       const result = await runTurn(() =>
         withRetry(
           () => invokeModel({
@@ -1324,6 +1403,7 @@ function createPhaseExecution(
             output: options.output,
             onThinkingDelta: config.onThinkingDelta,
             onToolCallDelta: config.onToolCallDelta,
+            callContext,
           }),
           {
             signal: config.signal,
@@ -1349,27 +1429,7 @@ function createPhaseExecution(
       await config.onPhaseStatus?.(phase.name, status);
     },
 
-    async executeTool(phaseContext: AgentContext, toolCall: ToolCall): Promise<ToolResult> {
-      return runTurn(async () => {
-        await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
-        const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
-        const result = await executeToolCall({
-          config: {
-            ...config,
-            context: {
-              ...config.context,
-              tools,
-              skills: phaseContext.skills,
-            },
-          },
-          tools,
-          toolCall,
-          driver: interaction,
-        });
-        await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
-        return result;
-      });
-    },
+    executeTool: executePhaseTool,
 
     async executeTools(phaseContext: AgentContext, toolCalls: readonly ToolCall[], contentBlocks?: readonly ContentBlock[]): Promise<readonly ToolResult[]> {
       return runTurn(async () => {

@@ -344,4 +344,12 @@ export type ModelRetry = Readonly<{
   error: string;
 }>;
 
-export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry;
+export type ProviderActivityEvent = Readonly<{
+  kind: "provider_activity";
+  durability: "transient";
+  runId: RunId;
+  turn: JsonObject;
+  activity: import("@rowan-agent/models").ProviderActivity;
+}>;
+
+export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry | ProviderActivityEvent;

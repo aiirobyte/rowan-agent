@@ -23,7 +23,6 @@ export type {
   LlmModelUsage,
   LlmRequest,
   LlmStreamEvent,
-  LlmStreamOptions,
   Outcome,
   StreamFn,
   ToolCall,
@@ -61,6 +60,7 @@ export type AgentContext = {
   skills: Skill[];
   /** Custom phases for this run. Agent normalizes this with the built-in default phase. */
   phases?: PhaseRegistry;
+  cwd?: string;
 };
 
 export type BeforeToolCall = (input: {

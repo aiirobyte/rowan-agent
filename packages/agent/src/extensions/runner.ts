@@ -23,6 +23,7 @@ import type {
   Extension,
   ExtensionCapability,
   ExtensionCapabilityContribution,
+  UiContribution,
   ExtensionError,
   ExtensionErrorListener,
   ExtensionHost,
@@ -106,8 +107,9 @@ async function execCommand(
 // ---------------------------------------------------------------------------
 
 function applyProviderRegistration(config: ProviderConfig): void {
-  if (config.streamSimple) {
-    registerApiProvider({ protocol: config.protocol, stream: config.streamSimple });
+  unregisterProviderModels(config.id);
+  if (config.stream) {
+    registerApiProvider({ protocol: config.protocol, stream: config.stream });
   }
   for (const modelConfig of config.models) {
     registerModel({
@@ -117,12 +119,13 @@ function applyProviderRegistration(config: ProviderConfig): void {
       provider: config.id,
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
-      reasoning: modelConfig.reasoning,
+      reasoning: modelConfig.reasoning ?? false,
       ...(modelConfig.thinkingLevel !== undefined ? { thinkingLevel: modelConfig.thinkingLevel } : {}),
-      input: modelConfig.input,
-      cost: modelConfig.cost,
-      contextWindow: modelConfig.contextWindow,
-      maxTokens: modelConfig.maxTokens,
+      ...(modelConfig.thinkingLevels !== undefined ? { thinkingLevels: modelConfig.thinkingLevels } : {}),
+      input: modelConfig.input ?? ["text"],
+      cost: modelConfig.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: modelConfig.contextWindow ?? 128_000,
+      maxTokens: modelConfig.maxTokens ?? 4096,
       ...(config.headers || modelConfig.headers
         ? { headers: { ...config.headers, ...modelConfig.headers } }
         : {}),
@@ -213,6 +216,9 @@ export class ExtensionRunner {
 
   // Capability change listeners
   private readonly capabilityListeners = new Set<(capabilities: readonly ExtensionCapability[]) => void>();
+
+  // UI contribution change listeners
+  private readonly uiContributionListeners = new Set<(contributions: readonly UiContribution[]) => void>();
 
   /** Current agent context — set by the agent before each phase */
   currentContext?: AgentContext;
@@ -337,6 +343,7 @@ export class ExtensionRunner {
         tools: new Map(),
         phases: new Set(),
         capabilities: new Map(),
+        uiContributions: new Map(),
         cleanup: [],
         runtime: createExtensionRuntime(),
       };
@@ -349,6 +356,9 @@ export class ExtensionRunner {
         this._phaseCache = null;
         if (extension.capabilities.size > 0) {
           this.notifyCapabilitiesChanged();
+        }
+        if (extension.uiContributions.size > 0) {
+          this.notifyUiContributionsChanged();
         }
       } catch (error) {
         await this.rollbackExtension(extension);
@@ -487,6 +497,30 @@ export class ExtensionRunner {
   onCapabilitiesChanged(listener: (capabilities: readonly ExtensionCapability[]) => void): () => void {
     this.capabilityListeners.add(listener);
     return () => this.capabilityListeners.delete(listener);
+  }
+
+  /** Get all contributed UI elements across all extensions. */
+  getUiContributions(): readonly UiContribution[] {
+    const result: UiContribution[] = [];
+    for (const ext of this.extensions) {
+      for (const contrib of ext.uiContributions.values()) {
+        result.push(contrib);
+      }
+    }
+    return Object.freeze(result);
+  }
+
+  /**
+   * Subscribe to UI contribution changes (contributions added, removed, or extensions disposed).
+   * Returns an unsubscribe function.
+   */
+  onUiContributionsChanged(listener: (contributions: readonly UiContribution[]) => void): () => void {
+    this.uiContributionListeners.add(listener);
+    return () => this.uiContributionListeners.delete(listener);
+  }
+
+  triggerUiAction(event: { contributionId: string; actionId: string; scope?: ScopeRef }): void {
+    this.events.emit("ui.action", event);
   }
 
   // ---------------------------------------------------------------------------
@@ -755,6 +789,8 @@ export class ExtensionRunner {
       unregisterTool: (toolName) => this.unregisterTool(extension, toolName),
       contributeCapability: (contribution) =>
         this.contributeCapability(extension, contribution),
+      contributeUi: (contribution) =>
+        this.contributeUi(extension, contribution),
       context: extContext,
       manifest,
       trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
@@ -870,6 +906,50 @@ export class ExtensionRunner {
     }
   }
 
+  private contributeUi(
+    extension: Extension,
+    contribution: UiContribution,
+  ): () => void {
+    const key = `${contribution.slot}:${contribution.id}`;
+    const entry: UiContribution = {
+      ...contribution,
+    };
+    extension.uiContributions.set(key, entry);
+    if (this.extensions.includes(extension)) {
+      this.notifyUiContributionsChanged();
+    }
+
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      if (extension.uiContributions.get(key) === entry) {
+        extension.uiContributions.delete(key);
+        if (this.extensions.includes(extension)) {
+          this.notifyUiContributionsChanged();
+        }
+      }
+    };
+    extension.cleanup.push(dispose);
+    return dispose;
+  }
+
+  private notifyUiContributionsChanged(): void {
+    const contributions = this.getUiContributions();
+    for (const listener of this.uiContributionListeners) {
+      try {
+        listener(contributions);
+      } catch (error) {
+        this.emitError({
+          extensionPath: "<runtime>",
+          event: "ui_contributions_changed",
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
+    }
+  }
+
   private async registerPhase(
     extension: Extension,
     registration: PhaseRegistration,
@@ -975,6 +1055,8 @@ export class ExtensionRunner {
     for (const name of extension.phases) this.phases.delete(name);
     const hadCapabilities = extension.capabilities.size > 0;
     extension.capabilities.clear();
+    const hadUiContributions = extension.uiContributions.size > 0;
+    extension.uiContributions.clear();
     for (const cleanup of [...extension.cleanup].reverse()) {
       await Promise.resolve().then(() => cleanup()).catch(() => undefined);
     }
@@ -984,6 +1066,9 @@ export class ExtensionRunner {
     this._phaseCache = null;
     if (hadCapabilities) {
       this.notifyCapabilitiesChanged();
+    }
+    if (hadUiContributions) {
+      this.notifyUiContributionsChanged();
     }
   }
 }

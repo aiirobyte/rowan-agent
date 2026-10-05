@@ -5,7 +5,15 @@ export type {
   ToolCall,
   ToolResult,
 } from "./agent";
-export type { LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn, ThinkingLevel } from "@rowan-agent/models";
+export type {
+  LlmRequest,
+  LlmStreamEvent,
+  ProviderActivity,
+  ProviderCallContext,
+  ProviderStreamFn,
+  StreamFn,
+  ThinkingLevel,
+} from "@rowan-agent/models";
 
 export * from "./model";
 export * from "./tool";

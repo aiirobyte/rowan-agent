@@ -93,27 +93,27 @@ export interface PhaseContext {
 /** JSON-safe structural defaults declared by a Phase's `input` mapping. */
 export type PhaseInput = Readonly<Record<string, JsonValue>>;
 
-/** JSON-safe option metadata exposed by a Phase to a host Settings surface. */
-export interface PhaseSettingsOption {
+/** JSON-safe option metadata exposed to a host Settings surface. */
+export interface SettingsOption {
   value: string;
   label: string;
   description?: string;
   disabled?: boolean;
 }
 
-export interface PhaseSettingsBadge {
+export interface SettingsBadge {
   label: string;
   tone?: "neutral" | "success" | "review" | "danger";
 }
 
-export interface PhaseSettingsItem {
+export interface SettingsItem {
   id: string;
   title: string;
   description?: string;
-  badges?: readonly PhaseSettingsBadge[];
+  badges?: readonly SettingsBadge[];
 }
 
-export type PhaseSettingsControl =
+export type SettingsControl =
   | {
       type: "boolean";
       path: string;
@@ -136,7 +136,7 @@ export type PhaseSettingsControl =
       path: string;
       label: string;
       description?: string;
-      options: readonly PhaseSettingsOption[];
+      options: readonly SettingsOption[];
     }
   | {
       type: "text";
@@ -152,38 +152,28 @@ export type PhaseSettingsControl =
       path: string;
       label: string;
       description?: string;
-      items: readonly PhaseSettingsItem[];
-      fields: readonly PhaseSettingsControl[];
+      items: readonly SettingsItem[];
+      fields: readonly SettingsControl[];
       add?: {
         label: string;
         idLabel?: string;
-        fields: readonly PhaseSettingsControl[];
+        fields: readonly SettingsControl[];
       };
       removeLabel?: string;
     };
 
-export interface PhaseSettingsSection {
+export interface SettingsSection {
   id: string;
   title: string;
   description?: string;
-  controls: readonly PhaseSettingsControl[];
+  controls: readonly SettingsControl[];
 }
 
-/** Declarative, host-neutral Settings surface contributed by a Phase. */
-export interface PhaseSettingsDefinition {
+/** Declarative, host-neutral Settings surface. */
+export interface SettingsDefinition {
   description?: string;
-  sections: readonly PhaseSettingsSection[];
+  sections: readonly SettingsSection[];
 }
-
-/** Host context is intentionally opaque beyond the effective configuration. */
-export interface PhaseSettingsContext {
-  configuration: Readonly<Record<string, unknown>>;
-  metadata?: Readonly<Record<string, unknown>>;
-}
-
-export type PhaseSettingsProvider = (
-  context: PhaseSettingsContext,
-) => PhaseSettingsDefinition | Promise<PhaseSettingsDefinition>;
 
 /**
  * Frontmatter properties parsed from PHASE.md

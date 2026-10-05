@@ -3,13 +3,14 @@ import type {
   MessageDelta,
   ModelRetry,
   PhaseStatusEvent,
+  ProviderActivityEvent,
   RunId,
   ThinkingDelta,
   ToolCallDelta,
   ToolProgress,
 } from "../runtime-events";
 
-export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry;
+export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry | ProviderActivityEvent;
 
 const MAX_BUFFERED_EVENTS = 128;
 const MAX_BUFFERED_TEXT = 64 * 1024;
@@ -65,6 +66,31 @@ export class TransientRunEventSubscription {
       && previous.providerToolCallId === event.providerToolCallId
     ) {
       this.queue[this.queue.length - 1] = event;
+    } else if (
+      event.kind === "provider_activity"
+      && event.activity.type === "tool_call"
+    ) {
+      const toolCallId = event.activity.id;
+      let index = -1;
+      for (let i = this.queue.length - 1; i >= 0; i -= 1) {
+        const existing = this.queue[i];
+        if (
+          existing
+          && existing.kind === "provider_activity"
+          && existing.runId === event.runId
+          && existing.activity.type === "tool_call"
+          && existing.activity.id === toolCallId
+        ) {
+          index = i;
+          break;
+        }
+      }
+      if (index !== -1) {
+        this.queue[index] = event;
+      } else {
+        if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
+        this.queue.push(event);
+      }
     } else {
       if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
       this.queue.push(event);
@@ -83,7 +109,9 @@ export class TransientRunEventSubscription {
       for (let index = this.queue.length - 1; index >= 0; index -= 1) {
         const event = this.queue[index];
         if (
-          event?.executionId === executionId
+          event
+          && "executionId" in event
+          && event.executionId === executionId
           && !(preserveCompletedPhaseStatus
             && event.kind === "phase_status"
             && event.status.state === "completed")

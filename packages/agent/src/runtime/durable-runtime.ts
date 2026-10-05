@@ -52,7 +52,7 @@ import { InMemoryConfigProvider } from "./config-provider";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
+import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
 import { assertJsonValue, isJsonValue } from "./json";
@@ -202,6 +202,17 @@ export class AgentRuntime implements AgentRuntimeContract {
   readonly host: ExtensionHost;
   private readonly resources: RuntimeBootstrapRegistry;
   private readonly startedRuns = new Set<string>();
+  private readonly liveInteractions = new Map<
+    RunId,
+    Map<
+      string,
+      {
+        interaction: RunInteraction;
+        resolve: (val: JsonValue) => void;
+        reject: (err: unknown) => void;
+      }
+    >
+  >();
   private heartbeat?: ReturnType<typeof setInterval>;
   private pumping = false;
   private closed = false;
@@ -244,6 +255,13 @@ export class AgentRuntime implements AgentRuntimeContract {
   }
 
   private async handleRunEnd(runId: RunId, agentId: AgentId, outcome: unknown): Promise<void> {
+    const runLive = this.liveInteractions.get(runId);
+    if (runLive) {
+      for (const live of runLive.values()) {
+        live.reject(new RunInteractionCancelledError("Run ended."));
+      }
+      this.liveInteractions.delete(runId);
+    }
     if (this.startedRuns.has(runId)) {
       this.startedRuns.delete(runId);
       try {
@@ -522,12 +540,79 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.resources.extensionRunner.onCapabilitiesChanged(listener);
   }
 
+  listUiContributions(): readonly import("../extensions").UiContribution[] {
+    this.assertOpen();
+    return this.resources.extensionRunner.getUiContributions();
+  }
+
+  onUiContributionsChanged(listener: (contributions: readonly import("../extensions").UiContribution[]) => void): () => void {
+    this.assertOpen();
+    return this.resources.extensionRunner.onUiContributionsChanged(listener);
+  }
+
+  triggerUiAction(event: { contributionId: string; actionId: string; scope?: import("../extensions").ScopeRef }): void {
+    this.assertOpen();
+    this.resources.extensionRunner.triggerUiAction(event);
+  }
+
+  private liveInteract(runId: RunId, request: RunInteractionRequest, signal: AbortSignal): Promise<JsonValue> {
+    if (signal.aborted) {
+      return Promise.reject(signal.reason ?? new Error("Run aborted"));
+    }
+    const interactionId = request.id ?? (createId("interaction") as string);
+    const interaction: RunInteraction = {
+      id: interactionId,
+      phase: "default",
+      kind: request.kind,
+      prompt: request.prompt,
+      payload: request.payload,
+      toolCallId: request.toolCallId,
+      createdAt: new Date().toISOString(),
+      status: "pending",
+      result: request.result,
+    };
+
+    let runLive = this.liveInteractions.get(runId);
+    if (!runLive) {
+      runLive = new Map();
+      this.liveInteractions.set(runId, runLive);
+    }
+
+    return new Promise<JsonValue>((resolve, reject) => {
+      const onAbort = () => {
+        runLive?.delete(interactionId);
+        if (runLive && runLive.size === 0) this.liveInteractions.delete(runId);
+        signal.removeEventListener("abort", onAbort);
+        reject(signal.reason ?? new Error("Run aborted"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      runLive!.set(interactionId, {
+        interaction,
+        resolve: (val) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(val);
+        },
+        reject: (err) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(err);
+        },
+      });
+    });
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
     for (const execution of this.executions.values()) execution.controller.abort();
     this.executions.clear();
+    for (const runLive of this.liveInteractions.values()) {
+      for (const live of runLive.values()) {
+        live.reject(new RunInteractionCancelledError("Runtime closed."));
+      }
+    }
+    this.liveInteractions.clear();
     this.transientEvents.close();
     for (const subscription of this.consumers.values()) subscription.controller.abort();
     await this.resources.closeExtensions();
@@ -536,7 +621,15 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async snapshot(runId: RunId): Promise<RunSnapshot> {
     this.assertOpen();
-    return this.owned.snapshotRun(runId);
+    const snap = await this.owned.snapshotRun(runId);
+    const runLive = this.liveInteractions.get(runId);
+    if (runLive && runLive.size > 0 && snap.state === "running") {
+      return {
+        ...snap,
+        interactions: [...runLive.values()].map((l) => l.interaction),
+      };
+    }
+    return snap;
   }
 
   async history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> {
@@ -546,6 +639,21 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async respondInteraction(runId: RunId, input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void> {
     this.assertOpen();
+    const runLive = this.liveInteractions.get(runId);
+    const live = runLive?.get(input.interactionId);
+    if (live) {
+      runLive!.delete(input.interactionId);
+      if (runLive!.size === 0) this.liveInteractions.delete(runId);
+      if (input.cancel) {
+        live.reject(new RunInteractionCancelledError("Run interaction cancelled."));
+      } else if (input.input !== undefined) {
+        live.resolve(input.input);
+      } else {
+        live.reject(new TypeError("respondInteraction requires input or cancel: true"));
+      }
+      return;
+    }
+
     const snapshot = await this.owned.snapshotRun(runId);
     if (snapshot.state !== "input_required" || !snapshot.interactions.some((interaction) => interaction.id === input.interactionId)) {
       throw new RuntimeError("input_request_conflict", { runId, interactionId: input.interactionId, reason: "not_found" });
@@ -556,6 +664,13 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async cancel(runId: RunId, reason?: string): Promise<RunBoundary> {
     this.assertOpen();
+    const runLive = this.liveInteractions.get(runId);
+    if (runLive) {
+      for (const live of runLive.values()) {
+        live.reject(new RunInteractionCancelledError(reason ?? "Agent run stopped."));
+      }
+      this.liveInteractions.delete(runId);
+    }
     const done = this.executionDone.get(runId);
     if (done) {
       this.cancellationRequested.add(runId);
@@ -924,9 +1039,25 @@ export class AgentRuntime implements AgentRuntimeContract {
             error: event.error,
           });
         },
+        onProviderActivity: (event) => {
+          const active = this.executions.get(run.id);
+          if (
+            this.closed
+            || controller.signal.aborted
+            || active?.executionId !== claim!.execution.executionId
+          ) return;
+          this.transientEvents.publish({
+            kind: "provider_activity",
+            durability: "transient",
+            runId: event.runId,
+            turn: event.turn,
+            activity: event.activity,
+          });
+        },
         retryDelayMs: this.retryDelayMs,
         onContext: assembly.setContext,
         runtime: {
+          interact: (request) => this.liveInteract(run.id, request, controller.signal),
           tools: ({ toolCall, contentBlocks, driver }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({

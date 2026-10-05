@@ -2,12 +2,21 @@
  * Extension types — simplified for the new hook-based system.
  */
 
-import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
+import type { Phase, PhaseContext, PhaseOutput, SettingsDefinition } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
 import type { JsonObject, JsonValue } from "../runtime-events";
 
 export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
+
+// ---------------------------------------------------------------------------
+// UI contributions
+// ---------------------------------------------------------------------------
+
+export type UiSlot = "settings" | "model-picker";
+export type UiContribution =
+  | { slot: "settings"; id: string; title: string; description?: string; settings: SettingsDefinition }
+  | { slot: "model-picker"; id: string; provider: string; status?: { kind: "ready" | "needs-setup" | "error"; message?: string }; actions?: { id: string; label: string }[] };
 
 // ---------------------------------------------------------------------------
 // Host & scope types
@@ -132,11 +141,11 @@ export type ExtensionPackageManifest = {
 // ---------------------------------------------------------------------------
 
 /**
- * Tool definition for registering LLM-callable tools via `api.tool.register()`.
+ * Tool definition for registering LLM-callable tools via `api.tools.register()`.
  *
  * @example
  * ```typescript
- * api.tool.register({
+ * api.tools.register({
  *   name: "search_docs",
  *   description: "Search documentation",
  *   parameters: { type: "object", properties: { query: { type: "string" } } },
@@ -239,6 +248,7 @@ export interface Extension {
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
   capabilities: Map<string, ExtensionCapabilityContribution>;
+  uiContributions: Map<string, UiContribution>;
   cleanup: Array<() => void | Promise<void>>;
   disposer?: ExtensionDisposer;
   runtime: ExtensionRuntime;

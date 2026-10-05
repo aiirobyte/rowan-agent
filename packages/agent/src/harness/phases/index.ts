@@ -7,14 +7,12 @@ export type {
   PhaseStatusState,
   PhaseStatus,
   PhaseRegistry,
-  PhaseSettingsBadge,
-  PhaseSettingsContext,
-  PhaseSettingsControl,
-  PhaseSettingsDefinition,
-  PhaseSettingsItem,
-  PhaseSettingsOption,
-  PhaseSettingsProvider,
-  PhaseSettingsSection,
+  SettingsBadge,
+  SettingsControl,
+  SettingsDefinition,
+  SettingsItem,
+  SettingsOption,
+  SettingsSection,
 } from "./types";
 export { parsePhaseInput, phaseInputSchema, preparePhasePayload } from "./input";
 export type { PhaseInputValue } from "./input";
@@ -27,7 +25,7 @@ export type {
 } from "./interactions";
 export { RunInteractionBoundary, RunInteractionCancelledError } from "./interactions";
 
-export { loadPhase, loadPhaseSettings, loadPhases, reloadPhases, readPhaseContent } from "./loader";
+export { loadPhase, loadPhases, reloadPhases, readPhaseContent } from "./loader";
 export {
   COMPACT_PHASE_ID,
   DEFAULT_PHASE_ID,
