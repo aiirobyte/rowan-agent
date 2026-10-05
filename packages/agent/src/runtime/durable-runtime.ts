@@ -1,10 +1,10 @@
 import { mkdir, chmod, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { createModelStream } from "@rowan-agent/models";
+import { createModelStream, isValidToolProgress } from "@rowan-agent/models";
 import type { AgentMessage, ModelRef } from "../protocol";
-import type { ContentBlock, StreamFn } from "@rowan-agent/models";
-import { createId } from "../utils";
+import type { StreamFn } from "@rowan-agent/models";
+import { createId, combineSignals, withAbort } from "../utils";
 import { executeOnce } from "./execution";
 import { ConfigCommandService } from "./config-commands";
 import type {
@@ -40,8 +40,21 @@ import type {
 import {
   assertEntryPhases,
   assertToolExecutionResult,
-  thinkingLevelFromMessages,
+  thinkingLevelFromUserInput,
 } from "./contracts";
+import type {
+  ContentBlock,
+  ScopeRef,
+  ToolAnnotations,
+  ToolCall as AcpToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallOptions,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+  ToolProgress,
+} from "@rowan-agent/models";
 import type { AgentId, AssistantMessage, ExecutionId, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
@@ -52,10 +65,18 @@ import { InMemoryConfigProvider } from "./config-provider";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
+import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
+import { defaultToolCallContent } from "./durable-store";
 import { assertJsonValue, isJsonValue } from "./json";
+import {
+  mergeToolCall,
+  isValidPresentationOutput,
+  type ToolCallPresentationInput,
+  type ToolCallPresentationOutput,
+  type ToolCallMergeTarget,
+} from "./tool-call-merge";
 import { TransientRunEventHub } from "./transient-run-events";
 import {
   type LoadInput,
@@ -63,7 +84,7 @@ import {
   type ResourceKind,
 } from "./resource-registry";
 import { RuntimeBootstrapRegistry, RuntimeExtensionLifetime } from "./extension-lifetime";
-import { InMemoryExtensionHost, resolveScopeFromMetadata } from "../extensions/host";
+import { InMemoryExtensionHost } from "../extensions/host";
 import type { ExtensionHost } from "../extensions/types";
 import type { AgentDefinition } from "../harness/definitions";
 import type { Phase } from "../harness/phases/types";
@@ -180,9 +201,64 @@ async function spillLargeToolResult(
   await writeFile(path, serialized, { encoding: "utf8", mode: 0o600 });
   await chmod(path, 0o600).catch(() => undefined);
   const preview = new TextDecoder().decode(bytes.subarray(0, MAX_INLINE_TOOL_RESULT_BYTES));
+  const truncatedText = `${preview}\n[truncated]\n\n[Full result: ${path}, offset 0]`;
+  if (Array.isArray(result.content)) {
+    return {
+      ...result,
+      content: [{ type: "text", text: truncatedText }],
+    };
+  }
+  if (result.ok) {
+    return {
+      ok: true,
+      content: truncatedText,
+      ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    };
+  }
   return {
-    ...result,
-    content: `${preview}\n[truncated]\n\n[Full result: ${path}, offset 0]`,
+    ok: false,
+    content: truncatedText,
+    error: (result as { error?: string }).error ?? "Tool execution failed.",
+    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+  };
+}
+
+async function presentToolCall(
+  tool: DurableTool,
+  call: ToolCallPresentationInput,
+): Promise<ToolCallPresentationOutput | undefined> {
+  if (!tool.present) return undefined;
+  try {
+    const res = await tool.present(call);
+    if (!res) return undefined;
+    if (!isValidPresentationOutput(res)) {
+      console.warn(`Tool "${tool.name}" present() returned invalid shape for status "${call.status}":`, res);
+      return undefined;
+    }
+    return res;
+  } catch (err) {
+    console.warn(`Tool "${tool.name}" present() threw for status "${call.status}":`, err);
+    return undefined;
+  }
+}
+
+async function presentToolPending(
+  tool: DurableTool,
+  args: JsonValue,
+): Promise<{
+  title: string;
+  kind: ToolKind;
+  locations?: ToolCallLocation[];
+  content?: ToolCallContent[];
+  _meta?: JsonObject;
+}> {
+  const pres = await presentToolCall(tool, { status: "pending", args });
+  return {
+    title: pres?.title ?? tool.annotations?.title ?? tool.name,
+    kind: tool.kind ?? "other",
+    ...(pres?.locations !== undefined ? { locations: pres.locations } : {}),
+    ...(pres?.content !== undefined ? { content: pres.content } : {}),
+    ...(pres?._meta !== undefined ? { _meta: pres._meta } : {}),
   };
 }
 
@@ -202,6 +278,17 @@ export class AgentRuntime implements AgentRuntimeContract {
   readonly host: ExtensionHost;
   private readonly resources: RuntimeBootstrapRegistry;
   private readonly startedRuns = new Set<string>();
+  private readonly liveInteractions = new Map<
+    RunId,
+    Map<
+      string,
+      {
+        interaction: RunInteraction;
+        resolve: (val: JsonValue) => void;
+        reject: (err: unknown) => void;
+      }
+    >
+  >();
   private heartbeat?: ReturnType<typeof setInterval>;
   private pumping = false;
   private closed = false;
@@ -244,6 +331,13 @@ export class AgentRuntime implements AgentRuntimeContract {
   }
 
   private async handleRunEnd(runId: RunId, agentId: AgentId, outcome: unknown): Promise<void> {
+    const runLive = this.liveInteractions.get(runId);
+    if (runLive) {
+      for (const live of runLive.values()) {
+        live.reject(new RunInteractionCancelledError("Run ended."));
+      }
+      this.liveInteractions.delete(runId);
+    }
     if (this.startedRuns.has(runId)) {
       this.startedRuns.delete(runId);
       try {
@@ -379,6 +473,8 @@ export class AgentRuntime implements AgentRuntimeContract {
     options: {
       idempotencyKey: string;
       metadata?: Metadata;
+      scope?: ScopeRef;
+      cwd?: string;
       phasePayload?: JsonValue;
       entryPhases?: ReadonlyArray<EntryPhaseSpec>;
     },
@@ -420,6 +516,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       agentId,
       input,
       ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      ...(options.scope === undefined ? {} : { scope: options.scope }),
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(phasePayload === undefined ? {} : { phasePayload }),
       ...(options.entryPhases === undefined ? {} : { entryPhases: options.entryPhases }),
       ...(pinnedConfigToken === agent.currentConfigToken ? {} : { pinnedConfigToken }),
@@ -522,12 +620,79 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.resources.extensionRunner.onCapabilitiesChanged(listener);
   }
 
+  listUiContributions(): readonly import("../extensions").UiContribution[] {
+    this.assertOpen();
+    return this.resources.extensionRunner.getUiContributions();
+  }
+
+  onUiContributionsChanged(listener: (contributions: readonly import("../extensions").UiContribution[]) => void): () => void {
+    this.assertOpen();
+    return this.resources.extensionRunner.onUiContributionsChanged(listener);
+  }
+
+  triggerUiAction(event: { contributionId: string; actionId: string; scope?: import("../extensions").ScopeRef }): void {
+    this.assertOpen();
+    this.resources.extensionRunner.triggerUiAction(event);
+  }
+
+  private liveInteract(runId: RunId, request: RunInteractionRequest, signal: AbortSignal): Promise<JsonValue> {
+    if (signal.aborted) {
+      return Promise.reject(signal.reason ?? new Error("Run aborted"));
+    }
+    const interactionId = request.id ?? (createId("interaction") as string);
+    const interaction: RunInteraction = {
+      id: interactionId,
+      phase: "default",
+      kind: request.kind,
+      prompt: request.prompt,
+      payload: request.payload,
+      toolCallId: request.toolCallId,
+      createdAt: new Date().toISOString(),
+      status: "pending",
+      result: request.result,
+    };
+
+    let runLive = this.liveInteractions.get(runId);
+    if (!runLive) {
+      runLive = new Map();
+      this.liveInteractions.set(runId, runLive);
+    }
+
+    return new Promise<JsonValue>((resolve, reject) => {
+      const onAbort = () => {
+        runLive?.delete(interactionId);
+        if (runLive && runLive.size === 0) this.liveInteractions.delete(runId);
+        signal.removeEventListener("abort", onAbort);
+        reject(signal.reason ?? new Error("Run aborted"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      runLive!.set(interactionId, {
+        interaction,
+        resolve: (val) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(val);
+        },
+        reject: (err) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(err);
+        },
+      });
+    });
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
     for (const execution of this.executions.values()) execution.controller.abort();
     this.executions.clear();
+    for (const runLive of this.liveInteractions.values()) {
+      for (const live of runLive.values()) {
+        live.reject(new RunInteractionCancelledError("Runtime closed."));
+      }
+    }
+    this.liveInteractions.clear();
     this.transientEvents.close();
     for (const subscription of this.consumers.values()) subscription.controller.abort();
     await this.resources.closeExtensions();
@@ -536,7 +701,15 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async snapshot(runId: RunId): Promise<RunSnapshot> {
     this.assertOpen();
-    return this.owned.snapshotRun(runId);
+    const snap = await this.owned.snapshotRun(runId);
+    const runLive = this.liveInteractions.get(runId);
+    if (runLive && runLive.size > 0 && snap.state === "running") {
+      return {
+        ...snap,
+        interactions: [...runLive.values()].map((l) => l.interaction),
+      };
+    }
+    return snap;
   }
 
   async history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> {
@@ -546,6 +719,21 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async respondInteraction(runId: RunId, input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void> {
     this.assertOpen();
+    const runLive = this.liveInteractions.get(runId);
+    const live = runLive?.get(input.interactionId);
+    if (live) {
+      runLive!.delete(input.interactionId);
+      if (runLive!.size === 0) this.liveInteractions.delete(runId);
+      if (input.cancel) {
+        live.reject(new RunInteractionCancelledError("Run interaction cancelled."));
+      } else if (input.input !== undefined) {
+        live.resolve(input.input);
+      } else {
+        live.reject(new TypeError("respondInteraction requires input or cancel: true"));
+      }
+      return;
+    }
+
     const snapshot = await this.owned.snapshotRun(runId);
     if (snapshot.state !== "input_required" || !snapshot.interactions.some((interaction) => interaction.id === input.interactionId)) {
       throw new RuntimeError("input_request_conflict", { runId, interactionId: input.interactionId, reason: "not_found" });
@@ -556,6 +744,13 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async cancel(runId: RunId, reason?: string): Promise<RunBoundary> {
     this.assertOpen();
+    const runLive = this.liveInteractions.get(runId);
+    if (runLive) {
+      for (const live of runLive.values()) {
+        live.reject(new RunInteractionCancelledError(reason ?? "Agent run stopped."));
+      }
+      this.liveInteractions.delete(runId);
+    }
     const done = this.executionDone.get(runId);
     if (done) {
       this.cancellationRequested.add(runId);
@@ -618,6 +813,7 @@ export class AgentRuntime implements AgentRuntimeContract {
   private async execute(run: RunRecord): Promise<void> {
     let claim: import("./contracts").RunClaim | undefined;
     let executionRevision = run.revision;
+    let toolQueue = Promise.resolve();
     try {
       const agent = await this.requireAgent(run.agentId);
       let token = run.pinnedConfigToken ?? agent.currentConfigToken;
@@ -709,7 +905,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(run.agentId),
       });
-      let toolQueue = Promise.resolve();
+      toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream
         ? config.model as ModelRef
         : { provider: config.model.provider, id: config.model.id } satisfies ModelRef;
@@ -752,9 +948,11 @@ export class AgentRuntime implements AgentRuntimeContract {
           input: typeof run.input === "string" ? run.input : run.input.content,
           ...(agent.metadata === undefined ? {} : { agentMetadata: agent.metadata }),
           ...(run.metadata === undefined ? {} : { runMetadata: run.metadata }),
+          ...(run.scope === undefined ? {} : { scope: run.scope }),
+          ...(run.cwd === undefined ? {} : { cwd: run.cwd }),
         },
         model,
-        thinkingLevel: thinkingLevelFromMessages(context.messages),
+        thinkingLevel: thinkingLevelFromUserInput(run.input),
         stream,
         maxAttempts: config.maxAttempts,
         checkpoint: claim!.run.checkpoint,
@@ -924,10 +1122,44 @@ export class AgentRuntime implements AgentRuntimeContract {
             error: event.error,
           });
         },
+        onToolReport: (event) => {
+          const active = this.executions.get(run.id);
+          if (
+            this.closed
+            || controller.signal.aborted
+            || active?.executionId !== claim!.execution.executionId
+          ) return;
+          this.transientEvents.publish({
+            kind: "tool_state_changed",
+            durability: "transient",
+            runId: event.runId,
+            executionId: claim!.execution.executionId,
+            transition: { from: null, to: event.update.status ?? "in_progress" },
+            toolCall: event.update,
+            external: true,
+          });
+          const task = toolQueue.then(async () => {
+            const active = this.executions.get(run.id);
+            if (
+              this.closed
+              || controller.signal.aborted
+              || active?.executionId !== claim!.execution.executionId
+            ) return;
+            const recorded = await this.owned.recordToolCall({
+              runId: run.id,
+              execution: claim!.execution,
+              update: event.update,
+              external: true,
+            });
+            executionRevision = recorded.runRevision;
+          });
+          toolQueue = task.then(() => undefined, () => undefined);
+        },
         retryDelayMs: this.retryDelayMs,
         onContext: assembly.setContext,
         runtime: {
-          tools: ({ toolCall, contentBlocks, driver }: ToolRunnerInput) => {
+          interact: (request) => this.liveInteract(run.id, request, controller.signal),
+          tools: ({ toolCall, contentBlocks, driver, options }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -939,6 +1171,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 contentBlocks,
                 signal: controller.signal,
                 driver,
+                options,
                 onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
@@ -947,7 +1180,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
           },
-          toolsBatch: ({ toolCalls, contentBlocks, driver }: Parameters<ToolBatchRunner>[0]) => {
+          toolsBatch: ({ toolCalls, contentBlocks, driver, options }: Parameters<ToolBatchRunner>[0]) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -959,6 +1192,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 contentBlocks,
                 signal: controller.signal,
                 driver,
+                options,
                 onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
@@ -980,6 +1214,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           result = await executeModel(executionContext);
         }
       }
+      await toolQueue;
       if (this.cancellationRequested.has(run.id) || controller.signal.aborted) {
         const output = latestAssistant(run, result.messages, executionContext.messages.length, true);
         const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
@@ -1064,6 +1299,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     } catch (error) {
       if (!claim && error instanceof RuntimeError && ["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) return;
       if (claim) {
+        await toolQueue;
         if (this.cancellationRequested.has(run.id)) {
           const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
           await this.owned.cancelRun({
@@ -1142,9 +1378,11 @@ export class AgentRuntime implements AgentRuntimeContract {
     contentBlocks?: readonly ContentBlock[];
     signal: AbortSignal;
     driver?: RunInteractionDriver;
+    options?: ToolCallOptions;
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
-    const scope = resolveScopeFromMetadata(input.run.metadata);
+    const scope = input.run.scope ?? [];
+    const cwd = input.run.cwd;
     const turn: JsonObject =
       typeof input.run.input === "object" && input.run.input !== null && !Array.isArray(input.run.input)
         ? (input.run.input as JsonObject)
@@ -1190,6 +1428,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           toolCallId,
           providerToolCallId: toolCall.id,
           scope,
+          ...(cwd ? { cwd } : {}),
           turn,
           interaction: createRunInteractionDriver({
             currentPhase: "default",
@@ -1217,6 +1456,12 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
 
       if (!hasInteraction) {
+        const startPresentations = await Promise.all(
+          input.toolCalls.map(async (tc) => {
+            const t = input.toolConfig.tools.find((c) => c.name === tc.name);
+            return t ? presentToolPending(t, toJsonValue(tc.args)) : undefined;
+          }),
+        );
         const reserved = await this.owned.reserveToolCalls({
           runId: input.run.id,
           execution: input.execution,
@@ -1228,6 +1473,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             providerToolCallId: tc.id,
             name: tc.name,
             args: toJsonValue(tc.args),
+            ...(startPresentations[i] ?? {}),
           })),
         });
         setRevision(reserved.run.revision);
@@ -1254,6 +1500,8 @@ export class AgentRuntime implements AgentRuntimeContract {
               toolCallId,
               state: "failed",
               result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+              title: toolCall.name,
+              kind: "other",
             });
             setRevision(failed.run.revision);
             results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
@@ -1269,125 +1517,67 @@ export class AgentRuntime implements AgentRuntimeContract {
               toolCallId,
               state: "failed",
               result: { ok: false, content: null, error: decision.reason },
+              title: durableTool.annotations?.title ?? durableTool.name,
+              kind: durableTool.kind ?? "other",
             });
             setRevision(failed.run.revision);
             results.push(protocolFailure(decision.reason));
             continue;
           }
 
-          let progressActive = false;
-          const context = {
-            agentId: input.run.agentId,
-            runId: input.run.id,
-            ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
-            ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
-            toolCallId,
-            providerToolCallId,
-            scope,
-            turn,
-            interaction: createToolInteractionDriver(input.driver!, {
-              toolCallId,
-              toolCallIds,
-              toolCalls: input.toolCalls,
-              pendingIndex: i,
-              completedResults: results,
+          const currentToolState: ToolCallMergeTarget = {
+            ...(startPresentations[i] ?? {
+              title: durableTool.annotations?.title ?? durableTool.name,
+              kind: durableTool.kind ?? "other",
             }),
-            reportProgress: (progress: JsonValue) => {
-              const active = this.executions.get(input.run.id);
-              if (
-                !progressActive
-                || this.closed
-                || input.signal.aborted
-                || active?.executionId !== input.execution.executionId
-                || !isJsonValue(progress)
-              ) return;
-              let copy: JsonValue;
-              try {
-                if (JSON.stringify(progress).length > 64 * 1024) return;
-                copy = structuredClone(progress);
-              } catch {
-                return;
-              }
-              this.transientEvents.publish({
-                kind: "tool_progress",
-                durability: "transient",
-                runId: input.run.id,
-                executionId: input.execution.executionId,
-                toolCallId,
-                progress: copy,
-              });
-            },
-          } as const;
+            rawInput: toJsonValue(toolCall.args),
+          };
+
+          const inProgressPres = await presentToolCall(durableTool, {
+            status: "in_progress",
+            args: toJsonValue(toolCall.args),
+          });
+          if (inProgressPres) mergeToolCall(currentToolState, inProgressPres);
 
           const started = await this.owned.startToolCall({
             runId: input.run.id,
             execution: input.execution,
             expectedRevision: revision,
             toolCallId,
+            title: currentToolState.title ?? durableTool.annotations?.title ?? durableTool.name,
+            kind: currentToolState.kind ?? durableTool.kind ?? "other",
+            ...(currentToolState.locations !== undefined ? { locations: currentToolState.locations } : {}),
+            ...(currentToolState.content !== undefined ? { content: currentToolState.content } : {}),
+            ...(currentToolState._meta !== undefined ? { _meta: currentToolState._meta } : {}),
           });
           setRevision(started.run.revision);
-          progressActive = true;
 
-          try {
-            let result = await durableTool.execute(toJsonValue(toolCall.args), context, input.signal);
-            assertToolExecutionResult(result);
-            if (input.toolConfig.afterToolCall) {
-              result = await input.toolConfig.afterToolCall({
-                tool: durableTool,
-                result,
-                context,
-                signal: input.signal,
-              });
-            }
-            assertToolExecutionResult(result);
-            result = await spillLargeToolResult(
-              result,
-              this.archiveDirFor(input.run.agentId),
-              toolCall.name,
-            );
-            const committed = await this.owned.commitToolResult({
-              runId: input.run.id,
-              execution: input.execution,
-              expectedRevision: revision,
-              toolCallId,
-              state: result.ok ? "completed" : "failed",
-              result,
-            });
-            setRevision(committed.run.revision);
-            const projectedResult = await this.foldToolInteractionRecords(result, toolCallId, input.run.agentId);
-            results.push({
-              toolCallId: providerToolCallId,
-              toolName: toolCall.name,
-              ...projectedResult,
-            });
-          } catch (error) {
-            if (error instanceof RunInteractionBoundary) {
-              const suspended = await this.owned.suspendToolCall({
-                runId: input.run.id,
-                execution: input.execution,
-                expectedRevision: revision,
-                toolCallId,
-              });
-              setRevision(suspended.run.revision);
-              throw error;
-            }
-            if (error instanceof RunInteractionCancelledError) throw error;
-            const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
-            const indeterminate = await this.owned.commitToolResult({
-              runId: input.run.id,
-              execution: input.execution,
-              expectedRevision: revision,
-              toolCallId,
-              state: "indeterminate",
-              reason,
-              result: { ok: false, content: null, error: reason },
-            });
-            setRevision(indeterminate.run.revision);
-            results.push(protocolFailure(reason));
-          } finally {
-            progressActive = false;
-            this.transientEvents.clearTool(input.run.id, toolCallId);
-          }
+          const toolResult = await this.executeAndCommitTool({
+            runId: input.run.id,
+            agentId: input.run.agentId,
+            agentMetadata: input.agentMetadata,
+            runMetadata: input.run.metadata,
+            execution: input.execution,
+            revision,
+            setRevision,
+            toolCall,
+            durableTool,
+            toolCallId,
+            providerToolCallId,
+            scope,
+            cwd,
+            turn,
+            driver: input.driver,
+            toolCalls: input.toolCalls,
+            toolCallIds,
+            pendingIndex: i,
+            completedResults: results,
+            signal: input.signal,
+            afterToolCall: input.toolConfig.afterToolCall,
+            currentToolState,
+            options: input.options,
+          });
+          results.push(toolResult);
         }
 
         return { results, revision };
@@ -1437,22 +1627,57 @@ export class AgentRuntime implements AgentRuntimeContract {
           toolCallId,
           state: "failed",
           result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+          title: toolCall.name,
+          kind: "other",
         });
         setRevision(failed.run.revision);
         results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
         continue;
       }
 
-      let progressActive = false;
+      const pendingPres = await presentToolPending(durableTool, toJsonValue(toolCall.args));
+      const currentToolState: ToolCallMergeTarget = {
+        ...pendingPres,
+        rawInput: toJsonValue(toolCall.args),
+      };
+
       const resumedStart = suspension && index === suspension.pendingIndex
-        ? await this.owned.startToolCall({
-            runId: input.run.id,
-            execution: input.execution,
-            expectedRevision: revision,
-            toolCallId,
-          })
+        ? await (async () => {
+            const inProgressPres = await presentToolCall(durableTool, {
+              status: "in_progress",
+              args: toJsonValue(toolCall.args),
+            });
+            if (inProgressPres) mergeToolCall(currentToolState, inProgressPres);
+            return this.owned.startToolCall({
+              runId: input.run.id,
+              execution: input.execution,
+              expectedRevision: revision,
+              toolCallId,
+              title: currentToolState.title ?? durableTool.annotations?.title ?? durableTool.name,
+              kind: currentToolState.kind ?? durableTool.kind ?? "other",
+              ...(currentToolState.locations !== undefined ? { locations: currentToolState.locations } : {}),
+              ...(currentToolState.content !== undefined ? { content: currentToolState.content } : {}),
+              ...(currentToolState._meta !== undefined ? { _meta: currentToolState._meta } : {}),
+            });
+          })()
         : undefined;
       if (resumedStart) setRevision(resumedStart.run.revision);
+
+      const baseDriver = input.driver ?? createRunInteractionDriver({
+        currentPhase: "default",
+        attempt: 0,
+        status: "running",
+        metrics: { iterations: 0, phaseTransitions: [], compactionCount: 0, retryCount: 0, startedAt: new Date().toISOString(), startedAtMs: Date.now() },
+      }, "default", input.signal);
+
+      const interactionDriver = createToolInteractionDriver(baseDriver, {
+        toolCallId,
+        ...(suspension?.toolCallIds === undefined ? {} : { toolCallIds: suspension.toolCallIds }),
+        toolCalls: input.toolCalls,
+        pendingIndex: index,
+        completedResults: results,
+      });
+
       const context = {
         agentId: input.run.agentId,
         runId: input.run.id,
@@ -1461,39 +1686,10 @@ export class AgentRuntime implements AgentRuntimeContract {
         toolCallId,
         providerToolCallId,
         scope,
+        ...(cwd ? { cwd } : {}),
         turn,
-        interaction: createToolInteractionDriver(input.driver!, {
-          toolCallId,
-          ...(suspension?.toolCallIds === undefined ? {} : { toolCallIds: suspension.toolCallIds }),
-          toolCalls: input.toolCalls,
-          pendingIndex: index,
-          completedResults: results,
-        }),
-        reportProgress: (progress: JsonValue) => {
-          const active = this.executions.get(input.run.id);
-          if (
-            !progressActive
-            || this.closed
-            || input.signal.aborted
-            || active?.executionId !== input.execution.executionId
-            || !isJsonValue(progress)
-          ) return;
-          let copy: JsonValue;
-          try {
-            if (JSON.stringify(progress).length > 64 * 1024) return;
-            copy = structuredClone(progress);
-          } catch {
-            return;
-          }
-          this.transientEvents.publish({
-            kind: "tool_progress",
-            durability: "transient",
-            runId: input.run.id,
-            executionId: input.execution.executionId,
-            toolCallId,
-            progress: copy,
-          });
-        },
+        interaction: interactionDriver,
+        reportProgress: () => {},
       } as const;
 
       const answer = (suspension && index === suspension.pendingIndex)
@@ -1514,30 +1710,42 @@ export class AgentRuntime implements AgentRuntimeContract {
             if (!input.driver) {
               throw new Error("Tool call requested interaction but no interaction driver is active.");
             }
-            context.interaction.request(decision.interaction);
-            if (!(suspension && index === suspension.pendingIndex)) {
+            interactionDriver.request(decision.interaction);
+            if (!resumedStart) {
               const reserved = await this.owned.reserveToolCalls({
                 runId: input.run.id,
                 execution: input.execution,
                 expectedRevision: revision,
                 requestMessageId: createId("msg") as MessageId,
                 contentBlocks: input.contentBlocks,
-                calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
+                calls: [{
+                  toolCallId,
+                  providerToolCallId,
+                  name: toolCall.name,
+                  args: toJsonValue(toolCall.args),
+                  ...pendingPres,
+                }],
               });
               setRevision(reserved.run.revision);
             }
-            context.interaction.suspend();
+            interactionDriver.suspend();
           }
 
           if ("allow" in decision && !decision.allow) {
-            if (!(suspension && index === suspension.pendingIndex)) {
+            if (!resumedStart) {
               const reserved = await this.owned.reserveToolCalls({
                 runId: input.run.id,
                 execution: input.execution,
                 expectedRevision: revision,
                 requestMessageId: createId("msg") as MessageId,
                 contentBlocks: input.contentBlocks,
-                calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
+                calls: [{
+                  toolCallId,
+                  providerToolCallId,
+                  name: toolCall.name,
+                  args: toJsonValue(toolCall.args),
+                  ...pendingPres,
+                }],
               });
               setRevision(reserved.run.revision);
             }
@@ -1548,8 +1756,26 @@ export class AgentRuntime implements AgentRuntimeContract {
               toolCallId,
               state: "failed",
               result: { ok: false, content: null, error: decision.reason },
+              title: currentToolState.title ?? durableTool.annotations?.title ?? durableTool.name,
+              kind: currentToolState.kind ?? durableTool.kind ?? "other",
+              locations: currentToolState.locations,
+              content: currentToolState.content,
+              _meta: currentToolState._meta,
             });
             setRevision(failed.run.revision);
+            if (input.options?.onUpdate) {
+              try {
+                input.options.onUpdate(createMergedToolCall(
+                  toolCallId,
+                  "failed",
+                  currentToolState,
+                  durableTool.annotations?.title ?? durableTool.name,
+                  durableTool.kind ?? "other",
+                ));
+              } catch (err) {
+                console.warn(`Error in tool call onUpdate callback:`, err);
+              }
+            }
             results.push(protocolFailure(decision.reason));
             continue;
           }
@@ -1559,14 +1785,20 @@ export class AgentRuntime implements AgentRuntimeContract {
           throw error;
         }
         const reason = error instanceof Error ? error.message : "Tool policy rejected the call.";
-        if (!(suspension && index === suspension.pendingIndex)) {
+        if (!resumedStart) {
           const reserved = await this.owned.reserveToolCalls({
             runId: input.run.id,
             execution: input.execution,
             expectedRevision: revision,
             requestMessageId: createId("msg") as MessageId,
             contentBlocks: input.contentBlocks,
-            calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
+            calls: [{
+              toolCallId,
+              providerToolCallId,
+              name: toolCall.name,
+              args: toJsonValue(toolCall.args),
+              ...pendingPres,
+            }],
           });
           setRevision(reserved.run.revision);
         }
@@ -1577,96 +1809,374 @@ export class AgentRuntime implements AgentRuntimeContract {
           toolCallId,
           state: "failed",
           result: { ok: false, content: null, error: reason },
+          title: currentToolState.title ?? durableTool.annotations?.title ?? durableTool.name,
+          kind: currentToolState.kind ?? durableTool.kind ?? "other",
+          locations: currentToolState.locations,
+          content: currentToolState.content,
+          _meta: currentToolState._meta,
         });
         setRevision(failed.run.revision);
+        if (input.options?.onUpdate) {
+          try {
+            input.options.onUpdate(createMergedToolCall(
+              toolCallId,
+              "failed",
+              currentToolState,
+              durableTool.annotations?.title ?? durableTool.name,
+              durableTool.kind ?? "other",
+            ));
+          } catch (err) {
+            console.warn(`Error in tool call onUpdate callback:`, err);
+          }
+        }
         results.push(protocolFailure(reason));
         continue;
       }
 
-      const reserved = resumedStart ?? await (async () => {
-        const committed = await this.owned.reserveToolCalls({
+      if (!resumedStart) {
+        const reserved = await this.owned.reserveToolCalls({
           runId: input.run.id,
           execution: input.execution,
           expectedRevision: revision,
           requestMessageId: createId("msg") as MessageId,
           contentBlocks: input.contentBlocks,
-          calls: [{ toolCallId, providerToolCallId, name: toolCall.name, args: toJsonValue(toolCall.args) }],
-        });
-        setRevision(committed.run.revision);
-        return this.owned.startToolCall({
-          runId: input.run.id,
-          execution: input.execution,
-          expectedRevision: revision,
-          toolCallId,
-        });
-      })();
-      if (reserved) setRevision(reserved.run.revision);
-      progressActive = true;
-
-      try {
-        let result = await durableTool.execute(toJsonValue(toolCall.args), context, input.signal);
-        assertToolExecutionResult(result);
-        if (input.toolConfig.afterToolCall) {
-          result = await input.toolConfig.afterToolCall({
-            tool: durableTool,
-            result,
-            context,
-            signal: input.signal,
-          });
-        }
-        assertToolExecutionResult(result);
-        result = await spillLargeToolResult(
-          result,
-          this.archiveDirFor(input.run.agentId),
-          toolCall.name,
-        );
-        const committed = await this.owned.commitToolResult({
-          runId: input.run.id,
-          execution: input.execution,
-          expectedRevision: revision,
-          toolCallId,
-          state: result.ok ? "completed" : "failed",
-          result,
-        });
-        setRevision(committed.run.revision);
-        const projectedResult = await this.foldToolInteractionRecords(result, toolCallId, input.run.agentId);
-        results.push({
-          toolCallId: providerToolCallId,
-          toolName: toolCall.name,
-          ...projectedResult,
-        });
-      } catch (error) {
-        if (error instanceof RunInteractionBoundary) {
-          const suspended = await this.owned.suspendToolCall({
-            runId: input.run.id,
-            execution: input.execution,
-            expectedRevision: revision,
+          calls: [{
             toolCallId,
-          });
-          setRevision(suspended.run.revision);
-          throw error;
-        }
-        if (error instanceof RunInteractionCancelledError) throw error;
-        const reason = error instanceof Error ? error.message : "Tool execution outcome is indeterminate.";
-        const indeterminate = await this.owned.commitToolResult({
+            providerToolCallId,
+            name: toolCall.name,
+            args: toJsonValue(toolCall.args),
+            ...pendingPres,
+          }],
+        });
+        setRevision(reserved.run.revision);
+
+        const inProgressPres = await presentToolCall(durableTool, {
+          status: "in_progress",
+          args: toJsonValue(toolCall.args),
+        });
+        if (inProgressPres) mergeToolCall(currentToolState, inProgressPres);
+
+        const started = await this.owned.startToolCall({
           runId: input.run.id,
           execution: input.execution,
           expectedRevision: revision,
           toolCallId,
-          state: "indeterminate",
-          reason,
-          result: { ok: false, content: null, error: reason },
+          title: currentToolState.title ?? durableTool.annotations?.title ?? durableTool.name,
+          kind: currentToolState.kind ?? durableTool.kind ?? "other",
+          ...(currentToolState.locations !== undefined ? { locations: currentToolState.locations } : {}),
+          ...(currentToolState.content !== undefined ? { content: currentToolState.content } : {}),
+          ...(currentToolState._meta !== undefined ? { _meta: currentToolState._meta } : {}),
         });
-        setRevision(indeterminate.run.revision);
-        results.push(protocolFailure(reason));
-      } finally {
-        progressActive = false;
-        this.transientEvents.clearTool(input.run.id, toolCallId);
+        setRevision(started.run.revision);
       }
+
+      const toolResult = await this.executeAndCommitTool({
+        runId: input.run.id,
+        agentId: input.run.agentId,
+        agentMetadata: input.agentMetadata,
+        runMetadata: input.run.metadata,
+        execution: input.execution,
+        revision,
+        setRevision,
+        toolCall,
+        durableTool,
+        toolCallId,
+        providerToolCallId,
+        scope,
+        cwd,
+        turn,
+        driver: input.driver,
+        toolCalls: input.toolCalls,
+        toolCallIds: suspension?.toolCallIds,
+        pendingIndex: index,
+        completedResults: results,
+        signal: input.signal,
+        afterToolCall: input.toolConfig.afterToolCall,
+        currentToolState,
+        options: input.options,
+      });
+      results.push(toolResult);
     }
 
     input.driver?.clearCheckpoint();
     return { results, revision };
+  }
+
+  private async executeAndCommitTool(input: {
+    runId: RunId;
+    agentId: AgentId;
+    agentMetadata?: JsonObject;
+    runMetadata?: JsonObject;
+    execution: import("./contracts").ExecutionToken;
+    revision: number;
+    setRevision: (rev: number) => void;
+    toolCall: ToolCall;
+    durableTool: DurableTool;
+    toolCallId: ToolCallId;
+    providerToolCallId: string;
+    scope?: ScopeRef;
+    cwd?: string;
+    turn?: JsonObject;
+    driver?: RunInteractionDriver;
+    toolCalls: readonly ToolCall[];
+    toolCallIds?: readonly ToolCallId[];
+    pendingIndex: number;
+    completedResults: readonly ToolResult[];
+    signal: AbortSignal;
+    afterToolCall?: AfterToolCall;
+    currentToolState: ToolCallMergeTarget;
+    options?: ToolCallOptions;
+  }): Promise<ToolResult> {
+    let progressActive = true;
+    let progressQueue: Promise<void> = Promise.resolve();
+
+    const notifyUpdate = (toolCall: AcpToolCall, progress?: ToolProgress) => {
+      if (input.options?.onUpdate) {
+        try {
+          input.options.onUpdate(toolCall, progress);
+        } catch (err) {
+          console.warn(`Error in tool call onUpdate callback:`, err);
+        }
+      }
+    };
+
+    // 1. Notify start update
+    const startToolCall = createMergedToolCall(
+      input.toolCallId,
+      "in_progress",
+      input.currentToolState,
+      input.durableTool.annotations?.title ?? input.durableTool.name,
+      input.durableTool.kind ?? "other",
+    );
+    notifyUpdate(startToolCall);
+
+    const effectiveSignal = combineSignals(input.signal, input.options?.signal);
+
+    const baseDriver = input.driver ?? createRunInteractionDriver({
+      currentPhase: "default",
+      attempt: 0,
+      status: "running",
+      metrics: { iterations: 0, phaseTransitions: [], compactionCount: 0, retryCount: 0, startedAt: new Date().toISOString(), startedAtMs: Date.now() },
+    }, "default", effectiveSignal);
+    const interactionDriver = createToolInteractionDriver(baseDriver, {
+      toolCallId: input.toolCallId,
+      ...(input.toolCallIds === undefined ? {} : { toolCallIds: input.toolCallIds }),
+      toolCalls: input.toolCalls,
+      pendingIndex: input.pendingIndex,
+      completedResults: input.completedResults,
+    });
+
+    const context = {
+      agentId: input.agentId,
+      runId: input.runId,
+      ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
+      ...(input.runMetadata === undefined ? {} : { runMetadata: input.runMetadata }),
+      toolCallId: input.toolCallId,
+      providerToolCallId: input.providerToolCallId,
+      scope: input.scope,
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      turn: input.turn,
+      interaction: interactionDriver,
+      reportProgress: (progress: ToolProgress) => {
+        const active = this.executions.get(input.runId);
+        if (
+          !progressActive
+          || this.closed
+          || effectiveSignal.aborted
+          || active?.executionId !== input.execution.executionId
+        ) return;
+        if (!isValidToolProgress(progress)) {
+          console.warn(`Invalid progress report for tool "${input.durableTool.name}": expected valid ToolProgress shape with finite numbers.`);
+          return;
+        }
+        let copy: ToolProgress;
+        try {
+          if (JSON.stringify(progress).length > 64 * 1024) return;
+          copy = structuredClone(progress);
+        } catch {
+          return;
+        }
+        progressQueue = progressQueue.then(async () => {
+          if (!progressActive || this.closed || effectiveSignal.aborted) return;
+          const pres = await presentToolCall(input.durableTool, {
+            status: "in_progress",
+            args: toJsonValue(input.toolCall.args),
+            progress: copy,
+          });
+          if (pres) {
+            mergeToolCall(input.currentToolState, pres);
+            const progressToolCall = createMergedToolCall(
+              input.toolCallId,
+              "in_progress",
+              input.currentToolState,
+              input.durableTool.annotations?.title ?? input.durableTool.name,
+              input.durableTool.kind ?? "other",
+            );
+            this.transientEvents.publish({
+              kind: "tool_state_changed",
+              durability: "transient",
+              runId: input.runId,
+              executionId: input.execution.executionId,
+              transition: { from: "in_progress", to: "in_progress" },
+              toolCall: progressToolCall,
+            });
+            notifyUpdate(progressToolCall, copy);
+          }
+        }).catch((err) => {
+          console.warn(`Error handling progress report for tool "${input.durableTool.name}":`, err);
+        });
+      },
+    } as const;
+
+    try {
+      if (input.options?.signal?.aborted) {
+        const error = input.options.signal.reason instanceof Error
+          ? input.options.signal.reason
+          : new DOMException(
+              typeof input.options.signal.reason === "string" ? input.options.signal.reason : "Tool execution aborted.",
+              "AbortError",
+            );
+        throw error;
+      }
+      let result = await withAbort(
+        input.durableTool.execute(toJsonValue(input.toolCall.args), context, effectiveSignal),
+        input.options?.signal,
+      );
+      assertToolExecutionResult(result);
+      if (input.afterToolCall) {
+        result = await input.afterToolCall({
+          tool: input.durableTool,
+          result,
+          context,
+          signal: effectiveSignal,
+        });
+      }
+      assertToolExecutionResult(result);
+      result = await spillLargeToolResult(
+        result,
+        this.archiveDirFor(input.agentId),
+        input.toolCall.name,
+      );
+
+      await progressQueue.catch(() => {});
+
+      const finalState = result.ok ? "completed" : "failed";
+      const completionPres = await presentToolCall(input.durableTool, {
+        status: finalState,
+        args: toJsonValue(input.toolCall.args),
+        result,
+      });
+      if (completionPres) {
+        mergeToolCall(input.currentToolState, completionPres);
+      }
+
+      const rawOutput = "structuredContent" in result && result.structuredContent !== undefined
+        ? toJsonValue(result.structuredContent)
+        : toJsonValue(result.content);
+      if (input.currentToolState.rawOutput === undefined) {
+        input.currentToolState.rawOutput = rawOutput;
+      }
+
+      const committed = await this.owned.commitToolResult({
+        runId: input.runId,
+        execution: input.execution,
+        expectedRevision: input.revision,
+        toolCallId: input.toolCallId,
+        state: finalState,
+        result,
+        title: input.currentToolState.title ?? input.durableTool.annotations?.title ?? input.durableTool.name,
+        kind: input.currentToolState.kind ?? input.durableTool.kind ?? "other",
+        locations: input.currentToolState.locations,
+        content: input.currentToolState.content,
+        rawOutput: input.currentToolState.rawOutput,
+        _meta: input.currentToolState._meta,
+      });
+      input.setRevision(committed.run.revision);
+
+      const finalToolCall = createMergedToolCall(
+        input.toolCallId,
+        finalState,
+        input.currentToolState,
+        input.durableTool.annotations?.title ?? input.durableTool.name,
+        input.durableTool.kind ?? "other",
+      );
+      notifyUpdate(finalToolCall);
+
+      const projectedResult = await this.foldToolInteractionRecords(result, input.toolCallId, input.agentId);
+      const ok = "ok" in projectedResult && typeof projectedResult.ok === "boolean"
+        ? projectedResult.ok
+        : !projectedResult.isError;
+      return {
+        toolCallId: input.providerToolCallId,
+        toolName: input.toolCall.name,
+        ...projectedResult,
+        ok,
+      };
+    } catch (error) {
+      if (error instanceof RunInteractionBoundary) {
+        const suspended = await this.owned.suspendToolCall({
+          runId: input.runId,
+          execution: input.execution,
+          expectedRevision: input.revision,
+          toolCallId: input.toolCallId,
+        });
+        input.setRevision(suspended.run.revision);
+        throw error;
+      }
+      if (error instanceof RunInteractionCancelledError) throw error;
+
+      const isPerCallAbort = Boolean(input.options?.signal?.aborted && !input.signal.aborted);
+      const reason = error instanceof Error
+        ? error.message
+        : (isPerCallAbort ? "Tool execution aborted." : "Tool execution outcome is indeterminate.");
+
+      await progressQueue.catch(() => {});
+      const failurePres = await presentToolCall(input.durableTool, {
+        status: "failed",
+        args: toJsonValue(input.toolCall.args),
+        result: { ok: false, content: null, error: reason },
+      });
+      if (failurePres) {
+        mergeToolCall(input.currentToolState, failurePres);
+      }
+
+      const commitState = isPerCallAbort ? "failed" : "indeterminate";
+      const committed = await this.owned.commitToolResult({
+        runId: input.runId,
+        execution: input.execution,
+        expectedRevision: input.revision,
+        toolCallId: input.toolCallId,
+        state: commitState,
+        ...(isPerCallAbort ? {} : { reason }),
+        result: { ok: false, content: null, error: reason },
+        title: input.currentToolState.title ?? input.durableTool.annotations?.title ?? input.durableTool.name,
+        kind: input.currentToolState.kind ?? input.durableTool.kind ?? "other",
+        locations: input.currentToolState.locations,
+        content: input.currentToolState.content,
+        _meta: input.currentToolState._meta,
+      });
+      input.setRevision(committed.run.revision);
+
+      const finalToolCall = createMergedToolCall(
+        input.toolCallId,
+        "failed",
+        input.currentToolState,
+        input.durableTool.annotations?.title ?? input.durableTool.name,
+        input.durableTool.kind ?? "other",
+      );
+      notifyUpdate(finalToolCall);
+
+      return {
+        toolCallId: input.providerToolCallId,
+        toolName: input.toolCall.name,
+        ok: false,
+        content: null,
+        error: reason,
+      };
+    } finally {
+      progressActive = false;
+      this.transientEvents.clearTool(input.runId, input.toolCallId);
+    }
   }
 
   private async foldToolInteractionRecords(
@@ -1685,11 +2195,27 @@ export class AgentRuntime implements AgentRuntimeContract {
     const content = typeof result.content === "string"
       ? result.content
       : JSON.stringify(result.content) ?? "null";
+    const appendedText = content === "null" || content.length === 0
+      ? interactionText
+      : `${interactionText}\n\n${content}`;
+    if (Array.isArray(result.content)) {
+      return {
+        ...result,
+        content: [{ type: "text", text: appendedText }],
+      };
+    }
+    if (result.ok) {
+      return {
+        ok: true,
+        content: appendedText,
+        ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+      };
+    }
     return {
-      ...result,
-      content: content === "null" || content.length === 0
-        ? interactionText
-        : `${interactionText}\n\n${content}`,
+      ok: false,
+      content: appendedText,
+      error: (result as { error?: string }).error ?? "Tool execution failed.",
+      ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
     };
   }
 
@@ -1790,8 +2316,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           if (event.runId !== runId) continue;
           if (event.kind === "message_committed") {
             subscription.clearMessage(event.message.id);
-          } else if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
-            subscription.clearTool(event.toolCall.id);
+          } else if (event.kind === "tool_state_changed" && ["completed", "failed"].includes(event.transition.to)) {
+            subscription.clearTool(event.toolCall.toolCallId);
           }
           if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) {
             // Phase.Status and other live progress facts are transient, so
@@ -1994,6 +2520,25 @@ function abortError(): Error { const error = new Error("Operation aborted."); er
 function toJsonValue(value: unknown): JsonValue {
   assertJsonValue(value, "tool arguments");
   return value;
+}
+function createMergedToolCall(
+  toolCallId: string,
+  status: ToolCallStatus,
+  current: ToolCallMergeTarget,
+  fallbackTitle: string,
+  fallbackKind: ToolKind = "other",
+): AcpToolCall {
+  return {
+    toolCallId,
+    title: current.title ?? fallbackTitle,
+    kind: current.kind ?? fallbackKind,
+    status,
+    ...(current.locations !== undefined ? { locations: current.locations as ToolCallLocation[] } : {}),
+    ...(current.content !== undefined ? { content: current.content as ToolCallContent[] } : {}),
+    ...(current.rawInput !== undefined ? { rawInput: current.rawInput } : {}),
+    ...(current.rawOutput !== undefined ? { rawOutput: current.rawOutput } : {}),
+    ...(current._meta !== undefined ? { _meta: current._meta } : {}),
+  };
 }
 function deferred<T = void>(): Deferred<T> {
   let resolve!: (value?: T | PromiseLike<T>) => void;

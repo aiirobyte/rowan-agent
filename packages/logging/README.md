@@ -22,7 +22,7 @@ await fileLog.flush();
 ```
 
 `run.observe()` yields the broader `RunEvent` union. Logging intentionally
-narrows it to `DurableRunEvent`; transient `message_delta` and `tool_progress`
+narrows it to `DurableRunEvent`; transient `message_delta` and transient `tool_state_changed`
 events are live presentation data and are never written to the durable log.
 
 `debug` includes the complete redacted event payload; `info`, `warn`, and

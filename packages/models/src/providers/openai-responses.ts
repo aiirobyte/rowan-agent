@@ -3,16 +3,17 @@ import type {
   LlmRequest,
   LlmStreamEvent,
   LlmTokenUsage,
-  LlmStreamOptions,
   LlmStopReason,
   LlmToolChoice,
   LlmToolDefinition,
+  ProviderCallContext,
+  ProviderStreamFn,
   StreamFn,
-  ApiStreamFn,
   AssistantMessagePartial,
   ThinkingLevel,
   ToolCallBlock,
 } from "../protocol";
+import { createProviderCallContext } from "../protocol";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
 import {
@@ -138,7 +139,7 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
             result.push({
               type: "function_call_output",
               call_id: part.toolUseId,
-              output: part.content,
+              output: typeof part.content === "string" ? part.content : JSON.stringify(part.content),
             });
           }
         }
@@ -256,7 +257,7 @@ type ResponsesStreamEvent =
 async function* streamResponses(
   config: OpenAIResponsesConfig,
   request: LlmRequest,
-  options: LlmStreamOptions = {},
+  ctx?: ProviderCallContext,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/responses`;
@@ -265,7 +266,7 @@ async function* streamResponses(
     config,
     endpoint,
     llmRequest: request,
-    signal: options.signal,
+    signal: ctx?.signal,
     request: () => ({
       method: "POST",
       headers: {
@@ -530,16 +531,19 @@ async function* streamResponses(
 
 export function createOpenAIResponsesStream(config: OpenAIResponsesConfig): StreamFn {
   const normalizedConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
-  return async function* openAIResponsesStream(request, options) {
-    yield* streamResponses(normalizedConfig, request, options);
+  return async function* openAIResponsesStream(request, ctx) {
+    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "interact" in ctx && "tools" in ctx
+      ? ctx as ProviderCallContext
+      : createProviderCallContext(ctx);
+    yield* streamResponses(normalizedConfig, request, fullCtx);
   };
 }
 
 /**
- * ApiStreamFn-compatible stream function for OpenAI Responses API.
+ * ProviderStreamFn-compatible stream function for OpenAI Responses API.
  * Resolves config from the Model descriptor and environment.
  */
-export const streamOpenAIResponses: ApiStreamFn = (model, request, options) => {
+export const streamOpenAIResponses: ProviderStreamFn = (model, request, ctx) => {
   const config = resolveOpenAIResponsesConfig({
     baseUrl: model.baseUrl,
     model: model.id,
@@ -550,5 +554,5 @@ export const streamOpenAIResponses: ApiStreamFn = (model, request, options) => {
     retryDelayMs: model.retryDelayMs,
     headers: model.headers,
   });
-  return streamResponses(config, request, options);
+  return streamResponses(config, request, ctx);
 };

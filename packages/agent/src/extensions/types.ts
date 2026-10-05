@@ -2,21 +2,52 @@
  * Extension types — simplified for the new hook-based system.
  */
 
-import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
+import type { Phase, PhaseContext, PhaseOutput, SettingsDefinition } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
-import type { JsonObject, JsonValue } from "../runtime-events";
+import type { JsonObject, JsonValue, ToolExecutionResult } from "../runtime-events";
+import type {
+  ProviderConfig,
+  ProviderModelConfig,
+  ScopeRef,
+  ToolKind,
+  ToolCallStatus,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCall,
+  ToolCallUpdate,
+  ToolAnnotations,
+  ToolProgress,
+  ContentBlock,
+} from "@rowan-agent/models";
 
-export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
+export type {
+  ProviderConfig,
+  ProviderModelConfig,
+  ScopeRef,
+  ToolKind,
+  ToolCallStatus,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolProgress,
+  ToolCall,
+  ToolCallUpdate,
+  ToolAnnotations,
+  ContentBlock,
+} from "@rowan-agent/models";
+
+// ---------------------------------------------------------------------------
+// UI contributions
+// ---------------------------------------------------------------------------
+
+export type UiSlot = "settings" | "model-picker";
+export type UiContribution =
+  | { slot: "settings"; id: string; title: string; description?: string; settings: SettingsDefinition }
+  | { slot: "model-picker"; id: string; provider: string; status?: { kind: "ready" | "needs-setup" | "error"; message?: string }; actions?: { id: string; label: string }[] };
 
 // ---------------------------------------------------------------------------
 // Host & scope types
 // ---------------------------------------------------------------------------
-
-export type ScopeRef =
-  | { kind: "global" }
-  | { kind: "team"; teamId: string }
-  | { kind: "project"; teamId: string; projectId: string };
 
 export interface ExtensionStateStore {
   get(key: string): Promise<JsonValue | undefined>;
@@ -46,6 +77,19 @@ export interface ExtensionHost {
   deleteAgentState(
     extensionId: string,
     agentId: string,
+    key: string,
+  ): Promise<void> | void;
+  getGlobalState(
+    extensionId: string,
+    key: string,
+  ): Promise<JsonValue | undefined> | JsonValue | undefined;
+  setGlobalState(
+    extensionId: string,
+    key: string,
+    value: JsonValue,
+  ): Promise<void> | void;
+  deleteGlobalState(
+    extensionId: string,
     key: string,
   ): Promise<void> | void;
 }
@@ -132,11 +176,11 @@ export type ExtensionPackageManifest = {
 // ---------------------------------------------------------------------------
 
 /**
- * Tool definition for registering LLM-callable tools via `api.tool.register()`.
+ * Tool definition for registering LLM-callable tools via `api.tools.register()`.
  *
  * @example
  * ```typescript
- * api.tool.register({
+ * api.tools.register({
  *   name: "search_docs",
  *   description: "Search documentation",
  *   parameters: { type: "object", properties: { query: { type: "string" } } },
@@ -157,6 +201,25 @@ export interface ToolDefinition {
   promptSnippet?: string;
   /** Optional: additional guidelines appended to system prompt */
   promptGuidelines?: string[];
+  kind?: ToolKind;
+  annotations?: ToolAnnotations;
+  _meta?: JsonObject;
+  present?: (call: {
+    status: ToolCallStatus;
+    args: JsonValue;
+    progress?: ToolProgress;
+    result?: ToolExecutionResult;
+  }) => {
+    title?: string;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    _meta?: JsonObject;
+  } | undefined | void | Promise<{
+    title?: string;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    _meta?: JsonObject;
+  } | undefined | void>;
   /** Execute the tool */
   execute: (args: unknown, context: import("../runtime/contracts").ToolInvocationContext, signal?: AbortSignal) => Promise<ToolExecutionResult>;
   /** Optional: per-tool execution mode override */
@@ -166,12 +229,7 @@ export interface ToolDefinition {
 /**
  * Result from tool execution.
  */
-export interface ToolExecutionResult {
-  /** Content blocks to return to the LLM */
-  content: Array<{ type: string; text?: string; [key: string]: unknown }>;
-  /** Whether this is an error result */
-  isError?: boolean;
-}
+export type { ToolExecutionResult } from "../runtime-events";
 
 /**
  * Registered tool with source metadata.
@@ -239,6 +297,7 @@ export interface Extension {
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
   capabilities: Map<string, ExtensionCapabilityContribution>;
+  uiContributions: Map<string, UiContribution>;
   cleanup: Array<() => void | Promise<void>>;
   disposer?: ExtensionDisposer;
   runtime: ExtensionRuntime;

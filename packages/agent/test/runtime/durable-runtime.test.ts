@@ -362,13 +362,13 @@ test("AgentRuntime forwards the user ThinkingLevel on the LLM Request", async ()
     const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "thinking-level-agent" });
     const run = await runtime.start(agentId, {
       content: "Think carefully",
-      metadata: { mori: { thinkingLevel: "high" } },
+      thinkingLevel: "high",
     }, { idempotencyKey: "thinking-level-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
 
     const offRun = await runtime.start(agentId, {
       content: "Do not reason",
-      metadata: { mori: { thinkingLevel: "off" } },
+      thinkingLevel: "off",
     }, { idempotencyKey: "thinking-level-off-run" });
     await expect(offRun.wait()).resolves.toMatchObject({ type: "completed" });
 
@@ -640,7 +640,7 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
     const observed = [];
     for await (const event of run.observe()) observed.push(event);
     const toolEvents = observed.filter((event) => event.kind === "tool_state_changed");
-    expect(toolEvents.map((event) => event.transition.to)).toEqual(["pending", "running", "completed"]);
+    expect(toolEvents.map((event) => event.transition.to)).toEqual(["pending", "in_progress", "completed"]);
     expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
   } finally {
     await runtime.close();
@@ -1050,8 +1050,17 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
     name: "progress_lookup",
     description: "Look up a value with progress.",
     parameters: Type.Object({}),
+    present(call: any) {
+      if (call.status === "in_progress" && call.progress) {
+        return {
+          title: `Progress ${(call.progress?._meta as any)?.stage}`,
+          _meta: { progress: call.progress?._meta },
+        };
+      }
+      return undefined;
+    },
     async execute(_args: unknown, context: ToolInvocationContext) {
-      context.reportProgress({ stage: "halfway" });
+      context.reportProgress({ progress: 50, _meta: { stage: "halfway" } });
       await toolReady;
       return { ok: true as const, content: { value: 42 } };
     },
@@ -1095,15 +1104,21 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
     const progress = next();
     releaseModel();
     let progressResult = await progress;
-    while (!progressResult.done && progressResult.value.kind !== "tool_progress") {
+    while (!progressResult.done && !(progressResult.value.kind === "tool_state_changed" && progressResult.value.durability === "transient" && progressResult.value.toolCall.title === "Progress halfway")) {
       progressResult = await next();
     }
     releaseTool();
     await run.wait();
     while (!(await next()).done) {}
 
-    expect(observed.find((event) => event.kind === "tool_progress")).toMatchObject({
-      progress: { stage: "halfway" },
+    expect(observed.find((event) => event.kind === "tool_state_changed" && event.durability === "transient" && (event.toolCall as any).title === "Progress halfway")).toMatchObject({
+      kind: "tool_state_changed",
+      durability: "transient",
+      transition: { from: "in_progress", to: "in_progress" },
+      toolCall: expect.objectContaining({
+        title: "Progress halfway",
+        _meta: { progress: { stage: "halfway" } },
+      }),
     });
   } finally {
     releaseModel();
@@ -1117,18 +1132,18 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
   let afterCalls = 0;
   let contextMessages = 0;
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "extension_lookup",
       description: "Look up a value from an extension.",
       parameters: { type: "object", properties: { query: { type: "string" } } },
       execute: async () => ({ content: [{ type: "text", text: "42" }] }),
     });
-    api.on("before_tool_call", () => {
+    api.hooks.on("before_tool_call", () => {
       beforeCalls += 1;
       contextMessages = api.context.getMessages?.().length ?? 0;
       return { allow: true };
     });
-    api.on("after_tool_call", (event) => {
+    api.hooks.on("after_tool_call", (event) => {
       afterCalls += 1;
       return { result: { ...event.result, content: { wrapped: event.result.content } } };
     });

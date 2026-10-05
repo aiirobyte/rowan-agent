@@ -1,5 +1,26 @@
 import type { RunInteraction } from "./harness/phases/interactions";
 import type { PhaseStatus } from "./harness/phases/types";
+import type {
+  ContentBlock,
+  ToolAnnotations,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+} from "@rowan-agent/models";
+
+export type {
+  ContentBlock,
+  ToolAnnotations,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+} from "@rowan-agent/models";
 
 declare const opaqueIdBrand: unique symbol;
 
@@ -41,8 +62,9 @@ export type ToolUseContent = Readonly<{
 }>;
 
 export type ToolExecutionResult =
-  | Readonly<{ ok: true; content: JsonValue }>
-  | Readonly<{ ok: false; content: JsonValue; error: string }>;
+  | Readonly<{ ok: true; content: JsonValue; structuredContent?: JsonValue; isError?: boolean }>
+  | Readonly<{ ok: false; content: JsonValue; error: string; structuredContent?: JsonValue; isError?: boolean }>
+  | Readonly<{ content: readonly ContentBlock[]; structuredContent?: JsonValue; isError?: boolean; ok?: boolean; error?: string }>;
 
 export type DurableToolResult = Readonly<{
   toolCallId: ToolCallId;
@@ -141,40 +163,24 @@ export type RunningRunFailure = Extract<
   { code: "runtime_interrupted" | "tool_indeterminate" | "execution_failed" }
 >;
 
-export type ToolCallState = "pending" | "running" | "completed" | "failed" | "indeterminate";
-export type ToolCallSnapshotBase = Readonly<{
+export type ToolCallState = ToolCallStatus;
+export type ToolCallSnapshot = ToolCall & Readonly<{
   id: ToolCallId;
-  providerToolCallId: string;
-  agentId: AgentId;
-  runId: RunId;
-  executionId: ExecutionId;
-  requestMessageId: MessageId;
-  name: string;
-  args: JsonValue;
-  createdAt: string;
-  updatedAt: string;
+  providerToolCallId?: string;
+  agentId?: AgentId;
+  runId?: RunId;
+  executionId?: ExecutionId;
+  requestMessageId?: MessageId;
+  name?: string;
+  args?: JsonValue;
+  state?: ToolCallStatus;
+  result?: DurableToolResult;
+  resultMessageId?: MessageId;
+  reason?: string;
+  external?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }>;
-
-export type ToolCallSnapshot = ToolCallSnapshotBase & (
-  | Readonly<{ state: "pending" }>
-  | Readonly<{ state: "running" }>
-  | Readonly<{
-      state: "completed";
-      result: DurableToolResult & Readonly<{ ok: true }>;
-      resultMessageId: MessageId;
-    }>
-  | Readonly<{
-      state: "failed";
-      result: DurableToolResult & Readonly<{ ok: false }>;
-      resultMessageId: MessageId;
-    }>
-  | Readonly<{
-      state: "indeterminate";
-      result: DurableToolResult & Readonly<{ ok: false }>;
-      resultMessageId: MessageId;
-      reason: string;
-    }>
-);
 
 export type DurableEventBase = Readonly<{
   id: EventId;
@@ -237,50 +243,29 @@ export type RunStateChanged = DurableEventBase & (
     }>
 );
 
-export type ToolStateChanged = DurableEventBase & (
+export type ToolStateChanged =
+  | (DurableEventBase & Readonly<{
+      kind: "tool_state_changed";
+      transition: Readonly<{ from: ToolCallStatus | null; to: ToolCallStatus }>;
+      toolCall: ToolCall;
+      external?: boolean;
+    }>)
   | Readonly<{
       kind: "tool_state_changed";
-      transition: Readonly<{ from: null; to: "pending" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "pending" }>;
-    }>
-  | Readonly<{
-      kind: "tool_state_changed";
-      transition: Readonly<{ from: "pending"; to: "running" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "running" }>;
-    }>
-  | Readonly<{
-      kind: "tool_state_changed";
-      transition: Readonly<{ from: "pending"; to: "failed" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "failed" }>;
-    }>
-  | Readonly<{
-      kind: "tool_state_changed";
-      transition: Readonly<{ from: "running"; to: "pending" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "pending" }>;
-    }>
-  | Readonly<{
-      kind: "tool_state_changed";
-      transition: Readonly<{ from: "running"; to: "pending" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "pending" }>;
-    }>
-  | Readonly<{
-      kind: "tool_state_changed";
-      transition: Readonly<{ from: "running"; to: "completed" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "completed" }>;
-    }>
-  | Readonly<{
-      kind: "tool_state_changed";
-      transition: Readonly<{ from: "running"; to: "failed" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "failed" }>;
-    }>
-  | Readonly<{
-      kind: "tool_state_changed";
-      transition: Readonly<{ from: "running"; to: "indeterminate" }>;
-      toolCall: Extract<ToolCallSnapshot, { state: "indeterminate" }>;
-    }>
-);
+      durability: "transient";
+      runId: RunId;
+      executionId?: ExecutionId;
+      transition: Readonly<{ from: ToolCallStatus | null; to: ToolCallStatus }>;
+      toolCall: ToolCall | ToolCallUpdate;
+      external?: boolean;
+    }>;
 
-export type DurableRunEvent = PhaseEntered | MessageCommitted | MessageRevised | RunStateChanged | ToolStateChanged;
+export type DurableRunEvent =
+  | PhaseEntered
+  | MessageCommitted
+  | MessageRevised
+  | RunStateChanged
+  | Extract<ToolStateChanged, { durability: "durable" }>;
 
 export type MessageDelta = Readonly<{
   kind: "message_delta";
@@ -315,15 +300,6 @@ export type ToolCallDelta = Readonly<{
   args: JsonValue | undefined;
 }>;
 
-export type ToolProgress = Readonly<{
-  kind: "tool_progress";
-  durability: "transient";
-  runId: RunId;
-  executionId: ExecutionId;
-  toolCallId: ToolCallId;
-  progress: JsonValue;
-}>;
-
 export type PhaseStatusEvent = Readonly<{
   kind: "phase_status";
   durability: "transient";
@@ -344,4 +320,12 @@ export type ModelRetry = Readonly<{
   error: string;
 }>;
 
-export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry;
+export type RunEvent =
+  | DurableRunEvent
+  | MessageDelta
+  | ThinkingDelta
+  | ToolCallDelta
+  | PhaseStatusEvent
+  | ModelRetry
+  | Extract<ToolStateChanged, { durability: "transient" }>;
+

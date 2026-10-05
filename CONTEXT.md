@@ -93,6 +93,10 @@ Scheduler becomes ready. It is implicit in every Resource View, remains active
 for the Runtime lifetime, and is never selected by a Definition or Phase.
 _Avoid_: Resource Candidate, Agent Extension, Scoped Extension
 
+**Extension State**:
+State storage exposed to an Extension through `api.state`: run-scoped in-memory state (`run(runId)`), agent-scoped durable state (`agent(agentId)`), and extension-scoped durable state (`global()`) that survives process restarts and is isolated per Extension ID.
+_Avoid_: Static module state, global process variables, Agent Configuration mutation
+
 ## Conversation
 
 **Agent Input**:
@@ -150,11 +154,8 @@ _Avoid_: Phase Interaction, Tool Call Interaction, Input Request, ACP Message, P
 The execution-scoped Rowan capability through which a Phase or Tool requests interactions, reads resolved answers, checkpoints continuation state, suspends, and observes cancellation. It is protocol-neutral and does not know Providers, processes, or host business domains.
 _Avoid_: Phase Interaction Driver, ACP Client, Provider Adapter, Tool Registry
 
-**Phase Settings Definition**:
-A JSON-safe, host-neutral declaration registered by a Phase bundle through the
-`ExtensionAPI.phase.settings` namespace. Rowan collects the provider registered
-with `api.phase.settings.register(provider)` but does not render the definition
-or interpret its domain fields; the host owns presentation and persistence.
+**Settings Definition**:
+A JSON-safe, host-neutral declaration registered by an extension as a declarative UI contribution through `api.ui.contribute({ slot: "settings", ... })`. Rowan collects the contribution but does not render the definition or interpret its domain fields; the host owns presentation and persistence through the extension's config block.
 _Avoid_: ACP Settings page, host-specific configuration model
 
 **Interaction Record**:
@@ -216,7 +217,7 @@ An immutable replayable fact committed atomically with the Run aggregate change 
 _Avoid_: Agent Input, Transient Run Event, command
 
 **Transient Run Event**:
-A lossy live observation such as a Message delta or Tool progress update. It is never authoritative for control flow or recovery.
+A lossy live observation such as a Message delta or transient Tool state update (e.g. progress). It is never authoritative for control flow or recovery.
 _Avoid_: Durable Run Event, Canonical Message
 
 **Run Metadata**:
@@ -250,6 +251,18 @@ Execution Attempt. Its Rowan ID is canonical and fences persistence and
 external idempotency; a stored provider correlation maps both Tool-use and
 Tool-result blocks only at the Model Context boundary.
 _Avoid_: Shell command, Tool Event
+
+**Tool Presentation**:
+A pure description function executed across tool call states (`pending`, `in_progress`, progress reports via `reportProgress`, and `completed` / `failed`). Updates are merged via `mergeToolCall` (replacing specified fields, merging `_meta` per top-level key). Tool definition `_meta` is preserved untouched for hosts. Presentation failures fall back to default presentation without failing the tool call.
+_Avoid_: Provider Activity, Tool Formatting Adapter, Imperative Presentation Hook
+
+**Tool Progress**:
+A structured progress report emitted by a running Tool via `context.reportProgress(progress: ToolProgress)`. It follows the standard MCP `notifications/progress` shape (`progress: number`, optional `total`, `message`, and `_meta`). Numbers must be finite; invalid shapes are dropped with a warning without failing the tool. Tool-private progress data lives under `_meta` keys, and continuous output must be reported cumulatively (e.g. a tail) because transient updates coalesce per `toolCallId`.
+_Avoid_: Free-form progress JSON, uncoalesced stream deltas
+
+**Tool Invocation Options**:
+Per-call options (`ToolCallOptions`) provided when calling `ProviderCallContext.tools.call(name, args, options?)`. Rowan supports per-call cancellation via `signal` (settling only that tool call as failed without aborting the Run) and continuous execution observation via `onUpdate` (receiving the merged `ToolCall` on every state change: start, progress-driven `present` updates, and completion/failure; the raw `ToolProgress` is passed when triggered by a progress report).
+_Avoid_: Run-level abort for single tool failure, polling tool state
 
 **Indeterminate Tool Call**:
 A Tool Call whose external effect may have happened but whose determinate result was not durably committed. It terminates the Run and is never retried automatically.

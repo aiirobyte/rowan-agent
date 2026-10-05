@@ -41,7 +41,7 @@ test("DurableStore persists Tool pending → running → terminal lifecycle", as
     expectedRevision: reserved.run.revision,
     toolCallId,
   });
-  expect(started.toolCall.state).toBe("running");
+  expect(started.toolCall.state).toBe("in_progress");
 
   const completed = await owner.commitToolResult({
     runId: run.id,

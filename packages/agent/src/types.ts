@@ -5,7 +5,7 @@ import type {
   ToolResult,
 } from "./protocol";
 import type { PhaseRegistry } from "./harness/phases/types";
-import type { ContentBlock, LlmContentPart } from "@rowan-agent/models";
+import type { ContentBlock, JsonObject, LlmContentPart } from "@rowan-agent/models";
 import { createId, createTimestamp } from "./utils";
 
 export type {
@@ -23,7 +23,6 @@ export type {
   LlmModelUsage,
   LlmRequest,
   LlmStreamEvent,
-  LlmStreamOptions,
   Outcome,
   StreamFn,
   ToolCall,
@@ -46,6 +45,7 @@ export type Tool<TArgs = unknown> = {
   promptGuidelines?: string[];
   /** Whether this tool can run concurrently with others. Default: "parallel". */
   executionMode?: ToolExecutionMode;
+  _meta?: JsonObject;
   execute(args: TArgs, context: ToolContext, signal?: AbortSignal): Promise<ToolResult>;
 };
 
@@ -61,6 +61,7 @@ export type AgentContext = {
   skills: Skill[];
   /** Custom phases for this run. Agent normalizes this with the built-in default phase. */
   phases?: PhaseRegistry;
+  cwd?: string;
 };
 
 export type BeforeToolCall = (input: {
@@ -126,13 +127,18 @@ export function contentBlocksToMessageContent(blocks: ContentBlock[]): LlmConten
     if (block.type === "thinking") {
       return { type: "thinking", thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) };
     }
-
-    let input: unknown = block.args;
-    try {
-      input = JSON.parse(block.args);
-    } catch {
-      // Keep raw arguments when the provider streamed incomplete or non-JSON input.
+    if (block.type === "image") {
+      return { type: "image", data: block.data, mimeType: block.mimeType };
     }
-    return { type: "tool_use", id: block.id, name: block.name, input };
+    if (block.type === "tool_call") {
+      let input: unknown = block.args;
+      try {
+        input = JSON.parse(block.args);
+      } catch {
+        // Keep raw arguments when the provider streamed incomplete or non-JSON input.
+      }
+      return { type: "tool_use", id: block.id, name: block.name, input };
+    }
+    return { type: "text", text: JSON.stringify(block) };
   });
 }

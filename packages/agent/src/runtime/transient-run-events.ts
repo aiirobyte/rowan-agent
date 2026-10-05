@@ -6,10 +6,17 @@ import type {
   RunId,
   ThinkingDelta,
   ToolCallDelta,
-  ToolProgress,
+  ToolStateChanged,
 } from "../runtime-events";
+import { mergeToolCall } from "./tool-call-merge";
 
-export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry;
+export type TransientRunEvent =
+  | MessageDelta
+  | ThinkingDelta
+  | ToolCallDelta
+  | PhaseStatusEvent
+  | ModelRetry
+  | Extract<ToolStateChanged, { durability: "transient" }>;
 
 const MAX_BUFFERED_EVENTS = 128;
 const MAX_BUFFERED_TEXT = 64 * 1024;
@@ -65,6 +72,34 @@ export class TransientRunEventSubscription {
       && previous.providerToolCallId === event.providerToolCallId
     ) {
       this.queue[this.queue.length - 1] = event;
+    } else if (event.kind === "tool_state_changed") {
+      const toolCallId = event.toolCall.toolCallId;
+      let index = -1;
+      for (let i = this.queue.length - 1; i >= 0; i -= 1) {
+        const existing = this.queue[i];
+        if (
+          existing
+          && existing.kind === "tool_state_changed"
+          && existing.runId === event.runId
+          && existing.toolCall.toolCallId === toolCallId
+        ) {
+          index = i;
+          break;
+        }
+      }
+      if (index !== -1) {
+        const existing = this.queue[index] as Extract<ToolStateChanged, { durability: "transient" }>;
+        const mergedCall = { ...existing.toolCall };
+        mergeToolCall(mergedCall, event.toolCall);
+        this.queue[index] = {
+          ...existing,
+          transition: { from: existing.transition.from, to: event.transition.to },
+          toolCall: mergedCall,
+        };
+      } else {
+        if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
+        this.queue.push(event);
+      }
     } else {
       if (this.queue.length >= MAX_BUFFERED_EVENTS) this.queue.shift();
       this.queue.push(event);
@@ -83,7 +118,9 @@ export class TransientRunEventSubscription {
       for (let index = this.queue.length - 1; index >= 0; index -= 1) {
         const event = this.queue[index];
         if (
-          event?.executionId === executionId
+          event
+          && "executionId" in event
+          && event.executionId === executionId
           && !(preserveCompletedPhaseStatus
             && event.kind === "phase_status"
             && event.status.state === "completed")
@@ -106,10 +143,12 @@ export class TransientRunEventSubscription {
     this.notify();
   }
 
-  clearTool(toolCallId: ToolProgress["toolCallId"]): void {
+  clearTool(toolCallId: string): void {
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {
       const event = this.queue[index];
-      if (event?.kind === "tool_progress" && event.toolCallId === toolCallId) this.queue.splice(index, 1);
+      if (
+        event?.kind === "tool_state_changed" && event.toolCall.toolCallId === toolCallId
+      ) this.queue.splice(index, 1);
     }
     this.notify();
   }
@@ -201,7 +240,7 @@ export class TransientRunEventHub {
     for (const subscription of this.subscriptions.get(runId) ?? []) subscription.clearMessage(messageId);
   }
 
-  clearTool(runId: RunId, toolCallId: ToolProgress["toolCallId"]): void {
+  clearTool(runId: RunId, toolCallId: string): void {
     for (const subscription of this.subscriptions.get(runId) ?? []) subscription.clearTool(toolCallId);
   }
 

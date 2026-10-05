@@ -1,4 +1,15 @@
-import type { Protocol, ApiStreamFn, Model, ModelConfig, ModelRef, LlmRequest, LlmStreamEvent, LlmStreamOptions, StreamFn } from "./protocol";
+import type {
+  Protocol,
+  Model,
+  ModelConfig,
+  ModelRef,
+  LlmRequest,
+  LlmStreamEvent,
+  ProviderCallContext,
+  ProviderStreamFn,
+  StreamFn,
+} from "./protocol";
+import { createProviderCallContext } from "./protocol";
 import { getModel, resolveModel } from "./models";
 import { streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
@@ -10,7 +21,7 @@ import { streamAnthropic } from "./providers/anthropic";
 
 export interface ApiProvider {
   protocol: Protocol;
-  stream: ApiStreamFn;
+  stream: ProviderStreamFn;
 }
 
 export function parseModelRef(input?: string): ModelRef | undefined {
@@ -84,7 +95,7 @@ export function registerBuiltInApiProviders(): void {
  * Resolve the API provider for a model and stream the request.
  * This is the main entry point for model-based dispatch.
  */
-export function stream(model: Model, request: LlmRequest, options: LlmStreamOptions): AsyncIterable<LlmStreamEvent> {
+export function stream(model: Model, request: LlmRequest, ctx?: ProviderCallContext | Partial<ProviderCallContext>): AsyncIterable<LlmStreamEvent> {
   const provider = apiProviderRegistry.get(model.protocol);
   if (!provider) {
     throw new Error(
@@ -93,7 +104,10 @@ export function stream(model: Model, request: LlmRequest, options: LlmStreamOpti
       `Call registerBuiltInApiProviders() or registerApiProvider() first.`,
     );
   }
-  return provider.stream(model, request, options);
+  const callContext: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "interact" in ctx && "tools" in ctx
+    ? ctx as ProviderCallContext
+    : createProviderCallContext(ctx);
+  return provider.stream(model, request, callContext);
 }
 
 /**
@@ -103,7 +117,7 @@ export function stream(model: Model, request: LlmRequest, options: LlmStreamOpti
 export function streamByRef(
   ref: string | { provider: string; id: string },
   request: Omit<LlmRequest, "model">,
-  options: LlmStreamOptions = {},
+  ctx?: ProviderCallContext | Partial<ProviderCallContext>,
 ): AsyncIterable<LlmStreamEvent> {
   const model = typeof ref === "string"
     ? resolveModel(ref)
@@ -114,7 +128,7 @@ export function streamByRef(
     throw new Error(`Model not found: "${key}". Register it with registerModel() first.`);
   }
 
-  return stream(model, { ...request, model: { provider: model.provider, id: model.id } }, options);
+  return stream(model, { ...request, model: { provider: model.provider, id: model.id } }, ctx);
 }
 
 const ZERO_COST = {
@@ -134,6 +148,7 @@ function modelFromConfig(config: ModelConfig): Model {
     apiKey: config.apiKey,
     reasoning: config.reasoning ?? false,
     ...(config.thinkingLevel !== undefined ? { thinkingLevel: config.thinkingLevel } : {}),
+    ...(config.thinkingLevels !== undefined ? { thinkingLevels: config.thinkingLevels } : {}),
     input: config.input ?? ["text"],
     cost: { ...ZERO_COST, ...config.cost },
     contextWindow: config.contextWindow ?? 128_000,
@@ -149,7 +164,7 @@ export function createModelStream(config?: ModelConfig): StreamFn {
   if (config || apiProviderRegistry.size === 0) registerBuiltInApiProviders();
   const configuredModel = config ? modelFromConfig(config) : undefined;
 
-  return async function* modelStream(request, options) {
+  return async function* modelStream(request, ctx) {
     if (
       configuredModel
       && (configuredModel.provider !== request.model.provider || configuredModel.id !== request.model.id)
@@ -165,7 +180,7 @@ export function createModelStream(config?: ModelConfig): StreamFn {
       ?? resolveModel(request.model.id);
 
     if (model) {
-      yield* stream(model, request, options);
+      yield* stream(model, request, ctx);
       return;
     }
 

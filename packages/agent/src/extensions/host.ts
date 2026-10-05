@@ -5,11 +5,13 @@ import type { ExtensionHost, ScopeRef } from "./types";
 export class InMemoryExtensionHost implements ExtensionHost {
   private readonly configs = new Map<string, Map<string, JsonObject>>();
   private readonly agentState = new Map<string, Map<string, Map<string, JsonValue>>>();
+  private readonly globalState = new Map<string, Map<string, JsonValue>>();
   private readonly listeners = new Set<(extensionId: string, scope: ScopeRef) => void>();
 
   constructor(options: {
     configs?: Record<string, Record<string, JsonObject>>;
     agentState?: Record<string, Record<string, Record<string, JsonValue>>>;
+    globalState?: Record<string, Record<string, JsonValue>>;
   } = {}) {
     if (options.configs) {
       for (const [scopeKey, extMap] of Object.entries(options.configs)) {
@@ -35,9 +37,19 @@ export class InMemoryExtensionHost implements ExtensionHost {
         this.agentState.set(agentId, agentMap);
       }
     }
+    if (options.globalState) {
+      for (const [extId, stateMap] of Object.entries(options.globalState)) {
+        const map = new Map<string, JsonValue>();
+        for (const [key, val] of Object.entries(stateMap)) {
+          assertJsonValue(val);
+          map.set(key, structuredClone(val));
+        }
+        this.globalState.set(extId, map);
+      }
+    }
   }
 
-  setConfig(extensionId: string, config: JsonObject | null, scope: ScopeRef = { kind: "global" }): void {
+  setConfig(extensionId: string, config: JsonObject | null, scope: ScopeRef = []): void {
     const scopeKey = scopeToKey(scope);
     if (!this.configs.has(scopeKey)) {
       this.configs.set(scopeKey, new Map());
@@ -52,20 +64,18 @@ export class InMemoryExtensionHost implements ExtensionHost {
     this.notifyConfigChanged(extensionId, scope);
   }
 
-  getConfig(extensionId: string, scope: ScopeRef = { kind: "global" }): JsonObject | null {
+  getConfig(extensionId: string, scope: ScopeRef = []): JsonObject | null {
+    let merged: Record<string, JsonValue> | null = null;
     const globalConfig = this.configs.get("global")?.get(extensionId);
-    let merged: Record<string, JsonValue> | null = globalConfig ? { ...globalConfig } : null;
-
-    if (scope.kind === "team" || scope.kind === "project") {
-      const teamConfig = this.configs.get(`team:${scope.teamId}`)?.get(extensionId);
-      if (teamConfig) {
-        merged = { ...(merged ?? {}), ...teamConfig };
-      }
+    if (globalConfig) {
+      merged = { ...globalConfig };
     }
-    if (scope.kind === "project") {
-      const projectConfig = this.configs.get(`project:${scope.teamId}:${scope.projectId}`)?.get(extensionId);
-      if (projectConfig) {
-        merged = { ...(merged ?? {}), ...projectConfig };
+    for (let i = 1; i <= scope.length; i++) {
+      const subScope = scope.slice(0, i);
+      const key = scopeToKey(subScope);
+      const layerConfig = this.configs.get(key)?.get(extensionId);
+      if (layerConfig) {
+        merged = { ...(merged ?? {}), ...layerConfig };
       }
     }
     return merged ? (structuredClone(merged) as JsonObject) : null;
@@ -76,7 +86,7 @@ export class InMemoryExtensionHost implements ExtensionHost {
     return () => this.listeners.delete(listener);
   }
 
-  notifyConfigChanged(extensionId: string, scope: ScopeRef = { kind: "global" }): void {
+  notifyConfigChanged(extensionId: string, scope: ScopeRef = []): void {
     for (const listener of this.listeners) {
       try {
         listener(extensionId, scope);
@@ -109,29 +119,28 @@ export class InMemoryExtensionHost implements ExtensionHost {
   deleteAgentState(extensionId: string, agentId: string, key: string): void {
     this.agentState.get(agentId)?.get(extensionId)?.delete(key);
   }
+
+  getGlobalState(extensionId: string, key: string): JsonValue | undefined {
+    const val = this.globalState.get(extensionId)?.get(key);
+    return val !== undefined ? structuredClone(val) : undefined;
+  }
+
+  setGlobalState(extensionId: string, key: string, value: JsonValue): void {
+    assertJsonValue(value);
+    let extMap = this.globalState.get(extensionId);
+    if (!extMap) {
+      extMap = new Map();
+      this.globalState.set(extensionId, extMap);
+    }
+    extMap.set(key, structuredClone(value));
+  }
+
+  deleteGlobalState(extensionId: string, key: string): void {
+    this.globalState.get(extensionId)?.delete(key);
+  }
 }
 
 export function scopeToKey(scope: ScopeRef): string {
-  switch (scope.kind) {
-    case "global":
-      return "global";
-    case "team":
-      return `team:${scope.teamId}`;
-    case "project":
-      return `project:${scope.teamId}:${scope.projectId}`;
-  }
-}
-
-export function resolveScopeFromMetadata(metadata?: Readonly<Record<string, unknown>>): ScopeRef {
-  if (metadata) {
-    const teamId = typeof metadata.teamId === "string" ? metadata.teamId : undefined;
-    const projectId = typeof metadata.projectId === "string" ? metadata.projectId : undefined;
-    if (teamId && projectId) {
-      return { kind: "project", teamId, projectId };
-    }
-    if (teamId) {
-      return { kind: "team", teamId };
-    }
-  }
-  return { kind: "global" };
+  if (scope.length === 0) return "global";
+  return scope.map((layer) => `${layer.kind}:${layer.id}`).join("/");
 }

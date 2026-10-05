@@ -166,12 +166,10 @@ function adaptExtensionTool(input: RegisteredTool): import("./contracts").Tool {
     parameters: definition.parameters as never,
     ...(definition.promptSnippet ? { promptSnippet: definition.promptSnippet } : {}),
     ...(definition.promptGuidelines ? { promptGuidelines: definition.promptGuidelines } : {}),
-    execute: async (args, context, signal) => {
-      const result = await definition.execute(args, context, signal);
-      const content = JSON.parse(JSON.stringify(result.content));
-      return result.isError
-        ? { ok: false, content, error: "Extension Tool failed." }
-        : { ok: true, content };
-    },
+    ...(definition.kind ? { kind: definition.kind } : {}),
+    ...(definition.annotations ? { annotations: definition.annotations } : {}),
+    ...(definition._meta !== undefined ? { _meta: definition._meta } : {}),
+    ...(definition.present ? { present: definition.present } : {}),
+    execute: async (args, context, signal) => definition.execute(args, context, signal),
   };
 }

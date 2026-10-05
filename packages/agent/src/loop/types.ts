@@ -132,6 +132,8 @@ export type AgentConfig = {
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
   onModelRetry?: (event: ModelRetryNotification) => void;
+  onToolReport?: (event: { runId: import("../runtime-events").RunId; update: import("@rowan-agent/models").ToolCall | import("@rowan-agent/models").ToolCallUpdate }) => void;
+  interact?: (request: import("@rowan-agent/models").RunInteractionRequest) => Promise<import("../runtime-events").JsonValue>;
   /** Internal / testing only: retry delay in milliseconds. */
   retryDelayMs?: number;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
@@ -146,6 +148,7 @@ export type ToolRunnerInput = {
   /** The model response's blocks, so a managed Runtime can commit them with the Tool Call. */
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
+  options?: import("@rowan-agent/models").ToolCallOptions;
 };
 
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
@@ -154,9 +157,11 @@ export type ToolBatchRunner = (input: {
   toolCalls: readonly ToolCall[];
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
+  options?: import("@rowan-agent/models").ToolCallOptions;
 }) => Promise<readonly ToolResult[]>;
 
 export type AgentRuntimePort = {
   tools?: ToolRunner;
   toolsBatch?: ToolBatchRunner;
+  interact?: (request: import("@rowan-agent/models").RunInteractionRequest) => Promise<import("../runtime-events").JsonValue>;
 };

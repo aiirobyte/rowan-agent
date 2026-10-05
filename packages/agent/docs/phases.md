@@ -82,8 +82,8 @@ export async function run(context, execution) {
 import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default function(api: ExtensionAPI) {
-  // Use api.on(), api.tool.register(), etc.
-  api.tool.register({
+  // Use api.hooks.on(), api.tools.register(), etc.
+  api.tools.register({
     name: "fetch_api",
     description: "Fetch data from external API",
     parameters: { type: "object", properties: { url: { type: "string" } } },
@@ -95,8 +95,8 @@ export default function(api: ExtensionAPI) {
   });
 
   // Set output for routing
-  api.phase.setMessage("Phase complete");
-  api.phase.setNextPhase("stop");
+  api.phases.setMessage("Phase complete");
+  api.phases.setNextPhase("stop");
 }
 ```
 
@@ -258,7 +258,7 @@ import type { ExtensionAPI } from "@rowan-agent/agent";
 
 export default async function(api: ExtensionAPI) {
   // Register a phase-specific tool
-  api.tool.register({
+  api.tools.register({
     name: "code_edit",
     description: "Edit a file with structured changes",
     parameters: {
@@ -275,7 +275,7 @@ export default async function(api: ExtensionAPI) {
   });
 
   // Hook into tool calls
-  api.on("before_tool_call", (event) => {
+  api.hooks.on("before_tool_call", (event) => {
     if (event.tool.name === "bash") {
       // Log or block commands
     }
@@ -283,9 +283,9 @@ export default async function(api: ExtensionAPI) {
   });
 
   // Set phase output after execution
-  api.phase.setMessage("Code changes applied");
-  api.phase.setNextPhase("verify");
-  api.phase.setPayload({ filesChanged: 3 });
+  api.phases.setMessage("Code changes applied");
+  api.phases.setNextPhase("verify");
+  api.phases.setPayload({ filesChanged: 3 });
 }
 ```
 

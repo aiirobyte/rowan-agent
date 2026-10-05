@@ -29,7 +29,7 @@ export type { LoadedExtension, ExtensionManifest } from "./types";
  *
  * @example
  * ```typescript
- * api.on("before_tool_call", (event, ctx) => {
+ * api.hooks.on("before_tool_call", (event, ctx) => {
  *   console.log(`cwd: ${ctx.cwd}`);
  *   if (ctx.isIdle()) { ... }
  * });

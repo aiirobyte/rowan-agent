@@ -168,7 +168,10 @@ function projectToolMessage(
     id: message.id,
     role: message.role,
     content: message.content.map((part) => {
-      const rawResult = jsonText(part.result.content);
+      const isError = "isError" in part.result ? Boolean(part.result.isError) : !part.result.ok;
+      const rawResult = Array.isArray(part.result.content)
+        ? part.result.content.map((block: any) => block?.type === "text" ? block.text : JSON.stringify(block)).join("\n\n")
+        : jsonText(part.result.content);
       const interactionTexts = toolInteractionTexts.get(String(part.toolCallId));
       let content = rawResult;
       if (interactionTexts && interactionTexts.length > 0) {
@@ -181,7 +184,7 @@ function projectToolMessage(
         type: "tool_result",
         toolUseId: part.providerToolCallId ?? String(part.toolCallId),
         content,
-        ...(part.result.ok ? {} : { isError: true }),
+        ...(isError ? { isError: true } : {}),
       };
     }),
     createdAt: message.createdAt,
@@ -218,12 +221,18 @@ function projectAssistantContent(content: AssistantContent): string | LlmContent
 }
 
 function projectToolContent(content: Extract<Message, { role: "tool" }>["content"]): LlmContentPart[] {
-  return content.map((part) => ({
-    type: "tool_result",
-    toolUseId: part.providerToolCallId ?? part.toolCallId,
-    content: jsonText(part.result.content),
-    ...(part.result.ok ? {} : { isError: true }),
-  }));
+  return content.map((part) => {
+    const isError = "isError" in part.result ? Boolean(part.result.isError) : !part.result.ok;
+    const textContent = Array.isArray(part.result.content)
+      ? part.result.content.map((block: any) => block?.type === "text" ? block.text : JSON.stringify(block)).join("\n\n")
+      : jsonText(part.result.content);
+    return {
+      type: "tool_result",
+      toolUseId: part.providerToolCallId ?? part.toolCallId,
+      content: textContent,
+      ...(isError ? { isError: true } : {}),
+    };
+  });
 }
 
 function inertRunInteraction(signal?: AbortSignal): RunInteractionDriver {
@@ -250,6 +259,7 @@ export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): 
     parameters: tool.parameters,
     ...(tool.promptSnippet ? { promptSnippet: tool.promptSnippet } : {}),
     ...(tool.promptGuidelines ? { promptGuidelines: [...tool.promptGuidelines] } : {}),
+    ...(tool._meta !== undefined ? { _meta: tool._meta } : {}),
     execute: async (args, context, signal): Promise<ToolResult> => {
       const result = await tool.execute(args as JsonValue, {
         agentId,
@@ -259,7 +269,8 @@ export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): 
         reportProgress: () => undefined,
         interaction: context.interaction ?? inertRunInteraction(signal),
       }, signal ?? new AbortController().signal);
-      return { toolCallId: context.toolCallId, toolName: tool.name, ...result };
+      const ok = "ok" in result && typeof result.ok === "boolean" ? result.ok : !result.isError;
+      return { toolCallId: context.toolCallId, toolName: tool.name, ok, ...result };
     },
   };
 }

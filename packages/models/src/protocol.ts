@@ -49,6 +49,7 @@ export interface Model {
   reasoning: boolean;
   /** Default reasoning level; an individual request may override it. */
   thinkingLevel?: ThinkingLevel;
+  thinkingLevels?: ThinkingLevel[];
   input: ("text" | "image")[];
   cost: ModelCost;
   contextWindow: number;
@@ -72,6 +73,7 @@ export type ModelConfig = {
   name?: string;
   reasoning?: boolean;
   thinkingLevel?: ThinkingLevel;
+  thinkingLevels?: ThinkingLevel[];
   input?: ("text" | "image")[];
   cost?: Partial<ModelCost>;
   contextWindow?: number;
@@ -91,22 +93,25 @@ export type ModelConfig = {
 export type ProviderModelConfig = {
   id: string;
   name?: string;
-  protocol: Protocol;
-  reasoning: boolean;
+  protocol?: Protocol;
+  reasoning?: boolean;
   thinkingLevel?: ThinkingLevel;
-  input: ("text" | "image")[];
-  cost: ModelCost;
-  contextWindow: number;
-  maxTokens: number;
+  thinkingLevels?: ThinkingLevel[];
+  input?: ("text" | "image")[];
+  cost?: ModelCost;
+  contextWindow?: number;
+  maxTokens?: number;
   headers?: Record<string, string>;
 };
 
 export type ProviderConfig = {
   id: string;
+  displayName?: string;
+  icon?: string;
   baseUrl: string;
   apiKey: string;
   protocol: Protocol;
-  streamSimple?: ApiStreamFn;
+  stream?: ProviderStreamFn;
   headers?: Record<string, string>;
   /** Maximum inactivity while waiting for response headers or the next body chunk. */
   timeoutMs?: number;
@@ -178,7 +183,7 @@ export type LlmToolUseContent = {
 export type LlmToolResultContent = {
   type: "tool_result";
   toolUseId: string;
-  content: string;
+  content: string | ContentBlock[];
   isError?: boolean;
 };
 
@@ -246,6 +251,36 @@ export type TextBlock = {
   text: string;
 };
 
+export type ImageBlock = {
+  type: "image";
+  data: string;
+  mimeType: string;
+};
+
+export type AudioBlock = {
+  type: "audio";
+  data: string;
+  mimeType: string;
+};
+
+export type ResourceLinkBlock = {
+  type: "resource_link";
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+};
+
+export type ResourceBlock = {
+  type: "resource";
+  resource: {
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+  };
+};
+
 export type ThinkingBlock = {
   type: "thinking";
   thinking: string;
@@ -260,7 +295,14 @@ export type ToolCallBlock = {
   args: string;  // Raw JSON string (may be incomplete during streaming)
 };
 
-export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock;
+export type ContentBlock =
+  | TextBlock
+  | ImageBlock
+  | AudioBlock
+  | ResourceLinkBlock
+  | ResourceBlock
+  | ThinkingBlock
+  | ToolCallBlock;
 
 /**
  * Accumulated assistant message partial, carried by each streaming event.
@@ -303,32 +345,160 @@ export function toolCallsFromPartial(partial: AssistantMessagePartial): ToolCall
 }
 
 // ---------------------------------------------------------------------------
-// Stream options
+// Provider call context and stream function types
 // ---------------------------------------------------------------------------
 
-export type LlmStreamOptions = {
-  signal?: AbortSignal;
+export type JsonPrimitive = null | boolean | number | string;
+export type JsonValue =
+  | JsonPrimitive
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+export type JsonObject = Readonly<Record<string, JsonValue>>;
+
+export type ScopeRef = readonly { kind: string; id: string }[];
+
+export type ToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "switch_mode"
+  | "other";
+
+export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export type ToolCallContent =
+  | { type: "content"; content: ContentBlock }
+  | { type: "diff"; path: string; oldText: string | null; newText: string }
+  | { type: "terminal"; terminalId: string };
+
+export type ToolCallLocation = { path: string; line?: number };
+
+export type ToolCall = {
+  toolCallId: string;
+  title: string;
+  kind: ToolKind;
+  status: ToolCallStatus;
+  content?: ToolCallContent[];
+  locations?: ToolCallLocation[];
+  rawInput?: JsonValue;
+  rawOutput?: JsonValue;
+  _meta?: JsonObject;
 };
 
-// ---------------------------------------------------------------------------
-// Stream function types
-// ---------------------------------------------------------------------------
+export type ToolCallUpdate = { toolCallId: string } & Partial<Omit<ToolCall, "toolCallId">>;
 
-/**
- * Low-level stream function: receives a full LlmRequest and yields events.
- * This is the function the agent loop consumes.
- */
-export type StreamFn = (
-  request: LlmRequest,
-  options: LlmStreamOptions,
-) => AsyncIterable<LlmStreamEvent>;
+export type ToolAnnotations = {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
 
-/**
- * API-level stream function: receives a resolved Model and yields events.
- * Providers implement this signature. The registry dispatches by model.protocol.
- */
-export type ApiStreamFn = (
+export type RunInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
+
+export type RunInteractionRequest = Readonly<{
+  id?: string;
+  kind: RunInteractionKind;
+  prompt: string;
+  payload?: JsonValue;
+  toolCallId?: string;
+  result?: Readonly<{
+    answered?: string;
+    replied?: string;
+    cancelled?: string;
+  }>;
+}>;
+
+export type ToolDefinitionSummary = Readonly<{
+  name: string;
+  description: string;
+  parameters?: JsonValue;
+  _meta?: JsonObject;
+}>;
+
+export type ToolCallOutcome =
+  | Readonly<{ ok: true; content: JsonValue }>
+  | Readonly<{ ok: false; error: string; content?: JsonValue }>;
+
+export type ToolProgress = {
+  progress: number;
+  total?: number;
+  message?: string;
+  _meta?: JsonObject;
+};
+
+export function isValidToolProgress(value: unknown): value is ToolProgress {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const p = value as Record<string, unknown>;
+  if (typeof p.progress !== "number" || !Number.isFinite(p.progress)) {
+    return false;
+  }
+  if (p.total !== undefined && (typeof p.total !== "number" || !Number.isFinite(p.total))) {
+    return false;
+  }
+  if (p.message !== undefined && typeof p.message !== "string") {
+    return false;
+  }
+  if (p._meta !== undefined && (typeof p._meta !== "object" || p._meta === null || Array.isArray(p._meta))) {
+    return false;
+  }
+  return true;
+}
+
+export type ToolCallOptions = {
+  signal?: AbortSignal;
+  onUpdate?(toolCall: ToolCall, progress?: ToolProgress): void;
+};
+
+export type ProviderCallContext = {
+  signal: AbortSignal;
+  run: { id: string; agentId: string; scope: ScopeRef; cwd: string };
+  /** Ask the user through the Run Interaction system and await the answer while the Run stays live. Rejects on abort/cancel. */
+  interact(request: RunInteractionRequest): Promise<JsonValue>;
+  /** The tools this Run would give the model, and ways to call or report tool execution. */
+  tools: {
+    list(): readonly ToolDefinitionSummary[];
+    call(name: string, args: JsonValue, options?: ToolCallOptions): Promise<ToolCallOutcome>;
+    /** Report execution of an external tool call or an update to one. */
+    report(update: ToolCall | ToolCallUpdate): void;
+  };
+};
+
+export type ProviderStreamFn = (
   model: Model,
   request: LlmRequest,
-  options: LlmStreamOptions,
+  ctx: ProviderCallContext,
 ) => AsyncIterable<LlmStreamEvent>;
+
+export type StreamFn = (
+  request: LlmRequest,
+  ctx?: ProviderCallContext | Partial<ProviderCallContext>,
+) => AsyncIterable<LlmStreamEvent>;
+
+export function createProviderCallContext(
+  overrides?: Partial<ProviderCallContext>,
+): ProviderCallContext {
+  return {
+    signal: overrides?.signal ?? new AbortController().signal,
+    run: overrides?.run ?? {
+      id: "run-0",
+      agentId: "agent-0",
+      scope: [],
+      cwd: "",
+    },
+    interact: overrides?.interact ?? (async () => null),
+    tools: {
+      list: () => overrides?.tools?.list() ?? [],
+      call: async (name, args, options) => overrides?.tools?.call?.(name, args, options) ?? { ok: true, content: null },
+      report: (update) => overrides?.tools?.report?.(update),
+    },
+  };
+}

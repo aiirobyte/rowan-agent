@@ -1,7 +1,16 @@
 import Type from "typebox";
 import type {
   ContentBlock,
+  ScopeRef,
   ThinkingLevel,
+  ToolAnnotations,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+  ToolProgress,
 } from "@rowan-agent/models";
 import type {
   AgentId,
@@ -30,7 +39,6 @@ import type {
   QueuedRunFailure,
   ToolCallId,
   ToolCallSnapshot,
-  ToolProgress,
   ToolExecutionResult,
   UserContent,
   UserMessage,
@@ -89,7 +97,6 @@ export type {
   ThinkingContent,
   ToolCallId,
   ToolCallSnapshot,
-  ToolProgress,
   ToolCallState,
   ToolExecutionResult,
   ToolMessage,
@@ -102,9 +109,20 @@ export type {
   WithdrawnUserInput,
 } from "../runtime-events";
 
+export type {
+  ScopeRef,
+  ToolAnnotations,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+} from "@rowan-agent/models";
+
 export type { RunInteraction, RunInteractionDriver, RunInteractionKind, RunInteractionRequest, RunInteractionState, RunInteractionStatus } from "../harness/phases/interactions";
 
-export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata }>;
+export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata; thinkingLevel?: ThinkingLevel }>;
 export type HistorySeed = readonly Message[];
 export type ContextStatus = Readonly<{
   tokens: number;
@@ -133,35 +151,10 @@ const THINKING_LEVELS = [
   "max",
 ] as const satisfies readonly ThinkingLevel[];
 
-function thinkingLevelFromMetadata(metadata: unknown): ThinkingLevel | undefined {
-  const record = isRecord(metadata) ? metadata : undefined;
-  const mori = record?.mori;
-  if (!isRecord(mori)) return undefined;
-  const level = mori.thinkingLevel;
-  return typeof level === "string" && THINKING_LEVELS.includes(level as ThinkingLevel)
-    ? level as ThinkingLevel
-    : undefined;
-}
-
 export function thinkingLevelFromUserInput(input: UserInput): ThinkingLevel | undefined {
-  return typeof input === "string" ? undefined : thinkingLevelFromMetadata(input.metadata);
+  return typeof input === "string" ? undefined : input.thinkingLevel;
 }
 
-export function thinkingLevelFromMessages(
-  messages: readonly { role: string; metadata?: unknown }[],
-): ThinkingLevel | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "user") continue;
-    const metadata = message.metadata;
-    const kind = isRecord(metadata) && typeof metadata.kind === "string"
-      ? metadata.kind
-      : undefined;
-    if (kind === "phase_prompt" || kind === "phase_input") continue;
-    return thinkingLevelFromMetadata(metadata);
-  }
-  return undefined;
-}
 /** Who is calling which tool, without the ability to ask or suspend. Hosts that
  * describe a call before it runs (for example to build a confirmation) only
  * have this much. */
@@ -175,13 +168,19 @@ export type ToolCallContext = Readonly<{
   toolCallId: ToolCallId;
   /** The model's id for this call, matching `tool_call_delta` events; absent when a host runs the tool itself. */
   providerToolCallId?: string;
-  scope?: import("../extensions").ScopeRef;
+  scope?: ScopeRef;
   turn?: JsonObject;
-  reportProgress(progress: JsonValue): void;
+  reportProgress(progress: ToolProgress): void;
 }>;
 export type ToolInvocationContext = ToolCallContext & Readonly<{
   interaction: RunInteractionDriver;
 }>;
+export type {
+  ToolCallPresentationInput,
+  ToolCallPresentationOutput,
+} from "./tool-call-merge";
+export { mergeToolCall, isValidPresentationOutput } from "./tool-call-merge";
+
 export type Tool = Readonly<{
   name: string;
   /** Rowan-owned Core Tool; Core Tools bypass Definition/Phase filtering. */
@@ -190,6 +189,20 @@ export type Tool = Readonly<{
   parameters: Type.TSchema;
   promptSnippet?: string;
   promptGuidelines?: readonly string[];
+  kind?: ToolKind;
+  annotations?: ToolAnnotations;
+  _meta?: JsonObject;
+  present?(call: import("./tool-call-merge").ToolCallPresentationInput): {
+    title?: string;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    _meta?: JsonObject;
+  } | undefined | void | Promise<{
+    title?: string;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    _meta?: JsonObject;
+  } | undefined | void>;
   execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
 }>;
 export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
@@ -252,6 +265,11 @@ export type ToolCallReservation = Readonly<{
   name: string;
   args: JsonValue;
   toolCallId?: ToolCallId;
+  title?: string;
+  kind?: ToolKind;
+  locations?: ToolCallLocation[];
+  content?: ToolCallContent[];
+  _meta?: JsonObject;
 }>;
 export type ToolCommit = Readonly<{ run: RunRecord; toolCall: ToolCallSnapshot }>;
 export type ToolBatchCommit = Readonly<{ run: RunRecord; toolCalls: readonly ToolCallSnapshot[] }>;
@@ -264,6 +282,8 @@ export type RunRecord = Readonly<{
   revision: number;
   state: RunState;
   input: UserInput;
+  scope?: ScopeRef;
+  cwd?: string;
   initialMessageId?: MessageId;
   invalidatedBy?: Readonly<{ messageId: MessageId; messageRevision: number }>;
   metadata?: Metadata;
@@ -304,6 +324,8 @@ export type RunSnapshotBase = Readonly<{
   agentSequence: number;
   revision: number;
   input: UserInput;
+  scope?: ScopeRef;
+  cwd?: string;
   metadata?: Metadata;
   /** Effective entry Phase payload the Run started with (defaults filled). */
   phasePayload?: JsonValue;
@@ -316,7 +338,7 @@ export type RunSnapshotBase = Readonly<{
   cursor: EventCursor;
 }>;
 export type RunSnapshot = RunSnapshotBase & (
-  | Readonly<{ state: "queued" | "running"; currentPhaseId?: string }>
+  | Readonly<{ state: "queued" | "running"; currentPhaseId?: string; interactions?: readonly RunInteraction[] }>
   | Readonly<{
       state: "input_required";
       interactions: readonly RunInteraction[];
@@ -364,7 +386,7 @@ export interface OwnedStore {
   contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus>;
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
-  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
+  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord>;
@@ -404,6 +426,11 @@ export interface OwnedStore {
     args: JsonValue;
     toolCallId?: ToolCallId;
     providerToolCallId?: string;
+    title?: string;
+    kind?: ToolKind;
+    locations?: ToolCallLocation[];
+    content?: ToolCallContent[];
+    _meta?: JsonObject;
   }): Promise<ToolCommit>;
   reserveToolCalls(input: {
     runId: RunId;
@@ -419,6 +446,11 @@ export interface OwnedStore {
     execution: ExecutionToken;
     expectedRevision: number;
     toolCallId: ToolCallId;
+    title?: string;
+    kind?: ToolKind;
+    locations?: ToolCallLocation[];
+    content?: ToolCallContent[];
+    _meta?: JsonObject;
   }): Promise<ToolCommit>;
   suspendToolCall(input: {
     runId: RunId;
@@ -434,8 +466,20 @@ export interface OwnedStore {
     result: ToolExecutionResult;
     state: "completed" | "failed" | "indeterminate";
     reason?: string;
+    title?: string;
+    kind?: ToolKind;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    rawOutput?: JsonValue;
+    _meta?: JsonObject;
   }): Promise<ToolCommit>;
   cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord>;
+  recordToolCall(input: {
+    runId: RunId;
+    execution?: ExecutionToken;
+    update: ToolCall | ToolCallUpdate;
+    external?: boolean;
+  }): Promise<DurableRunEvent>;
   snapshotRun(runId: RunId): Promise<RunSnapshot>;
   history(agentId: AgentId): Promise<readonly Message[]>;
   listAgents(): Promise<readonly AgentRecord[]>;
@@ -483,7 +527,14 @@ export interface AgentRuntime {
     effectDigestConfirmation?: string;
   }): Promise<MessageRevisionResult>;
   compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
-  start(agentId: AgentId, input: UserInput, options: { idempotencyKey: string; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: ReadonlyArray<EntryPhaseSpec> }): Promise<AgentRun>;
+  start(agentId: AgentId, input: UserInput, options: {
+    idempotencyKey: string;
+    metadata?: Metadata;
+    scope?: ScopeRef;
+    cwd?: string;
+    phasePayload?: JsonValue;
+    entryPhases?: ReadonlyArray<EntryPhaseSpec>;
+  }): Promise<AgentRun>;
   run(runId: RunId): AgentRun;
   contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
   compactContext(agentId: AgentId, options?: { input?: UserInput; instructions?: string; idempotencyKey?: string }): Promise<AgentRun>;
@@ -494,6 +545,9 @@ export interface AgentRuntime {
   consume(input: { consumerId: string; signal: AbortSignal; onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void> }): Promise<DurableConsumer>;
   listCapabilities(): readonly import("../extensions").ExtensionCapability[];
   onCapabilitiesChanged(listener: (capabilities: readonly import("../extensions").ExtensionCapability[]) => void): () => void;
+  listUiContributions(): readonly import("../extensions").UiContribution[];
+  onUiContributionsChanged(listener: (contributions: readonly import("../extensions").UiContribution[]) => void): () => void;
+  triggerUiAction(event: { contributionId: string; actionId: string; scope?: ScopeRef }): void;
   close(): Promise<void>;
 }
 export type ConsumerRegistration = Readonly<{ cursor?: EventCursor; waterline: EventCursor }>;
@@ -546,8 +600,13 @@ function isAssistantContent(value: unknown): value is AssistantContent {
 }
 export function normalizeUserInput(input: UserInput): UserInput {
   const normalized = typeof input === "string" ? { content: input } : input;
-  if (!isRecord(normalized) || !hasOnlyKeys(normalized, ["content", "metadata"]) || !isUserContent(normalized.content)) throw new TypeError("input must contain only valid UserContent");
+  if (!isRecord(normalized) || !hasOnlyKeys(normalized, ["content", "metadata", "thinkingLevel"]) || !isUserContent(normalized.content)) {
+    throw new TypeError("input must contain only valid UserContent");
+  }
   if (normalized.metadata !== undefined) assertMetadata(normalized.metadata, "input.metadata");
+  if (normalized.thinkingLevel !== undefined && !THINKING_LEVELS.includes(normalized.thinkingLevel as ThinkingLevel)) {
+    throw new TypeError("input.thinkingLevel must be a valid ThinkingLevel");
+  }
   assertJsonValue(normalized, "input");
   return normalized;
 }
@@ -561,9 +620,16 @@ export function isAssistantMessage(value: unknown): value is AssistantMessage {
     && (value.interrupted === undefined || typeof value.interrupted === "boolean");
 }
 function isToolResult(value: unknown): value is ToolExecutionResult {
-  if (!isRecord(value) || !isJsonValue(value.content) || typeof value.ok !== "boolean") return false;
+  if (!isRecord(value)) return false;
+  if (value.structuredContent !== undefined && !isJsonValue(value.structuredContent)) return false;
+  if (Array.isArray(value.content)) {
+    if (value.isError !== undefined && typeof value.isError !== "boolean") return false;
+    return true;
+  }
+  if (!isJsonValue(value.content) || typeof value.ok !== "boolean") return false;
+  const keys = Object.keys(value).filter((k) => k !== "structuredContent").sort();
   const expected = value.ok ? ["content", "ok"] : ["content", "error", "ok"];
-  if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expected)) return false;
+  if (JSON.stringify(keys) !== JSON.stringify(expected)) return false;
   return value.ok || typeof value.error === "string";
 }
 function isDurableToolResult(value: unknown): boolean {

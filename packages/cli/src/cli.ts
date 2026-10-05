@@ -752,8 +752,10 @@ async function promptWithLog(input: {
           }
           continue;
         }
-        if (event.kind === "tool_progress" || event.kind === "thinking_delta" || event.kind === "tool_call_delta" || event.kind === "model_retry" || event.kind === "phase_status") continue;
-        runEventLogger(event);
+        if (event.kind === "thinking_delta" || event.kind === "tool_call_delta" || event.kind === "model_retry" || event.kind === "phase_status") continue;
+        if (event.durability === "durable") {
+          runEventLogger(event);
+        }
         if (event.kind === "message_committed" && event.message.role === "assistant") {
           const content = formatMessageContent(event.message.content);
           const streamed = streamedMessages.get(event.message.id);
@@ -765,10 +767,13 @@ async function promptWithLog(input: {
           streamedMessages.delete(event.message.id);
         }
         if (event.kind === "tool_state_changed" && event.transition.to === "pending") {
-          process.stderr.write(`  ⚙ ${event.toolCall.name}(${formatToolArgsPreview(event.toolCall.name, event.toolCall.args)})\n`);
+          const title = ("title" in event.toolCall && event.toolCall.title) || ("name" in event.toolCall && (event.toolCall as any).name) || "tool";
+          const args = ("rawInput" in event.toolCall && event.toolCall.rawInput !== undefined) ? event.toolCall.rawInput : ("args" in event.toolCall ? (event.toolCall as any).args : undefined);
+          process.stderr.write(`  ⚙ ${title}(${formatToolArgsPreview(title, args)})\n`);
         }
-        if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
-          process.stderr.write(`  ${event.transition.to === "completed" ? "✓" : "✗"} ${event.toolCall.name}\n`);
+        if (event.kind === "tool_state_changed" && ["completed", "failed"].includes(event.transition.to)) {
+          const title = ("title" in event.toolCall && event.toolCall.title) || ("name" in event.toolCall && (event.toolCall as any).name) || "tool";
+          process.stderr.write(`  ${event.transition.to === "completed" ? "✓" : "✗"} ${title}\n`);
         }
         if (event.kind === "run_state_changed" && event.to === "input_required") {
           input.onInputWait?.();

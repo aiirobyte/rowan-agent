@@ -1,3 +1,4 @@
+import type { ScopeRef } from "@rowan-agent/models";
 import type { AgentId, JsonValue, Metadata } from "../runtime-events";
 import type { EntryPhaseSpec, UserInput } from "./contracts";
 import { assertUtf8ByteLimit, canonicalJson } from "./json";
@@ -36,16 +37,27 @@ export function encodeIdempotencyScope(storeIncarnation: string, scope: Idempote
   if (typeof storeIncarnation !== "string" || storeIncarnation.length === 0) throw new TypeError("storeIncarnation must be non-empty");
   return canonicalJson([storeIncarnation, ...scope] as never);
 }
-export function canonicalStartRunRequest(input: UserInput, metadata?: Metadata, phasePayload?: JsonValue, pinnedConfigToken?: string, entryPhases?: readonly EntryPhaseSpec[]): string {
+export function canonicalStartRunRequest(
+  input: UserInput,
+  metadata?: Metadata,
+  phasePayload?: JsonValue,
+  pinnedConfigToken?: string,
+  entryPhases?: readonly EntryPhaseSpec[],
+  scope?: ScopeRef,
+  cwd?: string,
+): string {
   const normalized = normalizeUserInput(input);
   if (metadata !== undefined) assertUtf8ByteLimit(canonicalJson(metadata), METADATA_JSON_BYTES, "run.metadata");
   if (phasePayload !== undefined) assertUtf8ByteLimit(canonicalJson(phasePayload), MESSAGE_CONTENT_JSON_BYTES, "run.phasePayload");
   if (entryPhases !== undefined) assertUtf8ByteLimit(canonicalJson(entryPhases as unknown as JsonValue), MESSAGE_CONTENT_JSON_BYTES, "run.entryPhases");
+  if (cwd !== undefined && typeof cwd !== "string") throw new TypeError("run.cwd must be a string");
   return canonicalJson({
     input: normalized,
     ...(metadata === undefined ? {} : { metadata }),
     ...(phasePayload === undefined ? {} : { phasePayload }),
     ...(entryPhases === undefined ? {} : { entryPhases }),
     ...(pinnedConfigToken === undefined ? {} : { pinnedConfigToken }),
+    ...(scope === undefined ? {} : { scope }),
+    ...(cwd === undefined ? {} : { cwd }),
   } as never);
 }

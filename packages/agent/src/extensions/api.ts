@@ -6,13 +6,11 @@ import type {
   ScopeRef,
   ExtensionStateStore,
   ExtensionCapabilityContribution,
+  UiContribution,
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
-import type {
-  PhaseContext,
-  PhaseSettingsProvider,
-} from "../harness/phases/types";
+import type { PhaseContext } from "../harness/phases/types";
 import type { ExtensionContext, ExtensionUtils } from "./context";
 import type { JsonObject } from "../runtime-events";
 import { assertJsonValue } from "../runtime/json";
@@ -32,16 +30,19 @@ import { assertJsonValue } from "../runtime/json";
  * ```
  */
 export interface ExtensionAPI {
-  /**
-   * Subscribe to a hook event.
-   *
-   * @param eventType - Hook type, e.g. "before_tool_call"
-   * @param handler - Hook handler, can return result to modify behavior
-   */
-  on<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
+  /** Hook events — subscribe or unsubscribe. */
+  hooks: {
+    /**
+     * Subscribe to a hook event.
+     *
+     * @param eventType - Hook type, e.g. "before_tool_call"
+     * @param handler - Hook handler, can return result to modify behavior
+     */
+    on<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
 
-  /** Unsubscribe from a hook event. */
-  off<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
+    /** Unsubscribe from a hook event. */
+    off<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
+  };
 
   /** Extension configuration — read own layered config or listen for changes. */
   config: {
@@ -51,16 +52,18 @@ export interface ExtensionAPI {
     changed(handler: (scope: ScopeRef) => void): void;
   };
 
-  /** Extension state — scoped to run (in-memory) or agent (durable). */
+  /** Extension state — scoped to run (in-memory) or agent (durable) or global (durable). */
   state: {
     /** Run-scoped in-memory state; dropped when the Run ends. */
     run(runId: string): ExtensionStateStore;
     /** Agent-scoped durable state; persisted with the Agent record. */
     agent(agentId: string): ExtensionStateStore;
+    /** Extension-scoped durable state; survives process restarts. */
+    global(): ExtensionStateStore;
   };
 
   /** Tool capabilities — register and unregister custom tools. */
-  tool: {
+  tools: {
     /** Register a custom LLM-callable tool. */
     register(tool: ToolDefinition): void;
     /** Unregister a previously registered tool by name. */
@@ -73,26 +76,16 @@ export interface ExtensionAPI {
     contribute(contribution: ExtensionCapabilityContribution): () => void;
   };
 
-  /** Register a model provider. */
-  registerProvider(config: import("@rowan-agent/models").ProviderConfig): void;
-
-  /** Unregister a model provider. */
-  unregisterProvider(name: string): void;
-
-  /** Extension manifest from package.json `rowan` field. */
-  manifest?: ExtensionManifest;
-
-  /** Utility functions. */
-  utils: ExtensionUtils;
-
-  /** Runtime context — cwd, signal, exec, message access, etc. */
-  context: ExtensionContext;
-
-  /** Shared event bus for inter-extension communication. */
-  events: EventBus;
+  /** Model provider registration. */
+  providers: {
+    /** Register a model provider. Registering with an existing id replaces it. */
+    register(config: import("@rowan-agent/models").ProviderConfig): void;
+    /** Unregister a model provider by id. */
+    unregister(id: string): void;
+  };
 
   /** Phase execution capabilities — provides Phase In/Out, phase identity, phase routing, and registration. */
-  phase: {
+  phases: {
     /** Register a Phase directory bundle or Phase object. */
     register(phase: PhaseRegistration): Promise<void>;
     /** Unregister a previously registered phase by name. */
@@ -111,11 +104,25 @@ export interface ExtensionAPI {
     getNextPhase(): string | undefined;
     /** Get the message set by setMessage */
     getMessage(): string | undefined;
-    /** Phase Settings contributions registered by the Phase extension. */
-    settings: {
-      register(provider: PhaseSettingsProvider): void;
-    };
   };
+
+  /** Declarative UI contributions — settings or model picker decorations. */
+  ui: {
+    /** Contribute declarative UI to a host slot. Returns a disposer to remove the contribution. */
+    contribute(contribution: UiContribution): () => void;
+  };
+
+  /** Extension manifest from package.json `rowan` field. */
+  manifest?: ExtensionManifest;
+
+  /** Utility functions. */
+  utils: ExtensionUtils;
+
+  /** Runtime context — cwd, signal, exec, message access, etc. */
+  context: ExtensionContext;
+
+  /** Shared event bus for inter-extension communication. */
+  events: EventBus;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,10 +152,10 @@ export function createExtensionAPI(
     registerPhase?: (registration: PhaseRegistration) => Promise<void>;
     unregisterPhase?: (phaseName: string) => void;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
-    unregisterProvider?: (name: string) => void;
+    unregisterProvider?: (id: string) => void;
     registerTool?: (tool: ToolDefinition) => void;
     unregisterTool?: (toolName: string) => void;
-    registerSettings?: (provider: PhaseSettingsProvider) => void;
+    contributeUi?: (contribution: UiContribution) => () => void;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
@@ -160,6 +167,7 @@ export function createExtensionAPI(
     state?: {
       run: (runId: string) => ExtensionStateStore;
       agent: (agentId: string) => ExtensionStateStore;
+      global: () => ExtensionStateStore;
     };
     contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
   },
@@ -198,17 +206,18 @@ export function createExtensionAPI(
   let outputPayload: unknown = phaseIn?.state?.payload;
   let nextPhase: string | undefined;
   let outputMessage: string | undefined;
-  let settingsProvider: PhaseSettingsProvider | undefined;
 
   return {
-    on: (eventType, handler) => {
-      assertActive();
-      hooks?.on(eventType, handler);
-      trackCleanup?.(() => hooks?.off(eventType, handler));
-    },
-    off: (eventType, handler) => {
-      assertActive();
-      hooks?.off(eventType, handler);
+    hooks: {
+      on: (eventType, handler) => {
+        assertActive();
+        hooks?.on(eventType, handler);
+        trackCleanup?.(() => hooks?.off(eventType, handler));
+      },
+      off: (eventType, handler) => {
+        assertActive();
+        hooks?.off(eventType, handler);
+      },
     },
     config: {
       get: async (scope) => {
@@ -259,8 +268,27 @@ export function createExtensionAPI(
           },
         };
       },
+      global: () => {
+        assertActive();
+        const store = options?.state?.global();
+        return {
+          get: async (key) => {
+            assertActive();
+            return store?.get(key);
+          },
+          set: async (key, value) => {
+            assertActive();
+            assertJsonValue(value);
+            return store?.set(key, value);
+          },
+          delete: async (key) => {
+            assertActive();
+            return store?.delete(key);
+          },
+        };
+      },
     },
-    tool: {
+    tools: {
       register: (tool) => {
         assertActive();
         options?.registerTool?.(tool);
@@ -288,14 +316,16 @@ export function createExtensionAPI(
         return options?.contributeCapability ? options.contributeCapability(contribution) : () => {};
       },
     },
-    registerProvider: (config) => {
-      assertActive();
-      options?.registerProvider?.(config);
-      trackCleanup?.(() => options?.unregisterProvider?.(config.id));
-    },
-    unregisterProvider: (name) => {
-      assertActive();
-      options?.unregisterProvider?.(name);
+    providers: {
+      register: (config) => {
+        assertActive();
+        options?.registerProvider?.(config);
+        trackCleanup?.(() => options?.unregisterProvider?.(config.id));
+      },
+      unregister: (id) => {
+        assertActive();
+        options?.unregisterProvider?.(id);
+      },
     },
     manifest: options?.manifest,
     utils: {
@@ -316,7 +346,7 @@ export function createExtensionAPI(
         count: (event) => eventBus.count(event),
       }
       : { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
-    phase: {
+    phases: {
       register: async (registration) => {
         assertActive();
         await options?.registerPhase?.(registration);
@@ -332,18 +362,35 @@ export function createExtensionAPI(
       setNextPhase: (id) => { nextPhase = id; },
       getNextPhase: () => nextPhase,
       getMessage: () => outputMessage,
-      settings: {
-        register: (provider) => {
-          assertActive();
-          if (typeof provider !== "function") {
-            throw new Error("Phase Settings registration requires a provider function.");
+    },
+    ui: {
+      contribute: (contribution) => {
+        assertActive();
+        if (!contribution || typeof contribution !== "object") {
+          throw new TypeError("UI contribution must be an object.");
+        }
+        if (contribution.slot !== "settings" && contribution.slot !== "model-picker") {
+          throw new TypeError(`Unsupported UI contribution slot: "${(contribution as any).slot}".`);
+        }
+        if (typeof contribution.id !== "string" || contribution.id.trim() === "") {
+          throw new TypeError("UI contribution requires a non-empty id.");
+        }
+        if (contribution.slot === "settings") {
+          if (typeof contribution.title !== "string") {
+            throw new TypeError("Settings UI contribution requires a title.");
           }
-          if (settingsProvider) {
-            throw new Error("A Phase may register only one Settings provider.");
+          if (!contribution.settings || typeof contribution.settings !== "object") {
+            throw new TypeError("Settings UI contribution requires a settings definition.");
           }
-          settingsProvider = provider;
-          options?.registerSettings?.(provider);
-        },
+        }
+        if (contribution.slot === "model-picker") {
+          if (typeof contribution.provider !== "string" || contribution.provider.trim() === "") {
+            throw new TypeError("Model-picker UI contribution requires a provider.");
+          }
+        }
+        const dispose = options?.contributeUi ? options.contributeUi(contribution) : () => {};
+        trackCleanup?.(dispose);
+        return dispose;
       },
     },
   };

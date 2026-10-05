@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import type { ContentBlock } from "@rowan-agent/models";
+import type {
+  ContentBlock,
+  ScopeRef,
+  ToolAnnotations,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+} from "@rowan-agent/models";
 import { createId, createTimestamp } from "../utils";
 import type {
   AgentId,
@@ -51,11 +61,13 @@ import { createIdempotencyScope, encodeIdempotencyScope, canonicalStartRunReques
 import { TOOL_VALUE_JSON_BYTES } from "./idempotency";
 import { assertJsonValue, assertUtf8ByteLimit, canonicalJson } from "./json";
 import { normalizeUserInput } from "./contracts";
+import { mergeToolCall } from "./tool-call-merge";
 import type {
   AssistantContent,
   DurableToolResult,
   EventId,
   InteractionRecord,
+  JsonObject,
   ToolCallId,
   ToolCallSnapshot,
   ToolExecutionResult,
@@ -72,20 +84,51 @@ export type StoredRun = Mutable<RunRecord>;
 export type StoredOwner = Mutable<OwnerLease>;
 export type StoredToolCall = {
   id: ToolCallId;
-  providerToolCallId: string;
+  providerToolCallId?: string;
   agentId: AgentId;
   runId: RunId;
-  executionId: ExecutionId;
-  requestMessageId: MessageId;
-  name: string;
-  args: import("../runtime-events").JsonValue;
-  state: import("../runtime-events").ToolCallState;
+  executionId?: ExecutionId;
+  requestMessageId?: MessageId;
+  name?: string;
+  args?: import("../runtime-events").JsonValue;
+  state?: import("../runtime-events").ToolCallState;
+
+  toolCallId: string;
+  title: string;
+  kind: ToolKind;
+  status: ToolCallStatus;
+  content?: ToolCallContent[];
+  locations?: ToolCallLocation[];
+  rawInput?: import("../runtime-events").JsonValue;
+  rawOutput?: import("../runtime-events").JsonValue;
+  _meta?: import("../runtime-events").JsonObject;
+  external?: boolean;
+
   result?: DurableToolResult;
   resultMessageId?: MessageId;
   reason?: string;
   createdAt: string;
   updatedAt: string;
 };
+
+export function defaultToolCallContent(result: ToolExecutionResult): ToolCallContent[] {
+  if ("content" in result && Array.isArray(result.content)) {
+    return (result.content as readonly (ContentBlock | ToolCallContent)[]).map((block) => {
+      if (typeof block === "object" && block !== null && "type" in block && (block.type === "content" || block.type === "diff" || block.type === "terminal")) {
+        return block as ToolCallContent;
+      }
+      return {
+        type: "content",
+        content: block as ContentBlock,
+      };
+    });
+  }
+  const content = (result as { content?: JsonValue }).content;
+  if (typeof content === "string") {
+    return [{ type: "content", content: { type: "text", text: content } }];
+  }
+  return [{ type: "content", content: { type: "text", text: JSON.stringify(content ?? null) } }];
+}
 
 export type IdempotencyReceipt = {
   payload: string;
@@ -260,7 +303,7 @@ export class InMemoryStore implements DurableStore {
       }
     }
     for (const message of state.messages) store.messages.set(message.id, clone(message));
-    for (const toolCall of state.toolCalls ?? []) store.toolCalls.set(toolCall.id, clone(toolCall));
+    for (const toolCall of state.toolCalls ?? []) store.toolCalls.set((toolCall.id ?? (toolCall as any).toolCallId) as ToolCallId, clone(toolCall) as StoredToolCall);
     store.events.push(...clone(state.events));
     for (const [key, receipt] of state.idempotency) store.idempotency.set(key, clone(receipt));
     for (const [key, receipt] of state.operationReceipts) {
@@ -330,10 +373,10 @@ export class InMemoryStore implements DurableStore {
     for (const run of this.runs.values()) {
       if (run.state !== "running" || run.execution?.ownerEpoch !== ownerEpoch) continue;
       const activeToolCalls = [...this.toolCalls.values()]
-        .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.state === "pending" || toolCall.state === "running"));
+        .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.status === "pending" || toolCall.status === "in_progress" || toolCall.state === "pending" || toolCall.state === "in_progress"));
       const indeterminateToolCallIds: ToolCallId[] = [];
       for (const toolCall of activeToolCalls) {
-        if (toolCall.state === "running") indeterminateToolCallIds.push(toolCall.id);
+        if (toolCall.status === "in_progress" || toolCall.state === "in_progress") indeterminateToolCallIds.push(toolCall.id);
         this.interruptToolCall(run, toolCall, message);
       }
       const failure: RunFailure = indeterminateToolCallIds.length > 0
@@ -633,7 +676,7 @@ export class InMemoryStore implements DurableStore {
       if (run.state === "running" || run.state === "queued" || run.state === "input_required") {
         if (run.state === "running") {
           const openToolCalls = [...this.toolCalls.values()]
-            .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.state === "pending" || toolCall.state === "running"));
+            .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.status === "pending" || toolCall.status === "in_progress" || toolCall.state === "pending" || toolCall.state === "in_progress"));
           for (const toolCall of openToolCalls) this.interruptToolCall(run, toolCall, "Run superseded by Message revision.");
         } else {
           delete run.openInteractions;
@@ -728,7 +771,7 @@ export class InMemoryStore implements DurableStore {
     return record;
   }
 
-  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
+  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
     this.assertOwner(lease);
     this.requireAgent(input.agentId);
     if (input.phasePayload !== undefined && input.entryPhases !== undefined) {
@@ -738,7 +781,7 @@ export class InMemoryStore implements DurableStore {
     if (input.phasePayload !== undefined) assertJsonValue(input.phasePayload, "run.phasePayload");
     if (input.entryPhases !== undefined) assertEntryPhases(input.entryPhases, "run.entryPhases");
     const scope = createIdempotencyScope("start_run", input.agentId, input.idempotencyKey);
-    const payload = canonicalStartRunRequest(normalizedInput, input.metadata, input.phasePayload, input.pinnedConfigToken, input.entryPhases);
+    const payload = canonicalStartRunRequest(normalizedInput, input.metadata, input.phasePayload, input.pinnedConfigToken, input.entryPhases, input.scope, input.cwd);
     const replay = this.replay(scope, payload);
     if (replay) return clone(replay as RunRecord);
 
@@ -805,6 +848,8 @@ export class InMemoryStore implements DurableStore {
       state: "queued",
       input: clone(normalizedInput),
       ...(input.metadata ? { metadata: clone(input.metadata) } : {}),
+      ...(input.scope !== undefined ? { scope: clone(input.scope) } : {}),
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       ...(input.phasePayload === undefined ? {} : { phasePayload: clone(input.phasePayload) }),
       ...(input.entryPhases === undefined ? {} : { entryPhases: clone(input.entryPhases) }),
       ...(input.pinnedConfigToken === undefined ? {} : { pinnedConfigToken: input.pinnedConfigToken }),
@@ -1127,19 +1172,30 @@ export class InMemoryStore implements DurableStore {
     this.assertExecution(run, input.execution, input.expectedRevision);
     if (this.messages.has(input.requestMessageId)) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     const timestamp = createTimestamp();
-    const toolCalls: StoredToolCall[] = input.calls.map((call) => ({
-      id: call.toolCallId ?? (createId("tool") as ToolCallId),
-      providerToolCallId: call.providerToolCallId,
-      agentId: run.agentId,
-      runId: run.id,
-      executionId: input.execution.executionId,
-      requestMessageId: input.requestMessageId,
-      name: call.name,
-      args: clone(call.args),
-      state: "pending",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }));
+    const toolCalls: StoredToolCall[] = input.calls.map((call) => {
+      const toolCallId = call.providerToolCallId || (call.toolCallId ?? (createId("tool") as ToolCallId));
+      return {
+        id: (call.toolCallId ?? (createId("tool") as ToolCallId)),
+        toolCallId,
+        ...(call.providerToolCallId ? { providerToolCallId: call.providerToolCallId } : {}),
+        agentId: run.agentId,
+        runId: run.id,
+        executionId: input.execution.executionId,
+        requestMessageId: input.requestMessageId,
+        name: call.name,
+        title: (call as any).title ?? call.name,
+        kind: (call as any).kind ?? "other",
+        status: "pending",
+        state: "pending",
+        ...((call as any).content ? { content: clone((call as any).content) } : {}),
+        ...((call as any).locations ? { locations: clone((call as any).locations) } : {}),
+        rawInput: clone(call.args),
+        ...((call as any)._meta ? { _meta: clone((call as any)._meta) } : {}),
+        args: clone(call.args),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+    });
     for (const toolCall of toolCalls) {
       if (this.toolCalls.has(toolCall.id)) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     }
@@ -1172,6 +1228,11 @@ export class InMemoryStore implements DurableStore {
     execution: ExecutionToken;
     expectedRevision: number;
     toolCallId: ToolCallId;
+    title?: string;
+    kind?: ToolKind;
+    locations?: ToolCallLocation[];
+    content?: ToolCallContent[];
+    _meta?: JsonObject;
   }): ToolCommit {
     this.assertOwner(lease);
     const operationKey = `tool_start:${input.toolCallId}:${input.execution.executionId}`;
@@ -1181,15 +1242,27 @@ export class InMemoryStore implements DurableStore {
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
     const toolCall = this.requireToolCall(input.toolCallId, run);
-    if (toolCall.state !== "pending") throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
-    toolCall.state = "running";
+    if (toolCall.status !== "pending" && toolCall.state !== "pending") throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
+    const from: ToolCallStatus = toolCall.status ?? "pending";
+    toolCall.status = "in_progress";
+    toolCall.state = "in_progress";
     toolCall.executionId = input.execution.executionId;
+    if (input.title !== undefined) toolCall.title = input.title;
+    if (input.kind !== undefined) toolCall.kind = input.kind;
+    if (input.locations !== undefined) toolCall.locations = clone(input.locations);
+    if (input.content !== undefined) toolCall.content = clone(input.content);
+    if (input._meta !== undefined) {
+      toolCall._meta = {
+        ...(toolCall._meta ?? {}),
+        ...clone(input._meta),
+      };
+    }
     toolCall.updatedAt = createTimestamp();
     this.storeToolCall(toolCall);
     run.revision += 1;
     run.updatedAt = toolCall.updatedAt;
     this.touchRun(run);
-    this.appendToolTransition(run, { from: "pending", to: "running" }, toolCall);
+    this.appendToolTransition(run, { from, to: "in_progress" }, toolCall);
     const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
     this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
@@ -1209,16 +1282,18 @@ export class InMemoryStore implements DurableStore {
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
     const toolCall = this.requireToolCall(input.toolCallId, run);
-    if (toolCall.state !== "running" || toolCall.executionId !== input.execution.executionId) {
+    if ((toolCall.status !== "in_progress" && toolCall.state !== "in_progress") || toolCall.executionId !== input.execution.executionId) {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     }
+    const from: ToolCallStatus = toolCall.status ?? "in_progress";
+    toolCall.status = "pending";
     toolCall.state = "pending";
     toolCall.updatedAt = createTimestamp();
     this.storeToolCall(toolCall);
     run.revision += 1;
     run.updatedAt = toolCall.updatedAt;
     this.touchRun(run);
-    this.appendToolTransition(run, { from: "running", to: "pending" }, toolCall);
+    this.appendToolTransition(run, { from, to: "pending" }, toolCall);
     const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
     this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
     return result;
@@ -1232,12 +1307,19 @@ export class InMemoryStore implements DurableStore {
     result: import("../runtime-events").ToolExecutionResult;
     state: "completed" | "failed" | "indeterminate";
     reason?: string;
+    title?: string;
+    kind?: ToolKind;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    rawOutput?: JsonValue;
+    _meta?: JsonObject;
   }): ToolCommit {
     this.assertOwner(lease);
     assertToolExecutionResult(input.result);
     assertToolValue(input.result, "tool.result");
-    if (input.state === "completed" && !input.result.ok) throw new TypeError("completed ToolCall requires a successful result");
-    if (input.state !== "completed" && input.result.ok) throw new TypeError(`${input.state} ToolCall requires a failed result`);
+    const isCompleted = "ok" in input.result ? input.result.ok : !input.result.isError;
+    if (input.state === "completed" && !isCompleted) throw new TypeError("completed ToolCall requires a successful result");
+    if (input.state !== "completed" && isCompleted) throw new TypeError(`${input.state} ToolCall requires a failed result`);
     if (input.state === "indeterminate" && (!input.reason || input.reason.trim().length === 0)) throw new TypeError("indeterminate ToolCall requires a reason");
     const operationKey = `tool_commit:${input.toolCallId}`;
     const operationPayload = canonicalJson([input.runId, input.expectedRevision, input.execution.executionId, input.state, input.result, input.reason ?? null] as never);
@@ -1247,10 +1329,9 @@ export class InMemoryStore implements DurableStore {
     this.assertExecution(run, input.execution, input.expectedRevision);
     const toolCall = this.requireToolCall(input.toolCallId, run);
     if (toolCall.executionId !== input.execution.executionId) throw new RuntimeError("runtime_ownership_lost", { reason: "epoch_advanced", expectedEpoch: input.execution.ownerEpoch, actualEpoch: this.ownerEpoch });
-    const from = toolCall.state;
-    if (from === "pending" && input.state !== "failed") throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
-    if (from !== "pending" && from !== "running") throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
-    const durableResult: DurableToolResult = { toolCallId: toolCall.id, toolName: toolCall.name, ...clone(input.result) };
+    const fromStatus = (toolCall.status ?? (toolCall.state === "in_progress" ? "in_progress" : toolCall.state)) as ToolCallStatus;
+    const toStatus: ToolCallStatus = input.state === "completed" ? "completed" : "failed";
+    const durableResult: DurableToolResult = { toolCallId: toolCall.id, toolName: toolCall.name ?? toolCall.title, ...clone(input.result) };
     const resultMessageId = createId("msg") as MessageId;
     const message: Message = {
       id: resultMessageId,
@@ -1262,7 +1343,21 @@ export class InMemoryStore implements DurableStore {
       createdAt: createTimestamp(),
     };
     this.storeMessage(message);
-    toolCall.state = input.state;
+    toolCall.status = toStatus;
+    toolCall.state = toStatus;
+    if (input.title !== undefined) toolCall.title = input.title;
+    if (input.kind !== undefined) toolCall.kind = input.kind;
+    if (input.locations !== undefined) toolCall.locations = clone(input.locations);
+    if (input.content !== undefined) toolCall.content = clone(input.content);
+    else if (toolCall.content === undefined) toolCall.content = defaultToolCallContent(input.result);
+    if (input.rawOutput !== undefined) toolCall.rawOutput = clone(input.rawOutput);
+    else if (toolCall.rawOutput === undefined) toolCall.rawOutput = "structuredContent" in input.result && input.result.structuredContent !== undefined ? clone(input.result.structuredContent) : clone((input.result as any).content);
+    if (input._meta !== undefined) {
+      toolCall._meta = {
+        ...(toolCall._meta ?? {}),
+        ...clone(input._meta),
+      };
+    }
     toolCall.result = durableResult;
     toolCall.resultMessageId = resultMessageId;
     if (input.state === "indeterminate") toolCall.reason = input.reason!;
@@ -1272,14 +1367,14 @@ export class InMemoryStore implements DurableStore {
     run.revision += 1;
     run.updatedAt = message.createdAt;
     this.touchRun(run);
-    this.appendToolTransition(run, { from: from as "pending" | "running", to: input.state }, toolCall);
+    this.appendToolTransition(run, { from: fromStatus, to: toStatus }, toolCall);
     this.appendMessage(run, message);
     if (input.state === "indeterminate") {
       const openToolCalls = [...this.toolCalls.values()]
-        .filter((candidate) => candidate.runId === run.id && candidate.executionId === input.execution.executionId && candidate.id !== toolCall.id && (candidate.state === "pending" || candidate.state === "running"));
+        .filter((candidate) => candidate.runId === run.id && candidate.executionId === input.execution.executionId && candidate.id !== toolCall.id && (candidate.status === "pending" || candidate.status === "in_progress" || candidate.state === "pending" || candidate.state === "in_progress"));
       const indeterminateToolCallIds: ToolCallId[] = [toolCall.id];
       for (const candidate of openToolCalls) {
-        if (candidate.state === "running") indeterminateToolCallIds.push(candidate.id);
+        if (candidate.status === "in_progress" || candidate.state === "in_progress") indeterminateToolCallIds.push(candidate.id);
         this.interruptToolCall(run, candidate, input.reason!);
       }
       const failure: RunFailure = {
@@ -1370,7 +1465,7 @@ export class InMemoryStore implements DurableStore {
     }
     const from = run.state;
       const activeToolCalls = run.execution
-        ? [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.state === "pending" || toolCall.state === "running"))
+        ? [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.status === "pending" || toolCall.status === "in_progress" || toolCall.state === "pending" || toolCall.state === "in_progress"))
         : run.state === "input_required" && run.checkpoint?.data && typeof run.checkpoint.data === "object" && !Array.isArray(run.checkpoint.data)
           ? (() => {
               const interactionState = (run.checkpoint!.data as Record<string, import("../runtime-events").JsonValue>).runInteractions;
@@ -1381,11 +1476,11 @@ export class InMemoryStore implements DurableStore {
                 ? (interactionCheckpoint as Record<string, import("../runtime-events").JsonValue>).toolCallIds
                 : undefined;
               const allowed = new Set(Array.isArray(ids) ? ids : []);
-              return [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && toolCall.state === "pending" && allowed.has(toolCall.id));
+              return [...this.toolCalls.values()].filter((toolCall) => toolCall.runId === run.id && (toolCall.status === "pending" || toolCall.state === "pending") && allowed.has(toolCall.id));
             })()
           : [];
     const indeterminateToolCallIds = activeToolCalls
-      .filter((toolCall) => toolCall.state === "running")
+      .filter((toolCall) => toolCall.status === "in_progress" || toolCall.state === "in_progress")
       .map((toolCall) => toolCall.id);
     for (const toolCall of activeToolCalls) this.interruptToolCall(run, toolCall, input.reason ?? "The Run was cancelled.");
     if (input.output && (typeof input.output.content === "string" ? input.output.content.length > 0 : input.output.content.length > 0)) {
@@ -1434,6 +1529,93 @@ export class InMemoryStore implements DurableStore {
     return result;
   }
 
+  recordToolCall(
+    lease: OwnerLease,
+    input: {
+      runId: RunId;
+      execution?: ExecutionToken;
+      update: ToolCall | ToolCallUpdate;
+      external?: boolean;
+    },
+  ): DurableRunEvent {
+    this.assertOwner(lease);
+    const run = this.requireRun(input.runId);
+    if (input.execution) {
+      if (
+        run.state !== "running"
+        || !run.execution
+        || run.execution.executionId !== input.execution.executionId
+        || run.execution.ownerEpoch !== input.execution.ownerEpoch
+      ) {
+        throw new RuntimeError("runtime_ownership_lost", {
+          reason: "epoch_advanced",
+          expectedEpoch: input.execution.ownerEpoch,
+          actualEpoch: this.ownerEpoch,
+        });
+      }
+    }
+    const toolCallId = input.update.toolCallId;
+    const existing = this.toolCalls.get(toolCallId as ToolCallId);
+    const fromStatus: ToolCallStatus | null = existing ? existing.status : null;
+    const toStatus: ToolCallStatus = input.update.status ?? (existing ? existing.status : "in_progress");
+    const timestamp = createTimestamp();
+
+    let stored: StoredToolCall;
+    if (existing) {
+      mergeToolCall(existing, input.update);
+      existing.status = toStatus;
+      existing.state = toStatus;
+      if (input.external !== undefined) existing.external = input.external;
+      existing.updatedAt = timestamp;
+      stored = existing;
+    } else {
+      stored = {
+        id: toolCallId as ToolCallId,
+        toolCallId,
+        providerToolCallId: toolCallId,
+        agentId: run.agentId,
+        runId: run.id,
+        executionId: input.execution?.executionId,
+        title: ("title" in input.update && input.update.title) ? input.update.title : "external_tool",
+        kind: ("kind" in input.update && input.update.kind) ? input.update.kind : "other",
+        status: toStatus,
+        state: toStatus,
+        external: input.external ?? false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      mergeToolCall(stored, input.update);
+      this.toolCalls.set(stored.id, stored);
+    }
+    this.storeToolCall(stored);
+
+    run.revision += 1;
+    run.updatedAt = timestamp;
+    this.touchRun(run);
+
+    const acpToolCall: ToolCall = {
+      toolCallId: stored.toolCallId,
+      title: stored.title,
+      kind: stored.kind,
+      status: stored.status,
+      ...(stored.content !== undefined ? { content: clone(stored.content) } : {}),
+      ...(stored.locations !== undefined ? { locations: clone(stored.locations) } : {}),
+      ...(stored.rawInput !== undefined ? { rawInput: clone(stored.rawInput) } : {}),
+      ...(stored.rawOutput !== undefined ? { rawOutput: clone(stored.rawOutput) } : {}),
+      ...(stored._meta !== undefined ? { _meta: clone(stored._meta) } : {}),
+    };
+
+    const event = this.baseEvent(run, {
+      kind: "tool_state_changed",
+      transition: { from: fromStatus, to: toStatus },
+      toolCall: acpToolCall,
+      ...(input.external ? { external: true } : {}),
+    } as any) as unknown as DurableRunEvent;
+
+    this.appendEvent(event);
+    return event;
+  }
+
   snapshotRun(lease: OwnerLease, runId: RunId): RunSnapshot {
     this.assertOwner(lease);
     const run = this.requireRun(runId);
@@ -1444,6 +1626,8 @@ export class InMemoryStore implements DurableStore {
       revision: run.revision,
       input: clone(run.input),
       ...(run.metadata ? { metadata: clone(run.metadata) } : {}),
+      ...(run.scope !== undefined ? { scope: clone(run.scope) } : {}),
+      ...(run.cwd !== undefined ? { cwd: run.cwd } : {}),
       ...(run.phasePayload === undefined ? {} : { phasePayload: clone(run.phasePayload) }),
       ...(run.entryPhases === undefined ? {} : { entryPhases: clone(run.entryPhases) }),
       messageCount: this.messagesForRun(run.id).length,
@@ -1539,7 +1723,7 @@ export class InMemoryStore implements DurableStore {
       if (run.state === "running") blockedRunIds.add(run.id);
     }
     for (const tool of this.toolCalls.values()) {
-      if (tool.state === "pending" || tool.state === "running" || tool.state === "indeterminate") {
+      if (tool.status === "pending" || tool.status === "in_progress" || tool.state === "pending" || tool.state === "in_progress") {
         blockedRunIds.add(tool.runId);
       }
     }
@@ -1715,14 +1899,14 @@ export class InMemoryStore implements DurableStore {
   private assertNoOpenTools(run: StoredRun, allowedPendingToolCallIds: readonly ToolCallId[] = []): void {
     const allowed = new Set(allowedPendingToolCallIds);
     if ([...this.toolCalls.values()].some((toolCall) => toolCall.runId === run.id
-      && (toolCall.state === "running" || (toolCall.state === "pending" && !allowed.has(toolCall.id))))) {
+      && (toolCall.status === "in_progress" || toolCall.state === "in_progress" || ((toolCall.status === "pending" || toolCall.state === "pending") && !allowed.has(toolCall.id))))) {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     }
   }
 
   private interruptToolCall(run: StoredRun, toolCall: StoredToolCall, reason: string): void {
     const result: ToolExecutionResult = { ok: false, content: null, error: reason };
-    const durableResult: DurableToolResult = { toolCallId: toolCall.id, toolName: toolCall.name, ...result };
+    const durableResult: DurableToolResult = { toolCallId: toolCall.id, toolName: toolCall.name ?? toolCall.title, ...result };
     const message: Message = {
       id: createId("msg") as MessageId,
       agentId: run.agentId,
@@ -1732,13 +1916,14 @@ export class InMemoryStore implements DurableStore {
       sequenceWithinRun: this.nextMessageSequence(run.id),
       createdAt: createTimestamp(),
     };
-    const from = toolCall.state as "pending" | "running";
-    const to = from === "running" ? "indeterminate" : "failed";
+    const from = (toolCall.status ?? toolCall.state ?? "in_progress") as ToolCallStatus;
+    const to: ToolCallStatus = "failed";
     this.storeMessage(message);
     toolCall.state = to;
+    toolCall.status = to;
     toolCall.result = durableResult;
     toolCall.resultMessageId = message.id;
-    if (to === "indeterminate") toolCall.reason = reason;
+    toolCall.reason = reason;
     toolCall.updatedAt = message.createdAt;
     this.storeToolCall(toolCall);
     run.revision += 1;
@@ -1940,15 +2125,28 @@ export class InMemoryStore implements DurableStore {
     this.appendEvent(transition);
   }
 
-  private appendToolTransition(run: StoredRun, transition: { from: null | "pending" | "running"; to: "pending" | "running" | "completed" | "failed" | "indeterminate" }, toolCall: StoredToolCall): void {
-    this.appendEvent(this.baseEvent(run, {
+  private appendToolTransition(run: StoredRun, transition: { from: null | ToolCallStatus; to: ToolCallStatus }, toolCall: StoredToolCall): void {
+    const acpToolCall: ToolCall = {
+      toolCallId: toolCall.toolCallId ?? toolCall.id,
+      title: toolCall.title ?? toolCall.name ?? toolCall.toolCallId,
+      kind: toolCall.kind ?? "other",
+      status: toolCall.status ?? (toolCall.state as ToolCallStatus),
+      ...(toolCall.content ? { content: clone(toolCall.content) } : {}),
+      ...(toolCall.locations ? { locations: clone(toolCall.locations) } : {}),
+      ...(toolCall.rawInput !== undefined ? { rawInput: clone(toolCall.rawInput) } : {}),
+      ...(toolCall.rawOutput !== undefined ? { rawOutput: clone(toolCall.rawOutput) } : {}),
+      ...(toolCall._meta ? { _meta: clone(toolCall._meta) } : {}),
+    };
+    this.appendEvent({
+      ...this.baseEvent(run),
       kind: "tool_state_changed",
       transition,
-      toolCall: clone(toolCall) as unknown as ToolCallSnapshot,
-    } as ToolStateChanged) as ToolStateChanged);
+      toolCall: acpToolCall,
+      ...(toolCall.external ? { external: true } : {}),
+    } as Extract<ToolStateChanged, { durability: "durable" }>);
   }
 
-  private baseEvent(run: StoredRun, extra?: Partial<DurableEventBase>): DurableEventBase & Partial<DurableRunEvent> {
+  private baseEvent(run: StoredRun, extra?: Record<string, unknown>): DurableEventBase & Record<string, unknown> {
     this.eventSequence += 1;
     return {
       id: createId("evt") as EventId,
@@ -2002,7 +2200,7 @@ class MemoryOwnedStore implements OwnedStore {
   async commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> {
     return this.store.commitContextCompaction(this.lease, record);
   }
-  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
+  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
@@ -2010,12 +2208,27 @@ class MemoryOwnedStore implements OwnedStore {
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
-  async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
-  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId }>[]; contentBlocks?: readonly ContentBlock[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
-  async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
+  async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
+  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly import("./contracts").ToolCallReservation[]; contentBlocks?: readonly ContentBlock[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
+  async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   async suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
-  async commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
+  async commitToolResult(input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    toolCallId: ToolCallId;
+    result: ToolExecutionResult;
+    state: "completed" | "failed" | "indeterminate";
+    reason?: string;
+    title?: string;
+    kind?: ToolKind;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    rawOutput?: JsonValue;
+    _meta?: JsonObject;
+  }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
+  async recordToolCall(input: { runId: RunId; execution?: ExecutionToken; update: ToolCall | ToolCallUpdate; external?: boolean }): Promise<DurableRunEvent> { return this.store.recordToolCall(this.lease, input); }
   async snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   async history(agentId: AgentId): Promise<readonly Message[]> { return this.store.history(this.lease, agentId); }
   async listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }
@@ -2175,19 +2388,19 @@ function requestMessageContent(
   const toolUse = (toolCall: StoredToolCall) => ({
     type: "tool_use" as const,
     toolCallId: toolCall.id,
-    providerToolCallId: toolCall.providerToolCallId,
-    name: toolCall.name,
-    input: clone(toolCall.args),
+    ...(toolCall.providerToolCallId !== undefined ? { providerToolCallId: toolCall.providerToolCallId } : {}),
+    name: toolCall.name ?? toolCall.title ?? "tool",
+    input: clone(toolCall.args !== undefined ? toolCall.args : (toolCall.rawInput !== undefined ? toolCall.rawInput : {})),
   });
   if (!contentBlocks) return toolCalls.map(toolUse);
-  const reserved = new Map(toolCalls.map((toolCall) => [toolCall.providerToolCallId, toolCall]));
+  const reserved = new Map(toolCalls.map((toolCall) => [toolCall.providerToolCallId ?? toolCall.id, toolCall]));
   const parts: Exclude<AssistantContent, string>[number][] = [];
   for (const block of contentBlocks) {
     if (block.type === "text") {
       parts.push({ type: "text", text: block.text });
     } else if (block.type === "thinking") {
       parts.push({ type: "thinking", thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) });
-    } else {
+    } else if (block.type === "tool_call") {
       const toolCall = reserved.get(block.id);
       if (!toolCall) continue;
       reserved.delete(block.id);

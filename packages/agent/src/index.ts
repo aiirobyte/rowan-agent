@@ -21,9 +21,9 @@ export { InMemoryStore } from "./runtime/durable-store";
 export { SqliteStore } from "./runtime/sqlite-durable-store";
 export { InMemoryConfigProvider, brandConfigToken } from "./runtime/config-provider";
 export { RuntimeError, isRuntimeError } from "./runtime/errors";
+export { mergeToolCall } from "./runtime/contracts";
 export { loadSkill, loadSkills } from "./harness/skills";
 export { loadPhase } from "./harness/phases/loader";
-export { loadPhaseSettings } from "./harness/phases/loader";
 export { loadPhases } from "./harness/phases/loader";
 export {
   COMPACT_PHASE_ID,
@@ -117,7 +117,8 @@ export type {
   ToolExecutionResult,
   ToolCallContext,
   ToolInvocationContext,
-  ToolProgress,
+  ToolCallPresentationInput,
+  ToolCallPresentationOutput,
   ToolMessage,
   ToolMessageContent,
   ToolResultContent,
@@ -156,7 +157,27 @@ export type {
   RuntimeErrorDetails,
 } from "./runtime/errors";
 
-export type { ModelConfig, ModelRef, StreamFn, ThinkingLevel } from "@rowan-agent/models";
+export type {
+  ModelConfig,
+  ModelRef,
+  StreamFn,
+  ThinkingLevel,
+  ProviderCallContext,
+  ProviderStreamFn,
+  ToolAnnotations,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallOptions,
+  ToolCallOutcome,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolDefinitionSummary,
+  ToolKind,
+  ToolProgress,
+  ProviderConfig,
+  ProviderModelConfig,
+} from "@rowan-agent/models";
 export type {
   Skill,
 } from "./protocol";
@@ -180,6 +201,8 @@ export type {
   RunStartEvent,
   ScopeRef,
   ToolDefinition,
+  UiSlot,
+  UiContribution,
 } from "./extensions";
 
 export type {
@@ -193,14 +216,12 @@ export type {
   PhaseStatus,
   PhaseRegistry,
   PhaseState,
-  PhaseSettingsBadge,
-  PhaseSettingsContext,
-  PhaseSettingsControl,
-  PhaseSettingsDefinition,
-  PhaseSettingsItem,
-  PhaseSettingsOption,
-  PhaseSettingsProvider,
-  PhaseSettingsSection,
+  SettingsBadge,
+  SettingsControl,
+  SettingsDefinition,
+  SettingsItem,
+  SettingsOption,
+  SettingsSection,
 } from "./harness/phases/types";
 export type { PhaseExecution, PhaseMessageManager } from "./loop/execution";
 export type {

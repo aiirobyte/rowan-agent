@@ -111,14 +111,20 @@ through:
 When an external side effect cannot be confirmed, the Tool must become
 `indeterminate`; the Run then fails and is never automatically retried.
 
-While running, a Tool may call `context.reportProgress(progress)` with a
-JSON-safe value. Progress is live-only and may be dropped.
+While running, a Tool may call `context.reportProgress(progress: ToolProgress)` using
+the standard MCP progress shape (`{ progress: number; total?: number; message?: string; _meta?: JsonObject }`).
+Shape is validated with finite numbers; invalid reports are dropped with a warning.
+Tool-private progress data goes under `_meta` keys, and continuous output should be reported
+cumulatively (e.g. a tail) because transient updates coalesce per `toolCallId`.
+Progress reports trigger the tool's presentation function and emit transient `tool_state_changed`
+updates. Progress is live-only and may be dropped; the final completed or failed tool call state
+is durably persisted.
 
 ## Events
 
 `run.observe()` delivers `RunEvent` values for live presentation:
 
-- transient `message_delta` and `tool_progress` events are live-only and
+- transient `message_delta` and `tool_state_changed` (progress) events are live-only and
   best-effort;
 - durable `message_committed`, `run_state_changed`, and `tool_state_changed`
   events are replayable;
@@ -192,6 +198,9 @@ cannot be claimed by host sources.
 
 Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
 `bootstrap`; after initialization they are frozen until the Runtime closes.
+Extensions can manage run-scoped in-memory state (`api.state.run(runId)`), agent-scoped
+durable state (`api.state.agent(agentId)`), and extension-scoped durable state
+(`api.state.global()`) via the configured `ExtensionHost`.
 Definition name lists narrow the selected Tools, Skills, and Phases: omission
 inherits all candidates, `[]` selects none, and missing names are skipped. The
 same rule applies to `definition.contexts`.

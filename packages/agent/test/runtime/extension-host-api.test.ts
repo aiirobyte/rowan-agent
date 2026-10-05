@@ -4,6 +4,7 @@ import {
   AgentRuntime,
   InMemoryExtensionHost,
   InMemoryStore,
+  type ExtensionFactory,
   type LoadedExtension,
   type RunEndEvent,
   type RunStartEvent,
@@ -60,7 +61,7 @@ test("config get scoped to own id and changed fires on scope change", async () =
       "team:team-1": {
         "alpha-ext": { teamSetting: "alpha-team", common: 2 },
       },
-      "project:team-1:proj-1": {
+      "team:team-1/project:proj-1": {
         "alpha-ext": { projectSetting: "alpha-proj", common: 3 },
       },
     },
@@ -81,14 +82,13 @@ test("config get scoped to own id and changed fires on scope change", async () =
       api.config.changed((scope) => {
         alphaChangedScopes.push(scope);
       });
-      api.on("run_start", async () => {
+      api.hooks.on("run_start", async () => {
         alphaGlobalConfig = await api.config.get();
-        alphaTeamConfig = await api.config.get({ kind: "team", teamId: "team-1" });
-        alphaProjectConfig = await api.config.get({
-          kind: "project",
-          teamId: "team-1",
-          projectId: "proj-1",
-        });
+        alphaTeamConfig = await api.config.get([{ kind: "team", id: "team-1" }]);
+        alphaProjectConfig = await api.config.get([
+          { kind: "team", id: "team-1" },
+          { kind: "project", id: "proj-1" },
+        ]);
       });
     },
   };
@@ -101,7 +101,7 @@ test("config get scoped to own id and changed fires on scope change", async () =
       api.config.changed((scope) => {
         betaChangedScopes.push(scope);
       });
-      api.on("run_start", async () => {
+      api.hooks.on("run_start", async () => {
         betaGlobalConfig = await api.config.get();
       });
     },
@@ -139,12 +139,12 @@ test("config get scoped to own id and changed fires on scope change", async () =
     expect(betaGlobalConfig).toEqual({ setting: "beta-global" });
 
     // Verify change notification fires ONLY for the changed extension
-    host.setConfig("alpha-ext", { newSetting: true }, { kind: "team", teamId: "team-1" });
-    expect(alphaChangedScopes).toEqual([{ kind: "team", teamId: "team-1" }]);
+    host.setConfig("alpha-ext", { newSetting: true }, [{ kind: "team", id: "team-1" }]);
+    expect(alphaChangedScopes).toEqual([[{ kind: "team", id: "team-1" }]]);
     expect(betaChangedScopes).toEqual([]);
 
-    host.setConfig("beta-ext", { updatedBeta: true }, { kind: "global" });
-    expect(betaChangedScopes).toEqual([{ kind: "global" }]);
+    host.setConfig("beta-ext", { updatedBeta: true }, []);
+    expect(betaChangedScopes).toEqual([[]]);
     expect(alphaChangedScopes).toHaveLength(1);
   } finally {
     await runtime.close();
@@ -164,11 +164,11 @@ test("run state is isolated per extension and dropped after run end", async () =
     name: "ext-1",
     factory: (api) => {
       ext1ApiRef = api;
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         capturedRunId = event.runId;
         await api.state.run(event.runId).set("key1", "val1");
       });
-      api.on("run_end", async (event) => {
+      api.hooks.on("run_end", async (event) => {
         ext1RunEndState = await api.state.run(event.runId).get("key1");
       });
     },
@@ -179,7 +179,7 @@ test("run state is isolated per extension and dropped after run end", async () =
     id: "ext-2",
     name: "ext-2",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         ext1SeenByExt2 = await api.state.run(event.runId).get("key1");
         await api.state.run(event.runId).set("key1", "ext2-val");
       });
@@ -222,7 +222,7 @@ test("agent state persists through the host and is private per extension", async
     id: "ext-x",
     name: "ext-x",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         const current = await api.state.agent(event.agentId).get("counter");
         if (current === undefined) {
           await api.state.agent(event.agentId).set("counter", 100);
@@ -239,7 +239,7 @@ test("agent state persists through the host and is private per extension", async
     id: "ext-y",
     name: "ext-y",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         extYSeenCounter = await api.state.agent(event.agentId).get("counter");
       });
     },
@@ -277,6 +277,79 @@ test("agent state persists through the host and is private per extension", async
   }
 });
 
+test("api.state.global() values are read back through a new extension instance on the same host and isolated per extension id", async () => {
+  let ext1FirstRunRead: any;
+  let ext2FirstRunRead: any;
+  let ext1SecondInstanceRead: any;
+  let ext2SecondInstanceRead: any;
+
+  const ext1Factory: ExtensionFactory = async (api) => {
+    ext1FirstRunRead = await api.state.global().get("registry");
+    await api.state.global().set("registry", { endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  };
+
+  const ext2Factory: ExtensionFactory = async (api) => {
+    ext2FirstRunRead = await api.state.global().get("registry");
+    await api.state.global().set("registry", { endpoint: "https://ext2.example.com", models: ["m3"] });
+  };
+
+  const host = new InMemoryExtensionHost();
+
+  // Instance 1: boot runtime with ext1 and ext2, writing their global state
+  const runtime1 = await AgentRuntime.init({
+    host,
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => {
+      await registry.loadExtensions([
+        { path: "ext-1", id: "ext-1", name: "ext-1", factory: ext1Factory },
+        { path: "ext-2", id: "ext-2", name: "ext-2", factory: ext2Factory },
+      ]);
+    },
+  });
+
+  await runtime1.close();
+
+  // Verify host received values under respective extension IDs
+  expect(ext1FirstRunRead).toBeUndefined();
+  expect(ext2FirstRunRead).toBeUndefined();
+  expect(host.getGlobalState("ext-1", "registry")).toEqual({ endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  expect(host.getGlobalState("ext-2", "registry")).toEqual({ endpoint: "https://ext2.example.com", models: ["m3"] });
+
+  // Instance 2: boot a new runtime instance sharing the same host
+  const ext1NewInstance: ExtensionFactory = async (api) => {
+    ext1SecondInstanceRead = await api.state.global().get("registry");
+  };
+
+  const ext2NewInstance: ExtensionFactory = async (api) => {
+    ext2SecondInstanceRead = await api.state.global().get("registry");
+    // Verify delete works on global state
+    await api.state.global().delete("registry");
+  };
+
+  const runtime2 = await AgentRuntime.init({
+    host,
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => {
+      await registry.loadExtensions([
+        { path: "ext-1", id: "ext-1", name: "ext-1", factory: ext1NewInstance },
+        { path: "ext-2", id: "ext-2", name: "ext-2", factory: ext2NewInstance },
+      ]);
+    },
+  });
+
+  await runtime2.close();
+
+  // Values are read back through the new extension instances and isolated per extension id
+  expect(ext1SecondInstanceRead).toEqual({ endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  expect(ext2SecondInstanceRead).toEqual({ endpoint: "https://ext2.example.com", models: ["m3"] });
+
+  // Ext-2 delete did not affect ext-1
+  expect(host.getGlobalState("ext-1", "registry")).toEqual({ endpoint: "https://ext1.example.com", models: ["m1", "m2"] });
+  expect(host.getGlobalState("ext-2", "registry")).toBeUndefined();
+});
+
 test("run_start and run_end fire with specified payloads", async () => {
   let startPayload: RunStartEvent | undefined;
   let endPayload: RunEndEvent | undefined;
@@ -286,10 +359,10 @@ test("run_start and run_end fire with specified payloads", async () => {
     id: "observer-ext",
     name: "observer-ext",
     factory: (api) => {
-      api.on("run_start", (event) => {
+      api.hooks.on("run_start", (event) => {
         startPayload = event;
       });
-      api.on("run_end", (event) => {
+      api.hooks.on("run_end", (event) => {
         endPayload = event;
       });
     },
@@ -334,7 +407,7 @@ test("run_end fires on cancelled run", async () => {
     id: "cancel-observer-ext",
     name: "cancel-observer-ext",
     factory: (api) => {
-      api.on("run_end", (event) => {
+      api.hooks.on("run_end", (event) => {
         endPayload = event;
       });
     },
@@ -373,18 +446,18 @@ test("tool-call events carry scope and turn", async () => {
     id: "tool-ext",
     name: "tool-ext",
     factory: (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "inspect_tool",
         description: "Inspect context tool",
         parameters: { type: "object", properties: { input: { type: "string" } } },
         execute: async () => ({ content: [{ type: "text", text: "inspected" }] }),
       });
-      api.on("before_tool_call", (event) => {
+      api.hooks.on("before_tool_call", (event) => {
         beforeScope = event.scope;
         beforeTurn = event.turn;
         return { allow: true };
       });
-      api.on("after_tool_call", (event) => {
+      api.hooks.on("after_tool_call", (event) => {
         afterScope = event.scope;
         afterTurn = event.turn;
       });
@@ -402,16 +475,20 @@ test("tool-call events carry scope and turn", async () => {
   try {
     const stream = createToolStream("inspect_tool", { input: "hello" });
     const agentId = await simpleAgent(runtime, stream);
+    const testScope = [
+      { kind: "team", id: "team-alpha" },
+      { kind: "project", id: "proj-beta" },
+    ];
     const run = await runtime.start(agentId, "run input", {
       idempotencyKey: "run-tool-scope-1",
-      metadata: { teamId: "team-alpha", projectId: "proj-beta" },
+      scope: testScope,
     });
     await run.wait();
 
-    expect(beforeScope).toEqual({ kind: "project", teamId: "team-alpha", projectId: "proj-beta" });
+    expect(beforeScope).toEqual(testScope);
     expect(beforeTurn).toEqual({ content: "run input" });
 
-    expect(afterScope).toEqual({ kind: "project", teamId: "team-alpha", projectId: "proj-beta" });
+    expect(afterScope).toEqual(testScope);
     expect(afterTurn).toEqual({ content: "run input" });
   } finally {
     await runtime.close();
@@ -427,7 +504,7 @@ test("default in-memory host works when host is omitted", async () => {
     id: "default-host-ext",
     name: "default-host-ext",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         extSeenHostConfig = await api.config.get();
         await api.state.agent(event.agentId).set("default_key", "default_val");
         extSeenAgentState = await api.state.agent(event.agentId).get("default_key");
@@ -466,7 +543,7 @@ test("throwing extension in run_start and run_end does not stop the run", async 
     id: "faulty-ext",
     name: "faulty-ext",
     factory: (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "resilient_tool",
         description: "A tool that executes even if lifecycle hooks fail",
         parameters: { type: "object", properties: {} },
@@ -475,10 +552,10 @@ test("throwing extension in run_start and run_end does not stop the run", async 
           return { content: [{ type: "text", text: "ok" }] };
         },
       });
-      api.on("run_start", () => {
+      api.hooks.on("run_start", () => {
         throw new Error("Failure in run_start hook");
       });
-      api.on("run_end", () => {
+      api.hooks.on("run_end", () => {
         throw new Error("Failure in run_end hook");
       });
     },
@@ -513,7 +590,7 @@ test("a before_tool_call handler that throws → the tool is not executed", asyn
     id: "gate-ext",
     name: "gate-ext",
     factory: (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "guarded_tool",
         description: "A tool that must not execute if gate throws",
         parameters: { type: "object", properties: {} },
@@ -522,7 +599,7 @@ test("a before_tool_call handler that throws → the tool is not executed", asyn
           return { content: [{ type: "text", text: "executed" }] };
         },
       });
-      api.on("before_tool_call", () => {
+      api.hooks.on("before_tool_call", () => {
         throw new Error("Gate rejection error");
       });
     },
