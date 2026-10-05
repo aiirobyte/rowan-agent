@@ -11,7 +11,7 @@ test("global Extension activation skips one failure and keeps successful contrib
   const lifetime = new RuntimeExtensionLifetime();
   const result = await lifetime.activate([
     extension("good", (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "good_tool",
         description: "Good",
         parameters: { type: "object", properties: {} },
@@ -19,7 +19,7 @@ test("global Extension activation skips one failure and keeps successful contrib
       });
     }),
     extension("bad", (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "bad_tool",
         description: "Bad",
         parameters: { type: "object", properties: {} },

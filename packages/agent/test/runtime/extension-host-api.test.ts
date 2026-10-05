@@ -81,7 +81,7 @@ test("config get scoped to own id and changed fires on scope change", async () =
       api.config.changed((scope) => {
         alphaChangedScopes.push(scope);
       });
-      api.on("run_start", async () => {
+      api.hooks.on("run_start", async () => {
         alphaGlobalConfig = await api.config.get();
         alphaTeamConfig = await api.config.get({ kind: "team", teamId: "team-1" });
         alphaProjectConfig = await api.config.get({
@@ -101,7 +101,7 @@ test("config get scoped to own id and changed fires on scope change", async () =
       api.config.changed((scope) => {
         betaChangedScopes.push(scope);
       });
-      api.on("run_start", async () => {
+      api.hooks.on("run_start", async () => {
         betaGlobalConfig = await api.config.get();
       });
     },
@@ -164,11 +164,11 @@ test("run state is isolated per extension and dropped after run end", async () =
     name: "ext-1",
     factory: (api) => {
       ext1ApiRef = api;
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         capturedRunId = event.runId;
         await api.state.run(event.runId).set("key1", "val1");
       });
-      api.on("run_end", async (event) => {
+      api.hooks.on("run_end", async (event) => {
         ext1RunEndState = await api.state.run(event.runId).get("key1");
       });
     },
@@ -179,7 +179,7 @@ test("run state is isolated per extension and dropped after run end", async () =
     id: "ext-2",
     name: "ext-2",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         ext1SeenByExt2 = await api.state.run(event.runId).get("key1");
         await api.state.run(event.runId).set("key1", "ext2-val");
       });
@@ -222,7 +222,7 @@ test("agent state persists through the host and is private per extension", async
     id: "ext-x",
     name: "ext-x",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         const current = await api.state.agent(event.agentId).get("counter");
         if (current === undefined) {
           await api.state.agent(event.agentId).set("counter", 100);
@@ -239,7 +239,7 @@ test("agent state persists through the host and is private per extension", async
     id: "ext-y",
     name: "ext-y",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         extYSeenCounter = await api.state.agent(event.agentId).get("counter");
       });
     },
@@ -286,10 +286,10 @@ test("run_start and run_end fire with specified payloads", async () => {
     id: "observer-ext",
     name: "observer-ext",
     factory: (api) => {
-      api.on("run_start", (event) => {
+      api.hooks.on("run_start", (event) => {
         startPayload = event;
       });
-      api.on("run_end", (event) => {
+      api.hooks.on("run_end", (event) => {
         endPayload = event;
       });
     },
@@ -334,7 +334,7 @@ test("run_end fires on cancelled run", async () => {
     id: "cancel-observer-ext",
     name: "cancel-observer-ext",
     factory: (api) => {
-      api.on("run_end", (event) => {
+      api.hooks.on("run_end", (event) => {
         endPayload = event;
       });
     },
@@ -373,18 +373,18 @@ test("tool-call events carry scope and turn", async () => {
     id: "tool-ext",
     name: "tool-ext",
     factory: (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "inspect_tool",
         description: "Inspect context tool",
         parameters: { type: "object", properties: { input: { type: "string" } } },
         execute: async () => ({ content: [{ type: "text", text: "inspected" }] }),
       });
-      api.on("before_tool_call", (event) => {
+      api.hooks.on("before_tool_call", (event) => {
         beforeScope = event.scope;
         beforeTurn = event.turn;
         return { allow: true };
       });
-      api.on("after_tool_call", (event) => {
+      api.hooks.on("after_tool_call", (event) => {
         afterScope = event.scope;
         afterTurn = event.turn;
       });
@@ -427,7 +427,7 @@ test("default in-memory host works when host is omitted", async () => {
     id: "default-host-ext",
     name: "default-host-ext",
     factory: (api) => {
-      api.on("run_start", async (event) => {
+      api.hooks.on("run_start", async (event) => {
         extSeenHostConfig = await api.config.get();
         await api.state.agent(event.agentId).set("default_key", "default_val");
         extSeenAgentState = await api.state.agent(event.agentId).get("default_key");
@@ -466,7 +466,7 @@ test("throwing extension in run_start and run_end does not stop the run", async 
     id: "faulty-ext",
     name: "faulty-ext",
     factory: (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "resilient_tool",
         description: "A tool that executes even if lifecycle hooks fail",
         parameters: { type: "object", properties: {} },
@@ -475,10 +475,10 @@ test("throwing extension in run_start and run_end does not stop the run", async 
           return { content: [{ type: "text", text: "ok" }] };
         },
       });
-      api.on("run_start", () => {
+      api.hooks.on("run_start", () => {
         throw new Error("Failure in run_start hook");
       });
-      api.on("run_end", () => {
+      api.hooks.on("run_end", () => {
         throw new Error("Failure in run_end hook");
       });
     },
@@ -513,7 +513,7 @@ test("a before_tool_call handler that throws → the tool is not executed", asyn
     id: "gate-ext",
     name: "gate-ext",
     factory: (api) => {
-      api.tool.register({
+      api.tools.register({
         name: "guarded_tool",
         description: "A tool that must not execute if gate throws",
         parameters: { type: "object", properties: {} },
@@ -522,7 +522,7 @@ test("a before_tool_call handler that throws → the tool is not executed", asyn
           return { content: [{ type: "text", text: "executed" }] };
         },
       });
-      api.on("before_tool_call", () => {
+      api.hooks.on("before_tool_call", () => {
         throw new Error("Gate rejection error");
       });
     },

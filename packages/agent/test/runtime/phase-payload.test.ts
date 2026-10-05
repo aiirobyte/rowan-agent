@@ -274,9 +274,9 @@ test("Extension Phases read the same effective payload through the generic API",
     content: "Extension.",
     input: { provider: "codex", options: { includeTests: true } },
     factory: async (api) => {
-      observed = api.phase.getPayload();
-      api.phase.setMessage("extended");
-      api.phase.setNextPhase("stop");
+      observed = api.phases.getPayload();
+      api.phases.setMessage("extended");
+      api.phases.setNextPhase("stop");
     },
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });

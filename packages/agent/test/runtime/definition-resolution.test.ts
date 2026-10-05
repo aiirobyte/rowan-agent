@@ -11,7 +11,7 @@ import { stopResponse } from "./route-test-utils";
 test("Runtime resolves Definition names after selected Extension assembly", async () => {
   const extension = {
     ...loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "extension_lookup",
       description: "Extension-provided lookup.",
       parameters: { type: "object", properties: {} },
@@ -374,7 +374,7 @@ test("Runtime rejects a Phase name contributed by both the host and an Extension
   };
   const extension = {
     ...loadExtensionFromFactory(async (api) => {
-      await api.phase.register(`${process.cwd()}/packages/agent/test/fixtures/phases/review`);
+      await api.phases.register(`${process.cwd()}/packages/agent/test/fixtures/phases/review`);
     }, process.cwd()),
     name: "duplicate-phase",
   };

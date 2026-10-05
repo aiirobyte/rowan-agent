@@ -22,7 +22,7 @@ test("Extension-registered Tool named edit directly replaces Core edit and leave
 
   const extension = {
     ...loadExtensionFromFactory((api) => {
-      api.tool.register({
+      api.tools.register({
         name: "edit",
         description: "Extension host document session edit.",
         parameters: {
@@ -538,7 +538,7 @@ test("Regression: with no host replacement, system prompt contains built-in Core
 
   const extension = {
     ...loadExtensionFromFactory((api) => {
-      api.tool.register({
+      api.tools.register({
         name: "custom_lookup",
         description: "Search project documents.",
         promptSnippet: "Search project documents.",

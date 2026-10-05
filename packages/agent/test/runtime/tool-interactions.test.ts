@@ -14,17 +14,17 @@ test("context fields are present on before_tool_call and after_tool_call hooks",
   let afterEvent: any;
 
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "test_tool",
       description: "A test tool",
       parameters: { type: "object", properties: { input: { type: "string" } } },
       execute: async (args: any) => ({ content: [{ type: "text", text: `Executed with ${args.input}` }] }),
     });
-    api.on("before_tool_call", (event) => {
+    api.hooks.on("before_tool_call", (event) => {
       beforeEvent = event;
       return { allow: true };
     });
-    api.on("after_tool_call", (event) => {
+    api.hooks.on("after_tool_call", (event) => {
       afterEvent = event;
     });
   }, process.cwd(), "<runtime-extension>");
@@ -95,7 +95,7 @@ test("tool call interaction suspends into input_required and resumes with allow"
   let receivedAnswer: any;
 
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "file_writer",
       description: "Write a file",
       parameters: { type: "object", properties: { path: { type: "string" }, data: { type: "string" } } },
@@ -106,7 +106,7 @@ test("tool call interaction suspends into input_required and resumes with allow"
       },
     });
 
-    api.on("before_tool_call", (event) => {
+    api.hooks.on("before_tool_call", (event) => {
       if (event.answer !== undefined) {
         receivedAnswer = event.answer;
         return event.answer === "allow"
@@ -219,7 +219,7 @@ test("tool call interaction suspends into input_required and answer deny produce
   let receivedAnswer: any;
 
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "delete_db",
       description: "Delete database",
       parameters: { type: "object", properties: { db: { type: "string" } } },
@@ -229,7 +229,7 @@ test("tool call interaction suspends into input_required and answer deny produce
       },
     });
 
-    api.on("before_tool_call", (event) => {
+    api.hooks.on("before_tool_call", (event) => {
       if (event.answer !== undefined) {
         receivedAnswer = event.answer;
         return event.answer === "allow"
@@ -315,7 +315,7 @@ test("tool call interaction survives process restart/rehydrate while pending the
   let executionsCount = 0;
 
   const createExtension = () => loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "safe_tool",
       description: "A tool requiring approval",
       parameters: { type: "object", properties: { key: { type: "string" } } },
@@ -325,7 +325,7 @@ test("tool call interaction survives process restart/rehydrate while pending the
       },
     });
 
-    api.on("before_tool_call", (event) => {
+    api.hooks.on("before_tool_call", (event) => {
       if (event.answer !== undefined) {
         return event.answer === "yes"
           ? { allow: true }
@@ -431,7 +431,7 @@ test("stop/cancel while pending interaction moves run to cancelled and tool is n
   let executionsCount = 0;
 
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "cancellable_tool",
       description: "A tool to cancel",
       parameters: { type: "object", properties: { x: { type: "number" } } },
@@ -441,7 +441,7 @@ test("stop/cancel while pending interaction moves run to cancelled and tool is n
       },
     });
 
-    api.on("before_tool_call", () => {
+    api.hooks.on("before_tool_call", () => {
       return {
         interaction: {
           kind: "permission",
@@ -497,7 +497,7 @@ test("legacy {allow:false} hook denies tool execution without suspending", async
   let executionsCount = 0;
 
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "legacy_tool",
       description: "Legacy tool",
       parameters: { type: "object", properties: {} },
@@ -507,7 +507,7 @@ test("legacy {allow:false} hook denies tool execution without suspending", async
       },
     });
 
-    api.on("before_tool_call", () => {
+    api.hooks.on("before_tool_call", () => {
       return { allow: false, reason: "Legacy denial reason" };
     });
   }, process.cwd(), "<runtime-extension>");
@@ -565,7 +565,7 @@ test("multiple tool calls in one assistant turn: sequential suspension per call"
   const executed: string[] = [];
 
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "tool_a",
       description: "First tool",
       parameters: { type: "object", properties: { a: { type: "string" } } },
@@ -575,7 +575,7 @@ test("multiple tool calls in one assistant turn: sequential suspension per call"
       },
     });
 
-    api.tool.register({
+    api.tools.register({
       name: "tool_b",
       description: "Second tool",
       parameters: { type: "object", properties: { b: { type: "string" } } },
@@ -585,7 +585,7 @@ test("multiple tool calls in one assistant turn: sequential suspension per call"
       },
     });
 
-    api.on("before_tool_call", (event) => {
+    api.hooks.on("before_tool_call", (event) => {
       if (event.answer !== undefined) {
         return event.answer === "allow"
           ? { allow: true }
@@ -678,7 +678,7 @@ test("multiple tool calls in one assistant turn: sequential suspension per call"
 test("a Tool execute interaction resumes with its answer and checkpoint, while cancellation does not re-enter it", async () => {
   const executions: Array<{ answer: unknown; checkpoint: unknown }> = [];
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "interactive_tool",
       description: "Ask during execution",
       parameters: { type: "object", properties: {} },
@@ -749,7 +749,7 @@ test("a new Agent Input reaches a suspended before_tool_call hook as a replied a
   const answers: unknown[] = [];
   let executions = 0;
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "approval_tool",
       description: "A tool that needs approval",
       parameters: { type: "object", properties: {} },
@@ -758,7 +758,7 @@ test("a new Agent Input reaches a suspended before_tool_call hook as a replied a
         return { content: [{ type: "text", text: "executed" }] };
       },
     });
-    api.on("before_tool_call", (event) => {
+    api.hooks.on("before_tool_call", (event) => {
       answers.push(event.answer);
       if (event.answer !== undefined) return { allow: false, reason: "Permission denied by user" };
       return { interaction: { kind: "permission", prompt: "Allow this tool?" } };
@@ -825,7 +825,7 @@ test("a new Agent Input reaches a suspended before_tool_call hook as a replied a
 test("cancelling a Tool execute interaction does not re-enter the Tool", async () => {
   let executions = 0;
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "cancelled_interactive_tool",
       description: "Ask before continuing",
       parameters: { type: "object", properties: {} },

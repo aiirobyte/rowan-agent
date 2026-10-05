@@ -1117,18 +1117,18 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
   let afterCalls = 0;
   let contextMessages = 0;
   const extension = loadExtensionFromFactory((api) => {
-    api.tool.register({
+    api.tools.register({
       name: "extension_lookup",
       description: "Look up a value from an extension.",
       parameters: { type: "object", properties: { query: { type: "string" } } },
       execute: async () => ({ content: [{ type: "text", text: "42" }] }),
     });
-    api.on("before_tool_call", () => {
+    api.hooks.on("before_tool_call", () => {
       beforeCalls += 1;
       contextMessages = api.context.getMessages?.().length ?? 0;
       return { allow: true };
     });
-    api.on("after_tool_call", (event) => {
+    api.hooks.on("after_tool_call", (event) => {
       afterCalls += 1;
       return { result: { ...event.result, content: { wrapped: event.result.content } } };
     });
