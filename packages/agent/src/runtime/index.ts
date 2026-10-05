@@ -33,6 +33,8 @@ export type {
   Message,
   MessageDelta,
   ThinkingDelta,
+  ToolCallDelta,
+  ModelRetry,
   MessageRevisionResult,
   MessageRevised,
   RetentionResult,

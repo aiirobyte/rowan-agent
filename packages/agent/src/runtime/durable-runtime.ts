@@ -205,6 +205,7 @@ export class AgentRuntime implements AgentRuntimeContract {
   private heartbeat?: ReturnType<typeof setInterval>;
   private pumping = false;
   private closed = false;
+  private readonly retryDelayMs?: number;
 
   private constructor(
     options: AgentRuntimeOptions & { configs: import("./contracts").ConfigProvider; host: ExtensionHost },
@@ -217,6 +218,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     this.storeIncarnation = String(owned.lease.token).split(":")[0]!;
     this.concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
     this.resources = resources;
+    this.retryDelayMs = options.retryDelayMs;
   }
 
   static async init(options: AgentRuntimeOptions): Promise<AgentRuntime> {
@@ -885,6 +887,44 @@ export class AgentRuntime implements AgentRuntimeContract {
             text: event.text,
           });
         },
+        onToolCallDelta: (event) => {
+          const active = this.executions.get(run.id);
+          if (
+            this.closed
+            || controller.signal.aborted
+            || active?.executionId !== claim!.execution.executionId
+          ) return;
+          this.transientEvents.publish({
+            kind: "tool_call_delta",
+            durability: "transient",
+            runId: run.id,
+            executionId: claim!.execution.executionId,
+            messageId: event.messageId as MessageId,
+            providerToolCallId: event.providerToolCallId,
+            toolName: event.toolName,
+            arguments: event.arguments,
+            args: event.args,
+          });
+        },
+        onModelRetry: (event) => {
+          const active = this.executions.get(run.id);
+          if (
+            this.closed
+            || controller.signal.aborted
+            || active?.executionId !== claim!.execution.executionId
+          ) return;
+          this.transientEvents.publish({
+            kind: "model_retry",
+            durability: "transient",
+            runId: run.id,
+            executionId: claim!.execution.executionId,
+            attempt: event.attempt,
+            maxRetries: event.maxRetries,
+            delayMs: event.delayMs,
+            error: event.error,
+          });
+        },
+        retryDelayMs: this.retryDelayMs,
         onContext: assembly.setContext,
         runtime: {
           tools: ({ toolCall, contentBlocks, driver }: ToolRunnerInput) => {
@@ -1005,14 +1045,21 @@ export class AgentRuntime implements AgentRuntimeContract {
         await this.handleRunEnd(run.id, run.agentId, result.outcome);
         return;
       }
+      const output = latestAssistant(run, result.messages, executionContext.messages.length);
       const failure: RunFailure = { code: "execution_failed", message: result.error instanceof Error ? result.error.message : "Execution failed." };
-      await this.owned.commitOutcome({ runId: run.id, execution: claim.execution, expectedRevision: executionRevision, failure });
+      const committed = await this.owned.commitOutcome({
+        runId: run.id,
+        execution: claim.execution,
+        expectedRevision: executionRevision,
+        failure,
+        ...(output ? { output } : {}),
+      });
       this.transientEvents.clear(run.id, claim.execution.executionId);
       await this.handleRunEnd(run.id, run.agentId, {
         id: createId("out"),
         status: "failed",
         message: failure.message,
-        error: failure,
+        error: committed.failure ?? failure,
       });
     } catch (error) {
       if (!claim && error instanceof RuntimeError && ["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) return;
@@ -1032,7 +1079,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           return;
         }
         const failureMessage = error instanceof Error ? error.message : "Execution failed.";
-        await this.owned.commitOutcome({
+        const committed = await this.owned.commitOutcome({
           runId: run.id,
           execution: claim.execution,
           expectedRevision: executionRevision,
@@ -1042,12 +1089,13 @@ export class AgentRuntime implements AgentRuntimeContract {
             runId: run.id,
             reason: commitError instanceof Error ? commitError.message : "Run failure could not be committed.",
           }).catch(() => undefined);
+          return undefined;
         });
         await this.handleRunEnd(run.id, run.agentId, {
           id: createId("out"),
           status: "failed",
           message: failureMessage,
-          error: { code: "execution_failed", message: failureMessage },
+          error: committed?.failure ?? { code: "execution_failed", message: failureMessage },
         });
         return;
       }
@@ -1140,6 +1188,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
           ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
           toolCallId,
+          providerToolCallId: toolCall.id,
           scope,
           turn,
           interaction: createRunInteractionDriver({
@@ -1233,6 +1282,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
             ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
             toolCallId,
+            providerToolCallId,
             scope,
             turn,
             interaction: createToolInteractionDriver(input.driver!, {
@@ -1409,6 +1459,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         ...(input.agentMetadata === undefined ? {} : { agentMetadata: input.agentMetadata }),
         ...(input.run.metadata === undefined ? {} : { runMetadata: input.run.metadata }),
         toolCallId,
+        providerToolCallId,
         scope,
         turn,
         interaction: createToolInteractionDriver(input.driver!, {

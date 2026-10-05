@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext, type RuntimeTool as Tool } from "../../src/runtime";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import type { AssistantMessage, RunId } from "../../src/runtime-events";
+import type { AssistantMessage, ModelRetry, RunId, ToolCallDelta } from "../../src/runtime-events";
 import type { Phase } from "../../src/harness/phases/types";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { configuration, createAgentWith, createPhaseAgent, seedResources, testDefinition } from "../fixtures/configuration";
@@ -598,12 +598,12 @@ test("AgentRun.observe streams ThinkingBlock deltas before the durable boundary"
 
 test("AgentRuntime routes Tool execution through durable lifecycle", async () => {
   let modelCalls = 0;
-  let toolContext: { runId: string; toolCallId: string } | undefined;
+  let toolContext: { runId: string; toolCallId: string; providerToolCallId?: string } | undefined;
   const tool = {
     name: "lookup",
     description: "Look up a value.",
     parameters: Type.Object({ query: Type.String() }),
-    async execute(_args: unknown, context: { runId: string; toolCallId: string }) {
+    async execute(_args: unknown, context: { runId: string; toolCallId: string; providerToolCallId?: string }) {
       toolContext = context;
       return { ok: true as const, content: { value: 42 } };
     },
@@ -636,11 +636,207 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
     expect(modelCalls).toBe(2);
     expect(toolContext?.runId).toBe(run.id);
     expect(toolContext?.toolCallId).toMatch(/^tool_/);
+    expect(toolContext?.providerToolCallId).toBe("call_lookup");
     const observed = [];
     for await (const event of run.observe()) observed.push(event);
     const toolEvents = observed.filter((event) => event.kind === "tool_state_changed");
     expect(toolEvents.map((event) => event.transition.to)).toEqual(["pending", "running", "completed"]);
     expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime streams tool_call_delta events with growing arguments and passes providerToolCallId to tool execution", async () => {
+  let modelCalls = 0;
+  let executedContext: ToolInvocationContext | undefined;
+  const tool = {
+    name: "edit",
+    description: "Edit a document.",
+    parameters: Type.Object({ path: Type.String(), newText: Type.String() }),
+    async execute(_args: unknown, context: ToolInvocationContext) {
+      executedContext = context;
+      return { ok: true as const, content: { applied: true } };
+    },
+  };
+
+  const id = "call_edit_abc123";
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      const fragment1 = '{"path": "doc.txt", "newText": "hello ';
+      const fragment2 = "world";
+      const fragment3 = '"}';
+
+      const partial1 = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args: fragment1 }] };
+      const partial2 = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args: fragment1 + fragment2 }] };
+      const partial3 = { role: "assistant" as const, contentBlocks: [{ type: "tool_call" as const, id, name: tool.name, args: fragment1 + fragment2 + fragment3 }] };
+
+      yield { type: "tool_call_start", id, name: tool.name, partial: partial1 };
+      yield { type: "tool_call_delta", id, arguments: fragment1, partial: partial1 };
+      yield { type: "tool_call_delta", id, arguments: fragment2, partial: partial2 };
+      yield { type: "tool_call_delta", id, arguments: fragment3, partial: partial3 };
+      yield { type: "tool_call_end", id, name: tool.name, arguments: fragment1 + fragment2 + fragment3, partial: partial3 };
+      yield { type: "done" };
+      return;
+    }
+    const hasResult = request.messages.some((message) => Array.isArray(message.content) && message.content.some((part) => part.type === "tool_result"));
+    if (!hasResult) throw new Error("model did not receive the Tool result");
+    const text = "edit applied";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse("edit applied") };
+  };
+
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await simpleAgent(runtime, stream, {
+      idempotencyKey: "agent-tool-call-delta",
+    }, { tools: [tool] });
+    const run = await runtime.start(agentId, "edit the doc", { idempotencyKey: "run-tool-call-delta" });
+
+    const observed: RunEvent[] = [];
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    const boundary = run.wait();
+
+    while (true) {
+      const event = await iterator.next();
+      if (event.done) break;
+      observed.push(event.value);
+    }
+    await boundary;
+
+    const deltas = observed.filter((event): event is ToolCallDelta => event.kind === "tool_call_delta");
+    expect(deltas.length).toBe(3);
+
+    expect(deltas[0]).toMatchObject({
+      kind: "tool_call_delta",
+      durability: "transient",
+      runId: run.id,
+      providerToolCallId: id,
+      toolName: "edit",
+      arguments: '{"path": "doc.txt", "newText": "hello ',
+      args: { path: "doc.txt", newText: "hello " },
+    });
+
+    expect(deltas[1]).toMatchObject({
+      kind: "tool_call_delta",
+      durability: "transient",
+      runId: run.id,
+      providerToolCallId: id,
+      toolName: "edit",
+      arguments: '{"path": "doc.txt", "newText": "hello world',
+      args: { path: "doc.txt", newText: "hello world" },
+    });
+
+    expect(deltas[2]).toMatchObject({
+      kind: "tool_call_delta",
+      durability: "transient",
+      runId: run.id,
+      providerToolCallId: id,
+      toolName: "edit",
+      arguments: '{"path": "doc.txt", "newText": "hello world"}',
+      args: { path: "doc.txt", newText: "hello world" },
+    });
+
+    expect(deltas[0].arguments.length).toBeLessThan(deltas[1].arguments.length);
+    expect(deltas[1].arguments.length).toBeLessThan(deltas[2].arguments.length);
+
+    expect(executedContext).toBeDefined();
+    expect(executedContext?.providerToolCallId).toBe(id);
+    expect(executedContext?.toolCallId).toMatch(/^tool_/);
+    expect(executedContext?.providerToolCallId).toBe(deltas[0].providerToolCallId);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime streams model_retry events on retryable failure and succeeds after retry", async () => {
+  let modelCalls = 0;
+  const stream: StreamFn = async function* () {
+    modelCalls += 1;
+    if (modelCalls <= 2) {
+      throw new Error("429 rate limit exceeded");
+    }
+    const text = "recovered after retry";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse(text) };
+  };
+
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, retryDelayMs: 1 });
+  try {
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "agent-model-retry-success" });
+    const run = await runtime.start(agentId, "retry please", { idempotencyKey: "run-model-retry-success" });
+
+    const observed: RunEvent[] = [];
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    const boundary = run.wait();
+
+    while (true) {
+      const event = await iterator.next();
+      if (event.done) break;
+      observed.push(event.value);
+    }
+    await boundary;
+
+    const retries = observed.filter((event): event is ModelRetry => event.kind === "model_retry");
+    expect(retries.length).toBe(2);
+    expect(retries[0]).toMatchObject({
+      kind: "model_retry",
+      durability: "transient",
+      runId: run.id,
+      attempt: 1,
+      maxRetries: 10,
+      delayMs: 1,
+      error: "429 rate limit exceeded",
+    });
+    expect(retries[0].executionId).toBeDefined();
+    expect(retries[1]).toMatchObject({
+      kind: "model_retry",
+      durability: "transient",
+      runId: run.id,
+      attempt: 2,
+      maxRetries: 10,
+      delayMs: 1,
+      error: "429 rate limit exceeded",
+    });
+    expect(modelCalls).toBe(3);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime streams model_retry events up to 10 times then fails when all attempts fail", async () => {
+  let modelCalls = 0;
+  const stream: StreamFn = async function* () {
+    modelCalls += 1;
+    throw new Error("500 internal server error");
+  };
+
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, retryDelayMs: 1 });
+  try {
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "agent-model-retry-fail" });
+    const run = await runtime.start(agentId, "fail please", { idempotencyKey: "run-model-retry-fail" });
+
+    const observed: RunEvent[] = [];
+    const iterator = run.observe()[Symbol.asyncIterator]();
+    const boundary = run.wait();
+
+    while (true) {
+      const event = await iterator.next();
+      if (event.done) break;
+      observed.push(event.value);
+    }
+    const result = await boundary;
+    expect(result.type).toBe("failed");
+
+    const retries = observed.filter((event): event is ModelRetry => event.kind === "model_retry");
+    expect(retries.length).toBe(10);
+    expect(retries.map((r) => r.attempt)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(retries.every((r) => r.maxRetries === 10)).toBe(true);
+    expect(retries.every((r) => r.kind === "model_retry")).toBe(true);
+    expect(retries.every((r) => r.error === "500 internal server error")).toBe(true);
+    // 1 initial call + 10 retries = 11 calls total
+    expect(modelCalls).toBe(11);
   } finally {
     await runtime.close();
   }
@@ -1464,4 +1660,152 @@ for (const [storeName, createStore] of [
       await cleanup();
     }
   });
+
+  test(`AgentRuntime withdraws user input when a Run fails without any assistant output (${storeName})`, async () => {
+    const stream: StreamFn = async function* () {
+      throw new Error("non-retryable failure");
+    };
+    const { store, cleanup } = await createStore();
+    const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+    try {
+      const agentId = await simpleAgent(runtime, stream, { idempotencyKey: `failed-no-output-${storeName}` });
+      const run = await runtime.start(agentId, "hello world", { idempotencyKey: `run-failed-${storeName}` });
+      const observedPromise = (async () => {
+        const events: RunEvent[] = [];
+        for await (const event of run.observe()) {
+          events.push(event);
+          if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) break;
+        }
+        return events;
+      })();
+      const boundary = await run.wait();
+      expect(boundary.type).toBe("failed");
+      if (boundary.type !== "failed") throw new Error("expected failed boundary");
+      expect(boundary.failure).toMatchObject({
+        code: "execution_failed",
+        withdrawnInput: {
+          messageId: expect.any(String),
+          content: "hello world",
+        },
+      });
+
+      const snapshot = await run.snapshot();
+      expect(snapshot.state).toBe("failed");
+      if (snapshot.state !== "failed") throw new Error("expected failed snapshot");
+      expect(snapshot.failure?.withdrawnInput).toMatchObject({
+        messageId: expect.any(String),
+        content: "hello world",
+      });
+
+      const events = await observedPromise;
+      const failedEvent = events.find((e) => e.kind === "run_state_changed" && e.to === "failed");
+      expect(failedEvent).toBeDefined();
+      expect(failedEvent).toMatchObject({
+        kind: "run_state_changed",
+        to: "failed",
+        failure: {
+          code: "execution_failed",
+          withdrawnInput: {
+            messageId: expect.any(String),
+            content: "hello world",
+          },
+        },
+        withdrawnInput: {
+          messageId: expect.any(String),
+          content: "hello world",
+        },
+      });
+
+      // User message must be withdrawn from history
+      const history = await runtime.history(agentId);
+      expect(history).toEqual([]);
+    } finally {
+      await runtime.close();
+      await cleanup();
+    }
+  });
+
+  test(`AgentRuntime does not withdraw user input when a Run fails after committing assistant output (${storeName})`, async () => {
+    let turn = 0;
+    const stream: StreamFn = async function* () {
+      turn += 1;
+      if (turn === 1) {
+        yield {
+          type: "done",
+          response: {
+            content: "Calling tool",
+            stopReason: "tool_use",
+            toolCalls: [{ id: "call_1", name: "test_tool", arguments: "{}" }],
+          },
+        };
+        return;
+      }
+      throw new Error("Model failed after tool execution");
+    };
+    const testTool: Tool = {
+      name: "test_tool",
+      description: "Test tool",
+      parameters: Type.Object({}),
+      execute: async () => ({ ok: true, content: "tool completed" }),
+    };
+    const { store, cleanup } = await createStore();
+    const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+    try {
+      const agentId = await simpleAgent(
+        runtime,
+        stream,
+        { idempotencyKey: `tool-fail-${storeName}` },
+        { tools: [testTool] },
+      );
+      const run = await runtime.start(agentId, "hello input", { idempotencyKey: `run-tool-fail-${storeName}` });
+      const boundary = await run.wait();
+      expect(boundary.type).toBe("failed");
+      if (boundary.type !== "failed") throw new Error("expected failed boundary");
+      expect(boundary.failure?.withdrawnInput).toBeUndefined();
+
+      const snapshot = await run.snapshot();
+      expect(snapshot.state).toBe("failed");
+      if (snapshot.state !== "failed") throw new Error("expected failed snapshot");
+      expect(snapshot.failure?.withdrawnInput).toBeUndefined();
+
+      // User message and assistant/tool messages remain in history
+      const history = await runtime.history(agentId);
+      expect(history.some((m) => m.role === "user" && m.content === "hello input")).toBe(true);
+      expect(history.some((m) => m.role === "assistant")).toBe(true);
+    } finally {
+      await runtime.close();
+      await cleanup();
+    }
+  });
+
+  test(`AgentRuntime does not withdraw user input when a Run is cancelled (${storeName})`, async () => {
+    let runStartedResolve!: () => void;
+    const runStarted = new Promise<void>((resolve) => { runStartedResolve = resolve; });
+    const stream: StreamFn = async function* (_request, options) {
+      runStartedResolve();
+      while (!options?.signal?.aborted) {
+        await Bun.sleep(10);
+      }
+    };
+    const { store, cleanup } = await createStore();
+    const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+    try {
+      const agentId = await simpleAgent(runtime, stream, { idempotencyKey: `cancel-withdraw-agent-${storeName}` });
+      const run = await runtime.start(agentId, "keep me on cancel", { idempotencyKey: `run-cancel-${storeName}` });
+      await runStarted;
+      const boundary = await run.cancel("Cancelled by user");
+      expect(boundary.type).toBe("cancelled");
+
+      const snapshot = await run.snapshot();
+      expect(snapshot.state).toBe("cancelled");
+
+      // User message must stay in history
+      const history = await runtime.history(agentId);
+      expect(history.some((m) => m.role === "user" && m.content === "keep me on cancel")).toBe(true);
+    } finally {
+      await runtime.close();
+      await cleanup();
+    }
+  });
 }
+

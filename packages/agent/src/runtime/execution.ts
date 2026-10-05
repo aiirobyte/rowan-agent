@@ -17,7 +17,9 @@ import type {
   BeforePromptHook,
   ExecutionState,
   MessageDeltaNotification,
+  ModelRetryNotification,
   ThinkingDeltaNotification,
+  ToolCallDeltaNotification,
 } from "../loop/types";
 import { RunInteractionBoundary, type RunInteraction, type RunInteractionState } from "../harness/phases/interactions";
 import type { PhaseExecutionIdentity, PhaseRegistry, PhaseStatus } from "../harness/phases/types";
@@ -70,6 +72,9 @@ export type OneShotExecutionInput = Readonly<{
   onParallelPhaseOutput?: AgentConfig["onParallelPhaseOutput"];
   onMessageDelta?: (event: MessageDeltaNotification) => void;
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
+  onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
+  onModelRetry?: (event: ModelRetryNotification) => void;
+  retryDelayMs?: number;
   onOutcome?: (outcome: Outcome) => Promise<void>;
   onModelTranscript?: (transcript: ModelTranscript, meta: { phase: string; model: ModelRef }) => Promise<void>;
   onPhaseEntered?: (phaseId: string) => void | Promise<void>;
@@ -283,6 +288,9 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     onParallelPhaseOutput: input.onParallelPhaseOutput,
     onMessageDelta: input.onMessageDelta,
     onThinkingDelta: input.onThinkingDelta,
+    onToolCallDelta: input.onToolCallDelta,
+    onModelRetry: input.onModelRetry,
+    retryDelayMs: input.retryDelayMs,
     onOutcome: input.onOutcome,
     onModelTranscript: input.onModelTranscript,
     onPhaseEntered: input.onPhaseEntered,

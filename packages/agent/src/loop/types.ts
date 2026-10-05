@@ -47,6 +47,21 @@ export type ThinkingDeltaNotification = Readonly<{
   text: string;
 }>;
 
+export type ToolCallDeltaNotification = Readonly<{
+  messageId: string;
+  providerToolCallId: string;
+  toolName: string;
+  arguments: string;
+  args: JsonValue | undefined;
+}>;
+
+export type ModelRetryNotification = Readonly<{
+  attempt: number;
+  maxRetries: number;
+  delayMs: number;
+  error: string;
+}>;
+
 export type LoopMetrics = {
   /** Number of phase iterations executed. */
   iterations: number;
@@ -115,6 +130,10 @@ export type AgentConfig = {
   ) => Promise<void>;
   onMessageDelta?: (event: MessageDeltaNotification) => void;
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
+  onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
+  onModelRetry?: (event: ModelRetryNotification) => void;
+  /** Internal / testing only: retry delay in milliseconds. */
+  retryDelayMs?: number;
   onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */
   waitForInput?: (state?: ExecutionState, inputRequest?: InputRequestPrompt) => Promise<AgentMessage[]>;

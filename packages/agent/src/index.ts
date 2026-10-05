@@ -84,6 +84,8 @@ export type {
   MessageContent,
   MessageDelta,
   ThinkingDelta,
+  ToolCallDelta,
+  ModelRetry,
   MessageId,
   MessageRevisionResult,
   MessageRevised,
@@ -124,6 +126,7 @@ export type {
   UserContent,
   UserInput,
   UserMessage,
+  WithdrawnUserInput,
 } from "./runtime/contracts";
 export type {
   LoadInput,
