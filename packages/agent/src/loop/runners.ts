@@ -1035,9 +1035,8 @@ async function runPhaseLoop(
 // Retry Logic
 // ============================================================================
 
-const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_BASE_DELAY_MS = 1_000;
-const DEFAULT_MAX_DELAY_MS = 30_000;
+const DEFAULT_MAX_RETRIES = 10;
+const DEFAULT_RETRY_DELAY_MS = 5_000;
 
 function isRetryableError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -1050,6 +1049,9 @@ function isRetryableError(error: unknown): boolean {
   if (message.includes("service unavailable") || message.includes("503")) return true;
   if (message.includes("gateway timeout") || message.includes("504")) return true;
   if (message.includes("econnreset") || message.includes("econnrefused")) return true;
+  if (message.includes("socket connection was closed") || message.includes("socket hang up")) return true;
+  if (message.includes("fetch failed") || message.includes("etimedout")) return true;
+  if (message.includes("network") || message.includes("connection reset")) return true;
   // Check for invalid model schema or empty response errors (retryable)
   if ("code" in error) {
     const code = (error as { code: string }).code;
@@ -1059,25 +1061,36 @@ function isRetryableError(error: unknown): boolean {
   return false;
 }
 
-function getRetryDelay(attempt: number, baseMs: number, maxMs: number): number {
-  const exponential = baseMs * Math.pow(2, attempt);
-  const jitter = exponential * (0.5 + Math.random() * 0.5);
-  return Math.min(jitter, maxMs);
+function sleepAbortable(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 async function withRetry<T>(
   fn: () => Promise<T>,
   options: {
     maxRetries?: number;
-    baseDelayMs?: number;
-    maxDelayMs?: number;
+    retryDelayMs?: number;
     signal?: AbortSignal;
-    onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
+    onRetry?: (attempt: number, error: unknown, delayMs: number, maxRetries: number) => void;
   } = {},
 ): Promise<T> {
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
-  const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
-  const maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
 
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -1091,9 +1104,9 @@ async function withRetry<T>(
       if (options.signal?.aborted) {
         throw error;
       }
-      const delayMs = getRetryDelay(attempt, baseDelayMs, maxDelayMs);
-      options.onRetry?.(attempt, error, delayMs);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const retryAttempt = attempt + 1;
+      options.onRetry?.(retryAttempt, error, retryDelayMs, maxRetries);
+      await sleepAbortable(retryDelayMs, options.signal);
       if (options.signal?.aborted) {
         throw lastError;
       }
@@ -1314,8 +1327,15 @@ function createPhaseExecution(
           }),
           {
             signal: config.signal,
-            onRetry: () => {
+            retryDelayMs: config.retryDelayMs,
+            onRetry: (attempt, error, delayMs, maxRetries) => {
               state.metrics.retryCount++;
+              config.onModelRetry?.({
+                attempt,
+                maxRetries,
+                delayMs,
+                error: error instanceof Error ? error.message : String(error),
+              });
             },
           },
         ),
@@ -1528,3 +1548,5 @@ async function waitForBackgroundTasks(
   backgroundTasks.clear();
   return successful;
 }
+
+export { withRetry, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY_MS };

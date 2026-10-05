@@ -1,6 +1,7 @@
 import type {
   ExecutionId,
   MessageDelta,
+  ModelRetry,
   PhaseStatusEvent,
   RunId,
   ThinkingDelta,
@@ -8,7 +9,7 @@ import type {
   ToolProgress,
 } from "../runtime-events";
 
-export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent;
+export type TransientRunEvent = MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry;
 
 const MAX_BUFFERED_EVENTS = 128;
 const MAX_BUFFERED_TEXT = 64 * 1024;

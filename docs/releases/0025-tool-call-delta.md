@@ -29,6 +29,23 @@ To allow hosts to correlate executed tool calls with the streaming deltas observ
 - `providerToolCallId: string` is added to `ToolCallContext` (and `ToolInvocationContext`).
 - Both batch and sequential tool execution paths in `durable-runtime` pass `providerToolCallId` to `durableTool.execute(args, context, signal)`.
 
+## Visible model retries and fixed retry policy
+
+Model call retries now emit transient `model_retry` runtime events so hosts can show retry state to users instead of retrying silently:
+
+- **Event shape**: `ModelRetry = { kind: "model_retry"; durability: "transient"; runId: RunId; executionId: ExecutionId; attempt: number; maxRetries: number; delayMs: number; error: string }`.
+- **Fixed retry policy**: Retryable model failures (rate limits, 5xx server errors, `empty_response`, etc.) now retry up to 10 times (`DEFAULT_MAX_RETRIES = 10`) at a fixed 5-second interval (`DEFAULT_RETRY_DELAY_MS = 5_000`), replacing exponential backoff and jitter. Transport drops (unexpected socket closures, fetch failures, `etimedout`, socket hang-ups, connection resets) are now classified as retryable.
+- **Immediate abort responsiveness**: Any wait between retry attempts terminates immediately when the execution's abort signal is triggered, re-throwing the last error promptly rather than sleeping through the remaining delay.
+- **Metrics**: `state.metrics.retryCount` continues to be incremented on every retry attempt.
+
+## Withdrawing user input on Runs failed without output
+
+When a Run fails before committing any assistant message or tool result/call (for example, when all model retries are exhausted, or on transport/empty response failures), the user input message that started it is now withdrawn atomically with the failure:
+
+- **Store exclusion**: The user message is removed from `history()`, `contextMessages()`, and subsequent model context, preventing duplicate user messages when the person resends their prompt.
+- **Failure notification**: The terminal failure event (`RunFailure` on `run_state_changed`, `run.wait()`, and snapshots) carries `withdrawnInput?: WithdrawnUserInput` (`{ messageId: MessageId; content: UserContent }`), enabling hosts to drop the message from transcripts and restore the prompt text into the composer.
+- **Unchanged on progress**: If the Run produced any assistant output or executed a tool call, or if the Run was cancelled by the user, nothing is withdrawn and `withdrawnInput` remains undefined.
+
 ## Packages
 
 - `@rowan-agent/agent` 0.17.0

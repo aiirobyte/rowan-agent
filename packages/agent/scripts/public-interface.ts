@@ -109,6 +109,7 @@ export const publicTypeExports = [
   "Metadata",
   "ModelConfig",
   "ModelRef",
+  "ModelRetry",
   "OpaqueId",
   "Outcome",
   "OwnerLease",
@@ -190,4 +191,5 @@ export const publicTypeExports = [
   "UserContent",
   "UserInput",
   "UserMessage",
+  "WithdrawnUserInput",
 ] as const;

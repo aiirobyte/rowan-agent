@@ -19,6 +19,7 @@ import type {
   MessageId,
   MessageRevised,
   Metadata,
+  ModelRetry,
   OwnerToken,
   Outcome,
   RunFailure,
@@ -33,6 +34,7 @@ import type {
   ToolExecutionResult,
   UserContent,
   UserMessage,
+  WithdrawnUserInput,
 } from "../runtime-events";
 import type { Skill } from "../protocol";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
@@ -67,6 +69,7 @@ export type {
   MessageDelta,
   ThinkingDelta,
   ToolCallDelta,
+  ModelRetry,
   MessageBase,
   MessageCommitted,
   MessageContent,
@@ -96,6 +99,7 @@ export type {
   ToolUseContent,
   UserContent,
   UserMessage,
+  WithdrawnUserInput,
 } from "../runtime-events";
 
 export type { RunInteraction, RunInteractionDriver, RunInteractionKind, RunInteractionRequest, RunInteractionState, RunInteractionStatus } from "../harness/phases/interactions";
@@ -449,6 +453,8 @@ export type AgentRuntimeOptions = Readonly<{
   concurrency?: number;
   bootstrap?: (registry: RuntimeBootstrapRegistry) => void | Promise<void>;
   host?: import("../extensions").ExtensionHost;
+  /** @internal Private / testing parameter to override retry delay */
+  retryDelayMs?: number;
 }>;
 export type DurableConsumer = Readonly<{ caughtUp: Promise<void>; done: Promise<void>; stop(): void }>;
 export interface AgentRun {
@@ -573,16 +579,23 @@ function isOutcome(value: unknown): value is Outcome {
     && (value.payload === undefined || isJsonValue(value.payload))
     && (value.toolResults === undefined || (Array.isArray(value.toolResults) && value.toolResults.every(isDurableToolResult)));
 }
+function isWithdrawnUserInput(value: unknown): value is WithdrawnUserInput {
+  return isRecord(value) && hasOnlyKeys(value, ["messageId", "content"])
+    && typeof value.messageId === "string" && isUserContent(value.content);
+}
+
 export function isRunFailure(value: unknown): value is RunFailure {
   if (!isRecord(value) || typeof value.code !== "string" || typeof value.message !== "string") return false;
+  if (value.withdrawnInput !== undefined && !isWithdrawnUserInput(value.withdrawnInput)) return false;
+  const baseKeys = value.withdrawnInput !== undefined ? ["withdrawnInput"] : [];
   switch (value.code) {
-    case "configuration_unavailable": return hasOnlyKeys(value, ["code", "message"]);
-    case "checkpoint_incompatible": return hasOnlyKeys(value, ["code", "message", "expected", "actual"])
+    case "configuration_unavailable": return hasOnlyKeys(value, ["code", "message", ...baseKeys]);
+    case "checkpoint_incompatible": return hasOnlyKeys(value, ["code", "message", "expected", "actual", ...baseKeys])
       && isRecord(value.expected) && typeof value.expected.codec === "string" && Array.isArray(value.expected.versions) && value.expected.versions.every((v) => Number.isInteger(v))
       && isRecord(value.actual) && typeof value.actual.codec === "string" && Number.isInteger(value.actual.version);
-    case "runtime_interrupted": return hasOnlyKeys(value, ["code", "message", "ownerEpoch"]) && Number.isInteger(value.ownerEpoch) && (value.ownerEpoch as number) >= 0;
-    case "tool_indeterminate": return hasOnlyKeys(value, ["code", "message", "toolCallIds"]) && Array.isArray(value.toolCallIds) && value.toolCallIds.length > 0 && value.toolCallIds.every((id) => typeof id === "string");
-    case "execution_failed": return hasOnlyKeys(value, ["code", "message", "details"]) && (value.details === undefined || isJsonValue(value.details));
+    case "runtime_interrupted": return hasOnlyKeys(value, ["code", "message", "ownerEpoch", ...baseKeys]) && Number.isInteger(value.ownerEpoch) && (value.ownerEpoch as number) >= 0;
+    case "tool_indeterminate": return hasOnlyKeys(value, ["code", "message", "toolCallIds", ...baseKeys]) && Array.isArray(value.toolCallIds) && value.toolCallIds.length > 0 && value.toolCallIds.every((id) => typeof id === "string");
+    case "execution_failed": return hasOnlyKeys(value, ["code", "message", "details", ...baseKeys]) && (value.details === undefined || isJsonValue(value.details));
     default: return false;
   }
 }

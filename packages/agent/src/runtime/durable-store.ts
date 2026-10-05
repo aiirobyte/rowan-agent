@@ -1331,7 +1331,11 @@ export class InMemoryStore implements DurableStore {
     }
     run.state = nextState;
     if (input.outcome) run.outcome = clone(input.outcome);
-    if (input.failure) run.failure = clone(input.failure);
+    let failure = input.failure ? clone(input.failure) : undefined;
+    if (nextState === "failed" && failure) {
+      failure = this.withdrawUserInputIfNoOutput(run, failure, output);
+      run.failure = failure;
+    }
     this.dropClaimReceipt(run.execution);
     delete run.execution;
     delete run.openInteractions;
@@ -1339,7 +1343,7 @@ export class InMemoryStore implements DurableStore {
     run.revision += 1;
     run.updatedAt = createTimestamp();
     this.touchRun(run);
-    this.appendTransition(run, "running", nextState, { outcome: input.outcome, failure: input.failure, output });
+    this.appendTransition(run, "running", nextState, { outcome: input.outcome, failure, output });
     this.dropRunOperationReceipts(run.id);
     const result = clone(run);
     return result;
@@ -1779,6 +1783,29 @@ export class InMemoryStore implements DurableStore {
     return [...this.messages.values()].filter((message) => message.runId === runId).sort((a, b) => a.sequenceWithinRun - b.sequenceWithinRun);
   }
 
+  private withdrawUserInputIfNoOutput(run: StoredRun, failure: RunFailure, output?: AssistantMessage): RunFailure {
+    const runMessages = this.messagesForRun(run.id);
+    const hasAssistantMessage = runMessages.some((m) => m.role === "assistant") || output !== undefined;
+    const hasToolMessage = runMessages.some((m) => m.role === "tool");
+    const hasToolCalls = [...this.toolCalls.values()].some((tc) => tc.runId === run.id);
+    if (hasAssistantMessage || hasToolMessage || hasToolCalls) {
+      return failure;
+    }
+    const userInputMessage = runMessages.find((m): m is UserMessage => m.role === "user");
+    if (!userInputMessage) {
+      return failure;
+    }
+    this.messages.delete(userInputMessage.id);
+    this.recorder?.onMessageDelete(userInputMessage.id);
+    return {
+      ...failure,
+      withdrawnInput: {
+        messageId: userInputMessage.id,
+        content: clone(userInputMessage.content),
+      },
+    };
+  }
+
   history(lease: OwnerLease, agentId: AgentId): readonly Message[] {
     this.assertOwner(lease);
     this.requireAgent(agentId);
@@ -1899,7 +1926,12 @@ export class InMemoryStore implements DurableStore {
       to,
       ...(to === "input_required" ? { interactions: clone(options?.interactions ?? []), answers: clone(options?.answers ?? {}) } : {}),
       ...(to === "completed" && options?.outcome ? { outcome: options.outcome, ...(options.output ? { output: options.output } : {}) } : {}),
-      ...(to === "failed" && options?.failure ? { failure: options.failure as never } : {}),
+      ...(to === "failed" && options?.failure
+        ? {
+            failure: options.failure as never,
+            ...(options.failure.withdrawnInput ? { withdrawnInput: options.failure.withdrawnInput } : {}),
+          }
+        : {}),
       ...(to === "cancelled" && options?.reason ? { reason: options.reason } : {}),
     } as RunStateChanged;
     // A transition always rewrites the Run, so record it here rather than

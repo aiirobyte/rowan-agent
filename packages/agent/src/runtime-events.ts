@@ -109,21 +109,28 @@ export type RunState =
   | "failed"
   | "cancelled";
 
+export type WithdrawnUserInput = Readonly<{
+  messageId: MessageId;
+  content: UserContent;
+}>;
+
 export type RunFailure =
-  | Readonly<{ code: "configuration_unavailable"; message: string }>
+  | Readonly<{ code: "configuration_unavailable"; message: string; withdrawnInput?: WithdrawnUserInput }>
   | Readonly<{
       code: "checkpoint_incompatible";
       message: string;
       expected: Readonly<{ codec: string; versions: readonly number[] }>;
       actual: Readonly<{ codec: string; version: number }>;
+      withdrawnInput?: WithdrawnUserInput;
     }>
-  | Readonly<{ code: "runtime_interrupted"; message: string; ownerEpoch: number }>
+  | Readonly<{ code: "runtime_interrupted"; message: string; ownerEpoch: number; withdrawnInput?: WithdrawnUserInput }>
   | Readonly<{
       code: "tool_indeterminate";
       message: string;
       toolCallIds: readonly [ToolCallId, ...ToolCallId[]];
+      withdrawnInput?: WithdrawnUserInput;
     }>
-  | Readonly<{ code: "execution_failed"; message: string; details?: JsonValue }>;
+  | Readonly<{ code: "execution_failed"; message: string; details?: JsonValue; withdrawnInput?: WithdrawnUserInput }>;
 
 export type QueuedRunFailure = Extract<
   RunFailure,
@@ -220,8 +227,8 @@ export type RunStateChanged = DurableEventBase & (
       outcome: Outcome;
       output?: AssistantMessage;
     }>
-  | Readonly<{ kind: "run_state_changed"; from: "queued"; to: "failed"; failure: QueuedRunFailure }>
-  | Readonly<{ kind: "run_state_changed"; from: "running"; to: "failed"; failure: RunningRunFailure }>
+  | Readonly<{ kind: "run_state_changed"; from: "queued"; to: "failed"; failure: QueuedRunFailure; withdrawnInput?: WithdrawnUserInput }>
+  | Readonly<{ kind: "run_state_changed"; from: "running"; to: "failed"; failure: RunningRunFailure; withdrawnInput?: WithdrawnUserInput }>
   | Readonly<{
       kind: "run_state_changed";
       from: "queued" | "running" | "input_required";
@@ -326,4 +333,15 @@ export type PhaseStatusEvent = Readonly<{
   status: PhaseStatus;
 }>;
 
-export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent;
+export type ModelRetry = Readonly<{
+  kind: "model_retry";
+  durability: "transient";
+  runId: RunId;
+  executionId: ExecutionId;
+  attempt: number;
+  maxRetries: number;
+  delayMs: number;
+  error: string;
+}>;
+
+export type RunEvent = DurableRunEvent | MessageDelta | ThinkingDelta | ToolCallDelta | ToolProgress | PhaseStatusEvent | ModelRetry;
