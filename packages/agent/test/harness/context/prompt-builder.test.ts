@@ -167,9 +167,9 @@ test("prompt builder includes tool and routing messages in conversation", () => 
   };
 
   const req = buildModelRequest(testInput);
-  const extractText = (m: { content: string | Array<{ type: string; text?: string; content?: string }> }) => {
+  const extractText = (m: { content: string | any[] }) => {
     if (typeof m.content === "string") return m.content;
-    return m.content.map(b => b.type === "text" ? (b.text ?? "") : b.type === "tool_result" ? (b.content ?? "") : "").join(" ");
+    return m.content.map(b => b.type === "text" ? (b.text ?? "") : b.type === "tool_result" ? (typeof b.content === "string" ? b.content : JSON.stringify(b.content)) : "").join(" ");
   };
   const allContent = req.messages.map(extractText).join("\n");
 

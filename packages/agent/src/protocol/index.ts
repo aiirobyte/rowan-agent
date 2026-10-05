@@ -8,11 +8,16 @@ export type {
 export type {
   LlmRequest,
   LlmStreamEvent,
-  ProviderActivity,
   ProviderCallContext,
   ProviderStreamFn,
   StreamFn,
   ThinkingLevel,
+  ToolAnnotations,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
 } from "@rowan-agent/models";
 
 export * from "./model";

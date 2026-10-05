@@ -139,7 +139,7 @@ function convertMessages(messages: LlmMessage[]): ResponsesInputMessage[] {
             result.push({
               type: "function_call_output",
               call_id: part.toolUseId,
-              output: part.content,
+              output: typeof part.content === "string" ? part.content : JSON.stringify(part.content),
             });
           }
         }
@@ -532,7 +532,7 @@ async function* streamResponses(
 export function createOpenAIResponsesStream(config: OpenAIResponsesConfig): StreamFn {
   const normalizedConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
   return async function* openAIResponsesStream(request, ctx) {
-    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "emit" in ctx && "interact" in ctx && "tools" in ctx
+    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "interact" in ctx && "tools" in ctx
       ? ctx as ProviderCallContext
       : createProviderCallContext(ctx);
     yield* streamResponses(normalizedConfig, request, fullCtx);

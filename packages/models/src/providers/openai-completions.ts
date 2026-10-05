@@ -100,7 +100,8 @@ function convertMessages(messages: LlmMessage[]): OpenAIChatMessage[] {
         // Extract tool_result content blocks
         for (const part of msg.content) {
           if (part.type === "tool_result") {
-            result.push({ role: "tool", content: part.content, tool_call_id: part.toolUseId });
+            const content = typeof part.content === "string" ? part.content : JSON.stringify(part.content);
+            result.push({ role: "tool", content, tool_call_id: part.toolUseId });
           }
         }
       }
@@ -409,7 +410,7 @@ async function* streamChatCompletions(
 export function createOpenAICompletionsStream(config: OpenAICompletionsConfig): StreamFn {
   const normalizedConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
   return async function* openAICompletionsStream(request, ctx) {
-    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "emit" in ctx && "interact" in ctx && "tools" in ctx
+    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "interact" in ctx && "tools" in ctx
       ? ctx as ProviderCallContext
       : createProviderCallContext(ctx);
     yield* streamChatCompletions(normalizedConfig, request, fullCtx);

@@ -1,5 +1,14 @@
 import { Database } from "bun:sqlite";
-import type { ContentBlock } from "@rowan-agent/models";
+import type {
+  ContentBlock,
+  ScopeRef,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+} from "@rowan-agent/models";
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -465,7 +474,7 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.commitContextCompaction(current, record));
   }
 
-  async createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> {
+  async createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> {
     return this.invoke(lease, (store, current) => store.createRun(current, input));
   }
 
@@ -530,7 +539,21 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.suspendToolCall(current, input));
   }
 
-  async commitToolResult(lease: OwnerLease, input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> {
+  async commitToolResult(lease: OwnerLease, input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    toolCallId: ToolCallId;
+    result: ToolExecutionResult;
+    state: "completed" | "failed" | "indeterminate";
+    reason?: string;
+    title?: string;
+    kind?: ToolKind;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    rawOutput?: JsonValue;
+    _meta?: JsonObject;
+  }): Promise<ToolCommit> {
     return this.invoke(lease, (store, current) => store.commitToolResult(current, input));
   }
 
@@ -538,16 +561,16 @@ export class SqliteStore implements DurableStore {
     return this.invoke(lease, (store, current) => store.cancelRun(current, input));
   }
 
-  async recordProviderActivity(
+  async recordToolCall(
     lease: OwnerLease,
     input: {
       runId: RunId;
       execution?: ExecutionToken;
-      turn: JsonObject;
-      activity: import("@rowan-agent/models").ProviderActivity;
+      update: ToolCall | ToolCallUpdate;
+      external?: boolean;
     },
   ): Promise<DurableRunEvent> {
-    return this.invoke(lease, (store, current) => store.recordProviderActivity(current, input));
+    return this.invoke(lease, (store, current) => store.recordToolCall(current, input));
   }
 
   async snapshotRun(lease: OwnerLease, runId: RunId): Promise<RunSnapshot> {
@@ -995,7 +1018,7 @@ export class SqliteStore implements DurableStore {
         toolCall.id,
         toolCall.runId,
         toolCall.executionId,
-        toolCall.state,
+        toolCall.status ?? toolCall.state ?? "in_progress",
         JSON.stringify(toolCall),
       );
     }
@@ -1336,7 +1359,7 @@ class SqliteOwnedStore implements OwnedStore {
   contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus> { return this.store.contextStatus(this.lease, agentId, contextWindow); }
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]> { return Promise.resolve(this.store.contextMessages(this.lease, agentId, recentTokenBudget)); }
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> { return this.store.commitContextCompaction(this.lease, record); }
-  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
+  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
@@ -1348,9 +1371,23 @@ class SqliteOwnedStore implements OwnedStore {
   reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly Readonly<{ providerToolCallId: string; name: string; args: JsonValue; toolCallId?: ToolCallId }>[]; contentBlocks?: readonly ContentBlock[] }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
   startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
-  commitToolResult(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; result: ToolExecutionResult; state: "completed" | "failed" | "indeterminate"; reason?: string }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
+  commitToolResult(input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    toolCallId: ToolCallId;
+    result: ToolExecutionResult;
+    state: "completed" | "failed" | "indeterminate";
+    reason?: string;
+    title?: string;
+    kind?: ToolKind;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+    rawOutput?: JsonValue;
+    _meta?: JsonObject;
+  }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
-  recordProviderActivity(input: { runId: RunId; execution?: ExecutionToken; turn: JsonObject; activity: import("@rowan-agent/models").ProviderActivity }): Promise<DurableRunEvent> { return this.store.recordProviderActivity(this.lease, input); }
+  recordToolCall(input: { runId: RunId; execution?: ExecutionToken; update: ToolCall | ToolCallUpdate; external?: boolean }): Promise<DurableRunEvent> { return this.store.recordToolCall(this.lease, input); }
   snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> { return this.store.history(this.lease, agentId); }
   listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }

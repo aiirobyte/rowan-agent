@@ -68,6 +68,8 @@ export type PhaseExecutionIdentity = Readonly<{
   /** Opaque metadata captured at the durable boundary; Rowan does not decode it. */
   agentMetadata?: Readonly<Record<string, unknown>>;
   runMetadata?: Readonly<Record<string, unknown>>;
+  scope?: import("@rowan-agent/models").ScopeRef;
+  cwd?: string;
 }>;
 
 /** Everything a phase needs to execute */

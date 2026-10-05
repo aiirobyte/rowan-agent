@@ -5,9 +5,34 @@
 import type { Phase, PhaseContext, PhaseOutput, SettingsDefinition } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
-import type { JsonObject, JsonValue } from "../runtime-events";
+import type { JsonObject, JsonValue, ToolExecutionResult } from "../runtime-events";
+import type {
+  ProviderConfig,
+  ProviderModelConfig,
+  ScopeRef,
+  ToolKind,
+  ToolCallStatus,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCall,
+  ToolCallUpdate,
+  ToolAnnotations,
+  ContentBlock,
+} from "@rowan-agent/models";
 
-export type { ProviderConfig, ProviderModelConfig } from "@rowan-agent/models";
+export type {
+  ProviderConfig,
+  ProviderModelConfig,
+  ScopeRef,
+  ToolKind,
+  ToolCallStatus,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCall,
+  ToolCallUpdate,
+  ToolAnnotations,
+  ContentBlock,
+} from "@rowan-agent/models";
 
 // ---------------------------------------------------------------------------
 // UI contributions
@@ -21,11 +46,6 @@ export type UiContribution =
 // ---------------------------------------------------------------------------
 // Host & scope types
 // ---------------------------------------------------------------------------
-
-export type ScopeRef =
-  | { kind: "global" }
-  | { kind: "team"; teamId: string }
-  | { kind: "project"; teamId: string; projectId: string };
 
 export interface ExtensionStateStore {
   get(key: string): Promise<JsonValue | undefined>;
@@ -166,6 +186,16 @@ export interface ToolDefinition {
   promptSnippet?: string;
   /** Optional: additional guidelines appended to system prompt */
   promptGuidelines?: string[];
+  kind?: ToolKind;
+  annotations?: ToolAnnotations;
+  present?: (
+    args: JsonValue,
+    result?: ToolExecutionResult,
+  ) => {
+    title?: string;
+    content?: ToolCallContent[];
+    locations?: ToolCallLocation[];
+  };
   /** Execute the tool */
   execute: (args: unknown, context: import("../runtime/contracts").ToolInvocationContext, signal?: AbortSignal) => Promise<ToolExecutionResult>;
   /** Optional: per-tool execution mode override */
@@ -175,12 +205,7 @@ export interface ToolDefinition {
 /**
  * Result from tool execution.
  */
-export interface ToolExecutionResult {
-  /** Content blocks to return to the LLM */
-  content: Array<{ type: string; text?: string; [key: string]: unknown }>;
-  /** Whether this is an error result */
-  isError?: boolean;
-}
+export type { ToolExecutionResult } from "../runtime-events";
 
 /**
  * Registered tool with source metadata.

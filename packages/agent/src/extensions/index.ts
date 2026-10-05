@@ -57,7 +57,7 @@ export type {
 } from "./hooks";
 
 // Host
-export { InMemoryExtensionHost, scopeToKey, resolveScopeFromMetadata } from "./host";
+export { InMemoryExtensionHost, scopeToKey } from "./host";
 
 // Runner
 export { ExtensionRunner, createExtensionRunner } from "./runner";

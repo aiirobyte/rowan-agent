@@ -132,7 +132,7 @@ export type AgentConfig = {
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
   onModelRetry?: (event: ModelRetryNotification) => void;
-  onProviderActivity?: (event: { runId: import("../runtime-events").RunId; turn: import("../runtime-events").JsonObject; activity: import("@rowan-agent/models").ProviderActivity }) => void;
+  onToolReport?: (event: { runId: import("../runtime-events").RunId; update: import("@rowan-agent/models").ToolCall | import("@rowan-agent/models").ToolCallUpdate }) => void;
   interact?: (request: import("@rowan-agent/models").RunInteractionRequest) => Promise<import("../runtime-events").JsonValue>;
   /** Internal / testing only: retry delay in milliseconds. */
   retryDelayMs?: number;

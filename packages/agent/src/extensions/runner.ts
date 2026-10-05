@@ -34,8 +34,7 @@ import type {
   ScopeRef,
   ToolDefinition,
 } from "./types";
-import { createExtensionRuntime } from "./types";
-import { InMemoryExtensionHost, resolveScopeFromMetadata } from "./host";
+import { InMemoryExtensionHost } from "./host";
 import type { JsonObject, JsonValue } from "../runtime-events";
 import { assertJsonValue } from "../runtime/json";
 import type { Tool, ToolResult, AgentContext } from "../types";
@@ -53,7 +52,7 @@ import {
 } from "./api";
 import type { ExtensionContext } from "./context";
 import type { LoadedExtension, ExtensionManifest } from "./types";
-import { createSourceInfo } from "./types";
+import { createExtensionRuntime, createSourceInfo } from "./types";
 import { createEventBus, type EventBus } from "./context";
 import { loadPhase } from "../harness/phases/loader";
 
@@ -696,7 +695,7 @@ export class ExtensionRunner {
       turn?: JsonObject;
     },
   ): Promise<BeforeToolCallResult> {
-    const scope = context?.scope ?? resolveScopeFromMetadata(context?.metadata);
+    const scope = context?.scope ?? [];
     const turn = context?.turn ?? {};
     const result = await this.emitHook("before_tool_call", {
       type: "before_tool_call",
@@ -725,7 +724,7 @@ export class ExtensionRunner {
       turn?: JsonObject;
     },
   ): Promise<ToolResult> {
-    const scope = context?.scope ?? resolveScopeFromMetadata(context?.metadata);
+    const scope = context?.scope ?? [];
     const turn = context?.turn ?? {};
     const hookResult = await this.emitHook("after_tool_call", {
       type: "after_tool_call",
@@ -796,7 +795,7 @@ export class ExtensionRunner {
       trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
       config: {
         get: async (scope) => {
-          const effectiveScope = scope ?? { kind: "global" };
+          const effectiveScope = scope ?? [];
           const res = await runner.host.getConfig(extension.id, effectiveScope);
           return res ?? null;
         },

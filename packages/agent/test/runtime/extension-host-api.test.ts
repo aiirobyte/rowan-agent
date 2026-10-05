@@ -60,7 +60,7 @@ test("config get scoped to own id and changed fires on scope change", async () =
       "team:team-1": {
         "alpha-ext": { teamSetting: "alpha-team", common: 2 },
       },
-      "project:team-1:proj-1": {
+      "team:team-1/project:proj-1": {
         "alpha-ext": { projectSetting: "alpha-proj", common: 3 },
       },
     },
@@ -83,12 +83,11 @@ test("config get scoped to own id and changed fires on scope change", async () =
       });
       api.hooks.on("run_start", async () => {
         alphaGlobalConfig = await api.config.get();
-        alphaTeamConfig = await api.config.get({ kind: "team", teamId: "team-1" });
-        alphaProjectConfig = await api.config.get({
-          kind: "project",
-          teamId: "team-1",
-          projectId: "proj-1",
-        });
+        alphaTeamConfig = await api.config.get([{ kind: "team", id: "team-1" }]);
+        alphaProjectConfig = await api.config.get([
+          { kind: "team", id: "team-1" },
+          { kind: "project", id: "proj-1" },
+        ]);
       });
     },
   };
@@ -139,12 +138,12 @@ test("config get scoped to own id and changed fires on scope change", async () =
     expect(betaGlobalConfig).toEqual({ setting: "beta-global" });
 
     // Verify change notification fires ONLY for the changed extension
-    host.setConfig("alpha-ext", { newSetting: true }, { kind: "team", teamId: "team-1" });
-    expect(alphaChangedScopes).toEqual([{ kind: "team", teamId: "team-1" }]);
+    host.setConfig("alpha-ext", { newSetting: true }, [{ kind: "team", id: "team-1" }]);
+    expect(alphaChangedScopes).toEqual([[{ kind: "team", id: "team-1" }]]);
     expect(betaChangedScopes).toEqual([]);
 
-    host.setConfig("beta-ext", { updatedBeta: true }, { kind: "global" });
-    expect(betaChangedScopes).toEqual([{ kind: "global" }]);
+    host.setConfig("beta-ext", { updatedBeta: true }, []);
+    expect(betaChangedScopes).toEqual([[]]);
     expect(alphaChangedScopes).toHaveLength(1);
   } finally {
     await runtime.close();
@@ -402,16 +401,20 @@ test("tool-call events carry scope and turn", async () => {
   try {
     const stream = createToolStream("inspect_tool", { input: "hello" });
     const agentId = await simpleAgent(runtime, stream);
+    const testScope = [
+      { kind: "team", id: "team-alpha" },
+      { kind: "project", id: "proj-beta" },
+    ];
     const run = await runtime.start(agentId, "run input", {
       idempotencyKey: "run-tool-scope-1",
-      metadata: { teamId: "team-alpha", projectId: "proj-beta" },
+      scope: testScope,
     });
     await run.wait();
 
-    expect(beforeScope).toEqual({ kind: "project", teamId: "team-alpha", projectId: "proj-beta" });
+    expect(beforeScope).toEqual(testScope);
     expect(beforeTurn).toEqual({ content: "run input" });
 
-    expect(afterScope).toEqual({ kind: "project", teamId: "team-alpha", projectId: "proj-beta" });
+    expect(afterScope).toEqual(testScope);
     expect(afterTurn).toEqual({ content: "run input" });
   } finally {
     await runtime.close();

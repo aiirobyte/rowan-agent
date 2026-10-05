@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createModelStream } from "@rowan-agent/models";
 import type { AgentMessage, ModelRef } from "../protocol";
-import type { ContentBlock, StreamFn } from "@rowan-agent/models";
+import type { StreamFn } from "@rowan-agent/models";
 import { createId } from "../utils";
 import { executeOnce } from "./execution";
 import { ConfigCommandService } from "./config-commands";
@@ -40,8 +40,19 @@ import type {
 import {
   assertEntryPhases,
   assertToolExecutionResult,
-  thinkingLevelFromMessages,
+  thinkingLevelFromUserInput,
 } from "./contracts";
+import type {
+  ContentBlock,
+  ScopeRef,
+  ToolAnnotations,
+  ToolCall as AcpToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+} from "@rowan-agent/models";
 import type { AgentId, AssistantMessage, ExecutionId, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
@@ -63,7 +74,7 @@ import {
   type ResourceKind,
 } from "./resource-registry";
 import { RuntimeBootstrapRegistry, RuntimeExtensionLifetime } from "./extension-lifetime";
-import { InMemoryExtensionHost, resolveScopeFromMetadata } from "../extensions/host";
+import { InMemoryExtensionHost } from "../extensions/host";
 import type { ExtensionHost } from "../extensions/types";
 import type { AgentDefinition } from "../harness/definitions";
 import type { Phase } from "../harness/phases/types";
@@ -180,9 +191,25 @@ async function spillLargeToolResult(
   await writeFile(path, serialized, { encoding: "utf8", mode: 0o600 });
   await chmod(path, 0o600).catch(() => undefined);
   const preview = new TextDecoder().decode(bytes.subarray(0, MAX_INLINE_TOOL_RESULT_BYTES));
+  const truncatedText = `${preview}\n[truncated]\n\n[Full result: ${path}, offset 0]`;
+  if (Array.isArray(result.content)) {
+    return {
+      ...result,
+      content: [{ type: "text", text: truncatedText }],
+    };
+  }
+  if (result.ok) {
+    return {
+      ok: true,
+      content: truncatedText,
+      ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    };
+  }
   return {
-    ...result,
-    content: `${preview}\n[truncated]\n\n[Full result: ${path}, offset 0]`,
+    ok: false,
+    content: truncatedText,
+    error: (result as { error?: string }).error ?? "Tool execution failed.",
+    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
   };
 }
 
@@ -397,6 +424,8 @@ export class AgentRuntime implements AgentRuntimeContract {
     options: {
       idempotencyKey: string;
       metadata?: Metadata;
+      scope?: ScopeRef;
+      cwd?: string;
       phasePayload?: JsonValue;
       entryPhases?: ReadonlyArray<EntryPhaseSpec>;
     },
@@ -438,6 +467,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       agentId,
       input,
       ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      ...(options.scope === undefined ? {} : { scope: options.scope }),
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(phasePayload === undefined ? {} : { phasePayload }),
       ...(options.entryPhases === undefined ? {} : { entryPhases: options.entryPhases }),
       ...(pinnedConfigToken === agent.currentConfigToken ? {} : { pinnedConfigToken }),
@@ -868,9 +899,11 @@ export class AgentRuntime implements AgentRuntimeContract {
           input: typeof run.input === "string" ? run.input : run.input.content,
           ...(agent.metadata === undefined ? {} : { agentMetadata: agent.metadata }),
           ...(run.metadata === undefined ? {} : { runMetadata: run.metadata }),
+          ...(run.scope === undefined ? {} : { scope: run.scope }),
+          ...(run.cwd === undefined ? {} : { cwd: run.cwd }),
         },
         model,
-        thinkingLevel: thinkingLevelFromMessages(context.messages),
+        thinkingLevel: thinkingLevelFromUserInput(run.input),
         stream,
         maxAttempts: config.maxAttempts,
         checkpoint: claim!.run.checkpoint,
@@ -1040,7 +1073,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             error: event.error,
           });
         },
-        onProviderActivity: (event) => {
+        onToolReport: (event) => {
           const active = this.executions.get(run.id);
           if (
             this.closed
@@ -1048,11 +1081,13 @@ export class AgentRuntime implements AgentRuntimeContract {
             || active?.executionId !== claim!.execution.executionId
           ) return;
           this.transientEvents.publish({
-            kind: "provider_activity",
+            kind: "tool_state_changed",
             durability: "transient",
             runId: event.runId,
-            turn: event.turn,
-            activity: event.activity,
+            executionId: claim!.execution.executionId,
+            transition: { from: null, to: event.update.status ?? "in_progress" },
+            toolCall: event.update,
+            external: true,
           });
           const task = toolQueue.then(async () => {
             const active = this.executions.get(run.id);
@@ -1061,12 +1096,13 @@ export class AgentRuntime implements AgentRuntimeContract {
               || controller.signal.aborted
               || active?.executionId !== claim!.execution.executionId
             ) return;
-            await this.owned.recordProviderActivity({
+            const recorded = await this.owned.recordToolCall({
               runId: run.id,
               execution: claim!.execution,
-              turn: event.turn,
-              activity: event.activity,
+              update: event.update,
+              external: true,
             });
+            executionRevision = recorded.runRevision;
           });
           toolQueue = task.then(() => undefined, () => undefined);
         },
@@ -1293,7 +1329,8 @@ export class AgentRuntime implements AgentRuntimeContract {
     driver?: RunInteractionDriver;
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
-    const scope = resolveScopeFromMetadata(input.run.metadata);
+    const scope = input.run.scope ?? [];
+    const cwd = input.run.cwd;
     const turn: JsonObject =
       typeof input.run.input === "object" && input.run.input !== null && !Array.isArray(input.run.input)
         ? (input.run.input as JsonObject)
@@ -1339,6 +1376,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           toolCallId,
           providerToolCallId: toolCall.id,
           scope,
+          ...(cwd ? { cwd } : {}),
           turn,
           interaction: createRunInteractionDriver({
             currentPhase: "default",
@@ -1403,6 +1441,8 @@ export class AgentRuntime implements AgentRuntimeContract {
               toolCallId,
               state: "failed",
               result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+              title: toolCall.name,
+              kind: "other",
             });
             setRevision(failed.run.revision);
             results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
@@ -1418,6 +1458,8 @@ export class AgentRuntime implements AgentRuntimeContract {
               toolCallId,
               state: "failed",
               result: { ok: false, content: null, error: decision.reason },
+              title: durableTool.annotations?.title ?? durableTool.name,
+              kind: durableTool.kind ?? "other",
             });
             setRevision(failed.run.revision);
             results.push(protocolFailure(decision.reason));
@@ -1433,6 +1475,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolCallId,
             providerToolCallId,
             scope,
+            ...(cwd ? { cwd } : {}),
             turn,
             interaction: createToolInteractionDriver(input.driver!, {
               toolCallId,
@@ -1494,6 +1537,12 @@ export class AgentRuntime implements AgentRuntimeContract {
               this.archiveDirFor(input.run.agentId),
               toolCall.name,
             );
+            const pres = durableTool.present ? await durableTool.present(toJsonValue(toolCall.args), result) : undefined;
+            const title = pres?.title ?? durableTool.annotations?.title ?? durableTool.name;
+            const kind = durableTool.kind ?? "other";
+            const content = pres?.content;
+            const locations = pres?.locations;
+            const rawOutput = (result as { structuredContent?: JsonValue }).structuredContent ?? (result as { content?: JsonValue }).content;
             const committed = await this.owned.commitToolResult({
               runId: input.run.id,
               execution: input.execution,
@@ -1501,13 +1550,22 @@ export class AgentRuntime implements AgentRuntimeContract {
               toolCallId,
               state: result.ok ? "completed" : "failed",
               result,
+              title,
+              kind,
+              ...(content !== undefined ? { content } : {}),
+              ...(locations !== undefined ? { locations } : {}),
+              ...(rawOutput !== undefined ? { rawOutput } : {}),
             });
             setRevision(committed.run.revision);
             const projectedResult = await this.foldToolInteractionRecords(result, toolCallId, input.run.agentId);
+            const ok = "ok" in projectedResult && typeof projectedResult.ok === "boolean"
+              ? projectedResult.ok
+              : !projectedResult.isError;
             results.push({
               toolCallId: providerToolCallId,
               toolName: toolCall.name,
               ...projectedResult,
+              ok,
             });
           } catch (error) {
             if (error instanceof RunInteractionBoundary) {
@@ -1530,6 +1588,8 @@ export class AgentRuntime implements AgentRuntimeContract {
               state: "indeterminate",
               reason,
               result: { ok: false, content: null, error: reason },
+              title: durableTool.annotations?.title ?? durableTool.name,
+              kind: durableTool.kind ?? "other",
             });
             setRevision(indeterminate.run.revision);
             results.push(protocolFailure(reason));
@@ -1586,6 +1646,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           toolCallId,
           state: "failed",
           result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+          title: toolCall.name,
+          kind: "other",
         });
         setRevision(failed.run.revision);
         results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
@@ -1610,6 +1672,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         toolCallId,
         providerToolCallId,
         scope,
+        ...(cwd ? { cwd } : {}),
         turn,
         interaction: createToolInteractionDriver(input.driver!, {
           toolCallId,
@@ -1697,6 +1760,8 @@ export class AgentRuntime implements AgentRuntimeContract {
               toolCallId,
               state: "failed",
               result: { ok: false, content: null, error: decision.reason },
+              title: durableTool.annotations?.title ?? durableTool.name,
+              kind: durableTool.kind ?? "other",
             });
             setRevision(failed.run.revision);
             results.push(protocolFailure(decision.reason));
@@ -1726,6 +1791,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           toolCallId,
           state: "failed",
           result: { ok: false, content: null, error: reason },
+          title: durableTool.annotations?.title ?? durableTool.name,
+          kind: durableTool.kind ?? "other",
         });
         setRevision(failed.run.revision);
         results.push(protocolFailure(reason));
@@ -1769,6 +1836,12 @@ export class AgentRuntime implements AgentRuntimeContract {
           this.archiveDirFor(input.run.agentId),
           toolCall.name,
         );
+        const pres = durableTool.present ? await durableTool.present(toJsonValue(toolCall.args), result) : undefined;
+        const title = pres?.title ?? durableTool.annotations?.title ?? durableTool.name;
+        const kind = durableTool.kind ?? "other";
+        const content = pres?.content;
+        const locations = pres?.locations;
+        const rawOutput = (result as { structuredContent?: JsonValue }).structuredContent ?? (result as { content?: JsonValue }).content;
         const committed = await this.owned.commitToolResult({
           runId: input.run.id,
           execution: input.execution,
@@ -1776,13 +1849,22 @@ export class AgentRuntime implements AgentRuntimeContract {
           toolCallId,
           state: result.ok ? "completed" : "failed",
           result,
+          title,
+          kind,
+          ...(content !== undefined ? { content } : {}),
+          ...(locations !== undefined ? { locations } : {}),
+          ...(rawOutput !== undefined ? { rawOutput } : {}),
         });
         setRevision(committed.run.revision);
         const projectedResult = await this.foldToolInteractionRecords(result, toolCallId, input.run.agentId);
+        const ok = "ok" in projectedResult && typeof projectedResult.ok === "boolean"
+          ? projectedResult.ok
+          : !projectedResult.isError;
         results.push({
           toolCallId: providerToolCallId,
           toolName: toolCall.name,
           ...projectedResult,
+          ok,
         });
       } catch (error) {
         if (error instanceof RunInteractionBoundary) {
@@ -1805,6 +1887,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           state: "indeterminate",
           reason,
           result: { ok: false, content: null, error: reason },
+          title: durableTool.annotations?.title ?? durableTool.name,
+          kind: durableTool.kind ?? "other",
         });
         setRevision(indeterminate.run.revision);
         results.push(protocolFailure(reason));
@@ -1834,11 +1918,27 @@ export class AgentRuntime implements AgentRuntimeContract {
     const content = typeof result.content === "string"
       ? result.content
       : JSON.stringify(result.content) ?? "null";
+    const appendedText = content === "null" || content.length === 0
+      ? interactionText
+      : `${interactionText}\n\n${content}`;
+    if (Array.isArray(result.content)) {
+      return {
+        ...result,
+        content: [{ type: "text", text: appendedText }],
+      };
+    }
+    if (result.ok) {
+      return {
+        ok: true,
+        content: appendedText,
+        ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+      };
+    }
     return {
-      ...result,
-      content: content === "null" || content.length === 0
-        ? interactionText
-        : `${interactionText}\n\n${content}`,
+      ok: false,
+      content: appendedText,
+      error: (result as { error?: string }).error ?? "Tool execution failed.",
+      ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
     };
   }
 
@@ -1939,12 +2039,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           if (event.runId !== runId) continue;
           if (event.kind === "message_committed") {
             subscription.clearMessage(event.message.id);
-          } else if (event.kind === "tool_state_changed" && ["completed", "failed", "indeterminate"].includes(event.transition.to)) {
-            subscription.clearTool(event.toolCall.id);
-          } else if (event.kind === "provider_activity") {
-            if (event.activity.type === "tool_call") {
-              subscription.clearProviderActivity(event.activity.id);
-            }
+          } else if (event.kind === "tool_state_changed" && ["completed", "failed"].includes(event.transition.to)) {
+            subscription.clearTool(event.toolCall.toolCallId);
           }
           if (event.kind === "run_state_changed" && ["completed", "failed", "cancelled"].includes(event.to)) {
             // Phase.Status and other live progress facts are transient, so

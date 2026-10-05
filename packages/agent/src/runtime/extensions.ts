@@ -142,17 +142,32 @@ function resolveDefinitionContext(
 }
 
 function toLoopResult(result: ToolExecutionResult, toolCallId: string, toolName: string): ToolResult {
+  const ok = "ok" in result && typeof result.ok === "boolean" ? result.ok : !result.isError;
+  const error = "error" in result && typeof result.error === "string" ? result.error : undefined;
   return {
     toolCallId,
     toolName,
-    ok: result.ok,
+    ok,
     content: result.content,
-    ...(!result.ok ? { error: result.error } : {}),
+    ...(!ok && error ? { error } : {}),
+    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    ...(result.isError !== undefined ? { isError: result.isError } : {}),
   };
 }
 
 function fromLoopResult(result: ToolResult): ToolExecutionResult {
-  return result.ok
-    ? { ok: true, content: result.content as JsonValue }
-    : { ok: false, content: result.content as JsonValue, error: result.error ?? "Extension hook rejected the Tool result." };
+  if (Array.isArray(result.content)) {
+    return {
+      content: result.content as unknown as readonly import("@rowan-agent/models").ContentBlock[],
+      ...(result.ok !== undefined ? { ok: result.ok } : {}),
+      ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent as JsonValue } : {}),
+      ...(result.isError !== undefined ? { isError: result.isError } : (!result.ok ? { isError: true } : {})),
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    };
+  }
+  return {
+    ...(result.ok ? { ok: true } : { ok: false, error: result.error ?? "Extension hook rejected the Tool result." }),
+    content: result.content as JsonValue,
+    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent as JsonValue } : {}),
+  };
 }

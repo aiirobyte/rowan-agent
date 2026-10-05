@@ -1,6 +1,6 @@
 import type { ContentBlock, LlmToolCall, ToolCallBlock } from "./protocol";
 
-type ToolCallUpdate = Partial<Pick<ToolCallBlock, "id" | "name" | "args">>;
+type ToolCallBlockUpdate = Partial<Pick<ToolCallBlock, "id" | "name" | "args">>;
 
 /**
  * The `done` response a provider reports, projected from its accumulated blocks.
@@ -17,7 +17,7 @@ export function contentBlocksResponse(blocks: readonly ContentBlock[]): {
   for (const block of blocks) {
     if (block.type === "text") text.push(block.text);
     else if (block.type === "thinking") thinking.push(block.thinking);
-    else {
+    else if (block.type === "tool_call") {
       let args: unknown = block.args;
       try { args = JSON.parse(block.args); } catch { /* keep raw */ }
       toolCalls.push({ id: block.id, name: block.name, arguments: args });
@@ -94,7 +94,7 @@ export class ContentBlockAccumulator {
     this.open(key, { ...block });
   }
 
-  updateToolCall(key: string, update: ToolCallUpdate): void {
+  updateToolCall(key: string, update: ToolCallBlockUpdate): void {
     const block = this.get(key);
     if (block.type !== "tool_call") throw new TypeError(`Content block ${key} is not a tool call.`);
     Object.assign(block, update);

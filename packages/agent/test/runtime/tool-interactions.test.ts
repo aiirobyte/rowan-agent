@@ -713,7 +713,10 @@ test("a Tool execute interaction resumes with its answer and checkpoint, while c
     }
     const toolMessage = request.messages.find((message) => message.role === "tool");
     const toolResult = JSON.parse((toolMessage?.content as any[])[0].content);
-    expect(toolResult.content).toContain('Selected {"choice":"blue"} for Choose a value');
+    const contentText = Array.isArray(toolResult.content)
+      ? toolResult.content.map((b: any) => b.text ?? "").join("\n")
+      : String(toolResult.content);
+    expect(contentText).toContain('Selected {"choice":"blue"} for Choose a value');
     yield { type: "text_delta", text: "finished", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "finished" }] } };
     yield { type: "done", response: stopResponse("finished") };
   };

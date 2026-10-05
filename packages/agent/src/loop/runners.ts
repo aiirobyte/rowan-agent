@@ -1,5 +1,4 @@
-import type { ContentBlock, ProviderCallContext, ProviderActivity, RunInteractionRequest, ToolCallOutcome } from "@rowan-agent/models";
-import { resolveScopeFromMetadata } from "../extensions/host";
+import type { ContentBlock, ProviderCallContext, RunInteractionRequest, ToolCallOutcome } from "@rowan-agent/models";
 import type { JsonObject, JsonValue, RunId } from "../runtime-events";
 import type {
   AgentMessage,
@@ -1337,8 +1336,8 @@ function createPhaseExecution(
         }
       }
 
-      const scope = resolveScopeFromMetadata(config.execution.runMetadata);
-      const cwd = (typeof config.execution.runMetadata?.cwd === "string" ? config.execution.runMetadata.cwd : undefined)
+      const scope = config.execution.scope ?? [];
+      const cwd = config.execution.cwd
         ?? config.context.cwd
         ?? "";
       const callContext: ProviderCallContext = {
@@ -1348,21 +1347,6 @@ function createPhaseExecution(
           agentId: config.execution.agentId,
           scope,
           cwd,
-        },
-        emit: (activity: ProviderActivity) => {
-          const turn: JsonObject = {
-            ...(typeof config.execution.input === "object"
-              && config.execution.input !== null
-              && !Array.isArray(config.execution.input)
-                ? (config.execution.input as unknown as JsonObject)
-                : {}),
-            turnIndex: state.metrics.iterations,
-          };
-          config.onProviderActivity?.({
-            runId: config.execution.runId as RunId,
-            turn,
-            activity,
-          });
         },
         interact: async (interactionReq: RunInteractionRequest) => {
           const handler = config.runtime?.interact ?? config.interact;
@@ -1391,6 +1375,12 @@ function createPhaseExecution(
             return res.ok
               ? { ok: true, content: res.content as JsonValue }
               : { ok: false, error: res.error ?? "Tool execution failed", ...(res.content !== undefined ? { content: res.content as JsonValue } : {}) };
+          },
+          report: (update) => {
+            config.onToolReport?.({
+              runId: config.execution.runId as RunId,
+              update,
+            });
           },
         },
       };

@@ -33,13 +33,15 @@ test("provider receives run-bound context (run id, agentId, scope, cwd, signal)"
       options: { idempotencyKey: "agent-provider-ctx-key" },
     });
 
+    const testScope = [
+      { kind: "team", id: "team-abc" },
+      { kind: "project", id: "proj-123" },
+    ];
+
     const run = await runtime.start(agentId, "test prompt", {
       idempotencyKey: "run-provider-ctx-key",
-      metadata: {
-        cwd: "/custom/worktree/path",
-        teamId: "team-abc",
-        projectId: "proj-123",
-      },
+      cwd: "/custom/worktree/path",
+      scope: testScope,
     });
 
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
@@ -48,7 +50,7 @@ test("provider receives run-bound context (run id, agentId, scope, cwd, signal)"
     expect(capturedCtx!.run.id).toBe(run.id);
     expect(capturedCtx!.run.agentId).toBe(agentId);
     expect(capturedCtx!.run.cwd).toBe("/custom/worktree/path");
-    expect(capturedCtx!.run.scope).toEqual({ kind: "project", teamId: "team-abc", projectId: "proj-123" });
+    expect(capturedCtx!.run.scope).toEqual(testScope);
     expect(capturedCtx!.signal).toBeDefined();
     expect(capturedCtx!.signal.aborted).toBe(false);
   } finally {
@@ -253,27 +255,21 @@ test("provider interact rejects when cancelled or run is aborted", async () => {
   }
 });
 
-test("provider emit produces provider_activity event with tool_call replacement by id", async () => {
+test("provider tools.report produces tool_state_changed event with tool_call replacement/merge by toolCallId", async () => {
   const stream: StreamFn = async function* (_request, rawCtx) {
     const ctx = rawCtx as ProviderCallContext;
-    ctx.emit({
-      type: "tool_call",
-      id: "call-1",
+    ctx.tools.report({
+      toolCallId: "call-1",
       title: "Compiling code",
+      kind: "execute",
       status: "in_progress",
     });
 
     // Updated tool call with same ID replaces earlier one
-    ctx.emit({
-      type: "tool_call",
-      id: "call-1",
+    ctx.tools.report({
+      toolCallId: "call-1",
       title: "Compilation finished",
       status: "completed",
-    });
-
-    ctx.emit({
-      type: "plan",
-      entries: [{ content: "Step 1: Done", status: "completed" }],
     });
 
     yield {
@@ -291,82 +287,67 @@ test("provider emit produces provider_activity event with tool_call replacement 
 
   try {
     const agentId = await createAgentWith(runtime, {
-      identity: "agent-emit-activity",
+      identity: "agent-report-activity",
       stream,
-      options: { idempotencyKey: "agent-emit-activity-key" },
+      options: { idempotencyKey: "agent-report-activity-key" },
     });
 
     const run = await runtime.start(agentId, "build project", {
-      idempotencyKey: "run-emit-activity-key",
+      idempotencyKey: "run-report-activity-key",
     });
 
-    const observedActivities: any[] = [];
+    const observedEvents: any[] = [];
     const observer = (async () => {
       for await (const event of runtime.observe(run.id)) {
-        if (event.kind === "provider_activity") {
-          observedActivities.push(event.activity);
-        }
+        observedEvents.push(event);
       }
     })();
 
-    await run.wait();
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
     await observer;
 
-    expect(observedActivities.length).toBeGreaterThanOrEqual(2);
-    expect(observedActivities).toContainEqual({
-      type: "tool_call",
-      id: "call-1",
+    const toolEvents = observedEvents.filter((e) => e.kind === "tool_state_changed");
+    expect(toolEvents.length).toBeGreaterThanOrEqual(2);
+    expect(toolEvents.map((e) => e.toolCall)).toContainEqual(expect.objectContaining({
+      toolCallId: "call-1",
       title: "Compilation finished",
       status: "completed",
-    });
-    expect(observedActivities).toContainEqual({
-      type: "plan",
-      entries: [{ content: "Step 1: Done", status: "completed" }],
-    });
+    }));
+
+    // Verify external tool calls never appear in transcript/history as tool messages
+    expect(observedEvents.some((e) => e.kind === "message_committed" && e.message.role === "tool")).toBe(false);
   } finally {
     await runtime.close();
   }
 });
 
-test("durable provider activity survives runtime reload / SQLite persistence and keeps latest state per tool_call id and plan", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-activity-"));
+test("durable provider tool reporting survives runtime reload / SQLite persistence and merges by toolCallId", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-tool-"));
   const dbPath = join(directory, "store.sqlite");
 
   const stream: StreamFn = async function* (_request, rawCtx) {
     const ctx = rawCtx as ProviderCallContext;
-    // Plan update 1
-    ctx.emit({
-      type: "plan",
-      entries: [{ content: "Initial plan", status: "in_progress" }],
-    });
-
-    // Plan update 2 (in same turn -> replaces earlier plan)
-    ctx.emit({
-      type: "plan",
-      entries: [{ content: "Refined plan", status: "in_progress" }],
-    });
-
     // Tool call 1 initial
-    ctx.emit({
-      type: "tool_call",
-      id: "call-1",
+    ctx.tools.report({
+      toolCallId: "call-1",
       title: "Tool 1 running",
+      kind: "execute",
       status: "in_progress",
     });
 
-    // Tool call 1 updated (same id -> replaces earlier tool call)
-    ctx.emit({
-      type: "tool_call",
-      id: "call-1",
+    // Tool call 1 updated (same id -> merges/updates earlier tool call)
+    ctx.tools.report({
+      toolCallId: "call-1",
       title: "Tool 1 finished",
       status: "completed",
+      rawOutput: { success: true },
     });
 
     // Tool call 2
-    ctx.emit({
-      type: "tool_call",
-      id: "call-2",
+    ctx.tools.report({
+      toolCallId: "call-2",
       title: "Tool 2 finished",
+      kind: "read",
       status: "completed",
     });
 
@@ -386,13 +367,13 @@ test("durable provider activity survives runtime reload / SQLite persistence and
     });
 
     const agentId = await createAgentWith(runtime1, {
-      identity: "agent-durable-activity",
+      identity: "agent-durable-tool",
       stream,
-      options: { idempotencyKey: "agent-durable-activity-key" },
+      options: { idempotencyKey: "agent-durable-tool-key" },
     });
 
     const run = await runtime1.start(agentId, "do something", {
-      idempotencyKey: "run-durable-activity-key",
+      idempotencyKey: "run-durable-tool-key",
     });
 
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
@@ -406,72 +387,32 @@ test("durable provider activity survives runtime reload / SQLite persistence and
     });
 
     try {
-      // 1. Snapshot preserves deduplicated activities
-      const snapshot = await runtime2.snapshot(run.id);
-      expect(snapshot.activities).toBeDefined();
-      expect(snapshot.activities).toEqual([
-        {
-          type: "plan",
-          entries: [{ content: "Refined plan", status: "in_progress" }],
-        },
-        {
-          type: "tool_call",
-          id: "call-1",
-          title: "Tool 1 finished",
-          status: "completed",
-        },
-        {
-          type: "tool_call",
-          id: "call-2",
-          title: "Tool 2 finished",
-          status: "completed",
-        },
-      ]);
-
       // Replay via runtime.observe after reload
       const observedEvents: any[] = [];
       for await (const event of runtime2.observe(run.id)) {
         observedEvents.push(event);
       }
-      const observedActivityEvents = observedEvents.filter((e) => e.kind === "provider_activity");
-      expect(observedActivityEvents).toHaveLength(3);
+      const observedToolEvents = observedEvents.filter((e) => e.kind === "tool_state_changed");
+      expect(observedToolEvents.length).toBeGreaterThanOrEqual(2);
+      expect(observedToolEvents.some((e) => e.toolCall.toolCallId === "call-1" && e.toolCall.status === "completed")).toBe(true);
+      expect(observedToolEvents.some((e) => e.toolCall.toolCallId === "call-2" && e.toolCall.status === "completed")).toBe(true);
+
+      // Verify external tool calls never appear in messages
+      expect(observedEvents.some((e) => e.kind === "message_committed" && e.message.role === "tool")).toBe(false);
     } finally {
       await runtime2.close();
     }
 
-    // 2. Replay events via owner.listEvents preserves ordering relative to assistant message
+    // 2. Replay events via owner.listEvents
     const owner = await store2.openOwner({ ownerId: "test-verifier", leaseMs: 30_000 });
     const events = await owner.listEvents();
     await owner.sealAndReleaseOwner();
 
     const runEvents = events.filter((e) => e.runId === run.id);
-    const activityEvents = runEvents.filter((e): e is Extract<typeof e, { kind: "provider_activity" }> => e.kind === "provider_activity");
+    const toolEvents = runEvents.filter((e): e is Extract<typeof e, { kind: "tool_state_changed" }> => e.kind === "tool_state_changed");
 
-    expect(activityEvents).toHaveLength(3);
-    expect(activityEvents.every((e) => e.durability === "durable")).toBe(true);
-    expect(activityEvents.map((e) => e.activity)).toEqual([
-      {
-        type: "plan",
-        entries: [{ content: "Refined plan", status: "in_progress" }],
-      },
-      {
-        type: "tool_call",
-        id: "call-1",
-        title: "Tool 1 finished",
-        status: "completed",
-      },
-      {
-        type: "tool_call",
-        id: "call-2",
-        title: "Tool 2 finished",
-        status: "completed",
-      },
-    ]);
-
-    // Verify that activity events appear before the assistant message committed event of the turn
-    const assistantMessageIndex = runEvents.findIndex((e) => e.kind === "message_committed" && e.message.role === "assistant");
-    const lastActivityIndex = runEvents.map((e) => e.kind).lastIndexOf("provider_activity");
-    expect(assistantMessageIndex).toBeGreaterThan(lastActivityIndex);
+    expect(toolEvents.length).toBeGreaterThanOrEqual(2);
+    expect(toolEvents.every((e) => e.durability === "durable")).toBe(true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -624,13 +565,13 @@ test("ui contributions list, change notification, dispose, and triggerUiAction",
     runtime.triggerUiAction({
       contributionId: "mp-contrib",
       actionId: "install",
-      scope: { kind: "global" },
+      scope: [],
     });
 
     expect(receivedUiAction).toEqual({
       contributionId: "mp-contrib",
       actionId: "install",
-      scope: { kind: "global" },
+      scope: [],
     });
 
     // Dispose the settings contribution

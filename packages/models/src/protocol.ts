@@ -183,7 +183,7 @@ export type LlmToolUseContent = {
 export type LlmToolResultContent = {
   type: "tool_result";
   toolUseId: string;
-  content: string;
+  content: string | ContentBlock[];
   isError?: boolean;
 };
 
@@ -251,6 +251,36 @@ export type TextBlock = {
   text: string;
 };
 
+export type ImageBlock = {
+  type: "image";
+  data: string;
+  mimeType: string;
+};
+
+export type AudioBlock = {
+  type: "audio";
+  data: string;
+  mimeType: string;
+};
+
+export type ResourceLinkBlock = {
+  type: "resource_link";
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+};
+
+export type ResourceBlock = {
+  type: "resource";
+  resource: {
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+  };
+};
+
 export type ThinkingBlock = {
   type: "thinking";
   thinking: string;
@@ -265,7 +295,14 @@ export type ToolCallBlock = {
   args: string;  // Raw JSON string (may be incomplete during streaming)
 };
 
-export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock;
+export type ContentBlock =
+  | TextBlock
+  | ImageBlock
+  | AudioBlock
+  | ResourceLinkBlock
+  | ResourceBlock
+  | ThinkingBlock
+  | ToolCallBlock;
 
 /**
  * Accumulated assistant message partial, carried by each streaming event.
@@ -318,10 +355,50 @@ export type JsonValue =
   | { readonly [key: string]: JsonValue };
 export type JsonObject = Readonly<Record<string, JsonValue>>;
 
-export type ScopeRef =
-  | { kind: "global" }
-  | { kind: "team"; teamId: string }
-  | { kind: "project"; teamId: string; projectId: string };
+export type ScopeRef = readonly { kind: string; id: string }[];
+
+export type ToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "switch_mode"
+  | "other";
+
+export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export type ToolCallContent =
+  | { type: "content"; content: ContentBlock }
+  | { type: "diff"; path: string; oldText: string | null; newText: string }
+  | { type: "terminal"; terminalId: string };
+
+export type ToolCallLocation = { path: string; line?: number };
+
+export type ToolCall = {
+  toolCallId: string;
+  title: string;
+  kind: ToolKind;
+  status: ToolCallStatus;
+  content?: ToolCallContent[];
+  locations?: ToolCallLocation[];
+  rawInput?: JsonValue;
+  rawOutput?: JsonValue;
+  _meta?: JsonObject;
+};
+
+export type ToolCallUpdate = { toolCallId: string } & Partial<Omit<ToolCall, "toolCallId">>;
+
+export type ToolAnnotations = {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
 
 export type RunInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
 
@@ -348,35 +425,18 @@ export type ToolCallOutcome =
   | Readonly<{ ok: true; content: JsonValue }>
   | Readonly<{ ok: false; error: string; content?: JsonValue }>;
 
-export type ProviderActivity =
-  | {
-      type: "tool_call";
-      id: string;
-      title: string;
-      kind?: string;
-      status: "pending" | "in_progress" | "completed" | "failed";
-      input?: JsonValue;
-      output?: JsonValue;
-      locations?: { path: string; line?: number }[];
-    }
-  | {
-      type: "plan";
-      entries: {
-        content: string;
-        status: "pending" | "in_progress" | "completed";
-        priority?: "high" | "medium" | "low";
-      }[];
-    };
-
 export type ProviderCallContext = {
   signal: AbortSignal;
   run: { id: string; agentId: string; scope: ScopeRef; cwd: string };
-  /** Forward activity that happened OUTSIDE Rowan's tool loop (an external agent's own tool calls, plans) into the Run's event stream. */
-  emit(activity: ProviderActivity): void;
   /** Ask the user through the Run Interaction system and await the answer while the Run stays live. Rejects on abort/cancel. */
   interact(request: RunInteractionRequest): Promise<JsonValue>;
-  /** The tools this Run would give the model, and a way to call one through Rowan's normal tool execution (before_tool_call -> execute -> after_tool_call), recorded as a normal tool call of the Run. */
-  tools: { list(): readonly ToolDefinitionSummary[]; call(name: string, args: JsonValue): Promise<ToolCallOutcome> };
+  /** The tools this Run would give the model, and ways to call or report tool execution. */
+  tools: {
+    list(): readonly ToolDefinitionSummary[];
+    call(name: string, args: JsonValue): Promise<ToolCallOutcome>;
+    /** Report execution of an external tool call or an update to one. */
+    report(update: ToolCall | ToolCallUpdate): void;
+  };
 };
 
 export type ProviderStreamFn = (
@@ -398,14 +458,14 @@ export function createProviderCallContext(
     run: overrides?.run ?? {
       id: "run-0",
       agentId: "agent-0",
-      scope: { kind: "global" },
+      scope: [],
       cwd: "",
     },
-    emit: overrides?.emit ?? (() => {}),
     interact: overrides?.interact ?? (async () => null),
-    tools: overrides?.tools ?? {
-      list: () => [],
-      call: async () => ({ ok: true, content: null }),
+    tools: {
+      list: () => overrides?.tools?.list() ?? [],
+      call: async (name, args) => overrides?.tools?.call?.(name, args) ?? { ok: true, content: null },
+      report: (update) => overrides?.tools?.report?.(update),
     },
   };
 }

@@ -39,8 +39,9 @@ export default extension;
 ## API
 
 - `config.get(scope?)` / `config.changed(handler)`: Read the extension's own
-  effective configuration block resolved across scopes (`global`, `team`,
-  `project`), and listen for configuration change events.
+  effective configuration block resolved across the host layer chain (`ScopeRef`:
+  `readonly { kind: string; id: string }[]`, with `[]` representing global scope),
+  and listen for configuration change events.
 - `state.run(runId)`: Access in-memory key-value state private to the extension
   for a specific run. Run state is dropped when the run ends.
 - `state.agent(agentId)`: Access durable key-value state private to the
@@ -98,7 +99,7 @@ import { AgentRuntime, InMemoryExtensionHost } from "@rowan-agent/agent";
 
 const host = new InMemoryExtensionHost({
   configs: {
-    global: {
+    "": {
       "my-extension": { apiKey: "secret" },
     },
   },

@@ -99,13 +99,17 @@ export function resolveAnthropicConfig(input: ResolveAnthropicConfigInput = {}):
 // Message conversion
 // ---------------------------------------------------------------------------
 
+type AnthropicToolResultContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
+
 type AnthropicContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
   | { type: "thinking"; thinking: string; signature: string }
   | { type: "redacted_thinking"; data: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: "tool_result"; tool_use_id: string; content: string | AnthropicToolResultContentBlock[]; is_error?: boolean };
 
 type AnthropicMessage =
   | { role: "user"; content: string | AnthropicContentBlock[] }
@@ -125,8 +129,23 @@ function convertContentPart(part: LlmContentPart): AnthropicContentBlock | undef
         : { type: "thinking", thinking: part.thinking, signature: part.signature };
     case "tool_use":
       return { type: "tool_use", id: part.id, name: part.name, input: part.input };
-    case "tool_result":
-      return { type: "tool_result", tool_use_id: part.toolUseId, content: part.content, ...(part.isError ? { is_error: true } : {}) };
+    case "tool_result": {
+      let content: string | AnthropicToolResultContentBlock[];
+      if (typeof part.content === "string") {
+        content = part.content;
+      } else {
+        content = part.content.map((block) => {
+          if (block.type === "image") {
+            return { type: "image", source: { type: "base64", media_type: block.mimeType, data: block.data } };
+          }
+          if (block.type === "text") {
+            return { type: "text", text: block.text };
+          }
+          return { type: "text", text: JSON.stringify(block) };
+        });
+      }
+      return { type: "tool_result", tool_use_id: part.toolUseId, content, ...(part.isError ? { is_error: true } : {}) };
+    }
   }
 }
 
@@ -390,7 +409,7 @@ async function* streamAnthropicMessages(
 export function createAnthropicStream(config: AnthropicConfig): StreamFn {
   const normalizedConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
   return async function* anthropicStream(request, ctx) {
-    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "emit" in ctx && "interact" in ctx && "tools" in ctx
+    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "interact" in ctx && "tools" in ctx
       ? ctx as ProviderCallContext
       : createProviderCallContext(ctx);
     yield* streamAnthropicMessages(normalizedConfig, request, fullCtx);

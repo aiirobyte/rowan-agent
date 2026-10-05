@@ -40,9 +40,11 @@ function extractToolResults(transcript: AgentMessage[]): NonNullable<Outcome["to
 
     for (const part of msg.content) {
       if (part.type !== "tool_result") continue;
-      const result = parseToolResult(part.content);
-      if (result) {
-        results.push(result);
+      if (typeof part.content === "string") {
+        const result = parseToolResult(part.content);
+        if (result) {
+          results.push(result);
+        }
       }
     }
   }

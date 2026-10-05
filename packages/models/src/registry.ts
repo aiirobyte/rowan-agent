@@ -104,7 +104,7 @@ export function stream(model: Model, request: LlmRequest, ctx?: ProviderCallCont
       `Call registerBuiltInApiProviders() or registerApiProvider() first.`,
     );
   }
-  const callContext: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "emit" in ctx && "interact" in ctx && "tools" in ctx
+  const callContext: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "interact" in ctx && "tools" in ctx
     ? ctx as ProviderCallContext
     : createProviderCallContext(ctx);
   return provider.stream(model, request, callContext);

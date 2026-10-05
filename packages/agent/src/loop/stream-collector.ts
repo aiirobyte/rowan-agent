@@ -17,7 +17,6 @@ import type { ThinkingDeltaNotification, ToolCallDeltaNotification } from "./typ
 import { parsePartialJson } from "./partial-json";
 import type { ModelTranscript } from "../protocol/turn";
 import { LoopGuard, EmptyResponseError, ModelOutputLimitError } from "./errors";
-import { resolveScopeFromMetadata } from "../extensions/host";
 import type { JsonObject, JsonValue, RunId } from "../runtime-events";
 
 const MAX_STREAMED_OUTPUT_CHARACTERS = 1024 * 1024;
@@ -48,25 +47,8 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     run: {
       id: input.config.execution.runId,
       agentId: input.config.execution.agentId,
-      scope: resolveScopeFromMetadata(input.config.execution.runMetadata),
-      cwd: (typeof input.config.execution.runMetadata?.cwd === "string" ? input.config.execution.runMetadata.cwd : undefined)
-        ?? input.config.context.cwd
-        ?? "",
-    },
-    emit: (activity) => {
-      const turn: JsonObject = {
-        ...(typeof input.config.execution.input === "object"
-          && input.config.execution.input !== null
-          && !Array.isArray(input.config.execution.input)
-            ? (input.config.execution.input as unknown as JsonObject)
-            : {}),
-        turnIndex: 0,
-      };
-      input.config.onProviderActivity?.({
-        runId: input.config.execution.runId as RunId,
-        turn,
-        activity,
-      });
+      scope: input.config.execution.scope ?? [],
+      cwd: input.config.execution.cwd ?? input.config.context.cwd ?? "",
     },
     interact: async (request) => {
       const handler = input.config.runtime?.interact ?? input.config.interact;
@@ -85,6 +67,12 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
       },
       call: async () => {
         throw new Error("Tool calling is not available in standalone stream collector without callContext.");
+      },
+      report: (update) => {
+        input.config.onToolReport?.({
+          runId: input.config.execution.runId as RunId,
+          update,
+        });
       },
     },
   };

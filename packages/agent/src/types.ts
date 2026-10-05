@@ -126,13 +126,18 @@ export function contentBlocksToMessageContent(blocks: ContentBlock[]): LlmConten
     if (block.type === "thinking") {
       return { type: "thinking", thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) };
     }
-
-    let input: unknown = block.args;
-    try {
-      input = JSON.parse(block.args);
-    } catch {
-      // Keep raw arguments when the provider streamed incomplete or non-JSON input.
+    if (block.type === "image") {
+      return { type: "image", data: block.data, mimeType: block.mimeType };
     }
-    return { type: "tool_use", id: block.id, name: block.name, input };
+    if (block.type === "tool_call") {
+      let input: unknown = block.args;
+      try {
+        input = JSON.parse(block.args);
+      } catch {
+        // Keep raw arguments when the provider streamed incomplete or non-JSON input.
+      }
+      return { type: "tool_use", id: block.id, name: block.name, input };
+    }
+    return { type: "text", text: JSON.stringify(block) };
   });
 }

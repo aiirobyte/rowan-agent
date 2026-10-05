@@ -70,7 +70,7 @@ export type OneShotExecutionInput = Readonly<{
   beforePrompt?: BeforePromptHook;
   onMessage?: (message: AgentMessage) => Promise<void>;
   onParallelPhaseOutput?: AgentConfig["onParallelPhaseOutput"];
-  onProviderActivity?: AgentConfig["onProviderActivity"];
+  onToolReport?: AgentConfig["onToolReport"];
   onMessageDelta?: (event: MessageDeltaNotification) => void;
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
@@ -296,7 +296,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     onModelTranscript: input.onModelTranscript,
     onPhaseEntered: input.onPhaseEntered,
     onPhaseStatus: input.onPhaseStatus,
-    onProviderActivity: input.onProviderActivity,
+    onToolReport: input.onToolReport,
     runtime: input.runtime,
     waitForInput: async (nextState: ExecutionState | undefined, request: { phase: string; prompt: string; requestedAt: string } | undefined) => {
       if (!nextState || !request) throw new Error("Input boundary did not include execution state.");

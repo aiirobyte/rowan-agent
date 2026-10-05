@@ -362,13 +362,13 @@ test("AgentRuntime forwards the user ThinkingLevel on the LLM Request", async ()
     const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "thinking-level-agent" });
     const run = await runtime.start(agentId, {
       content: "Think carefully",
-      metadata: { mori: { thinkingLevel: "high" } },
+      thinkingLevel: "high",
     }, { idempotencyKey: "thinking-level-run" });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
 
     const offRun = await runtime.start(agentId, {
       content: "Do not reason",
-      metadata: { mori: { thinkingLevel: "off" } },
+      thinkingLevel: "off",
     }, { idempotencyKey: "thinking-level-off-run" });
     await expect(offRun.wait()).resolves.toMatchObject({ type: "completed" });
 
@@ -640,7 +640,7 @@ test("AgentRuntime routes Tool execution through durable lifecycle", async () =>
     const observed = [];
     for await (const event of run.observe()) observed.push(event);
     const toolEvents = observed.filter((event) => event.kind === "tool_state_changed");
-    expect(toolEvents.map((event) => event.transition.to)).toEqual(["pending", "running", "completed"]);
+    expect(toolEvents.map((event) => event.transition.to)).toEqual(["pending", "in_progress", "completed"]);
     expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
   } finally {
     await runtime.close();

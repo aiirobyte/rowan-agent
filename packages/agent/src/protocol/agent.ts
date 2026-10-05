@@ -54,4 +54,6 @@ export type ToolResult = {
   ok: boolean;
   content: unknown;
   error?: string;
+  structuredContent?: unknown;
+  isError?: boolean;
 };
