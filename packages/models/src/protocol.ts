@@ -49,6 +49,7 @@ export interface Model {
   reasoning: boolean;
   /** Default reasoning level; an individual request may override it. */
   thinkingLevel?: ThinkingLevel;
+  thinkingLevels?: ThinkingLevel[];
   input: ("text" | "image")[];
   cost: ModelCost;
   contextWindow: number;
@@ -72,6 +73,7 @@ export type ModelConfig = {
   name?: string;
   reasoning?: boolean;
   thinkingLevel?: ThinkingLevel;
+  thinkingLevels?: ThinkingLevel[];
   input?: ("text" | "image")[];
   cost?: Partial<ModelCost>;
   contextWindow?: number;
@@ -91,22 +93,25 @@ export type ModelConfig = {
 export type ProviderModelConfig = {
   id: string;
   name?: string;
-  protocol: Protocol;
-  reasoning: boolean;
+  protocol?: Protocol;
+  reasoning?: boolean;
   thinkingLevel?: ThinkingLevel;
-  input: ("text" | "image")[];
-  cost: ModelCost;
-  contextWindow: number;
-  maxTokens: number;
+  thinkingLevels?: ThinkingLevel[];
+  input?: ("text" | "image")[];
+  cost?: ModelCost;
+  contextWindow?: number;
+  maxTokens?: number;
   headers?: Record<string, string>;
 };
 
 export type ProviderConfig = {
   id: string;
+  displayName?: string;
+  icon?: string;
   baseUrl: string;
   apiKey: string;
   protocol: Protocol;
-  streamSimple?: ApiStreamFn;
+  stream?: ProviderStreamFn;
   headers?: Record<string, string>;
   /** Maximum inactivity while waiting for response headers or the next body chunk. */
   timeoutMs?: number;
@@ -303,32 +308,104 @@ export function toolCallsFromPartial(partial: AssistantMessagePartial): ToolCall
 }
 
 // ---------------------------------------------------------------------------
-// Stream options
+// Provider call context and stream function types
 // ---------------------------------------------------------------------------
 
-export type LlmStreamOptions = {
-  signal?: AbortSignal;
+export type JsonPrimitive = null | boolean | number | string;
+export type JsonValue =
+  | JsonPrimitive
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+export type JsonObject = Readonly<Record<string, JsonValue>>;
+
+export type ScopeRef =
+  | { kind: "global" }
+  | { kind: "team"; teamId: string }
+  | { kind: "project"; teamId: string; projectId: string };
+
+export type RunInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
+
+export type RunInteractionRequest = Readonly<{
+  id?: string;
+  kind: RunInteractionKind;
+  prompt: string;
+  payload?: JsonValue;
+  toolCallId?: string;
+  result?: Readonly<{
+    answered?: string;
+    replied?: string;
+    cancelled?: string;
+  }>;
+}>;
+
+export type ToolDefinitionSummary = Readonly<{
+  name: string;
+  description: string;
+  parameters?: JsonValue;
+}>;
+
+export type ToolCallOutcome =
+  | Readonly<{ ok: true; content: JsonValue }>
+  | Readonly<{ ok: false; error: string; content?: JsonValue }>;
+
+export type ProviderActivity =
+  | {
+      type: "tool_call";
+      id: string;
+      title: string;
+      kind?: string;
+      status: "pending" | "in_progress" | "completed" | "failed";
+      input?: JsonValue;
+      output?: JsonValue;
+      locations?: { path: string; line?: number }[];
+    }
+  | {
+      type: "plan";
+      entries: {
+        content: string;
+        status: "pending" | "in_progress" | "completed";
+        priority?: "high" | "medium" | "low";
+      }[];
+    };
+
+export type ProviderCallContext = {
+  signal: AbortSignal;
+  run: { id: string; agentId: string; scope: ScopeRef; cwd: string };
+  /** Forward activity that happened OUTSIDE Rowan's tool loop (an external agent's own tool calls, plans) into the Run's event stream. */
+  emit(activity: ProviderActivity): void;
+  /** Ask the user through the Run Interaction system and await the answer while the Run stays live. Rejects on abort/cancel. */
+  interact(request: RunInteractionRequest): Promise<JsonValue>;
+  /** The tools this Run would give the model, and a way to call one through Rowan's normal tool execution (before_tool_call -> execute -> after_tool_call), recorded as a normal tool call of the Run. */
+  tools: { list(): readonly ToolDefinitionSummary[]; call(name: string, args: JsonValue): Promise<ToolCallOutcome> };
 };
 
-// ---------------------------------------------------------------------------
-// Stream function types
-// ---------------------------------------------------------------------------
-
-/**
- * Low-level stream function: receives a full LlmRequest and yields events.
- * This is the function the agent loop consumes.
- */
-export type StreamFn = (
-  request: LlmRequest,
-  options: LlmStreamOptions,
-) => AsyncIterable<LlmStreamEvent>;
-
-/**
- * API-level stream function: receives a resolved Model and yields events.
- * Providers implement this signature. The registry dispatches by model.protocol.
- */
-export type ApiStreamFn = (
+export type ProviderStreamFn = (
   model: Model,
   request: LlmRequest,
-  options: LlmStreamOptions,
+  ctx: ProviderCallContext,
 ) => AsyncIterable<LlmStreamEvent>;
+
+export type StreamFn = (
+  request: LlmRequest,
+  ctx?: ProviderCallContext | Partial<ProviderCallContext>,
+) => AsyncIterable<LlmStreamEvent>;
+
+export function createProviderCallContext(
+  overrides?: Partial<ProviderCallContext>,
+): ProviderCallContext {
+  return {
+    signal: overrides?.signal ?? new AbortController().signal,
+    run: overrides?.run ?? {
+      id: "run-0",
+      agentId: "agent-0",
+      scope: { kind: "global" },
+      cwd: "",
+    },
+    emit: overrides?.emit ?? (() => {}),
+    interact: overrides?.interact ?? (async () => null),
+    tools: overrides?.tools ?? {
+      list: () => [],
+      call: async () => ({ ok: true, content: null }),
+    },
+  };
+}

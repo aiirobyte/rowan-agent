@@ -3,13 +3,14 @@ import type {
   LlmRequest,
   LlmStreamEvent,
   LlmTokenUsage,
-  LlmStreamOptions,
   LlmToolChoice,
   LlmToolDefinition,
+  ProviderCallContext,
+  ProviderStreamFn,
   StreamFn,
-  ApiStreamFn,
   AssistantMessagePartial,
 } from "../protocol";
+import { createProviderCallContext } from "../protocol";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { executeProviderRequest, streamProviderRequest } from "./http";
 import {
@@ -239,7 +240,7 @@ type ChatCompletionResponse = {
 async function* streamChatCompletions(
   config: OpenAICompletionsConfig,
   request: LlmRequest,
-  options: LlmStreamOptions = {},
+  ctx?: ProviderCallContext,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request, true);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
@@ -248,7 +249,7 @@ async function* streamChatCompletions(
     config,
     endpoint,
     llmRequest: request,
-    signal: options.signal,
+    signal: ctx?.signal,
     request: () => ({
       method: "POST",
       headers: {
@@ -407,16 +408,19 @@ async function* streamChatCompletions(
 
 export function createOpenAICompletionsStream(config: OpenAICompletionsConfig): StreamFn {
   const normalizedConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
-  return async function* openAICompletionsStream(request, options) {
-    yield* streamChatCompletions(normalizedConfig, request, options);
+  return async function* openAICompletionsStream(request, ctx) {
+    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "emit" in ctx && "interact" in ctx && "tools" in ctx
+      ? ctx as ProviderCallContext
+      : createProviderCallContext(ctx);
+    yield* streamChatCompletions(normalizedConfig, request, fullCtx);
   };
 }
 
 /**
- * ApiStreamFn-compatible stream function for OpenAI Chat Completions API.
+ * ProviderStreamFn-compatible stream function for OpenAI Chat Completions API.
  * Resolves config from the Model descriptor and environment.
  */
-export const streamOpenAICompletions: ApiStreamFn = (model, request, options) => {
+export const streamOpenAICompletions: ProviderStreamFn = (model, request, ctx) => {
   const config = resolveOpenAICompletionsConfig({
     baseUrl: model.baseUrl,
     model: model.id,
@@ -427,13 +431,13 @@ export const streamOpenAICompletions: ApiStreamFn = (model, request, options) =>
     retryDelayMs: model.retryDelayMs,
     headers: model.headers,
   });
-  return streamChatCompletions(config, request, options);
+  return streamChatCompletions(config, request, ctx);
 };
 
 export async function callOpenAICompletions(
   config: OpenAICompletionsConfig,
   request: LlmRequest,
-  options: LlmStreamOptions = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ content: string; thinking?: string; usage?: LlmTokenUsage }> {
   const body = buildRequestBody(config, request, false);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;

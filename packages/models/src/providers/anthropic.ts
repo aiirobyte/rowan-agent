@@ -5,14 +5,15 @@ import type {
   LlmStopReason,
   LlmStreamEvent,
   LlmTokenUsage,
-  LlmStreamOptions,
   LlmToolChoice,
   LlmToolDefinition,
+  ProviderCallContext,
+  ProviderStreamFn,
   StreamFn,
-  ApiStreamFn,
   AssistantMessagePartial,
   ThinkingLevel,
 } from "../protocol";
+import { createProviderCallContext } from "../protocol";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
 import {
@@ -252,7 +253,7 @@ const MESSAGE_EVENTS = new Set([
 async function* streamAnthropicMessages(
   config: AnthropicConfig,
   request: LlmRequest,
-  options: LlmStreamOptions = {},
+  ctx?: ProviderCallContext,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/v1/messages`;
@@ -262,7 +263,7 @@ async function* streamAnthropicMessages(
     endpoint,
     llmRequest: request,
     requestName: "Anthropic request",
-    signal: options.signal,
+    signal: ctx?.signal,
     request: () => ({
       method: "POST",
       headers: {
@@ -388,16 +389,19 @@ async function* streamAnthropicMessages(
 
 export function createAnthropicStream(config: AnthropicConfig): StreamFn {
   const normalizedConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
-  return async function* anthropicStream(request, options) {
-    yield* streamAnthropicMessages(normalizedConfig, request, options);
+  return async function* anthropicStream(request, ctx) {
+    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "emit" in ctx && "interact" in ctx && "tools" in ctx
+      ? ctx as ProviderCallContext
+      : createProviderCallContext(ctx);
+    yield* streamAnthropicMessages(normalizedConfig, request, fullCtx);
   };
 }
 
 /**
- * ApiStreamFn-compatible stream function for Anthropic Messages API.
+ * ProviderStreamFn-compatible stream function for Anthropic Messages API.
  * Resolves config from the Model descriptor and environment.
  */
-export const streamAnthropic: ApiStreamFn = (model, request, options) => {
+export const streamAnthropic: ProviderStreamFn = (model, request, ctx) => {
   const config = resolveAnthropicConfig({
     baseUrl: model.baseUrl,
     model: model.id,
@@ -408,5 +412,5 @@ export const streamAnthropic: ApiStreamFn = (model, request, options) => {
     retryDelayMs: model.retryDelayMs,
     headers: model.headers,
   });
-  return streamAnthropicMessages(config, request, options);
+  return streamAnthropicMessages(config, request, ctx);
 };

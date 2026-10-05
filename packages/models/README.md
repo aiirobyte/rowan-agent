@@ -25,7 +25,7 @@ registerModel({
 });
 
 const model = resolveModel("openai/gpt-4o");
-for await (const event of stream(model!, request, { signal })) {
+for await (const event of stream(model!, request, ctx)) {
   // consume LlmStreamEvent
 }
 ```
@@ -56,7 +56,7 @@ contracts belong to `@rowan-agent/agent`.
 ```ts
 type StreamFn = (
   request: LlmRequest,
-  options: LlmStreamOptions,
+  ctx: ProviderCallContext,
 ) => AsyncIterable<LlmStreamEvent>;
 ```
 
