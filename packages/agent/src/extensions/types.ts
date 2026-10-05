@@ -17,6 +17,7 @@ import type {
   ToolCall,
   ToolCallUpdate,
   ToolAnnotations,
+  ToolProgress,
   ContentBlock,
 } from "@rowan-agent/models";
 
@@ -28,6 +29,7 @@ export type {
   ToolCallStatus,
   ToolCallContent,
   ToolCallLocation,
+  ToolProgress,
   ToolCall,
   ToolCallUpdate,
   ToolAnnotations,
@@ -192,7 +194,7 @@ export interface ToolDefinition {
   present?: (call: {
     status: ToolCallStatus;
     args: JsonValue;
-    progress?: JsonValue;
+    progress?: ToolProgress;
     result?: ToolExecutionResult;
   }) => {
     title?: string;

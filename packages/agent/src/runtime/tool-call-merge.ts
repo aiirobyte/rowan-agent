@@ -5,13 +5,14 @@ import type {
   ToolCallLocation,
   ToolCallStatus,
   ToolKind,
+  ToolProgress,
 } from "@rowan-agent/models";
 import type { ToolExecutionResult } from "../runtime-events";
 
 export type ToolCallPresentationInput = Readonly<{
   status: ToolCallStatus;
   args: JsonValue;
-  progress?: JsonValue;
+  progress?: ToolProgress;
   result?: ToolExecutionResult;
 }>;
 

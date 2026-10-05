@@ -148,6 +148,7 @@ export const publicTypeExports = [
   "ToolCallUpdate",
   "ToolDefinitionSummary",
   "ToolKind",
+  "ToolProgress",
   "ProviderConfig",
   "ProviderModelConfig",
   "RunBoundary",

@@ -1053,14 +1053,14 @@ test("AgentRun.observe streams best-effort Tool progress", async () => {
     present(call: any) {
       if (call.status === "in_progress" && call.progress) {
         return {
-          title: `Progress ${(call.progress as any).stage}`,
-          _meta: { progress: call.progress },
+          title: `Progress ${(call.progress?._meta as any)?.stage}`,
+          _meta: { progress: call.progress?._meta },
         };
       }
       return undefined;
     },
     async execute(_args: unknown, context: ToolInvocationContext) {
-      context.reportProgress({ stage: "halfway" });
+      context.reportProgress({ progress: 50, _meta: { stage: "halfway" } });
       await toolReady;
       return { ok: true as const, content: { value: 42 } };
     },

@@ -19,6 +19,7 @@ export type {
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,
+  ToolProgress,
 } from "@rowan-agent/models";
 
 export * from "./model";

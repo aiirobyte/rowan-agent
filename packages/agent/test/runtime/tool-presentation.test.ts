@@ -36,8 +36,8 @@ test("Tool present function customizes title, locations, content, and kind in to
       if (call.status === "in_progress") {
         if (call.progress) {
           return {
-            title: `Progress edit of ${args?.path} (${(call.progress as any).percent}%)`,
-            _meta: { progressPercent: (call.progress as any).percent },
+            title: `Progress edit of ${args?.path} (${call.progress.progress}%)`,
+            _meta: { progressPercent: call.progress.progress },
           };
         }
         return {
@@ -61,7 +61,7 @@ test("Tool present function customizes title, locations, content, and kind in to
       };
     },
     async execute(_args: unknown, context: any) {
-      context.reportProgress({ percent: 50 });
+      context.reportProgress({ progress: 50 });
       return {
         content: [{ type: "text" as const, text: "patch applied successfully" }],
         structuredContent: { applied: true, linesChanged: 1 },
@@ -179,7 +179,7 @@ test("Tool without present function defaults title to annotations.title ?? name,
     description: "Fetches remote data.",
     parameters: Type.Object({ url: Type.String() }),
     async execute(_args: unknown, context: any) {
-      context.reportProgress({ pct: 50 });
+      context.reportProgress({ progress: 50 });
       return {
         content: [
           { type: "text" as const, text: "remote payload" },
@@ -680,8 +680,8 @@ test("Transient progress vs persisted final and replay verification", async () =
     present(call: ToolCallPresentationInput): ToolCallPresentationOutput | undefined {
       if (call.status === "in_progress" && call.progress) {
         return {
-          title: `Step ${(call.progress as any).step}`,
-          _meta: { step: (call.progress as any).step },
+          title: `Step ${call.progress.progress}`,
+          _meta: { step: call.progress.progress },
         };
       }
       if (call.status === "completed") {
@@ -693,8 +693,8 @@ test("Transient progress vs persisted final and replay verification", async () =
       return undefined;
     },
     async execute(_args: unknown, context: any): Promise<any> {
-      context.reportProgress({ step: 1 });
-      context.reportProgress({ step: 2 });
+      context.reportProgress({ progress: 1 });
+      context.reportProgress({ progress: 2 });
       return { ok: true as const, content: [{ type: "text", text: "finished all steps" }] };
     },
   };

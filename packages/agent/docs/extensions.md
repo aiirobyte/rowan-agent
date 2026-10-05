@@ -52,12 +52,12 @@ export default extension;
   present?(call: {
     status: ToolCallStatus;
     args: JsonValue;
-    progress?: JsonValue;
+    progress?: ToolProgress;
     result?: ToolExecutionResult;
   }): { title?: string; content?: ToolCallContent[]; locations?: ToolCallLocation[]; _meta?: JsonObject } | void | Promise<...>;
   ```
-  Rowan calls `present` at call reservation (`pending`), start of execution (`in_progress`), on each progress report via `ctx.reportProgress(data)` (`status: "in_progress", progress: data`), and on completion/failure (`status: "completed" | "failed", result`). Outputs are merged using `mergeToolCall`. When omitted or on error, Rowan falls back to default presentation without failing the tool call.
-  During execution, tools can report progress data using `context.reportProgress(data: JsonValue)`, which triggers `present({ status: "in_progress", args, progress: data })` and emits transient `tool_state_changed` updates.
+  Rowan calls `present` at call reservation (`pending`), start of execution (`in_progress`), on each progress report via `ctx.reportProgress(progress)` (`status: "in_progress", progress`), and on completion/failure (`status: "completed" | "failed", result`). Outputs are merged using `mergeToolCall`. When omitted or on error, Rowan falls back to default presentation without failing the tool call.
+  During execution, tools report progress using `context.reportProgress(progress: ToolProgress)` (`{ progress: number; total?: number; message?: string; _meta?: JsonObject }` matching MCP standard). Shape is validated (finite numbers); invalid reports are dropped with a warning without failing the tool. Tool-private progress data goes under `_meta` keys. Continuous output must be reported cumulatively (e.g. a tail), because transient updates coalesce per `toolCallId`.
 - `capabilities.contribute({ kind: "tool", name, description })`: Contribute a
   capability (such as a tool) to the host. Returns a disposer function to remove
   the contribution. Contributions are automatically removed when the extension is
@@ -69,7 +69,7 @@ export default extension;
   - `tools.list()`: Inspect registered tools and their MCP-standard `_meta`.
   - `tools.call(name, args, options?)`: Invoke a registered tool. Accepts `options`:
     - `signal?: AbortSignal`: Aborts that single tool call without cancelling the Run.
-    - `onUpdate?(toolCall: ToolCall): void`: Receives the merged `ToolCall` on every state change (start, progress-driven `present` updates, final state).
+    - `onUpdate?(toolCall: ToolCall, progress?: ToolProgress): void`: Receives the merged `ToolCall` on every state change (start, progress-driven `present` updates, final state). Passes the raw `progress` object when triggered by a progress report.
   - `tools.report(update)`: Report external tool execution states and progress.
 - `phases.register(path | Phase)` / `phases.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
   directory contains `PHASE.md` and may contain direct child Skill Bundles. Also provides

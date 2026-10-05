@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModelStream, type ProviderCallContext, type ProviderStreamFn, type StreamFn, type ToolCall, type ToolCallOutcome } from "@rowan-agent/models";
+import { createModelStream, isValidToolProgress, type ProviderCallContext, type ProviderStreamFn, type StreamFn, type ToolCall, type ToolCallOutcome, type ToolProgress } from "@rowan-agent/models";
 import Type from "typebox";
 import { AgentRuntime, InMemoryStore, SqliteStore, type ToolCallPresentationInput, type ToolCallPresentationOutput } from "../../src";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
@@ -589,7 +589,8 @@ test("ui contributions list, change notification, dispose, and triggerUiAction",
   }
 });
 
-test("ctx.tools.call options.onUpdate receives start, progress update, and final state", async () => {
+test("ctx.tools.call options.onUpdate receives start, progress update with raw ToolProgress, and final state", async () => {
+  const capturedPresentProgress: (ToolProgress | undefined)[] = [];
   const tool = {
     name: "progress_tool",
     description: "A tool that reports progress and provides presentation",
@@ -597,12 +598,17 @@ test("ctx.tools.call options.onUpdate receives start, progress update, and final
     kind: "execute" as const,
     _meta: { key: "initial_meta" },
     present(call: ToolCallPresentationInput): ToolCallPresentationOutput | void {
+      capturedPresentProgress.push(call.progress);
       if (call.status === "in_progress") {
         if (call.progress) {
           return {
-            title: `Progress: ${(call.progress as any).percent}%`,
+            title: `Progress: ${call.progress.progress}% (${call.progress.message})`,
             locations: [{ path: "file.txt", line: 42 }],
-            _meta: { step: (call.progress as any).percent },
+            _meta: {
+              step: call.progress.progress,
+              ...(call.progress.total !== undefined ? { total: call.progress.total } : {}),
+              ...(call.progress._meta ?? {}),
+            },
           };
         }
         return {
@@ -618,12 +624,17 @@ test("ctx.tools.call options.onUpdate receives start, progress update, and final
       }
     },
     async execute(args: any, ctx: any) {
-      ctx.reportProgress({ percent: 50 });
+      ctx.reportProgress({
+        progress: 50,
+        total: 100,
+        message: "halfway",
+        _meta: { detail: "chunk-1" },
+      });
       return { ok: true, content: [{ type: "text" as const, text: `Processed ${args.text}` }] };
     },
   };
 
-  const updates: ToolCall[] = [];
+  const updates: { toolCall: ToolCall; progress?: ToolProgress }[] = [];
   let callOutcome: ToolCallOutcome | undefined;
 
   const stream: StreamFn = async function* (_request, rawCtx) {
@@ -631,7 +642,7 @@ test("ctx.tools.call options.onUpdate receives start, progress update, and final
     callOutcome = await ctx.tools.call(
       "progress_tool",
       { text: "hello" },
-      { onUpdate: (tc) => updates.push({ ...tc }) },
+      { onUpdate: (tc, prog) => updates.push({ toolCall: { ...tc }, progress: prog ? { ...prog } : undefined }) },
     );
 
     yield {
@@ -680,22 +691,39 @@ test("ctx.tools.call options.onUpdate receives start, progress update, and final
     // onUpdate must have received start, progress, and final updates
     expect(updates.length).toBe(3);
 
-    // 1. Start update
-    expect(updates[0]!.status).toBe("in_progress");
-    expect(updates[0]!.title).toBe("Starting tool...");
-    expect(updates[0]!.locations).toEqual([{ path: "file.txt" }]);
-    expect(updates[0]!.kind).toBe("execute");
+    // 1. Start update: no progress parameter
+    expect(updates[0]!.toolCall.status).toBe("in_progress");
+    expect(updates[0]!.toolCall.title).toBe("Starting tool...");
+    expect(updates[0]!.toolCall.locations).toEqual([{ path: "file.txt" }]);
+    expect(updates[0]!.toolCall.kind).toBe("execute");
+    expect(updates[0]!.progress).toBeUndefined();
 
-    // 2. Progress update
-    expect(updates[1]!.status).toBe("in_progress");
-    expect(updates[1]!.title).toBe("Progress: 50%");
-    expect(updates[1]!.locations).toEqual([{ path: "file.txt", line: 42 }]);
-    expect(updates[1]!._meta).toEqual({ step: 50 });
+    // 2. Progress update: raw ToolProgress passed
+    expect(updates[1]!.toolCall.status).toBe("in_progress");
+    expect(updates[1]!.toolCall.title).toBe("Progress: 50% (halfway)");
+    expect(updates[1]!.toolCall.locations).toEqual([{ path: "file.txt", line: 42 }]);
+    expect(updates[1]!.toolCall._meta).toEqual({ step: 50, total: 100, detail: "chunk-1" });
+    expect(updates[1]!.progress).toEqual({
+      progress: 50,
+      total: 100,
+      message: "halfway",
+      _meta: { detail: "chunk-1" },
+    });
 
-    // 3. Final update
-    expect(updates[2]!.status).toBe("completed");
-    expect(updates[2]!.title).toBe("Tool finished successfully");
-    expect(updates[2]!._meta).toEqual({ step: 50, done: true });
+    // 3. Final update: no progress parameter
+    expect(updates[2]!.toolCall.status).toBe("completed");
+    expect(updates[2]!.toolCall.title).toBe("Tool finished successfully");
+    expect(updates[2]!.toolCall._meta).toEqual({ step: 50, total: 100, detail: "chunk-1", done: true });
+    expect(updates[2]!.progress).toBeUndefined();
+
+    // Verify present(call) received call.progress
+    const progressPresentCall = capturedPresentProgress.find((p) => p !== undefined);
+    expect(progressPresentCall).toEqual({
+      progress: 50,
+      total: 100,
+      message: "halfway",
+      _meta: { detail: "chunk-1" },
+    });
 
     // Match observed tool_state_changed events with onUpdate updates
     const startEvent = observedEvents.find(
@@ -712,10 +740,123 @@ test("ctx.tools.call options.onUpdate receives start, progress update, and final
     expect(progressEvent).toBeDefined();
     expect(completedEvent).toBeDefined();
 
-    expect(startEvent!.toolCall.title).toBe(updates[0]!.title);
-    expect(progressEvent!.toolCall.title).toBe(updates[1]!.title);
-    expect(completedEvent!.toolCall.title).toBe(updates[2]!.title);
+    expect(startEvent!.toolCall.title).toBe(updates[0]!.toolCall.title);
+    expect(progressEvent!.toolCall.title).toBe(updates[1]!.toolCall.title);
+    expect(completedEvent!.toolCall.title).toBe(updates[2]!.toolCall.title);
   } finally {
+    await runtime.close();
+  }
+});
+
+test("ToolProgress shape validation and invalid report drop behavior", async () => {
+  // 1. Validator unit checks
+  expect(isValidToolProgress({ progress: 0 })).toBe(true);
+  expect(isValidToolProgress({ progress: 42.5 })).toBe(true);
+  expect(isValidToolProgress({ progress: 100, total: 200 })).toBe(true);
+  expect(isValidToolProgress({ progress: 50, message: "downloading", _meta: { file: "a.zip" } })).toBe(true);
+
+  // Invalid: non-finite or missing progress
+  expect(isValidToolProgress(null)).toBe(false);
+  expect(isValidToolProgress(undefined)).toBe(false);
+  expect(isValidToolProgress("invalid")).toBe(false);
+  expect(isValidToolProgress(123)).toBe(false);
+  expect(isValidToolProgress([])).toBe(false);
+  expect(isValidToolProgress({})).toBe(false);
+  expect(isValidToolProgress({ progress: "50" })).toBe(false);
+  expect(isValidToolProgress({ progress: NaN })).toBe(false);
+  expect(isValidToolProgress({ progress: Infinity })).toBe(false);
+  expect(isValidToolProgress({ progress: -Infinity })).toBe(false);
+
+  // Invalid: non-finite total
+  expect(isValidToolProgress({ progress: 50, total: "100" })).toBe(false);
+  expect(isValidToolProgress({ progress: 50, total: NaN })).toBe(false);
+  expect(isValidToolProgress({ progress: 50, total: Infinity })).toBe(false);
+
+  // Invalid: message not string
+  expect(isValidToolProgress({ progress: 50, message: 123 })).toBe(false);
+  expect(isValidToolProgress({ progress: 50, message: {} })).toBe(false);
+
+  // Invalid: _meta not object
+  expect(isValidToolProgress({ progress: 50, _meta: "str" })).toBe(false);
+  expect(isValidToolProgress({ progress: 50, _meta: [1, 2] })).toBe(false);
+
+  // 2. Integration test: invalid reports dropped with warning, never failing the tool
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: any[]) => {
+    warnings.push(args.join(" "));
+  };
+
+  const progressUpdates: ToolProgress[] = [];
+  const testTool = {
+    name: "validation_tool",
+    description: "Tests progress validation",
+    parameters: Type.Object({}),
+    present(call: ToolCallPresentationInput): ToolCallPresentationOutput | void {
+      if (call.status === "in_progress" && call.progress) {
+        return { title: `Valid progress: ${call.progress.progress}` };
+      }
+    },
+    async execute(_args: any, ctx: any) {
+      // Invalid reports: should be dropped with warning, not failing the tool
+      ctx.reportProgress({ percent: 50 } as any); // wrong key
+      ctx.reportProgress({ progress: NaN } as any); // NaN
+      ctx.reportProgress({ progress: Infinity } as any); // Infinity
+      ctx.reportProgress("bad-string" as any); // non-object
+      ctx.reportProgress({ progress: 10, total: NaN } as any); // NaN total
+      ctx.reportProgress({ progress: 20, message: 404 } as any); // non-string message
+      ctx.reportProgress({ progress: 30, _meta: "not-an-object" } as any); // non-object _meta
+
+      // Valid report: should succeed and trigger update
+      ctx.reportProgress({ progress: 99, message: "almost done" });
+
+      return { ok: true, content: [{ type: "text" as const, text: "validation complete" }] };
+    },
+  };
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    await ctx.tools.call(
+      "validation_tool",
+      {},
+      {
+        onUpdate: (_tc, prog) => {
+          if (prog) progressUpdates.push(prog);
+        },
+      },
+    );
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-progress-validation",
+      stream,
+      tools: [testTool],
+      options: { idempotencyKey: "agent-progress-validation-key" },
+    });
+
+    const run = await runtime.start(agentId, "test validation", {
+      idempotencyKey: "run-progress-validation-key",
+    });
+
+    const boundary = await run.wait();
+    expect(boundary).toMatchObject({ type: "completed" });
+
+    // Warnings logged for invalid reports
+    expect(warnings.length).toBeGreaterThanOrEqual(7);
+    expect(warnings.some((w) => w.includes("Invalid progress report"))).toBe(true);
+
+    // Only the single valid report triggered an onUpdate progress notification
+    expect(progressUpdates.length).toBe(1);
+    expect(progressUpdates[0]).toEqual({ progress: 99, message: "almost done" });
+  } finally {
+    console.warn = originalWarn;
     await runtime.close();
   }
 });

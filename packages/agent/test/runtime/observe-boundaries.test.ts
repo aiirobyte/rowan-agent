@@ -299,15 +299,15 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
     present(call: any) {
       if (call.status === "in_progress" && call.progress) {
         return {
-          title: `Lookup (${(call.progress as any).stage})`,
-          _meta: { stage: (call.progress as any).stage },
+          title: `Lookup (${(call.progress?._meta as any)?.stage})`,
+          _meta: { stage: (call.progress?._meta as any)?.stage },
         };
       }
       return undefined;
     },
     async execute(_args: unknown, context: ToolInvocationContext) {
       retainedReporter = context.reportProgress;
-      context.reportProgress({ stage: "active" });
+      context.reportProgress({ progress: 10, _meta: { stage: "active" } });
       await toolCompletion;
       return { ok: true as const, content: { value: 42 } };
     },
@@ -340,7 +340,7 @@ test("Tool progress reporter retained after Tool terminal state is inert", async
     );
     await secondModelStarted;
 
-    retainedReporter?.({ stage: "late" });
+    retainedReporter?.({ progress: 100, _meta: { stage: "late" } });
     releaseFinalModel();
     await run.wait();
     const remaining: RunEvent[] = [];

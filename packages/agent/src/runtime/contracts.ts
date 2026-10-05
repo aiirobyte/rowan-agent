@@ -10,6 +10,7 @@ import type {
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,
+  ToolProgress,
 } from "@rowan-agent/models";
 import type {
   AgentId,
@@ -169,7 +170,7 @@ export type ToolCallContext = Readonly<{
   providerToolCallId?: string;
   scope?: ScopeRef;
   turn?: JsonObject;
-  reportProgress(progress: JsonValue): void;
+  reportProgress(progress: ToolProgress): void;
 }>;
 export type ToolInvocationContext = ToolCallContext & Readonly<{
   interaction: RunInteractionDriver;

@@ -426,9 +426,36 @@ export type ToolCallOutcome =
   | Readonly<{ ok: true; content: JsonValue }>
   | Readonly<{ ok: false; error: string; content?: JsonValue }>;
 
+export type ToolProgress = {
+  progress: number;
+  total?: number;
+  message?: string;
+  _meta?: JsonObject;
+};
+
+export function isValidToolProgress(value: unknown): value is ToolProgress {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const p = value as Record<string, unknown>;
+  if (typeof p.progress !== "number" || !Number.isFinite(p.progress)) {
+    return false;
+  }
+  if (p.total !== undefined && (typeof p.total !== "number" || !Number.isFinite(p.total))) {
+    return false;
+  }
+  if (p.message !== undefined && typeof p.message !== "string") {
+    return false;
+  }
+  if (p._meta !== undefined && (typeof p._meta !== "object" || p._meta === null || Array.isArray(p._meta))) {
+    return false;
+  }
+  return true;
+}
+
 export type ToolCallOptions = {
   signal?: AbortSignal;
-  onUpdate?(toolCall: ToolCall): void;
+  onUpdate?(toolCall: ToolCall, progress?: ToolProgress): void;
 };
 
 export type ProviderCallContext = {

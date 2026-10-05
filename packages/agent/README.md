@@ -111,10 +111,14 @@ through:
 When an external side effect cannot be confirmed, the Tool must become
 `indeterminate`; the Run then fails and is never automatically retried.
 
-While running, a Tool may call `context.reportProgress(progress)` with a
-JSON-safe value. Progress reports trigger the tool's presentation function and emit
-transient `tool_state_changed` updates. Progress is live-only and may be dropped;
-the final completed or failed tool call state is durably persisted.
+While running, a Tool may call `context.reportProgress(progress: ToolProgress)` using
+the standard MCP progress shape (`{ progress: number; total?: number; message?: string; _meta?: JsonObject }`).
+Shape is validated with finite numbers; invalid reports are dropped with a warning.
+Tool-private progress data goes under `_meta` keys, and continuous output should be reported
+cumulatively (e.g. a tail) because transient updates coalesce per `toolCallId`.
+Progress reports trigger the tool's presentation function and emit transient `tool_state_changed`
+updates. Progress is live-only and may be dropped; the final completed or failed tool call state
+is durably persisted.
 
 ## Events
 

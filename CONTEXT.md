@@ -252,8 +252,12 @@ _Avoid_: Shell command, Tool Event
 A pure description function executed across tool call states (`pending`, `in_progress`, progress reports via `reportProgress`, and `completed` / `failed`). Updates are merged via `mergeToolCall` (replacing specified fields, merging `_meta` per top-level key). Tool definition `_meta` is preserved untouched for hosts. Presentation failures fall back to default presentation without failing the tool call.
 _Avoid_: Provider Activity, Tool Formatting Adapter, Imperative Presentation Hook
 
+**Tool Progress**:
+A structured progress report emitted by a running Tool via `context.reportProgress(progress: ToolProgress)`. It follows the standard MCP `notifications/progress` shape (`progress: number`, optional `total`, `message`, and `_meta`). Numbers must be finite; invalid shapes are dropped with a warning without failing the tool. Tool-private progress data lives under `_meta` keys, and continuous output must be reported cumulatively (e.g. a tail) because transient updates coalesce per `toolCallId`.
+_Avoid_: Free-form progress JSON, uncoalesced stream deltas
+
 **Tool Invocation Options**:
-Per-call options (`ToolCallOptions`) provided when calling `ProviderCallContext.tools.call(name, args, options?)`. Rowan supports per-call cancellation via `signal` (settling only that tool call as failed without aborting the Run) and continuous execution observation via `onUpdate` (receiving the merged `ToolCall` on every state change: start, progress-driven `present` updates, and completion/failure).
+Per-call options (`ToolCallOptions`) provided when calling `ProviderCallContext.tools.call(name, args, options?)`. Rowan supports per-call cancellation via `signal` (settling only that tool call as failed without aborting the Run) and continuous execution observation via `onUpdate` (receiving the merged `ToolCall` on every state change: start, progress-driven `present` updates, and completion/failure; the raw `ToolProgress` is passed when triggered by a progress report).
 _Avoid_: Run-level abort for single tool failure, polling tool state
 
 **Indeterminate Tool Call**:

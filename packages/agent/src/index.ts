@@ -174,6 +174,7 @@ export type {
   ToolCallUpdate,
   ToolDefinitionSummary,
   ToolKind,
+  ToolProgress,
   ProviderConfig,
   ProviderModelConfig,
 } from "@rowan-agent/models";

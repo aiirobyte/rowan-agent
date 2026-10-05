@@ -1,7 +1,7 @@
 import { mkdir, chmod, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { createModelStream } from "@rowan-agent/models";
+import { createModelStream, isValidToolProgress } from "@rowan-agent/models";
 import type { AgentMessage, ModelRef } from "../protocol";
 import type { StreamFn } from "@rowan-agent/models";
 import { createId, combineSignals, withAbort } from "../utils";
@@ -53,6 +53,7 @@ import type {
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,
+  ToolProgress,
 } from "@rowan-agent/models";
 import type { AgentId, AssistantMessage, ExecutionId, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
@@ -1929,10 +1930,10 @@ export class AgentRuntime implements AgentRuntimeContract {
     let progressActive = true;
     let progressQueue: Promise<void> = Promise.resolve();
 
-    const notifyUpdate = (toolCall: AcpToolCall) => {
+    const notifyUpdate = (toolCall: AcpToolCall, progress?: ToolProgress) => {
       if (input.options?.onUpdate) {
         try {
-          input.options.onUpdate(toolCall);
+          input.options.onUpdate(toolCall, progress);
         } catch (err) {
           console.warn(`Error in tool call onUpdate callback:`, err);
         }
@@ -1976,16 +1977,19 @@ export class AgentRuntime implements AgentRuntimeContract {
       ...(input.cwd ? { cwd: input.cwd } : {}),
       turn: input.turn,
       interaction: interactionDriver,
-      reportProgress: (progress: JsonValue) => {
+      reportProgress: (progress: ToolProgress) => {
         const active = this.executions.get(input.runId);
         if (
           !progressActive
           || this.closed
           || effectiveSignal.aborted
           || active?.executionId !== input.execution.executionId
-          || !isJsonValue(progress)
         ) return;
-        let copy: JsonValue;
+        if (!isValidToolProgress(progress)) {
+          console.warn(`Invalid progress report for tool "${input.durableTool.name}": expected valid ToolProgress shape with finite numbers.`);
+          return;
+        }
+        let copy: ToolProgress;
         try {
           if (JSON.stringify(progress).length > 64 * 1024) return;
           copy = structuredClone(progress);
@@ -2016,7 +2020,7 @@ export class AgentRuntime implements AgentRuntimeContract {
               transition: { from: "in_progress", to: "in_progress" },
               toolCall: progressToolCall,
             });
-            notifyUpdate(progressToolCall);
+            notifyUpdate(progressToolCall, copy);
           }
         }).catch((err) => {
           console.warn(`Error handling progress report for tool "${input.durableTool.name}":`, err);

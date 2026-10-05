@@ -69,8 +69,23 @@ Stream functions receive a `ProviderCallContext` with:
 - `tools.list(): readonly ToolDefinitionSummary[]` — registered tool definitions with metadata.
 - `tools.call(name, args, options?): Promise<ToolCallOutcome>` — invoke a registered tool.
   - `options.signal?: AbortSignal` — aborts that single tool call without cancelling the Run.
-  - `options.onUpdate?(toolCall: ToolCall): void` — receives the merged ToolCall every time it changes during execution (start, each progress-driven `present` update, final).
+  - `options.onUpdate?(toolCall: ToolCall, progress?: ToolProgress): void` — receives the merged ToolCall every time it changes during execution (start, each progress-driven `present` update, final). The raw `progress` object is passed when the update was triggered by a progress report.
 - `tools.report(update: ToolCall | ToolCallUpdate): void` — report external tool execution.
+
+### ToolProgress
+
+Progress reports use the standard MCP `notifications/progress` shape:
+```ts
+type ToolProgress = {
+  progress: number;
+  total?: number;
+  message?: string;
+  _meta?: JsonObject;
+};
+```
+- Shape is validated (finite numbers); invalid reports are dropped with a warning without failing the tool call.
+- Tool-private progress data goes under `_meta` keys.
+- Continuous output must be reported cumulatively (e.g. a tail), because transient updates coalesce per `toolCallId`.
 
 ## Source structure
 
