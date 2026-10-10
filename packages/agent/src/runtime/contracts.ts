@@ -545,8 +545,8 @@ export interface AgentRuntime {
   consume(input: { consumerId: string; signal: AbortSignal; onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void> }): Promise<DurableConsumer>;
   listCapabilities(): readonly import("../extensions").ExtensionCapability[];
   onCapabilitiesChanged(listener: (capabilities: readonly import("../extensions").ExtensionCapability[]) => void): () => void;
-  listUiContributions(): readonly import("../extensions").UiContribution[];
-  onUiContributionsChanged(listener: (contributions: readonly import("../extensions").UiContribution[]) => void): () => void;
+  listHostContributions(): readonly import("../extensions").HostContribution[];
+  onHostContributionsChanged(listener: (contributions: readonly import("../extensions").HostContribution[]) => void): () => void;
   triggerUiAction(event: { contributionId: string; actionId: string; scope?: ScopeRef }): void;
   close(): Promise<void>;
 }

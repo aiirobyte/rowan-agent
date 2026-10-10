@@ -2,7 +2,7 @@
  * Extension types — simplified for the new hook-based system.
  */
 
-import type { Phase, PhaseContext, PhaseOutput, SettingsDefinition } from "../harness/phases/types";
+import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
 import type { JsonObject, JsonValue, ToolExecutionResult } from "../runtime-events";
@@ -37,13 +37,12 @@ export type {
 } from "@rowan-agent/models";
 
 // ---------------------------------------------------------------------------
-// UI contributions
+// Host contributions
 // ---------------------------------------------------------------------------
 
-export type UiSlot = "settings" | "model-picker";
-export type UiContribution =
-  | { slot: "settings"; id: string; title: string; description?: string; settings: SettingsDefinition }
-  | { slot: "model-picker"; id: string; provider: string; status?: { kind: "ready" | "needs-setup" | "error"; message?: string }; actions?: { id: string; label: string }[] };
+export type HostContribution = { readonly kind: string; readonly id: string } & {
+  readonly [key: string]: JsonValue;
+};
 
 // ---------------------------------------------------------------------------
 // Host & scope types
@@ -297,7 +296,7 @@ export interface Extension {
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
   capabilities: Map<string, ExtensionCapabilityContribution>;
-  uiContributions: Map<string, UiContribution>;
+  hostContributions: Map<string, HostContribution>;
   cleanup: Array<() => void | Promise<void>>;
   disposer?: ExtensionDisposer;
   runtime: ExtensionRuntime;

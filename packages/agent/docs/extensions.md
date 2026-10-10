@@ -76,7 +76,7 @@ export default extension;
 - `phases.register(path | Phase)` / `phases.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
   directory contains `PHASE.md` and may contain direct child Skill Bundles. Also provides
   `getPayload`, `setPayload`, `setMessage`, `getCurrentPhase`, `setNextPhase`, `getNextPhase`, `getMessage`.
-- `ui.contribute(contribution)`: Contribute declarative UI elements (`settings`, `model-picker`).
+- `host.contribute(contribution)`: Contribute declarative declarations to the host. Rowan transports `{ kind, id, ...payload }` without interpreting contribution kinds or payloads; the host defines kinds, their schema, and validation.
 - `hooks.on()` / `hooks.off()`: Register lifecycle hooks (`run_start`, `run_end`) and
   execution hooks (`before_phase`, `after_phase`, `before_prompt`,
   `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
@@ -134,9 +134,9 @@ The host interface defines:
 - `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.
 - `getGlobalState(extensionId, key)`, `setGlobalState(extensionId, key, value)`, `deleteGlobalState(extensionId, key)`: Manages extension-wide durable state.
 
-Hosts can query and listen to capabilities and UI contributions directly on `AgentRuntime`:
+Hosts can query and listen to capabilities and host contributions directly on `AgentRuntime`:
 - `runtime.listCapabilities()`: Returns the active array of capabilities (`{ extensionId, kind: "tool", name, description }`), readable at any time outside a Run.
 - `runtime.onCapabilitiesChanged(listener: (capabilities) => void)`: Subscribes to capability changes and returns an unsubscribe function.
-- `runtime.listUiContributions()`: Returns the active array of declarative UI contributions (`UiContribution`), readable at any time outside a Run.
-- `runtime.onUiContributionsChanged(listener: (contributions) => void)`: Subscribes to UI contribution changes and returns an unsubscribe function.
+- `runtime.listHostContributions()`: Returns the active array of declarative host contributions (`HostContribution`), readable at any time outside a Run.
+- `runtime.onHostContributionsChanged(listener: (contributions) => void)`: Subscribes to host contribution changes and returns an unsubscribe function.
 - `runtime.triggerUiAction({ contributionId, actionId, scope })`: Dispatches a UI action event (`ui.action`) to the contributing extension.
