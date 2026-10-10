@@ -6,7 +6,7 @@ import type {
   ScopeRef,
   ExtensionStateStore,
   ExtensionCapabilityContribution,
-  UiContribution,
+  HostContribution,
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
@@ -106,10 +106,10 @@ export interface ExtensionAPI {
     getMessage(): string | undefined;
   };
 
-  /** Declarative UI contributions — settings or model picker decorations. */
-  ui: {
-    /** Contribute declarative UI to a host slot. Returns a disposer to remove the contribution. */
-    contribute(contribution: UiContribution): () => void;
+  /** Declarative host contributions. */
+  host: {
+    /** Contribute a declarative declaration to the host. Returns a disposer to remove the contribution. */
+    contribute<T extends HostContribution>(contribution: T): () => void;
   };
 
   /** Extension manifest from package.json `rowan` field. */
@@ -155,7 +155,7 @@ export function createExtensionAPI(
     unregisterProvider?: (id: string) => void;
     registerTool?: (tool: ToolDefinition) => void;
     unregisterTool?: (toolName: string) => void;
-    contributeUi?: (contribution: UiContribution) => () => void;
+    contributeToHost?: (contribution: HostContribution) => () => void;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
@@ -363,32 +363,20 @@ export function createExtensionAPI(
       getNextPhase: () => nextPhase,
       getMessage: () => outputMessage,
     },
-    ui: {
-      contribute: (contribution) => {
+    host: {
+      contribute: <T extends HostContribution>(contribution: T): () => void => {
         assertActive();
-        if (!contribution || typeof contribution !== "object") {
-          throw new TypeError("UI contribution must be an object.");
+        if (!contribution || typeof contribution !== "object" || Array.isArray(contribution)) {
+          throw new TypeError("Host contribution must be an object.");
         }
-        if (contribution.slot !== "settings" && contribution.slot !== "model-picker") {
-          throw new TypeError(`Unsupported UI contribution slot: "${(contribution as any).slot}".`);
+        if (typeof contribution.kind !== "string" || contribution.kind.trim() === "") {
+          throw new TypeError("Host contribution requires a non-empty kind.");
         }
         if (typeof contribution.id !== "string" || contribution.id.trim() === "") {
-          throw new TypeError("UI contribution requires a non-empty id.");
+          throw new TypeError("Host contribution requires a non-empty id.");
         }
-        if (contribution.slot === "settings") {
-          if (typeof contribution.title !== "string") {
-            throw new TypeError("Settings UI contribution requires a title.");
-          }
-          if (!contribution.settings || typeof contribution.settings !== "object") {
-            throw new TypeError("Settings UI contribution requires a settings definition.");
-          }
-        }
-        if (contribution.slot === "model-picker") {
-          if (typeof contribution.provider !== "string" || contribution.provider.trim() === "") {
-            throw new TypeError("Model-picker UI contribution requires a provider.");
-          }
-        }
-        const dispose = options?.contributeUi ? options.contributeUi(contribution) : () => {};
+        assertJsonValue(contribution, "Host contribution");
+        const dispose = options?.contributeToHost ? options.contributeToHost(contribution) : () => {};
         trackCleanup?.(dispose);
         return dispose;
       },

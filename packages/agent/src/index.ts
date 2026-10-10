@@ -201,8 +201,7 @@ export type {
   RunStartEvent,
   ScopeRef,
   ToolDefinition,
-  UiSlot,
-  UiContribution,
+  HostContribution,
 } from "./extensions";
 
 export type {
