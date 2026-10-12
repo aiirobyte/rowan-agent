@@ -65,6 +65,12 @@ test("buildModelRequest forwards the selected ThinkingLevel", () => {
   expect(req.thinkingLevel).toBe("high");
 });
 
+test("buildModelRequest forwards providerOptions", () => {
+  const req = buildModelRequest(createTestInput(), { providerOptions: { mode: "read-only" } });
+
+  expect(req.providerOptions).toEqual({ mode: "read-only" });
+});
+
 test("buildModelRequest includes skills in system prompt when present", () => {
   const input = createTestInput({
     skills: [{ name: "writer", description: "Write concise plans.", filePath: "/skills/writer/SKILL.md", baseDir: "/skills/writer", content: "", disableModelInvocation: false }],

@@ -95,7 +95,13 @@ export type MessageBase = Readonly<{
   createdAt: string;
 }>;
 
-export type UserMessage = MessageBase & Readonly<{ role: "user"; content: UserContent }>;
+export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
+
+export type UserMessage = MessageBase & Readonly<{
+  role: "user";
+  content: UserContent;
+  contexts?: readonly ContextCandidate[];
+}>;
 export type AssistantMessage = MessageBase & Readonly<{ role: "assistant"; content: AssistantContent; interrupted?: boolean }>;
 export type ToolMessage = MessageBase & Readonly<{ role: "tool"; content: ToolMessageContent }>;
 export type InteractionRecord = MessageBase & Readonly<{

@@ -17,6 +17,7 @@ import type {
   AgentDeletionRequest,
   AssistantMessage,
   ConsumerRegistration,
+  ContextCandidate,
   ContextCompactionRecord,
   ContextStatus,
   ConfigToken,
@@ -863,7 +864,7 @@ export class InMemoryStore implements DurableStore {
     return clone(run);
   }
 
-  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): RunClaim {
+  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[] }): RunClaim {
     this.assertOwner(lease);
     const executionId = input.executionId ?? (createId("exec") as ExecutionId);
     const operationKey = `claim:${executionId}`;
@@ -872,6 +873,7 @@ export class InMemoryStore implements DurableStore {
       input.expectedRevision,
       input.messageId ?? null,
       input.configToken ?? null,
+      input.additionalContexts ?? null,
     ] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as RunClaim);
@@ -894,6 +896,7 @@ export class InMemoryStore implements DurableStore {
     const committedMessages: Message[] = [];
     if (!run.checkpoint && !run.initialMessageId && (!isControlRun(run) || hasUserInput(run.input))) {
       const userInput = normalizeUserInput(run.input);
+      const turnContexts = input.additionalContexts ?? [];
       const message: Message = {
         id: input.messageId ?? (createId("msg") as MessageId),
         agentId: run.agentId,
@@ -901,6 +904,7 @@ export class InMemoryStore implements DurableStore {
         role: "user",
         content: userInputContent(userInput),
         ...(userInputMetadata(userInput) ? { metadata: clone(userInputMetadata(userInput)!) } : {}),
+        ...(turnContexts.length > 0 ? { contexts: clone(turnContexts) } : {}),
         sequenceWithinRun: this.nextMessageSequence(run.id),
         createdAt: createTimestamp(),
       };
@@ -2201,7 +2205,7 @@ class MemoryOwnedStore implements OwnedStore {
     return this.store.commitContextCompaction(this.lease, record);
   }
   async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
-  async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
+  async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[]; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
   async commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> { return this.store.commitPhaseOutput(this.lease, input); }

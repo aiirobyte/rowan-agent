@@ -105,7 +105,7 @@ test("AgentRuntime runs a queued Run through claim and completion", async () => 
   }
 });
 
-test("AgentRuntime injects additional Contexts into the System Prompt", async () => {
+test("AgentRuntime puts additional Contexts on the turn's user message, not the System Prompt", async () => {
   const requests: Parameters<StreamFn>[0][] = [];
   const stream: StreamFn = async function* (input) {
     requests.push(input);
@@ -123,10 +123,20 @@ test("AgentRuntime injects additional Contexts into the System Prompt", async ()
     const history = await runtime.history(agentId);
     expect(history.filter(({ role }) => role === "user")).toHaveLength(1);
     expect(history[0]).toMatchObject({ role: "user", content: "hello" });
-    expect(requests[0]?.system).toContain('<context name="explicit">');
-    expect(requests[0]?.system).toContain("Review carefully.");
-    const userMessages = requests[0]?.messages.filter((message) => message.role === "user") ?? [];
-    expect(userMessages.some((message) => String(message.content).includes("Review carefully."))).toBe(false);
+    expect(requests[0]?.system).not.toContain("Review carefully.");
+    const helloOf = (request: Parameters<StreamFn>[0] | undefined) => request?.messages.find((message) =>
+      message.role === "user" && Array.isArray(message.content)
+      && message.content.some((part) => part.type === "text" && part.text === "hello"));
+    expect(helloOf(requests[0])?.content).toEqual([
+      { type: "text", text: expect.stringMatching(/^<turn_context>[\s\S]*<context name="explicit">[\s\S]*Review carefully\.[\s\S]*<\/turn_context>$/) },
+      { type: "text", text: "hello" },
+    ]);
+
+    // A later turn renders the earlier user message byte-for-byte the same.
+    const second = await runtime.start(agentId, "again", { idempotencyKey: "host-context-run-2" });
+    await expect(second.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(requests[1]?.system).toBe(requests[0]?.system);
+    expect(helloOf(requests.at(-1))).toEqual(helloOf(requests[0]));
   } finally {
     await runtime.close();
   }
@@ -373,6 +383,37 @@ test("AgentRuntime forwards the user ThinkingLevel on the LLM Request", async ()
     await expect(offRun.wait()).resolves.toMatchObject({ type: "completed" });
 
     expect(requests.map(({ thinkingLevel }) => thinkingLevel)).toEqual(["high", "off"]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("AgentRuntime forwards providerOptions on the LLM Request", async () => {
+  const requests: Parameters<StreamFn>[0][] = [];
+  const stream: StreamFn = async function* (input) {
+    requests.push(input);
+    const text = "done";
+    yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+    yield { type: "done", response: stopResponse(text) };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await simpleAgent(runtime, stream, { idempotencyKey: "provider-options-agent" });
+    const run = await runtime.start(agentId, {
+      content: "Run with provider options",
+      providerOptions: { mode: "read-only", collab: "work-dir" },
+    }, { idempotencyKey: "provider-options-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+
+    const omittedRun = await runtime.start(agentId, {
+      content: "Run without provider options",
+    }, { idempotencyKey: "provider-options-omitted-run" });
+    await expect(omittedRun.wait()).resolves.toMatchObject({ type: "completed" });
+
+    expect(requests.map(({ providerOptions }) => providerOptions)).toEqual([
+      { mode: "read-only", collab: "work-dir" },
+      undefined,
+    ]);
   } finally {
     await runtime.close();
   }

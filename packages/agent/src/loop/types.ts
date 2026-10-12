@@ -12,7 +12,7 @@ import type { PhaseContext, PhaseExecutionIdentity, PhaseInvocation, PhaseOutput
 import type { RunInteractionDriver, RunInteractionState } from "../harness/phases/interactions";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
-import type { ContentBlock, ThinkingLevel } from "@rowan-agent/models";
+import type { ContentBlock, JsonObject, ThinkingLevel } from "@rowan-agent/models";
 import type { JsonValue } from "../runtime-events";
 import type { EntryPhaseSpec } from "../runtime/contracts";
 
@@ -104,6 +104,7 @@ export type ExecutionContinuationState = {
 export type AgentConfig = {
   model: ModelRef;
   thinkingLevel?: ThinkingLevel;
+  providerOptions?: JsonObject;
   stream: StreamFn;
   context: AgentContext;
   /** Durable Run identity passed to generated Phase callbacks. */

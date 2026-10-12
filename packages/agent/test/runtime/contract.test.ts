@@ -89,10 +89,16 @@ test("RuntimeError narrows the code/details discriminant", () => {
 
 test("UserInput cannot choose durable identity and uses canonical request bytes", () => {
   expect(normalizeUserInput("hello")).toEqual({ content: "hello" });
+  expect(normalizeUserInput({ content: "hello", providerOptions: { mode: "read-only" } })).toEqual({
+    content: "hello",
+    providerOptions: { mode: "read-only" },
+  });
   expect(canonicalStartRunRequest("hello", { b: 2, a: 1 })).toBe(
     '{"input":{"content":"hello"},"metadata":{"a":1,"b":2}}',
   );
   expect(() => normalizeUserInput({ content: "hello", id: "message-1" } as never)).toThrow();
+  expect(() => normalizeUserInput({ content: "hello", providerOptions: "not-an-object" as never })).toThrow();
+  expect(() => normalizeUserInput({ content: "hello", providerOptions: [1, 2] as never })).toThrow();
   // @ts-expect-error UserInput cannot choose a Message role.
   const invalidRole: UserInput = { role: "assistant", content: "not valid" };
   // @ts-expect-error UserInput cannot choose a Message identity.

@@ -2,9 +2,12 @@ import type { AgentMessage, Skill } from "../../protocol";
 import type {
   LlmRequest,
   LlmMessage,
+  LlmContentPart,
   ModelRef,
   ThinkingLevel,
+  JsonObject,
 } from "@rowan-agent/models";
+import { buildContextDescription } from "./resource-formatter";
 import { buildSystemPrompt } from "./system-prompt";
 import { messageContentText } from "../../types";
 
@@ -52,6 +55,16 @@ export function latestUserInput(messages: AgentMessage[]): string {
 export function conversationMessages(messages: AgentMessage[]): LlmMessage[] {
   return messages.flatMap((message): LlmMessage[] => {
     if (message.role === "user") {
+      if (message.contexts && message.contexts.length > 0) {
+        const turnContextText = `<turn_context>\n${buildContextDescription(message.contexts)}\n</turn_context>`;
+        const contentParts: LlmContentPart[] = [
+          { type: "text", text: turnContextText },
+          ...(typeof message.content === "string"
+            ? [{ type: "text" as const, text: message.content }]
+            : message.content),
+        ];
+        return [{ role: "user", content: contentParts }];
+      }
       return [{ role: "user", content: message.content }];
     }
 
@@ -83,7 +96,7 @@ type ModelRequestInput = {
 
 export function buildModelRequest(
   input: ModelRequestInput,
-  options?: { model?: ModelRef; thinkingLevel?: ThinkingLevel },
+  options?: { model?: ModelRef; thinkingLevel?: ThinkingLevel; providerOptions?: JsonObject },
 ): LlmRequest {
   const toolMeta = input.tools.map((t) => ({
     name: t.name,
@@ -111,6 +124,7 @@ export function buildModelRequest(
   return {
     model: options?.model ?? { provider: "", id: "" },
     ...(options?.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
+    ...(options?.providerOptions === undefined ? {} : { providerOptions: options.providerOptions }),
     system: systemText,
     messages,
     tools: modelTools.length > 0 ? modelTools : undefined,

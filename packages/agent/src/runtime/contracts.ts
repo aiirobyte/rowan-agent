@@ -18,6 +18,7 @@ import type {
   AssistantContent,
   AssistantMessage,
   ConfigToken,
+  ContextCandidate,
   DurableRunEvent,
   EventCursor,
   ExecutionId,
@@ -63,6 +64,7 @@ export type {
   AssistantContent,
   AssistantMessage,
   ConfigToken,
+  ContextCandidate,
   DurableEventBase,
   DurableRunEvent,
   DurableToolResult,
@@ -124,7 +126,7 @@ export type {
 
 export type { RunInteraction, RunInteractionDriver, RunInteractionKind, RunInteractionRequest, RunInteractionState, RunInteractionStatus } from "../harness/phases/interactions";
 
-export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata; thinkingLevel?: ThinkingLevel }>;
+export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata; thinkingLevel?: ThinkingLevel; providerOptions?: JsonObject }>;
 export type HistorySeed = readonly Message[];
 export type ContextStatus = Readonly<{
   tokens: number;
@@ -155,6 +157,10 @@ const THINKING_LEVELS = [
 
 export function thinkingLevelFromUserInput(input: UserInput): ThinkingLevel | undefined {
   return typeof input === "string" ? undefined : input.thinkingLevel;
+}
+
+export function providerOptionsFromUserInput(input: UserInput): JsonObject | undefined {
+  return typeof input === "string" ? undefined : input.providerOptions;
 }
 
 /** Who is calling which tool, without the ability to ask or suspend. Hosts that
@@ -207,7 +213,6 @@ export type Tool = Readonly<{
   } | undefined | void>;
   execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
 }>;
-export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
 export type ProviderToolDefinition = Readonly<{ name: string; description: string; parameters: JsonObject }>;
 export type BeforeToolCallDecision =
   | Readonly<{ allow: true }>
@@ -389,7 +394,7 @@ export interface OwnedStore {
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
   createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
-  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken }): Promise<RunClaim>;
+  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[] }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord>;
   commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord>;
@@ -602,12 +607,15 @@ function isAssistantContent(value: unknown): value is AssistantContent {
 }
 export function normalizeUserInput(input: UserInput): UserInput {
   const normalized = typeof input === "string" ? { content: input } : input;
-  if (!isRecord(normalized) || !hasOnlyKeys(normalized, ["content", "metadata", "thinkingLevel"]) || !isUserContent(normalized.content)) {
+  if (!isRecord(normalized) || !hasOnlyKeys(normalized, ["content", "metadata", "thinkingLevel", "providerOptions"]) || !isUserContent(normalized.content)) {
     throw new TypeError("input must contain only valid UserContent");
   }
   if (normalized.metadata !== undefined) assertMetadata(normalized.metadata, "input.metadata");
   if (normalized.thinkingLevel !== undefined && !THINKING_LEVELS.includes(normalized.thinkingLevel as ThinkingLevel)) {
     throw new TypeError("input.thinkingLevel must be a valid ThinkingLevel");
+  }
+  if (normalized.providerOptions !== undefined && (!isRecord(normalized.providerOptions) || !isJsonValue(normalized.providerOptions))) {
+    throw new TypeError("input.providerOptions must be a JSON object");
   }
   assertJsonValue(normalized, "input");
   return normalized;

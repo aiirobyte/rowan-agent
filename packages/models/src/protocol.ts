@@ -228,6 +228,8 @@ export type LlmRequest = {
   toolChoice?: LlmToolChoice;
   /** Per-request reasoning level; falls back to the selected model's default. */
   thinkingLevel?: ThinkingLevel;
+  /** Opaque per-request options for the provider; Rowan never reads them. */
+  providerOptions?: JsonObject;
   maxTokens?: number;
   temperature?: number;
 };

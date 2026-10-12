@@ -104,13 +104,10 @@ function resolveDefinitionContext(
     selectNamedResources(snapshot.resources.skills, snapshot.definition.skills, "Skill"),
     snapshot.definition.bundledSkills,
   );
-  // Host-supplied Context is part of the same System Prompt Context block as
-  // the Definition's declared Context. It is never a separate message, so the
-  // System Prompt remains the single Context injection seam.
-  const contexts = [
-    ...selectNamedResources(snapshot.contexts, snapshot.definition.contexts, "Context"),
-    ...snapshot.additionalContexts,
-  ];
+  // Definition-selected Context goes into the System Prompt. Turn-scoped
+  // host-supplied Contexts (additionalContexts) ride on the turn's user message
+  // instead, keeping the System Prompt stable across turns.
+  const contexts = selectNamedResources(snapshot.contexts, snapshot.definition.contexts, "Context");
   const phaseCandidates = [...(snapshot.resources.phases?.phases.values() ?? [])];
   const corePhases = phaseCandidates.filter((phase) => phase.core);
   const authoredPhases = phaseCandidates.filter((phase) => !phase.core);

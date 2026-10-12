@@ -1334,6 +1334,9 @@ function createPhaseExecution(
         ...(config.thinkingLevel === undefined
           ? {}
           : { thinkingLevel: config.thinkingLevel }),
+        ...(config.providerOptions === undefined
+          ? {}
+          : { providerOptions: config.providerOptions }),
       });
 
       // Ensure tools are available

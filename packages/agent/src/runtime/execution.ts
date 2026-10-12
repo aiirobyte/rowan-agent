@@ -25,7 +25,7 @@ import { RunInteractionBoundary, type RunInteraction, type RunInteractionState }
 import type { PhaseExecutionIdentity, PhaseRegistry, PhaseStatus } from "../harness/phases/types";
 import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
-import type { ThinkingLevel } from "@rowan-agent/models";
+import type { JsonObject, ThinkingLevel } from "@rowan-agent/models";
 import { assertJsonValue, canonicalJson, isJsonValue } from "./json";
 import type { EntryPhaseSpec, ExecutionCheckpoint } from "./contracts";
 import { createId } from "../utils";
@@ -58,6 +58,7 @@ export type OneShotExecutionInput = Readonly<{
   execution: PhaseExecutionIdentity;
   model: ModelRef;
   thinkingLevel?: ThinkingLevel;
+  providerOptions?: JsonObject;
   stream: StreamFn;
   checkpoint?: ExecutionCheckpoint;
   interactionAnswers?: Readonly<Record<string, JsonValue>>;
@@ -277,6 +278,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     execution: input.execution,
     model: input.model,
     ...(input.thinkingLevel === undefined ? {} : { thinkingLevel: input.thinkingLevel }),
+    ...(input.providerOptions === undefined ? {} : { providerOptions: input.providerOptions }),
     stream: input.stream,
     maxAttempts: input.maxAttempts,
     signal: input.signal,

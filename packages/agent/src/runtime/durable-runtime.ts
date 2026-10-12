@@ -40,6 +40,7 @@ import type {
 import {
   assertEntryPhases,
   assertToolExecutionResult,
+  providerOptionsFromUserInput,
   thinkingLevelFromUserInput,
 } from "./contracts";
 import type {
@@ -895,6 +896,9 @@ export class AgentRuntime implements AgentRuntimeContract {
         expectedRevision: run.revision,
         executionId,
         configToken: token,
+        ...(config.additionalContexts && config.additionalContexts.length > 0
+          ? { additionalContexts: config.additionalContexts }
+          : {}),
       });
       executionRevision = claim.run.revision;
       const controller = new AbortController();
@@ -974,6 +978,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         },
         model,
         thinkingLevel: thinkingLevelFromUserInput(run.input),
+        providerOptions: providerOptionsFromUserInput(run.input),
         stream,
         maxAttempts: config.maxAttempts,
         checkpoint: claim!.run.checkpoint,

@@ -150,7 +150,14 @@ function durableInterruptedAssistantContent(content: AgentMessage["content"]): A
 function projectMessage(message: Message): AgentMessage {
   switch (message.role) {
     case "user":
-      return { id: message.id, role: message.role, content: projectUserContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
+      return {
+        id: message.id,
+        role: message.role,
+        content: projectUserContent(message.content),
+        createdAt: message.createdAt,
+        ...(message.metadata ? { metadata: message.metadata as never } : {}),
+        ...(message.contexts && message.contexts.length > 0 ? { contexts: message.contexts } : {}),
+      };
     case "assistant":
       return { id: message.id, role: message.role, content: projectAssistantContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
     case "tool":
