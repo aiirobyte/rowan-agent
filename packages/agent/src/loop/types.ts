@@ -149,6 +149,8 @@ export type ToolRunnerInput = {
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
   options?: import("@rowan-agent/models").ToolCallOptions;
+  /** Set when a Provider issued this call through ProviderCallContext.tools.call. */
+  providerInitiated?: boolean;
 };
 
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
