@@ -1,4 +1,4 @@
-# Rowan Agent 0.19.1 — provider-initiated tool interactions and live interaction events
+# Rowan Agent 0.19.2 — provider-initiated tool interactions and live interaction events
 
 This release fixes an issue where host tools called mid-stream by a model Provider via `ProviderCallContext.tools.call` (`ctx.tools.call`) failed when requesting interactions, and introduces transient `live_interaction` events for host visibility.
 
@@ -33,5 +33,5 @@ Hosts observing runs via `run.observe()` can now detect live interactions in rea
 
 ## Packages
 
-- `@rowan-agent/agent` 0.19.1
+- `@rowan-agent/agent` 0.19.2
 - Other package versions unchanged

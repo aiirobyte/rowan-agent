@@ -92,6 +92,7 @@ export const publicTypeExports = [
   "JsonObject",
   "JsonPrimitive",
   "JsonValue",
+  "LiveInteractionEvent",
   "LoadExtensionsResult",
   "LoadedExtension",
   "Message",
