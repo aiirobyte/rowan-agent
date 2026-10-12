@@ -120,6 +120,9 @@ type ConsumerSubscription = {
 type ActiveExecution = Readonly<{
   controller: AbortController;
   executionId: ExecutionId;
+  reservedToolCalls: Set<ToolCallId>;
+  startedToolCalls: Set<ToolCallId>;
+  providerToolCalls: Map<string, ToolCallId>;
 }>;
 
 type ExecutionToolConfig = Readonly<{
@@ -151,6 +154,8 @@ function createToolInteractionDriver(
     answers: () => driver.answers(),
     checkpoint: () => resumed ? resumed.toolCheckpoint : stored,
     clearCheckpoint: () => driver.clearCheckpoint(),
+    answer: (id, val) => driver.answer?.(id, val),
+    clearAnswer: (id) => driver.clearAnswer?.(id),
     suspend(options = {}): never {
       const interactionIds = [...new Set([
         ...requestedIds,
@@ -330,14 +335,28 @@ export class AgentRuntime implements AgentRuntimeContract {
     }
   }
 
-  private async handleRunEnd(runId: RunId, agentId: AgentId, outcome: unknown): Promise<void> {
+  private publishLiveInteraction(runId: RunId, interaction: RunInteraction): void {
+    this.transientEvents.publish({
+      kind: "live_interaction",
+      durability: "transient",
+      runId,
+      executionId: this.executions.get(runId)?.executionId,
+      interaction,
+    });
+  }
+
+  private cancelLiveInteractions(runId: RunId, reason: string): void {
     const runLive = this.liveInteractions.get(runId);
-    if (runLive) {
-      for (const live of runLive.values()) {
-        live.reject(new RunInteractionCancelledError("Run ended."));
-      }
-      this.liveInteractions.delete(runId);
+    if (!runLive) return;
+    this.liveInteractions.delete(runId);
+    for (const live of runLive.values()) {
+      this.publishLiveInteraction(runId, { ...live.interaction, status: "cancelled" });
+      live.reject(new RunInteractionCancelledError(reason));
     }
+  }
+
+  private async handleRunEnd(runId: RunId, agentId: AgentId, outcome: unknown): Promise<void> {
+    this.cancelLiveInteractions(runId, "Run ended.");
     if (this.startedRuns.has(runId)) {
       this.startedRuns.delete(runId);
       try {
@@ -658,11 +677,14 @@ export class AgentRuntime implements AgentRuntimeContract {
       this.liveInteractions.set(runId, runLive);
     }
 
+    this.publishLiveInteraction(runId, interaction);
+
     return new Promise<JsonValue>((resolve, reject) => {
       const onAbort = () => {
         runLive?.delete(interactionId);
         if (runLive && runLive.size === 0) this.liveInteractions.delete(runId);
         signal.removeEventListener("abort", onAbort);
+        this.publishLiveInteraction(runId, { ...interaction, status: "cancelled" });
         reject(signal.reason ?? new Error("Run aborted"));
       };
       signal.addEventListener("abort", onAbort, { once: true });
@@ -687,12 +709,9 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (this.heartbeat) clearInterval(this.heartbeat);
     for (const execution of this.executions.values()) execution.controller.abort();
     this.executions.clear();
-    for (const runLive of this.liveInteractions.values()) {
-      for (const live of runLive.values()) {
-        live.reject(new RunInteractionCancelledError("Runtime closed."));
-      }
+    for (const runId of [...this.liveInteractions.keys()]) {
+      this.cancelLiveInteractions(runId, "Runtime closed.");
     }
-    this.liveInteractions.clear();
     this.transientEvents.close();
     for (const subscription of this.consumers.values()) subscription.controller.abort();
     await this.resources.closeExtensions();
@@ -725,8 +744,10 @@ export class AgentRuntime implements AgentRuntimeContract {
       runLive!.delete(input.interactionId);
       if (runLive!.size === 0) this.liveInteractions.delete(runId);
       if (input.cancel) {
+        this.publishLiveInteraction(runId, { ...live.interaction, status: "cancelled" });
         live.reject(new RunInteractionCancelledError("Run interaction cancelled."));
       } else if (input.input !== undefined) {
+        this.publishLiveInteraction(runId, { ...live.interaction, status: "answered", answer: input.input });
         live.resolve(input.input);
       } else {
         live.reject(new TypeError("respondInteraction requires input or cancel: true"));
@@ -744,13 +765,7 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async cancel(runId: RunId, reason?: string): Promise<RunBoundary> {
     this.assertOpen();
-    const runLive = this.liveInteractions.get(runId);
-    if (runLive) {
-      for (const live of runLive.values()) {
-        live.reject(new RunInteractionCancelledError(reason ?? "Agent run stopped."));
-      }
-      this.liveInteractions.delete(runId);
-    }
+    this.cancelLiveInteractions(runId, reason ?? "Agent run stopped.");
     const done = this.executionDone.get(runId);
     if (done) {
       this.cancellationRequested.add(runId);
@@ -883,7 +898,13 @@ export class AgentRuntime implements AgentRuntimeContract {
       });
       executionRevision = claim.run.revision;
       const controller = new AbortController();
-      this.executions.set(run.id, { controller, executionId });
+      this.executions.set(run.id, {
+        controller,
+        executionId,
+        reservedToolCalls: new Set(),
+        startedToolCalls: new Set(),
+        providerToolCalls: new Map(),
+      });
       if (this.cancellationRequested.has(run.id)) controller.abort();
       if (!this.startedRuns.has(run.id)) {
         this.startedRuns.add(run.id);
@@ -1159,23 +1180,126 @@ export class AgentRuntime implements AgentRuntimeContract {
         onContext: assembly.setContext,
         runtime: {
           interact: (request) => this.liveInteract(run.id, request, controller.signal),
-          tools: ({ toolCall, contentBlocks, driver, options }: ToolRunnerInput) => {
+          tools: ({ toolCall, contentBlocks, driver, options, providerInitiated }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
-              const execution = await this.executeToolBatch({
-                run,
-                agentMetadata: agent.metadata,
-                execution: claim!.execution,
-                expectedRevision: executionRevision,
-                toolConfig: executionTools,
-                toolCalls: [toolCall],
-                contentBlocks,
-                signal: controller.signal,
-                driver,
-                options,
-                onRevision: (rev) => { executionRevision = rev; },
-              });
-              executionRevision = execution.revision;
-              return execution.results[0]!;
+              if (!providerInitiated) {
+                const execution = await this.executeToolBatch({
+                  run,
+                  agentMetadata: agent.metadata,
+                  execution: claim!.execution,
+                  expectedRevision: executionRevision,
+                  toolConfig: executionTools,
+                  toolCalls: [toolCall],
+                  contentBlocks,
+                  signal: controller.signal,
+                  driver,
+                  options,
+                  onRevision: (rev) => { executionRevision = rev; },
+                });
+                executionRevision = execution.revision;
+                return execution.results[0]!;
+              }
+
+              const interactionIds: string[] = [];
+              try {
+                while (true) {
+                  try {
+                    const execution = await this.executeToolBatch({
+                      run,
+                      agentMetadata: agent.metadata,
+                      execution: claim!.execution,
+                      expectedRevision: executionRevision,
+                      toolConfig: executionTools,
+                      toolCalls: [toolCall],
+                      contentBlocks,
+                      signal: controller.signal,
+                      driver,
+                      options,
+                      providerInitiated: true,
+                      interactionIds,
+                      onRevision: (rev) => { executionRevision = rev; },
+                    });
+                    executionRevision = execution.revision;
+                    return execution.results[0]!;
+                  } catch (error) {
+                    if (error instanceof RunInteractionBoundary) {
+                      try {
+                        for (const interaction of error.interactions) {
+                          interactionIds.push(interaction.id);
+                          const answer = await this.liveInteract(run.id, interaction, controller.signal);
+                          driver?.answer?.(interaction.id, answer);
+                        }
+                        driver?.clearCheckpoint();
+                        continue;
+                      } catch (waitError) {
+                        const active = this.executions.get(run.id);
+                        const toolCallId = active?.providerToolCalls.get(toolCall.id) ?? (error.interactions[0]?.toolCallId as ToolCallId);
+                        const isCancel = waitError instanceof RunInteractionCancelledError;
+                        const reason = isCancel ? waitError.message : "Tool execution aborted.";
+                        if (toolCallId) {
+                          const committed = await this.owned.commitToolResult({
+                            runId: run.id,
+                            execution: claim!.execution,
+                            expectedRevision: executionRevision,
+                            toolCallId,
+                            state: "failed",
+                            result: { ok: false, content: null, error: reason },
+                            title: toolCall.name,
+                            kind: "other",
+                          });
+                          executionRevision = committed.run.revision;
+                          if (options?.onUpdate) {
+                            try {
+                              options.onUpdate(createMergedToolCall(
+                                toolCallId,
+                                "failed",
+                                { rawInput: toJsonValue(toolCall.args) },
+                                toolCall.name,
+                                "other",
+                              ));
+                            } catch (err) {
+                              console.warn("Error in tool call onUpdate callback:", err);
+                            }
+                          }
+                        }
+                        if (!controller.signal.aborted && isCancel) {
+                          return {
+                            toolCallId: toolCall.id,
+                            toolName: toolCall.name,
+                            ok: false,
+                            content: null,
+                            error: reason,
+                          };
+                        }
+                        throw waitError;
+                      }
+                    }
+                    const active = this.executions.get(run.id);
+                    const toolCallId = active?.providerToolCalls.get(toolCall.id);
+                    if (toolCallId && (active?.reservedToolCalls.has(toolCallId) || active?.startedToolCalls.has(toolCallId))) {
+                      try {
+                        const committed = await this.owned.commitToolResult({
+                          runId: run.id,
+                          execution: claim!.execution,
+                          expectedRevision: executionRevision,
+                          toolCallId,
+                          state: "failed",
+                          result: { ok: false, content: null, error: error instanceof Error ? error.message : "Tool execution failed." },
+                          title: toolCall.name,
+                          kind: "other",
+                        });
+                        executionRevision = committed.run.revision;
+                      } catch {}
+                    }
+                    throw error;
+                  }
+                }
+              } finally {
+                driver?.clearCheckpoint();
+                for (const id of interactionIds) driver?.clearAnswer?.(id);
+                const active = this.executions.get(run.id);
+                active?.providerToolCalls.delete(toolCall.id);
+              }
             });
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
@@ -1213,6 +1337,9 @@ export class AgentRuntime implements AgentRuntimeContract {
           executionContext = buildExecutionContext(modelMessages);
           result = await executeModel(executionContext);
         }
+      }
+      if (result.type !== "input_required") {
+        this.cancelLiveInteractions(run.id, result.type === "failed" ? (result.error instanceof Error ? result.error.message : "Model execution failed.") : "Run ended.");
       }
       await toolQueue;
       if (this.cancellationRequested.has(run.id) || controller.signal.aborted) {
@@ -1299,6 +1426,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     } catch (error) {
       if (!claim && error instanceof RuntimeError && ["run_state_conflict", "runtime_ownership_lost", "run_not_found"].includes(error.code)) return;
       if (claim) {
+        this.cancelLiveInteractions(run.id, error instanceof Error ? error.message : "Execution failed.");
         await toolQueue;
         if (this.cancellationRequested.has(run.id)) {
           const reason = this.cancellationReasons.get(run.id) ?? "Agent run stopped.";
@@ -1379,6 +1507,8 @@ export class AgentRuntime implements AgentRuntimeContract {
     signal: AbortSignal;
     driver?: RunInteractionDriver;
     options?: ToolCallOptions;
+    providerInitiated?: boolean;
+    interactionIds?: readonly string[];
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
     const scope = input.run.scope ?? [];
@@ -1586,16 +1716,24 @@ export class AgentRuntime implements AgentRuntimeContract {
 
     const results: ToolResult[] = suspension ? [...suspension.completedResults] : [];
     const startIndex = suspension ? suspension.pendingIndex : 0;
+    const active = this.executions.get(input.run.id);
 
     for (let index = startIndex; index < input.toolCalls.length; index += 1) {
       const toolCall = input.toolCalls[index]!;
       const durableTool = input.toolConfig.tools.find((candidate) => candidate.name === toolCall.name);
       const providerToolCallId = toolCall.id;
-      const toolCallId: ToolCallId = (suspension && index >= suspension.pendingIndex && suspension.toolCallIds?.[index])
-        ? suspension.toolCallIds[index]!
-        : (suspension && index === suspension.pendingIndex && suspension.toolCallId)
-          ? suspension.toolCallId
-          : (createId("tool") as ToolCallId);
+      const toolCallId: ToolCallId = (input.providerInitiated && active?.providerToolCalls.has(providerToolCallId))
+        ? active.providerToolCalls.get(providerToolCallId)!
+        : (suspension && index >= suspension.pendingIndex && suspension.toolCallIds?.[index])
+          ? suspension.toolCallIds[index]!
+          : (suspension && index === suspension.pendingIndex && suspension.toolCallId)
+            ? suspension.toolCallId
+            : (createId("tool") as ToolCallId);
+      if (input.providerInitiated && !active?.providerToolCalls.has(providerToolCallId)) {
+        active?.providerToolCalls.set(providerToolCallId, toolCallId);
+      }
+      const isReserved = Boolean(active?.reservedToolCalls.has(toolCallId));
+      const isStarted = Boolean(active?.startedToolCalls.has(toolCallId));
 
       const protocolFailure = (error: string): ToolResult => ({
         toolCallId: providerToolCallId,
@@ -1606,20 +1744,23 @@ export class AgentRuntime implements AgentRuntimeContract {
       });
 
       if (!durableTool) {
-        const reserved = await this.owned.reserveToolCalls({
-          runId: input.run.id,
-          execution: input.execution,
-          expectedRevision: revision,
-          requestMessageId: createId("msg") as MessageId,
-          contentBlocks: input.contentBlocks,
-          calls: [{
-            toolCallId,
-            providerToolCallId,
-            name: toolCall.name,
-            args: toJsonValue(toolCall.args),
-          }],
-        });
-        setRevision(reserved.run.revision);
+        if (!isReserved) {
+          const reserved = await this.owned.reserveToolCalls({
+            runId: input.run.id,
+            execution: input.execution,
+            expectedRevision: revision,
+            requestMessageId: createId("msg") as MessageId,
+            contentBlocks: input.contentBlocks,
+            calls: [{
+              toolCallId,
+              providerToolCallId,
+              name: toolCall.name,
+              args: toJsonValue(toolCall.args),
+            }],
+          });
+          setRevision(reserved.run.revision);
+          active?.reservedToolCalls.add(toolCallId);
+        }
         const failed = await this.owned.commitToolResult({
           runId: input.run.id,
           execution: input.execution,
@@ -1694,7 +1835,9 @@ export class AgentRuntime implements AgentRuntimeContract {
 
       const answer = (suspension && index === suspension.pendingIndex)
         ? suspension.interactionIds?.map((id) => input.driver?.answers().get(id)).find((value) => value !== undefined)
-        : undefined;
+        : (input.providerInitiated && input.interactionIds
+          ? input.interactionIds.map((id) => input.driver?.answers().get(id)).find((value) => value !== undefined)
+          : undefined);
 
       try {
         if (input.toolConfig.beforeToolCall) {
@@ -1711,7 +1854,7 @@ export class AgentRuntime implements AgentRuntimeContract {
               throw new Error("Tool call requested interaction but no interaction driver is active.");
             }
             interactionDriver.request(decision.interaction);
-            if (!resumedStart) {
+            if (!resumedStart && !isReserved) {
               const reserved = await this.owned.reserveToolCalls({
                 runId: input.run.id,
                 execution: input.execution,
@@ -1727,12 +1870,13 @@ export class AgentRuntime implements AgentRuntimeContract {
                 }],
               });
               setRevision(reserved.run.revision);
+              active?.reservedToolCalls.add(toolCallId);
             }
             interactionDriver.suspend();
           }
 
           if ("allow" in decision && !decision.allow) {
-            if (!resumedStart) {
+            if (!resumedStart && !isReserved) {
               const reserved = await this.owned.reserveToolCalls({
                 runId: input.run.id,
                 execution: input.execution,
@@ -1748,6 +1892,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 }],
               });
               setRevision(reserved.run.revision);
+              active?.reservedToolCalls.add(toolCallId);
             }
             const failed = await this.owned.commitToolResult({
               runId: input.run.id,
@@ -1785,7 +1930,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           throw error;
         }
         const reason = error instanceof Error ? error.message : "Tool policy rejected the call.";
-        if (!resumedStart) {
+        if (!resumedStart && !isReserved) {
           const reserved = await this.owned.reserveToolCalls({
             runId: input.run.id,
             execution: input.execution,
@@ -1801,6 +1946,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             }],
           });
           setRevision(reserved.run.revision);
+          active?.reservedToolCalls.add(toolCallId);
         }
         const failed = await this.owned.commitToolResult({
           runId: input.run.id,
@@ -1833,22 +1979,25 @@ export class AgentRuntime implements AgentRuntimeContract {
         continue;
       }
 
-      if (!resumedStart) {
-        const reserved = await this.owned.reserveToolCalls({
-          runId: input.run.id,
-          execution: input.execution,
-          expectedRevision: revision,
-          requestMessageId: createId("msg") as MessageId,
-          contentBlocks: input.contentBlocks,
-          calls: [{
-            toolCallId,
-            providerToolCallId,
-            name: toolCall.name,
-            args: toJsonValue(toolCall.args),
-            ...pendingPres,
-          }],
-        });
-        setRevision(reserved.run.revision);
+      if (!resumedStart && !isStarted) {
+        if (!isReserved) {
+          const reserved = await this.owned.reserveToolCalls({
+            runId: input.run.id,
+            execution: input.execution,
+            expectedRevision: revision,
+            requestMessageId: createId("msg") as MessageId,
+            contentBlocks: input.contentBlocks,
+            calls: [{
+              toolCallId,
+              providerToolCallId,
+              name: toolCall.name,
+              args: toJsonValue(toolCall.args),
+              ...pendingPres,
+            }],
+          });
+          setRevision(reserved.run.revision);
+          active?.reservedToolCalls.add(toolCallId);
+        }
 
         const inProgressPres = await presentToolCall(durableTool, {
           status: "in_progress",
@@ -1868,6 +2017,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           ...(currentToolState._meta !== undefined ? { _meta: currentToolState._meta } : {}),
         });
         setRevision(started.run.revision);
+        active?.startedToolCalls.add(toolCallId);
       }
 
       const toolResult = await this.executeAndCommitTool({
@@ -1894,6 +2044,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         afterToolCall: input.toolConfig.afterToolCall,
         currentToolState,
         options: input.options,
+        providerInitiated: input.providerInitiated,
       });
       results.push(toolResult);
     }
@@ -1926,6 +2077,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     afterToolCall?: AfterToolCall;
     currentToolState: ToolCallMergeTarget;
     options?: ToolCallOptions;
+    providerInitiated?: boolean;
   }): Promise<ToolResult> {
     let progressActive = true;
     let progressQueue: Promise<void> = Promise.resolve();
@@ -2114,13 +2266,15 @@ export class AgentRuntime implements AgentRuntimeContract {
       };
     } catch (error) {
       if (error instanceof RunInteractionBoundary) {
-        const suspended = await this.owned.suspendToolCall({
-          runId: input.runId,
-          execution: input.execution,
-          expectedRevision: input.revision,
-          toolCallId: input.toolCallId,
-        });
-        input.setRevision(suspended.run.revision);
+        if (!input.providerInitiated) {
+          const suspended = await this.owned.suspendToolCall({
+            runId: input.runId,
+            execution: input.execution,
+            expectedRevision: input.revision,
+            toolCallId: input.toolCallId,
+          });
+          input.setRevision(suspended.run.revision);
+        }
         throw error;
       }
       if (error instanceof RunInteractionCancelledError) throw error;

@@ -320,6 +320,14 @@ export type ModelRetry = Readonly<{
   error: string;
 }>;
 
+export type LiveInteractionEvent = Readonly<{
+  kind: "live_interaction";
+  durability: "transient";
+  runId: RunId;
+  executionId?: ExecutionId;
+  interaction: RunInteraction;
+}>;
+
 export type RunEvent =
   | DurableRunEvent
   | MessageDelta
@@ -327,5 +335,7 @@ export type RunEvent =
   | ToolCallDelta
   | PhaseStatusEvent
   | ModelRetry
+  | LiveInteractionEvent
   | Extract<ToolStateChanged, { durability: "transient" }>;
+
 

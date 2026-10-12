@@ -4,10 +4,41 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModelStream, isValidToolProgress, type ProviderCallContext, type ProviderStreamFn, type StreamFn, type ToolCall, type ToolCallOutcome, type ToolProgress } from "@rowan-agent/models";
 import Type from "typebox";
-import { AgentRuntime, InMemoryStore, SqliteStore, type ToolCallPresentationInput, type ToolCallPresentationOutput } from "../../src";
+import { AgentRuntime, InMemoryStore, SqliteStore, type LiveInteractionEvent, type RunSnapshot, type ToolCallPresentationInput, type ToolCallPresentationOutput } from "../../src";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
+
+/** Durable Tool Call transitions this Run published, in order. */
+async function toolTransitions(
+  runtime: AgentRuntime,
+  runId: string,
+): Promise<readonly { id: string; to: string }[]> {
+  const transitions: { id: string; to: string }[] = [];
+  const consumer = await runtime.consume({
+    consumerId: `tool-transitions-${runId}`,
+    signal: new AbortController().signal,
+    onEvent: (event) => {
+      if (event.runId !== runId || event.kind !== "tool_state_changed") return;
+      transitions.push({ id: event.toolCall.toolCallId, to: event.transition.to });
+    },
+  });
+  await consumer.caughtUp;
+  consumer.stop();
+  return transitions;
+}
+
+/** The id of a Run Interaction the live Execution Attempt is waiting on. */
+async function waitForLiveInteraction(run: { snapshot(): Promise<RunSnapshot> }): Promise<string> {
+  for (let i = 0; i < 200; i++) {
+    const snapshot = await run.snapshot();
+    if (snapshot.state === "running" && snapshot.interactions?.length) return snapshot.interactions[0]!.id;
+    if (["completed", "failed", "cancelled", "input_required"].includes(snapshot.state)) break;
+    await Bun.sleep(10);
+  }
+  throw new Error("Expected the Run to wait on a live interaction.");
+}
+
 
 test("provider receives run-bound context (run id, agentId, scope, cwd, signal)", async () => {
   let capturedCtx: ProviderCallContext | undefined;
@@ -1021,4 +1052,597 @@ test("ctx.tools.call per-call abort cancels only that call while the Run continu
     await runtime.close();
   }
 });
+
+test("provider tools.call whose before_tool_call hook asks a permission: observe() yields open and resolve events, host answers, Tool runs", async () => {
+  let executions = 0;
+  let callOutcome: ToolCallOutcome | undefined;
+
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "approval_tool",
+      description: "Requires host approval",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        executions += 1;
+        return { content: [{ type: "text", text: "approved execution" }] };
+      },
+    });
+    api.hooks.on("before_tool_call", (event) => {
+      if (event.tool.name !== "approval_tool") return { allow: true };
+      if (event.answer === "allow") return { allow: true };
+      return { interaction: { kind: "permission", prompt: "Allow this provider tool?" } };
+    });
+  }, process.cwd(), "<test:provider-tool-observe-permission>");
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    callOutcome = await ctx.tools.call("approval_tool", {});
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-provider-tool-observe",
+      stream,
+      options: { idempotencyKey: "agent-provider-tool-observe-key" },
+    });
+    const run = await runtime.start(agentId, "call host tools", {
+      idempotencyKey: "run-provider-tool-observe-key",
+    });
+
+    const observedLiveEvents: any[] = [];
+    const observeController = new AbortController();
+    const observePromise = (async () => {
+      for await (const event of run.observe({ signal: observeController.signal })) {
+        if (event.kind === "live_interaction") {
+          observedLiveEvents.push(event);
+          if (event.interaction.status === "pending") {
+            await run.respondInteraction({ interactionId: event.interaction.id, input: "allow" });
+          }
+        }
+      }
+    })();
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    observeController.abort();
+    await observePromise.catch(() => {});
+
+    expect(callOutcome).toEqual({
+      ok: true,
+      content: [{ type: "text", text: "approved execution" }],
+    });
+    expect(executions).toBe(1);
+
+    // Verified observe() yielded both open (pending) and resolve (answered) live_interaction events
+    expect(observedLiveEvents.length).toBeGreaterThanOrEqual(2);
+    expect(observedLiveEvents[0]).toMatchObject({
+      kind: "live_interaction",
+      durability: "transient",
+      interaction: expect.objectContaining({ status: "pending", prompt: "Allow this provider tool?" }),
+    });
+    expect(observedLiveEvents.some((e) => e.interaction.status === "answered" && e.interaction.answer === "allow")).toBe(true);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("declining a provider tool interaction fails that call and leaves the Run able to call other tools", async () => {
+  let executions = 0;
+  let firstOutcome: ToolCallOutcome | undefined;
+  let secondOutcome: ToolCallOutcome | undefined;
+
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "approval_tool",
+      description: "Requires host approval",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        executions += 1;
+        return { content: [{ type: "text", text: "approved execution" }] };
+      },
+    });
+    api.tools.register({
+      name: "followup_tool",
+      description: "Runs without approval",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [{ type: "text", text: "followup result" }] }),
+    });
+    api.hooks.on("before_tool_call", (event) => {
+      if (event.tool.name !== "approval_tool") return { allow: true };
+      if (event.answer !== undefined) return { allow: false, reason: "Permission denied by user" };
+      return { interaction: { kind: "permission", prompt: "Allow this provider tool?" } };
+    });
+  }, process.cwd(), "<test:provider-tool-decline>");
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    firstOutcome = await ctx.tools.call("approval_tool", {});
+    secondOutcome = await ctx.tools.call("followup_tool", {});
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-provider-tool-decline",
+      stream,
+      options: { idempotencyKey: "agent-provider-tool-decline-key" },
+    });
+    const run = await runtime.start(agentId, "call host tools", {
+      idempotencyKey: "run-provider-tool-decline-key",
+    });
+
+    const interactionId = await waitForLiveInteraction(run);
+    await run.respondInteraction({ interactionId, cancel: true });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(firstOutcome).toEqual({
+      ok: false,
+      content: null,
+      error: "Run interaction cancelled.",
+    });
+    expect(secondOutcome).toEqual({
+      ok: true,
+      content: [{ type: "text", text: "followup result" }],
+    });
+    expect(executions).toBe(0);
+    expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 2 });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("after an answered call, a later tools.call in the same execution gets its own Tool Call record", async () => {
+  let firstOutcome: ToolCallOutcome | undefined;
+  let secondOutcome: ToolCallOutcome | undefined;
+  let executions = 0;
+
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "approval_tool",
+      description: "Requires host approval",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        executions += 1;
+        return { content: [{ type: "text", text: "approved execution" }] };
+      },
+    });
+    api.tools.register({
+      name: "followup_tool",
+      description: "Runs after the approved call",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [{ type: "text", text: "followup result" }] }),
+    });
+    api.hooks.on("before_tool_call", (event) => {
+      if (event.tool.name !== "approval_tool") return { allow: true };
+      if (event.answer === "allow") return { allow: true };
+      return { interaction: { kind: "permission", prompt: "Allow this provider tool?" } };
+    });
+  }, process.cwd(), "<test:provider-tool-later-calls>");
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    firstOutcome = await ctx.tools.call("approval_tool", {});
+    secondOutcome = await ctx.tools.call("followup_tool", {});
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-provider-tool-later-calls",
+      stream,
+      options: { idempotencyKey: "agent-provider-tool-later-calls-key" },
+    });
+    const run = await runtime.start(agentId, "call host tools", {
+      idempotencyKey: "run-provider-tool-later-calls-key",
+    });
+
+    const interactionId = await waitForLiveInteraction(run);
+    await run.respondInteraction({ interactionId, input: "allow" });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(firstOutcome).toEqual({
+      ok: true,
+      content: [{ type: "text", text: "approved execution" }],
+    });
+    expect(secondOutcome).toEqual({
+      ok: true,
+      content: [{ type: "text", text: "followup result" }],
+    });
+    expect(executions).toBe(1);
+
+    const transitions = await toolTransitions(runtime, run.id);
+    const completedIds = transitions.filter(({ to }) => to === "completed").map(({ id }) => id);
+    // Two distinct durable tool records, no idempotency conflict
+    expect(completedIds.length).toBe(2);
+    expect(completedIds[0]).not.toEqual(completedIds[1]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("cancelling a Run while waiting on a provider tool interaction leaves no open Tool Call in_progress", async () => {
+  let executions = 0;
+  let callError: unknown;
+
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "approval_tool",
+      description: "Requires host approval",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        executions += 1;
+        return { content: [{ type: "text", text: "approved execution" }] };
+      },
+    });
+    api.hooks.on("before_tool_call", (event) => {
+      if (event.answer === "allow") return { allow: true };
+      return { interaction: { kind: "permission", prompt: "Allow this provider tool?" } };
+    });
+  }, process.cwd(), "<test:provider-tool-cancel>");
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    try {
+      await ctx.tools.call("approval_tool", {});
+    } catch (error) {
+      callError = error;
+    }
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-provider-tool-cancel",
+      stream,
+      options: { idempotencyKey: "agent-provider-tool-cancel-key" },
+    });
+    const run = await runtime.start(agentId, "call host tools", {
+      idempotencyKey: "run-provider-tool-cancel-key",
+    });
+
+    const interactionId = await waitForLiveInteraction(run);
+    await expect(run.cancel("user stopped the Run")).resolves.toMatchObject({ type: "cancelled" });
+
+    expect(callError).toBeDefined();
+    expect(executions).toBe(0);
+
+    const transitions = await toolTransitions(runtime, run.id);
+    expect(transitions).toContainEqual({ id: expect.any(String), to: "failed" });
+    expect(transitions.filter(({ to }) => to === "in_progress")).toEqual([]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("Tool that asks from execute re-runs with its answer", async () => {
+  const executions: unknown[] = [];
+
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "asking_tool",
+      description: "Asks before finishing",
+      parameters: { type: "object", properties: {} },
+      execute: async (_args, context) => {
+        const answer = context.interaction.answers().get("ship_it");
+        executions.push(answer);
+        if (answer === undefined) {
+          context.interaction.request({ id: "ship_it", kind: "confirmation", prompt: "Ship it?" });
+          context.interaction.suspend({ checkpoint: { step: "awaiting-ship" } });
+        }
+        return { content: [{ type: "text", text: `shipped after ${String(answer)}` }] };
+      },
+    });
+  }, process.cwd(), "<test:provider-tool-execute-interaction>");
+
+  let callOutcome: ToolCallOutcome | undefined;
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    callOutcome = await ctx.tools.call("asking_tool", {});
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-provider-tool-execute-interaction",
+      stream,
+      options: { idempotencyKey: "agent-provider-tool-execute-interaction-key" },
+    });
+    const run = await runtime.start(agentId, "ship", {
+      idempotencyKey: "run-provider-tool-execute-interaction-key",
+    });
+
+    const interactionId = await waitForLiveInteraction(run);
+    expect(await run.snapshot()).toMatchObject({ state: "running" });
+    await run.respondInteraction({ interactionId, input: "yes" });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(executions).toEqual([undefined, "yes"]);
+    expect(callOutcome).toMatchObject({ ok: true });
+    expect(JSON.stringify(callOutcome?.content)).toContain("shipped after yes");
+    expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 1 });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("two consecutive provider tools.call to a permission-gated tool both require host approval", async () => {
+  let executions = 0;
+  const requestedPrompts: string[] = [];
+
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "guarded_tool",
+      description: "Permission guarded tool",
+      parameters: { type: "object", properties: { target: { type: "string" } } },
+      execute: async (args: any) => {
+        executions += 1;
+        return { content: [{ type: "text", text: `executed for ${args.target}` }] };
+      },
+    });
+    api.hooks.on("before_tool_call", (event) => {
+      if (event.tool.name !== "guarded_tool") return { allow: true };
+      if (event.answer === "allow") return { allow: true };
+      const prompt = `Allow ${(event.args as any)?.target}?`;
+      requestedPrompts.push(prompt);
+      return { interaction: { kind: "permission", prompt } };
+    });
+  }, process.cwd(), "<test:provider-consecutive-guarded-tools>");
+
+  let outcome1: ToolCallOutcome | undefined;
+  let outcome2: ToolCallOutcome | undefined;
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    outcome1 = await ctx.tools.call("guarded_tool", { target: "first" });
+    outcome2 = await ctx.tools.call("guarded_tool", { target: "second" });
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-provider-consecutive-guarded",
+      stream,
+      options: { idempotencyKey: "agent-provider-consecutive-guarded-key" },
+    });
+    const run = await runtime.start(agentId, "run consecutive", {
+      idempotencyKey: "run-provider-consecutive-guarded-key",
+    });
+
+    // 1. First interaction opens
+    const firstInteractionId = await waitForLiveInteraction(run);
+    const snap1 = await run.snapshot();
+    expect(snap1.state).toBe("running");
+    if (snap1.state === "running") {
+      expect(snap1.interactions?.[0]?.prompt).toBe("Allow first?");
+    }
+    expect(executions).toBe(0);
+
+    // Approve the first call
+    await run.respondInteraction({ interactionId: firstInteractionId, input: "allow" });
+
+    // 2. Second interaction must open and wait! (It must NOT run without asking!)
+    const secondInteractionId = await waitForLiveInteraction(run);
+    expect(secondInteractionId).not.toBe(firstInteractionId);
+    const snap2 = await run.snapshot();
+    expect(snap2.state).toBe("running");
+    if (snap2.state === "running") {
+      expect(snap2.interactions?.[0]?.prompt).toBe("Allow second?");
+    }
+    expect(executions).toBe(1); // Only the first tool has executed so far!
+
+    // Approve the second call
+    await run.respondInteraction({ interactionId: secondInteractionId, input: "allow" });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(executions).toBe(2);
+    expect(outcome1).toMatchObject({ ok: true });
+    expect(outcome2).toMatchObject({ ok: true });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("declined first provider tool call does not auto-decline a subsequent provider call", async () => {
+  let executions = 0;
+
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "guarded_tool",
+      description: "Permission guarded tool",
+      parameters: { type: "object", properties: { action: { type: "string" } } },
+      execute: async (args: any) => {
+        executions += 1;
+        return { content: [{ type: "text", text: `ran ${args.action}` }] };
+      },
+    });
+    api.hooks.on("before_tool_call", (event) => {
+      if (event.tool.name !== "guarded_tool") return { allow: true };
+      if (event.answer === "allow") return { allow: true };
+      return { interaction: { kind: "permission", prompt: `Allow ${String((event.args as any)?.action)}?` } };
+    });
+  }, process.cwd(), "<test:provider-declined-does-not-leak>");
+
+  let outcome1: ToolCallOutcome | undefined;
+  let outcome2: ToolCallOutcome | undefined;
+
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    outcome1 = await ctx.tools.call("guarded_tool", { action: "dangerous" });
+    outcome2 = await ctx.tools.call("guarded_tool", { action: "safe" });
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    concurrency: 1,
+    bootstrap: async (registry) => { await registry.loadExtensions([extension]); },
+  });
+
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-provider-decline-no-leak",
+      stream,
+      options: { idempotencyKey: "agent-provider-decline-no-leak-key" },
+    });
+    const run = await runtime.start(agentId, "test decline then allow", {
+      idempotencyKey: "run-provider-decline-no-leak-key",
+    });
+
+    // 1. First interaction opens -> decline it (cancel: true)
+    const firstInteractionId = await waitForLiveInteraction(run);
+    await run.respondInteraction({ interactionId: firstInteractionId, cancel: true });
+
+    // 2. Second interaction MUST open and wait! It must not auto-decline or fail.
+    const secondInteractionId = await waitForLiveInteraction(run);
+    expect(secondInteractionId).not.toBe(firstInteractionId);
+    expect(executions).toBe(0);
+
+    // Approve the second call
+    await run.respondInteraction({ interactionId: secondInteractionId, input: "allow" });
+
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(executions).toBe(1);
+    expect(outcome1).toMatchObject({ ok: false });
+    expect(outcome2).toMatchObject({ ok: true });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("rejection paths (cancel, close) publish live_interaction cancelled event exactly once", async () => {
+  const extension = loadExtensionFromFactory((api) => {
+    api.tools.register({
+      name: "slow_tool",
+      description: "Asks interaction",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    });
+    api.hooks.on("before_tool_call", () => ({
+      interaction: { kind: "permission", prompt: "Approve?" },
+    }));
+  }, process.cwd(), "<test:cancel-paths-exact-once>");
+
+  const makeStream = (): StreamFn => async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    try {
+      await ctx.tools.call("slow_tool", {});
+    } catch {}
+    yield { type: "done", response: stopResponse("done") };
+  };
+
+  // 1. Path: run.cancel()
+  {
+    const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, bootstrap: async (reg) => { await reg.loadExtensions([extension]); } });
+    try {
+      const agentId = await createAgentWith(runtime, { identity: "agent-path-cancel", stream: makeStream(), options: { idempotencyKey: "agent-path-cancel-key" } });
+      const run = await runtime.start(agentId, "test run.cancel", { idempotencyKey: "run-path-cancel-key" });
+      const observedEvents: LiveInteractionEvent[] = [];
+      const obsPromise = (async () => {
+        for await (const event of run.observe()) {
+          if (event.kind === "live_interaction") observedEvents.push(event as LiveInteractionEvent);
+        }
+      })();
+      await waitForLiveInteraction(run);
+      await run.cancel("user cancel");
+      await obsPromise;
+      const cancelledEvents = observedEvents.filter((e) => e.interaction.status === "cancelled");
+      expect(cancelledEvents.length).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  }
+
+  // 2. Path: runtime.close()
+  {
+    const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, bootstrap: async (reg) => { await reg.loadExtensions([extension]); } });
+    const agentId = await createAgentWith(runtime, { identity: "agent-path-close", stream: makeStream(), options: { idempotencyKey: "agent-path-close-key" } });
+    const run = await runtime.start(agentId, "test runtime.close", { idempotencyKey: "run-path-close-key" });
+    const observedEvents: LiveInteractionEvent[] = [];
+    const obsController = new AbortController();
+    const obsPromise = (async () => {
+      try {
+        for await (const event of run.observe({ signal: obsController.signal })) {
+          if (event.kind === "live_interaction") {
+            observedEvents.push(event as LiveInteractionEvent);
+            if (event.interaction.status === "cancelled") {
+              obsController.abort();
+            }
+          }
+        }
+      } catch {}
+    })();
+    await waitForLiveInteraction(run);
+    await runtime.close();
+    await obsPromise;
+    const cancelledEvents = observedEvents.filter((e) => e.interaction.status === "cancelled");
+    expect(cancelledEvents.length).toBe(1);
+  }
+
+  // 3. Path: stream error -> handleRunEnd
+  {
+    const crashStream: StreamFn = async function* (_request, rawCtx) {
+      const ctx = rawCtx as ProviderCallContext;
+      void ctx.tools.call("slow_tool", {});
+      await Bun.sleep(20);
+      throw new Error("fatal model stream failure");
+    };
+    const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, bootstrap: async (reg) => { await reg.loadExtensions([extension]); } });
+    try {
+      const agentId = await createAgentWith(runtime, { identity: "agent-path-crash", stream: crashStream, options: { idempotencyKey: "agent-path-crash-key" } });
+      const run = await runtime.start(agentId, "test stream crash", { idempotencyKey: "run-path-crash-key" });
+      const observedEvents: LiveInteractionEvent[] = [];
+      const obsPromise = (async () => {
+        try {
+          for await (const event of run.observe()) {
+            if (event.kind === "live_interaction") observedEvents.push(event as LiveInteractionEvent);
+          }
+        } catch {}
+      })();
+      await waitForLiveInteraction(run);
+      await expect(run.wait()).resolves.toMatchObject({ type: "failed" });
+      await obsPromise;
+      const cancelledEvents = observedEvents.filter((e) => e.interaction.status === "cancelled");
+      expect(cancelledEvents.length).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  }
+});
+
 

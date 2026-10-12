@@ -111,6 +111,7 @@ export type {
   ThinkingContent,
   Tool,
   ToolCallId,
+  LiveInteractionEvent,
   RunInteractionRequest,
   ToolCallSnapshot,
   ToolCallState,

@@ -1189,6 +1189,7 @@ async function executeToolCall(input: {
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
   options?: ToolCallOptions;
+  providerInitiated?: boolean;
 }): Promise<ToolResult> {
   let result: ToolResult;
   if (input.config.runtime?.tools) {
@@ -1198,6 +1199,7 @@ async function executeToolCall(input: {
       contentBlocks: input.contentBlocks,
       driver: input.driver,
       options: input.options,
+      ...(input.providerInitiated ? { providerInitiated: true } : {}),
     });
   } else {
     const toolContext = {
@@ -1268,6 +1270,7 @@ function createPhaseExecution(
     phaseContext: AgentContext,
     toolCall: ToolCall,
     options?: ToolCallOptions,
+    providerInitiated = false,
   ): Promise<ToolResult> => {
     return runTurn(async () => {
       await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
@@ -1285,6 +1288,7 @@ function createPhaseExecution(
         toolCall,
         driver: interaction,
         options,
+        providerInitiated,
       });
       await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
       return result;
@@ -1379,7 +1383,7 @@ function createPhaseExecution(
               name,
               args,
             };
-            const res = await executePhaseTool(phaseContext, toolCall, options);
+            const res = await executePhaseTool(phaseContext, toolCall, options, true);
             return res.ok
               ? { ok: true, content: res.content as JsonValue }
               : { ok: false, error: res.error ?? "Tool execution failed", ...(res.content !== undefined ? { content: res.content as JsonValue } : {}) };

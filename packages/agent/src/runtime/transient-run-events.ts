@@ -1,5 +1,6 @@
 import type {
   ExecutionId,
+  LiveInteractionEvent,
   MessageDelta,
   ModelRetry,
   PhaseStatusEvent,
@@ -16,6 +17,7 @@ export type TransientRunEvent =
   | ToolCallDelta
   | PhaseStatusEvent
   | ModelRetry
+  | LiveInteractionEvent
   | Extract<ToolStateChanged, { durability: "transient" }>;
 
 const MAX_BUFFERED_EVENTS = 128;
@@ -165,7 +167,6 @@ export class TransientRunEventSubscription {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.queue.length = 0;
     this.notify();
   }
 

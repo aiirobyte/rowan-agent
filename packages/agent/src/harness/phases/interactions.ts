@@ -52,6 +52,8 @@ export type RunInteractionDriver = Readonly<{
   answers(): ReadonlyMap<string, JsonValue>;
   checkpoint(): JsonValue | undefined;
   clearCheckpoint(): void;
+  answer?(id: string, value: JsonValue): void;
+  clearAnswer?(id: string): void;
   suspend(input?: Readonly<{ checkpoint?: JsonValue }>): never;
 }>;
 
@@ -182,6 +184,21 @@ export function createRunInteractionDriver(
 
     clearCheckpoint(): void {
       checkpoint = undefined;
+      sync();
+    },
+
+    answer(id: string, value: JsonValue): void {
+      answers.set(id, value);
+      const req = requests.get(id);
+      if (req) {
+        requests.set(id, { ...req, status: "answered", answer: value });
+      }
+      sync();
+    },
+
+    clearAnswer(id: string): void {
+      answers.delete(id);
+      requests.delete(id);
       sync();
     },
 
