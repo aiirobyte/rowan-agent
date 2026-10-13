@@ -469,6 +469,10 @@ async function openResponse(
     const init = spec.request();
     const headers: Record<string, string> = {};
     new Headers(init.headers).forEach((value, name) => { headers[name] = value; });
+    const streamSpec = spec as Partial<ProviderStreamRequestSpec>;
+    if (streamSpec.llmRequest?.sessionId) {
+      headers["x-session-id"] = streamSpec.llmRequest.sessionId;
+    }
     new Headers(spec.config.headers).forEach((value, name) => { headers[name] = value; });
     response = await raceWithAbort(
       fetchImpl(spec.endpoint, { ...init, headers, signal: activity.signal }),

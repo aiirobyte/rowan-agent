@@ -504,6 +504,7 @@ export type AgentRuntimeOptions = Readonly<{
   concurrency?: number;
   bootstrap?: (registry: RuntimeBootstrapRegistry) => void | Promise<void>;
   host?: import("../extensions").ExtensionHost;
+  sessionFiles?: Readonly<{ dir: string }>;
   /** @internal Private / testing parameter to override retry delay */
   retryDelayMs?: number;
 }>;

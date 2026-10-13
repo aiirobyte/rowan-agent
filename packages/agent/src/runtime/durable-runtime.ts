@@ -63,6 +63,7 @@ import { pageAgents, pageRuns } from "./read-models";
 import { PARALLEL_PHASE_METADATA_KEY, projectAssistantMessage, projectModelContext, renderInteractionText } from "./model-context";
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
+import { startSessionFilesConsumer } from "./session-files";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
 import type { PhaseRegistry } from "../harness/phases/types";
@@ -328,6 +329,9 @@ export class AgentRuntime implements AgentRuntimeContract {
       await options.bootstrap?.(runtime.resources);
       runtime.startHeartbeat();
       void runtime.pump();
+      if (options.sessionFiles) {
+        await startSessionFilesConsumer(runtime, options.sessionFiles);
+      }
       return runtime;
     } catch (error) {
       await runtime.resources.closeExtensions().catch(() => undefined);

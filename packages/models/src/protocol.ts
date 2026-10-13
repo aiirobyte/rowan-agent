@@ -230,6 +230,7 @@ export type LlmRequest = {
   thinkingLevel?: ThinkingLevel;
   /** Opaque per-request options for the provider; Rowan never reads them. */
   providerOptions?: JsonObject;
+  sessionId?: string;
   maxTokens?: number;
   temperature?: number;
 };

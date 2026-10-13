@@ -1331,6 +1331,7 @@ function createPhaseExecution(
         appendSystemPrompt: phaseContext.appendSystemPrompt,
       }, {
         model: phase.model ?? config.model,
+        sessionId: config.execution.agentId,
         ...(config.thinkingLevel === undefined
           ? {}
           : { thinkingLevel: config.thinkingLevel }),
