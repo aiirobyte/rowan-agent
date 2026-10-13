@@ -1,5 +1,5 @@
-import type { ContentBlock, ProviderCallContext, RunInteractionRequest, ToolCallOptions, ToolCallOutcome } from "@rowan-agent/models";
-import type { JsonObject, JsonValue, RunId } from "../runtime-events";
+import type { ContentBlock, RunInteractionRequest, ToolCallOptions, ToolCallOutcome } from "@rowan-agent/models";
+import type { JsonObject, JsonValue } from "../runtime-events";
 import type {
   AgentMessage,
   AgentContext,
@@ -21,7 +21,7 @@ import type {
   PhaseExecution,
   PhaseContextSnapshot,
 } from "./execution";
-import { invokeModel } from "./stream-collector";
+import { invokeModel, type ModelInvokerInput } from "./stream-collector";
 import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
 import { createExtensionAPI } from "../extensions/api";
 
@@ -1354,7 +1354,7 @@ function createPhaseExecution(
       const cwd = config.execution.cwd
         ?? config.context.cwd
         ?? "";
-      const callContext: ProviderCallContext = {
+      const callContext: ModelInvokerInput["callContext"] = {
         signal: config.signal ?? new AbortController().signal,
         run: {
           id: config.execution.runId,
@@ -1390,12 +1390,6 @@ function createPhaseExecution(
             return res.ok
               ? { ok: true, content: res.content as JsonValue }
               : { ok: false, error: res.error ?? "Tool execution failed", ...(res.content !== undefined ? { content: res.content as JsonValue } : {}) };
-          },
-          report: (update) => {
-            config.onToolReport?.({
-              runId: config.execution.runId as RunId,
-              update,
-            });
           },
         },
       };

@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test";
 import type { StreamFn } from "@rowan-agent/models";
-import { invokeModel } from "../../src/loop/stream-collector";
+import { invokeModel, type ModelInvokerInput } from "../../src/loop/stream-collector";
 import type { PhaseMessageManager } from "../../src/loop/execution";
 import type { AgentConfig } from "../../src/loop/types";
+
+// These streams never read their provider context.
+const callContext = {} as ModelInvokerInput["callContext"];
 
 test("model collection rejects an unbounded streamed response before it exhausts memory", async () => {
   const chunk = "x".repeat(16 * 1024);
@@ -41,6 +44,7 @@ test("model collection rejects an unbounded streamed response before it exhausts
       messages: [{ role: "user", content: "hello" }],
     },
     phaseId: "default",
+    callContext,
   })).rejects.toMatchObject({
     name: "ModelOutputLimitError",
     code: "model_output_limit",
@@ -89,6 +93,7 @@ test("model collection persists a thinking-only response", async () => {
       messages: [{ role: "user", content: "hello" }],
     },
     phaseId: "default",
+    callContext,
   });
 
   expect(result.contentBlocks).toEqual([{ type: "thinking", thinking: "Reasoning content" }]);

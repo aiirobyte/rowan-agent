@@ -17,7 +17,7 @@ import type { ThinkingDeltaNotification, ToolCallDeltaNotification } from "./typ
 import { parsePartialJson } from "./partial-json";
 import type { ModelTranscript } from "../protocol/turn";
 import { LoopGuard, EmptyResponseError, ModelOutputLimitError } from "./errors";
-import type { JsonObject, JsonValue, RunId } from "../runtime-events";
+import type { RunId } from "../runtime-events";
 
 const MAX_STREAMED_OUTPUT_CHARACTERS = 1024 * 1024;
 
@@ -29,7 +29,10 @@ export type ModelInvokerInput = {
   output?: "reply" | "internal";
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
-  callContext?: ProviderCallContext;
+  /** The Run's provider context; invokeModel adds `tools.report`. */
+  callContext: Omit<ProviderCallContext, "tools"> & {
+    tools: Omit<ProviderCallContext["tools"], "report">;
+  };
 };
 
 export type ModelInvokerResult = ModelInvokeOutput & {
@@ -42,48 +45,13 @@ export type ModelInvokerResult = ModelInvokeOutput & {
  * falls back to partial accumulation otherwise.
  */
 export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvokerResult> {
-  const baseContext: ProviderCallContext = input.callContext ?? {
-    signal: input.config.signal ?? new AbortController().signal,
-    run: {
-      id: input.config.execution.runId,
-      agentId: input.config.execution.agentId,
-      scope: input.config.execution.scope ?? [],
-      cwd: input.config.execution.cwd ?? input.config.context.cwd ?? "",
-    },
-    interact: async (request) => {
-      const handler = input.config.runtime?.interact ?? input.config.interact;
-      if (!handler) {
-        throw new Error("Run interactions are not supported in this runtime.");
-      }
-      return handler(request);
-    },
-    tools: {
-      list: () => {
-        return input.config.context.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters as JsonValue | undefined,
-          ...(t._meta !== undefined ? { _meta: t._meta } : {}),
-        }));
-      },
-      call: async (_name, _args, _options) => {
-        throw new Error("Tool calling is not available in standalone stream collector without callContext.");
-      },
-      report: (update) => {
-        input.config.onToolReport?.({
-          runId: input.config.execution.runId as RunId,
-          update,
-        });
-      },
-    },
-  };
   // A report lands between stream events, after every event before it was
   // collected, so the blocks seen so far place it in the assistant message.
   const position = { contentIndex: 0 };
   const callContext: ProviderCallContext = {
-    ...baseContext,
+    ...input.callContext,
     tools: {
-      ...baseContext.tools,
+      ...input.callContext.tools,
       report: (update) => {
         input.config.onToolReport?.({
           runId: input.config.execution.runId as RunId,
