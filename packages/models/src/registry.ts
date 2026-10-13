@@ -8,9 +8,11 @@ import type {
   ProviderCallContext,
   ProviderStreamFn,
   StreamFn,
+  ModelCost,
 } from "./protocol";
-import { createProviderCallContext } from "./protocol";
+import { createProviderCallContext, ZERO_COST } from "./protocol";
 import { getModel, resolveModel } from "./models";
+import { MODELS } from "./models.generated";
 import { streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
 import { streamAnthropic } from "./providers/anthropic";
@@ -131,12 +133,53 @@ export function streamByRef(
   return stream(model, { ...request, model: { provider: model.provider, id: model.id } }, ctx);
 }
 
-const ZERO_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} as const;
+function parseHostname(urlStr?: string): string | undefined {
+  if (!urlStr) return undefined;
+  try {
+    const parsed = new URL(urlStr);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function findCatalogModel(
+  config: ModelConfig,
+  catalog: Record<string, Record<string, Model>>,
+): Model | undefined {
+  const byProvider = catalog[config.provider]?.[config.id];
+  if (byProvider) return byProvider;
+  // A host-named provider (e.g. "my-deepseek") is matched by its baseUrl host.
+  const host = parseHostname(config.baseUrl);
+  if (!host) return undefined;
+  for (const providerModels of Object.values(catalog)) {
+    const model = providerModels[config.id];
+    if (model && parseHostname(model.baseUrl) === host) return model;
+  }
+  return undefined;
+}
+
+/**
+ * Resolves model cost for a host configuration, like pi's modelOverrides:
+ * the catalog entry (same provider and id, else same baseUrl host and id)
+ * gives the rates, and each rate the host supplies replaces its own field.
+ * A local gateway matches no catalog host, so only host rates apply.
+ */
+export function resolveConfigCost(
+  config: ModelConfig,
+  catalog: Record<string, Record<string, Model>> = MODELS,
+): ModelCost {
+  const base = findCatalogModel(config, catalog)?.cost ?? ZERO_COST;
+  const host = config.cost ?? {};
+  const tiers = host.tiers ?? base.tiers;
+  return {
+    input: host.input ?? base.input,
+    output: host.output ?? base.output,
+    cacheRead: host.cacheRead ?? base.cacheRead,
+    cacheWrite: host.cacheWrite ?? base.cacheWrite,
+    ...(tiers ? { tiers } : {}),
+  };
+}
 
 function modelFromConfig(config: ModelConfig): Model {
   return {
@@ -150,7 +193,7 @@ function modelFromConfig(config: ModelConfig): Model {
     ...(config.thinkingLevel !== undefined ? { thinkingLevel: config.thinkingLevel } : {}),
     ...(config.thinkingLevels !== undefined ? { thinkingLevels: config.thinkingLevels } : {}),
     input: config.input ?? ["text"],
-    cost: { ...ZERO_COST, ...config.cost },
+    cost: resolveConfigCost(config),
     contextWindow: config.contextWindow ?? 128_000,
     maxTokens: config.maxTokens ?? 4096,
     ...(config.headers ? { headers: config.headers } : {}),

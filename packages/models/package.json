@@ -27,7 +27,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "import-pi-catalog": "bun scripts/import-pi-catalog.ts"
   },
   "devDependencies": {
     "tsup": "^8.5.1"

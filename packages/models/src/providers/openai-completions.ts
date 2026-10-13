@@ -9,12 +9,15 @@ import type {
   ProviderStreamFn,
   StreamFn,
   AssistantMessagePartial,
+  Model,
 } from "../protocol";
-import { createProviderCallContext } from "../protocol";
+import { createProviderCallContext, ZERO_COST } from "../protocol";
+import { calculateCost } from "../models";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { executeProviderRequest, streamProviderRequest } from "./http";
 import {
   type BaseProviderConfig,
+  type RawUsage,
   normalizeBaseUrl,
   normalizeUsage,
   openAIReasoningEffort,
@@ -214,7 +217,7 @@ type ChatCompletionChunk = {
     };
     finish_reason?: string | null;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; input_tokens?: number; output_tokens?: number };
+  usage?: RawUsage;
 };
 
 type ChatCompletionResponse = {
@@ -231,7 +234,7 @@ type ChatCompletionResponse = {
     };
     finish_reason?: string | null;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; input_tokens?: number; output_tokens?: number };
+  usage?: RawUsage;
 };
 
 // ---------------------------------------------------------------------------
@@ -242,9 +245,21 @@ async function* streamChatCompletions(
   config: OpenAICompletionsConfig,
   request: LlmRequest,
   ctx?: ProviderCallContext,
+  model?: Model,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request, true);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
+  const concreteModel: Model = model ?? {
+    id: config.model,
+    provider: (config as any).provider ?? "openai",
+    protocol: "openai-completions",
+    baseUrl: config.baseUrl,
+    reasoning: false,
+    input: ["text", "image"],
+    cost: config.cost ?? ZERO_COST,
+    contextWindow: 128_000,
+    maxTokens: 4096,
+  };
 
   yield* streamProviderRequest({
     config,
@@ -303,6 +318,9 @@ async function* streamChatCompletions(
         }
 
         const usage = normalizeUsage(data.usage);
+        if (usage) {
+          usage.cost = calculateCost(concreteModel, usage);
+        }
         yield {
           type: "done",
           response: {
@@ -392,6 +410,10 @@ async function* streamChatCompletions(
         yield { type: "tool_call_end", id: block.id, name: block.name, arguments: block.args, partial: { ...partial, contentBlocks: [...partial.contentBlocks] } };
       }
 
+      if (usage) {
+        usage.cost = calculateCost(concreteModel, usage);
+      }
+
       yield {
         type: "done",
         response: {
@@ -431,8 +453,9 @@ export const streamOpenAICompletions: ProviderStreamFn = (model, request, ctx) =
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,
     headers: model.headers,
+    cost: model.cost,
   });
-  return streamChatCompletions(config, request, ctx);
+  return streamChatCompletions(config, request, ctx, model);
 };
 
 export async function callOpenAICompletions(

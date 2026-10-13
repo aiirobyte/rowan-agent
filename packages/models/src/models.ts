@@ -1,4 +1,4 @@
-import type { Model, Provider, LlmTokenUsage } from "./protocol";
+import type { Model, Provider, LlmTokenUsage, ModelCostRates } from "./protocol";
 
 // ---------------------------------------------------------------------------
 // Model registry
@@ -91,16 +91,35 @@ export function unregisterProviderModels(provider: string): number {
 // Cost calculation
 // ---------------------------------------------------------------------------
 
-export function calculateCost(model: Model, usage: LlmTokenUsage): {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  total: number;
-} {
-  const input = ((usage.inputTokens ?? 0) / 1_000_000) * model.cost.input;
-  const output = ((usage.outputTokens ?? 0) / 1_000_000) * model.cost.output;
-  const cacheRead = ((usage.cacheReadTokens ?? 0) / 1_000_000) * model.cost.cacheRead;
-  const cacheWrite = ((usage.cacheWriteTokens ?? 0) / 1_000_000) * model.cost.cacheWrite;
-  return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
+export function calculateCost(model: Model, usage: LlmTokenUsage): NonNullable<LlmTokenUsage["cost"]> {
+  const input = usage.inputTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  const cacheRead = usage.cacheReadTokens ?? 0;
+  const cacheWrite = usage.cacheWriteTokens ?? 0;
+  const longWrite = usage.cacheWrite1hTokens ?? 0;
+
+  // The highest tier whose threshold the whole input exceeds prices the request.
+  const totalInputTokens = input + cacheRead + cacheWrite;
+  let rates: ModelCostRates = model.cost;
+  let matchedThreshold = -1;
+  for (const tier of model.cost.tiers ?? []) {
+    if (totalInputTokens > tier.inputTokensAbove && tier.inputTokensAbove > matchedThreshold) {
+      rates = tier;
+      matchedThreshold = tier.inputTokensAbove;
+    }
+  }
+
+  // Anthropic charges 2x base input for 1h cache writes.
+  const shortWrite = Math.max(0, cacheWrite - longWrite);
+  const costInput = (rates.input / 1_000_000) * input;
+  const costOutput = (rates.output / 1_000_000) * output;
+  const costCacheRead = (rates.cacheRead / 1_000_000) * cacheRead;
+  const costCacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000;
+  return {
+    input: costInput,
+    output: costOutput,
+    cacheRead: costCacheRead,
+    cacheWrite: costCacheWrite,
+    total: costInput + costOutput + costCacheRead + costCacheWrite,
+  };
 }

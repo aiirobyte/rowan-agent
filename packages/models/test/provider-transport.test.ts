@@ -156,3 +156,56 @@ test("an unsupported timeout is rejected before the request starts", async () =>
   });
   expect(fetchCalled).toBe(false);
 });
+
+test("streamProviderRequest sets x-session-id header from llmRequest.sessionId before config.headers", async () => {
+  let capturedHeaders: Record<string, string> = {};
+  const fetch: ProviderFetch = async (_url, init) => {
+    capturedHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+    return new Response("ok", { status: 200, headers: { "content-type": "text/plain" } });
+  };
+
+  await collect(streamProviderRequest({
+    config: {
+      model: "test-model",
+      fetch,
+    },
+    endpoint: "https://provider.example/generate",
+    llmRequest: {
+      model: { provider: "test", id: "test-model" },
+      messages: [{ role: "user", content: "hello" }],
+      sessionId: "agent-session-123",
+    },
+    request: () => ({ method: "POST" }),
+  }, async function* () {
+    yield { type: "done", response: { content: "ok", stopReason: "stop" } };
+  }));
+
+  expect(capturedHeaders["x-session-id"]).toBe("agent-session-123");
+});
+
+test("streamProviderRequest allows config.headers to override x-session-id", async () => {
+  let capturedHeaders: Record<string, string> = {};
+  const fetch: ProviderFetch = async (_url, init) => {
+    capturedHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+    return new Response("ok", { status: 200, headers: { "content-type": "text/plain" } });
+  };
+
+  await collect(streamProviderRequest({
+    config: {
+      model: "test-model",
+      headers: { "x-session-id": "custom-override" },
+      fetch,
+    },
+    endpoint: "https://provider.example/generate",
+    llmRequest: {
+      model: { provider: "test", id: "test-model" },
+      messages: [{ role: "user", content: "hello" }],
+      sessionId: "agent-session-123",
+    },
+    request: () => ({ method: "POST" }),
+  }, async function* () {
+    yield { type: "done", response: { content: "ok", stopReason: "stop" } };
+  }));
+
+  expect(capturedHeaders["x-session-id"]).toBe("custom-override");
+});

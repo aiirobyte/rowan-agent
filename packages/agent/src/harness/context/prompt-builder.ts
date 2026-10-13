@@ -96,7 +96,7 @@ type ModelRequestInput = {
 
 export function buildModelRequest(
   input: ModelRequestInput,
-  options?: { model?: ModelRef; thinkingLevel?: ThinkingLevel; providerOptions?: JsonObject },
+  options?: { model?: ModelRef; thinkingLevel?: ThinkingLevel; providerOptions?: JsonObject; sessionId?: string },
 ): LlmRequest {
   const toolMeta = input.tools.map((t) => ({
     name: t.name,
@@ -125,6 +125,7 @@ export function buildModelRequest(
     model: options?.model ?? { provider: "", id: "" },
     ...(options?.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
     ...(options?.providerOptions === undefined ? {} : { providerOptions: options.providerOptions }),
+    ...(options?.sessionId === undefined ? {} : { sessionId: options.sessionId }),
     system: systemText,
     messages,
     tools: modelTools.length > 0 ? modelTools : undefined,

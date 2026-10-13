@@ -2,6 +2,8 @@ import type { RunInteraction } from "./harness/phases/interactions";
 import type { PhaseStatus } from "./harness/phases/types";
 import type {
   ContentBlock,
+  LlmTokenUsage,
+  ModelRef,
   ToolAnnotations,
   ToolCall,
   ToolCallContent,
@@ -13,6 +15,8 @@ import type {
 
 export type {
   ContentBlock,
+  LlmTokenUsage,
+  ModelRef,
   ToolAnnotations,
   ToolCall,
   ToolCallContent,
@@ -102,7 +106,13 @@ export type UserMessage = MessageBase & Readonly<{
   content: UserContent;
   contexts?: readonly ContextCandidate[];
 }>;
-export type AssistantMessage = MessageBase & Readonly<{ role: "assistant"; content: AssistantContent; interrupted?: boolean }>;
+export type AssistantMessage = MessageBase & Readonly<{
+  role: "assistant";
+  content: AssistantContent;
+  interrupted?: boolean;
+  model?: ModelRef;
+  usage?: LlmTokenUsage;
+}>;
 export type ToolMessage = MessageBase & Readonly<{ role: "tool"; content: ToolMessageContent }>;
 export type InteractionRecord = MessageBase & Readonly<{
   role: "interaction";

@@ -343,9 +343,15 @@ function createMessageManager(
       if (!active) return;
       active.message.content = content;
     },
-    async end(messageId) {
+    async end(messageId, meta?: { model?: import("@rowan-agent/models").ModelRef; usage?: import("@rowan-agent/models").LlmTokenUsage }) {
       const active = activeMessages.get(messageId);
       if (!active) return;
+      if (meta?.model) {
+        active.message.model = meta.model;
+      }
+      if (meta?.usage) {
+        active.message.usage = meta.usage;
+      }
       if (!active.emitted && (active.message.content === "" || active.message.content.length === 0)) {
         activeMessages.delete(messageId);
         return;
@@ -430,6 +436,7 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
 
     let executableToolCalls: readonly ToolCall[];
     let roundContentBlocks: readonly ContentBlock[] | undefined;
+    let collected: ModelInvokeOutput | undefined;
     const checkpoint = ctx.execution.interaction.checkpoint();
     if (checkpoint && typeof checkpoint === "object" && (checkpoint as any).kind === "tool_call_suspension") {
       const toolSuspension = checkpoint as {
@@ -448,7 +455,7 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
         toolCalls: [...toolSuspension.toolCalls],
       };
     } else {
-      const collected = await ctx.execution.invokeModel(roundContext);
+      collected = await ctx.execution.invokeModel(roundContext);
 
       output = {
         message: collected.text,
@@ -492,7 +499,13 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       }
     }
 
-    const results = await ctx.execution.executeTools(roundContext, executableToolCalls, roundContentBlocks);
+    const currentModel = ctx.phase.model ?? ctx.config.model;
+    const results = await ctx.execution.executeTools(
+      roundContext,
+      executableToolCalls,
+      roundContentBlocks,
+      { model: currentModel, usage: collected?.usage },
+    );
     for (const result of results) {
       const messageId = ctx.messageManager.start("tool", createToolResultContent(result), {
         phase: ctx.phase.name,
@@ -1231,6 +1244,8 @@ async function executeToolCalls(input: {
   toolCalls: readonly ToolCall[];
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
+  model?: import("@rowan-agent/models").ModelRef;
+  usage?: import("@rowan-agent/models").LlmTokenUsage;
 }): Promise<readonly ToolResult[]> {
   if (input.config.runtime?.toolsBatch) {
     const results = await input.config.runtime.toolsBatch({
@@ -1238,6 +1253,8 @@ async function executeToolCalls(input: {
       toolCalls: input.toolCalls,
       contentBlocks: input.contentBlocks,
       driver: input.driver,
+      model: input.model,
+      usage: input.usage,
     });
     if (results.length !== input.toolCalls.length) throw new Error("Runtime returned an invalid Tool batch result");
     return results.map((result, index) => ({
@@ -1331,6 +1348,7 @@ function createPhaseExecution(
         appendSystemPrompt: phaseContext.appendSystemPrompt,
       }, {
         model: phase.model ?? config.model,
+        sessionId: config.execution.agentId,
         ...(config.thinkingLevel === undefined
           ? {}
           : { thinkingLevel: config.thinkingLevel }),
@@ -1432,7 +1450,12 @@ function createPhaseExecution(
 
     executeTool: executePhaseTool,
 
-    async executeTools(phaseContext: AgentContext, toolCalls: readonly ToolCall[], contentBlocks?: readonly ContentBlock[]): Promise<readonly ToolResult[]> {
+    async executeTools(
+      phaseContext: AgentContext,
+      toolCalls: readonly ToolCall[],
+      contentBlocks?: readonly ContentBlock[],
+      meta?: { model?: import("@rowan-agent/models").ModelRef; usage?: import("@rowan-agent/models").LlmTokenUsage },
+    ): Promise<readonly ToolResult[]> {
       return runTurn(async () => {
         const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
         for (const toolCall of toolCalls) {
@@ -1451,6 +1474,8 @@ function createPhaseExecution(
           toolCalls,
           contentBlocks,
           driver: interaction,
+          model: meta?.model,
+          usage: meta?.usage,
         });
         for (const result of results) {
           await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);

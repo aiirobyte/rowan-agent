@@ -71,6 +71,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     output: input.output,
     onThinkingDelta: input.onThinkingDelta,
     onToolCallDelta: input.onToolCallDelta,
+    model: input.request.model,
   });
 
   const response: LlmResponse = result.doneResponse ?? {
@@ -88,6 +89,8 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     contentBlocks: result.contentBlocks,
     toolCalls: result.toolCalls,
     stopReason: result.stopReason,
+    model: input.request.model,
+    usage: response.usage,
     transcript: {
       request: input.request,
       response,
@@ -112,6 +115,7 @@ async function collectStreamResult(input: {
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
   position: { contentIndex: number };
+  model?: import("@rowan-agent/models").ModelRef;
 }): Promise<StreamCollectionResult> {
   const persistAssistant = input.output !== "internal";
   let activeMessageId: string | undefined;
@@ -249,7 +253,7 @@ async function collectStreamResult(input: {
       }
 
       if (persistAssistant && activeMessageId) {
-        if (hasContent) await input.message.end(activeMessageId);
+        if (hasContent) await input.message.end(activeMessageId, { model: input.model, usage: event.response?.usage });
         else input.message.discard(activeMessageId);
         activeMessageId = undefined;
       }
@@ -259,14 +263,14 @@ async function collectStreamResult(input: {
   const abortResult = LoopGuard.checkAbort(input.config.signal);
   if (abortResult.stopReason !== "none") {
     if (persistAssistant && activeMessageId) {
-      await input.message.end(activeMessageId);
+      await input.message.end(activeMessageId, { model: input.model });
       activeMessageId = undefined;
     }
     return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
   }
 
   if (persistAssistant && activeMessageId) {
-    await input.message.end(activeMessageId);
+    await input.message.end(activeMessageId, { model: input.model, usage: doneResponse?.usage });
   }
 
   // Detect empty responses — model returned no text and no tool calls.

@@ -153,6 +153,8 @@ export type ToolRunnerInput = {
   options?: import("@rowan-agent/models").ToolCallOptions;
   /** Set when a Provider issued this call through ProviderCallContext.tools.call. */
   providerInitiated?: boolean;
+  model?: import("@rowan-agent/models").ModelRef;
+  usage?: import("@rowan-agent/models").LlmTokenUsage;
 };
 
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
@@ -162,6 +164,8 @@ export type ToolBatchRunner = (input: {
   contentBlocks?: readonly ContentBlock[];
   driver?: RunInteractionDriver;
   options?: import("@rowan-agent/models").ToolCallOptions;
+  model?: import("@rowan-agent/models").ModelRef;
+  usage?: import("@rowan-agent/models").LlmTokenUsage;
 }) => Promise<readonly ToolResult[]>;
 
 export type AgentRuntimePort = {
