@@ -143,47 +143,42 @@ function parseHostname(urlStr?: string): string | undefined {
   }
 }
 
-function hasConfiguredCost(cost?: Partial<ModelCost>): boolean {
-  if (!cost) return false;
-  if ((cost.input ?? 0) > 0 || (cost.output ?? 0) > 0 || (cost.cacheRead ?? 0) > 0 || (cost.cacheWrite ?? 0) > 0) {
-    return true;
+function findCatalogModel(
+  config: ModelConfig,
+  catalog: Record<string, Record<string, Model>>,
+): Model | undefined {
+  const byProvider = catalog[config.provider]?.[config.id];
+  if (byProvider) return byProvider;
+  // A host-named provider (e.g. "my-deepseek") is matched by its baseUrl host.
+  const host = parseHostname(config.baseUrl);
+  if (!host) return undefined;
+  for (const providerModels of Object.values(catalog)) {
+    const model = providerModels[config.id];
+    if (model && parseHostname(model.baseUrl) === host) return model;
   }
-  if (cost.tiers && cost.tiers.length > 0) {
-    return true;
-  }
-  return false;
+  return undefined;
 }
 
 /**
- * Resolves model cost for a host configuration.
- * A host-supplied cost always wins, even all zeros (a free model).
- * Without one:
- * matches the catalog provider by baseUrl hostname, then the model id.
- * A local gateway matches no catalog host and stays 0.
+ * Resolves model cost for a host configuration, like pi's modelOverrides:
+ * the catalog entry (same provider and id, else same baseUrl host and id)
+ * gives the rates, and each rate the host supplies replaces its own field.
+ * A local gateway matches no catalog host, so only host rates apply.
  */
 export function resolveConfigCost(
   config: ModelConfig,
   catalog: Record<string, Record<string, Model>> = MODELS,
 ): ModelCost {
-  if (config.cost) return { ...ZERO_COST, ...config.cost };
-
-  // Match the catalog provider by baseUrl host, then the model id.
-  const configHost = parseHostname(config.baseUrl);
-  if (configHost) {
-    for (const providerModels of Object.values(catalog)) {
-      const matchesHost = Object.values(providerModels).some(
-        (m) => parseHostname(m.baseUrl) === configHost,
-      );
-      if (matchesHost) {
-        const matchedModel = providerModels[config.id];
-        if (matchedModel?.cost && hasConfiguredCost(matchedModel.cost)) {
-          return { ...ZERO_COST, ...matchedModel.cost };
-        }
-      }
-    }
-  }
-
-  return ZERO_COST;
+  const base = findCatalogModel(config, catalog)?.cost ?? ZERO_COST;
+  const host = config.cost ?? {};
+  const tiers = host.tiers ?? base.tiers;
+  return {
+    input: host.input ?? base.input,
+    output: host.output ?? base.output,
+    cacheRead: host.cacheRead ?? base.cacheRead,
+    cacheWrite: host.cacheWrite ?? base.cacheWrite,
+    ...(tiers ? { tiers } : {}),
+  };
 }
 
 function modelFromConfig(config: ModelConfig): Model {

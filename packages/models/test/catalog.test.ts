@@ -221,3 +221,26 @@ test("Price fallback: an all-zero host cost keeps the model free", () => {
   expect(cost.input).toBe(0);
   expect(cost.output).toBe(0);
 });
+
+test("Price fallback: by provider + id even through a proxy baseUrl", () => {
+  const cost = resolveConfigCost({
+    id: "deepseek-flash",
+    provider: "deepseek",
+    protocol: "openai-completions",
+    baseUrl: "https://custom-proxy.example.com",
+    apiKey: "test-key",
+  });
+  expect(cost).toEqual({ input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 });
+});
+
+test("Price fallback: each host rate overrides only its own catalog field", () => {
+  const cost = resolveConfigCost({
+    id: "deepseek-flash",
+    provider: "deepseek",
+    protocol: "openai-completions",
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "test-key",
+    cost: { input: 0.5 },
+  });
+  expect(cost).toEqual({ input: 0.5, output: 1.2, cacheRead: 0.006, cacheWrite: 0 });
+});
