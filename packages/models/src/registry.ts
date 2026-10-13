@@ -133,7 +133,7 @@ export function streamByRef(
   return stream(model, { ...request, model: { provider: model.provider, id: model.id } }, ctx);
 }
 
-export function parseHostname(urlStr?: string): string | undefined {
+function parseHostname(urlStr?: string): string | undefined {
   if (!urlStr) return undefined;
   try {
     const parsed = new URL(urlStr);
@@ -141,18 +141,6 @@ export function parseHostname(urlStr?: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-export function isLocalGatewayHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return (
-    h === "localhost" ||
-    h === "127.0.0.1" ||
-    h === "0.0.0.0" ||
-    h === "::1" ||
-    h.endsWith(".localhost") ||
-    h.endsWith(".local")
-  );
 }
 
 function hasConfiguredCost(cost?: Partial<ModelCost>): boolean {
@@ -170,9 +158,8 @@ function hasConfiguredCost(cost?: Partial<ModelCost>): boolean {
  * Resolves model cost for a host configuration.
  * A host-supplied cost always wins, even all zeros (a free model).
  * Without one:
- * 1. Checks catalog entry with matching provider and model id.
- * 2. Matches catalog provider by config baseUrl hostname and then model id.
- * Local gateways (127.0.0.1, localhost, etc.) match nothing and stay 0.
+ * matches the catalog provider by baseUrl hostname, then the model id.
+ * A local gateway matches no catalog host and stays 0.
  */
 export function resolveConfigCost(
   config: ModelConfig,
@@ -180,15 +167,9 @@ export function resolveConfigCost(
 ): ModelCost {
   if (config.cost) return { ...ZERO_COST, ...config.cost };
 
-  // 1. Direct match by (provider, id)
-  const byProvider = catalog[config.provider]?.[config.id];
-  if (byProvider?.cost && hasConfiguredCost(byProvider.cost)) {
-    return { ...ZERO_COST, ...byProvider.cost };
-  }
-
-  // 2. BaseUrl host match
+  // Match the catalog provider by baseUrl host, then the model id.
   const configHost = parseHostname(config.baseUrl);
-  if (configHost && !isLocalGatewayHost(configHost)) {
+  if (configHost) {
     for (const providerModels of Object.values(catalog)) {
       const matchesHost = Object.values(providerModels).some(
         (m) => parseHostname(m.baseUrl) === configHost,

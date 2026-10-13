@@ -137,22 +137,6 @@ test("transformPiCatalog pure transform over in-test fixtures (offline)", () => 
   });
 });
 
-test("Price fallback: by provider + id when host gives no cost", () => {
-  const config: ModelConfig = {
-    id: "deepseek-flash",
-    provider: "deepseek",
-    protocol: "openai-completions",
-    baseUrl: "https://custom-proxy.example.com",
-    apiKey: "test-key",
-  };
-
-  const cost = resolveConfigCost(config);
-  expect(cost.input).toBe(0.3);
-  expect(cost.output).toBe(1.2);
-  expect(cost.cacheRead).toBe(0.006);
-  expect(cost.cacheWrite).toBe(0);
-});
-
 test("Price fallback: by baseUrl host when provider is custom/unmatched", () => {
   const config: ModelConfig = {
     id: "deepseek-flash",
