@@ -8,9 +8,11 @@ import type {
   ProviderCallContext,
   ProviderStreamFn,
   StreamFn,
+  ModelCost,
 } from "./protocol";
-import { createProviderCallContext } from "./protocol";
+import { createProviderCallContext, ZERO_COST } from "./protocol";
 import { getModel, resolveModel } from "./models";
+import { MODELS } from "./models.generated";
 import { streamOpenAICompletions } from "./providers/openai-completions";
 import { streamOpenAIResponses } from "./providers/openai-responses";
 import { streamAnthropic } from "./providers/anthropic";
@@ -131,12 +133,79 @@ export function streamByRef(
   return stream(model, { ...request, model: { provider: model.provider, id: model.id } }, ctx);
 }
 
-const ZERO_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} as const;
+export function parseHostname(urlStr?: string): string | undefined {
+  if (!urlStr) return undefined;
+  try {
+    const parsed = new URL(urlStr);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+export function isLocalGatewayHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return (
+    h === "localhost" ||
+    h === "127.0.0.1" ||
+    h === "0.0.0.0" ||
+    h === "::1" ||
+    h.endsWith(".localhost") ||
+    h.endsWith(".local")
+  );
+}
+
+function hasConfiguredCost(cost?: Partial<ModelCost>): boolean {
+  if (!cost) return false;
+  if ((cost.input ?? 0) > 0 || (cost.output ?? 0) > 0 || (cost.cacheRead ?? 0) > 0 || (cost.cacheWrite ?? 0) > 0) {
+    return true;
+  }
+  if (cost.tiers && cost.tiers.length > 0) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Resolves model cost for a host configuration.
+ * If the config supplies non-zero cost or tiers, host-supplied cost wins.
+ * If no cost or all-zero base rates without tiers:
+ * 1. Checks catalog entry with matching provider and model id.
+ * 2. Matches catalog provider by config baseUrl hostname and then model id.
+ * Local gateways (127.0.0.1, localhost, etc.) match nothing and stay 0.
+ */
+export function resolveConfigCost(
+  config: ModelConfig,
+  catalog: Record<string, Record<string, Model>> = MODELS,
+): ModelCost {
+  if (hasConfiguredCost(config.cost)) {
+    return { ...ZERO_COST, ...config.cost };
+  }
+
+  // 1. Direct match by (provider, id)
+  const byProvider = catalog[config.provider]?.[config.id];
+  if (byProvider?.cost && hasConfiguredCost(byProvider.cost)) {
+    return { ...ZERO_COST, ...byProvider.cost };
+  }
+
+  // 2. BaseUrl host match
+  const configHost = parseHostname(config.baseUrl);
+  if (configHost && !isLocalGatewayHost(configHost)) {
+    for (const providerModels of Object.values(catalog)) {
+      const matchesHost = Object.values(providerModels).some(
+        (m) => parseHostname(m.baseUrl) === configHost,
+      );
+      if (matchesHost) {
+        const matchedModel = providerModels[config.id];
+        if (matchedModel?.cost && hasConfiguredCost(matchedModel.cost)) {
+          return { ...ZERO_COST, ...matchedModel.cost };
+        }
+      }
+    }
+  }
+
+  return { ...ZERO_COST, ...config.cost };
+}
 
 function modelFromConfig(config: ModelConfig): Model {
   return {
@@ -150,7 +219,7 @@ function modelFromConfig(config: ModelConfig): Model {
     ...(config.thinkingLevel !== undefined ? { thinkingLevel: config.thinkingLevel } : {}),
     ...(config.thinkingLevels !== undefined ? { thinkingLevels: config.thinkingLevels } : {}),
     input: config.input ?? ["text"],
-    cost: { ...ZERO_COST, ...config.cost },
+    cost: resolveConfigCost(config),
     contextWindow: config.contextWindow ?? 128_000,
     maxTokens: config.maxTokens ?? 4096,
     ...(config.headers ? { headers: config.headers } : {}),
