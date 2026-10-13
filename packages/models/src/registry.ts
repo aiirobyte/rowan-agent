@@ -168,8 +168,8 @@ function hasConfiguredCost(cost?: Partial<ModelCost>): boolean {
 
 /**
  * Resolves model cost for a host configuration.
- * If the config supplies non-zero cost or tiers, host-supplied cost wins.
- * If no cost or all-zero base rates without tiers:
+ * A host-supplied cost always wins, even all zeros (a free model).
+ * Without one:
  * 1. Checks catalog entry with matching provider and model id.
  * 2. Matches catalog provider by config baseUrl hostname and then model id.
  * Local gateways (127.0.0.1, localhost, etc.) match nothing and stay 0.
@@ -178,9 +178,7 @@ export function resolveConfigCost(
   config: ModelConfig,
   catalog: Record<string, Record<string, Model>> = MODELS,
 ): ModelCost {
-  if (hasConfiguredCost(config.cost)) {
-    return { ...ZERO_COST, ...config.cost };
-  }
+  if (config.cost) return { ...ZERO_COST, ...config.cost };
 
   // 1. Direct match by (provider, id)
   const byProvider = catalog[config.provider]?.[config.id];
@@ -204,7 +202,7 @@ export function resolveConfigCost(
     }
   }
 
-  return { ...ZERO_COST, ...config.cost };
+  return ZERO_COST;
 }
 
 function modelFromConfig(config: ModelConfig): Model {

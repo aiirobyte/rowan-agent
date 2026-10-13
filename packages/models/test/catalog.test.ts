@@ -224,3 +224,16 @@ test("the built-in catalog prices but does not register models", () => {
   expect(MODELS.deepseek?.["deepseek-flash"]?.cost.input).toBe(0.3);
   expect(getModel("deepseek", "deepseek-flash")).toBeUndefined();
 });
+
+test("Price fallback: an all-zero host cost keeps the model free", () => {
+  const cost = resolveConfigCost({
+    id: "deepseek-flash",
+    provider: "deepseek",
+    protocol: "openai-completions",
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "test-key",
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  expect(cost.input).toBe(0);
+  expect(cost.output).toBe(0);
+});
