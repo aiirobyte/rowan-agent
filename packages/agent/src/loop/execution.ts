@@ -4,8 +4,7 @@ import type {
   ToolCall,
   ToolResult,
 } from "../types";
-import type { LlmContentPart } from "@rowan-agent/models";
-import type { ContentBlock } from "@rowan-agent/models";
+import type { ContentBlock, LlmContentPart, LlmTokenUsage, ModelRef } from "@rowan-agent/models";
 import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
 import type { RunInteractionDriver } from "../harness/phases/interactions";
 
@@ -16,6 +15,8 @@ export type ModelInvokeOutput = {
   contentBlocks: ContentBlock[];
   toolCalls: ToolCall[];
   stopReason?: string;
+  model?: ModelRef;
+  usage?: LlmTokenUsage;
 };
 
 /** Snapshot of phase-level context for restore */
@@ -35,7 +36,12 @@ export type PhaseExecution = {
   invokeModel(context: PhaseContext, options?: { output?: "reply" | "internal" }): Promise<ModelInvokeOutput>;
   reportStatus(status: PhaseStatus): Promise<void>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
-  executeTools(context: AgentContext, toolCalls: readonly ToolCall[], contentBlocks?: readonly ContentBlock[]): Promise<readonly ToolResult[]>;
+  executeTools(
+    context: AgentContext,
+    toolCalls: readonly ToolCall[],
+    contentBlocks?: readonly ContentBlock[],
+    meta?: { model?: ModelRef; usage?: LlmTokenUsage },
+  ): Promise<readonly ToolResult[]>;
   interaction: RunInteractionDriver;
   /** Message lifecycle manager for streaming updates from programmatic phases */
   messages: PhaseMessageManager;
@@ -54,7 +60,7 @@ export type PhaseMessageManager = {
   /** Replace the active message content with model-native content parts */
   replaceContent(messageId: string, content: string | LlmContentPart[]): void;
   /** End the message stream, appends to transcript */
-  end(messageId: string): Promise<void>;
+  end(messageId: string, meta?: { model?: ModelRef; usage?: LlmTokenUsage }): Promise<void>;
   /** Drop an unstarted stream that produced no content. */
   discard(messageId: string): void;
 };

@@ -137,6 +137,8 @@ export function projectAssistantMessage(
     createdAt: message.createdAt,
     ...(message.metadata ? { metadata: message.metadata as never } : {}),
     ...(options.interrupted ? { interrupted: true } : {}),
+    ...(message.model ? { model: message.model } : {}),
+    ...(message.usage ? { usage: message.usage } : {}),
   };
 }
 

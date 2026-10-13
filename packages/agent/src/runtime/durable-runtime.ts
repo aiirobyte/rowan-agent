@@ -1189,7 +1189,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         onContext: assembly.setContext,
         runtime: {
           interact: (request) => this.liveInteract(run.id, request, controller.signal),
-          tools: ({ toolCall, contentBlocks, driver, options, providerInitiated }: ToolRunnerInput) => {
+          tools: ({ toolCall, contentBlocks, driver, options, providerInitiated, model: callModel, usage: callUsage }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               if (!providerInitiated) {
                 const execution = await this.executeToolBatch({
@@ -1203,6 +1203,8 @@ export class AgentRuntime implements AgentRuntimeContract {
                   signal: controller.signal,
                   driver,
                   options,
+                  model: callModel ?? model,
+                  usage: callUsage,
                   onRevision: (rev) => { executionRevision = rev; },
                 });
                 executionRevision = execution.revision;
@@ -1226,6 +1228,8 @@ export class AgentRuntime implements AgentRuntimeContract {
                       options,
                       providerInitiated: true,
                       interactionIds,
+                      model: callModel ?? model,
+                      usage: callUsage,
                       onRevision: (rev) => { executionRevision = rev; },
                     });
                     executionRevision = execution.revision;
@@ -1313,7 +1317,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
           },
-          toolsBatch: ({ toolCalls, contentBlocks, driver, options }: Parameters<ToolBatchRunner>[0]) => {
+          toolsBatch: ({ toolCalls, contentBlocks, driver, options, model: batchModel, usage: batchUsage }: Parameters<ToolBatchRunner>[0]) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -1326,6 +1330,8 @@ export class AgentRuntime implements AgentRuntimeContract {
                 signal: controller.signal,
                 driver,
                 options,
+                model: batchModel ?? model,
+                usage: batchUsage,
                 onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
@@ -1500,6 +1506,8 @@ export class AgentRuntime implements AgentRuntimeContract {
     contentBlocks?: readonly ContentBlock[];
     signal: AbortSignal;
     driver?: RunInteractionDriver;
+    model?: import("@rowan-agent/models").ModelRef;
+    usage?: import("@rowan-agent/models").LlmTokenUsage;
   }): Promise<{ result: ToolResult; revision: number }> {
     const batch = await this.executeToolBatch({ ...input, toolCalls: [input.toolCall] });
     return { result: batch.results[0]!, revision: batch.revision };
@@ -1518,6 +1526,8 @@ export class AgentRuntime implements AgentRuntimeContract {
     options?: ToolCallOptions;
     providerInitiated?: boolean;
     interactionIds?: readonly string[];
+    model?: import("@rowan-agent/models").ModelRef;
+    usage?: import("@rowan-agent/models").LlmTokenUsage;
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
     const scope = input.run.scope ?? [];
@@ -1607,6 +1617,8 @@ export class AgentRuntime implements AgentRuntimeContract {
           expectedRevision: revision,
           requestMessageId: createId("msg") as MessageId,
           contentBlocks: input.contentBlocks,
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.usage ? { usage: input.usage } : {}),
           calls: input.toolCalls.map((tc, i) => ({
             toolCallId: toolCallIds[i]!,
             providerToolCallId: tc.id,
@@ -1760,6 +1772,8 @@ export class AgentRuntime implements AgentRuntimeContract {
             expectedRevision: revision,
             requestMessageId: createId("msg") as MessageId,
             contentBlocks: input.contentBlocks,
+            ...(input.model ? { model: input.model } : {}),
+            ...(input.usage ? { usage: input.usage } : {}),
             calls: [{
               toolCallId,
               providerToolCallId,
@@ -1870,6 +1884,8 @@ export class AgentRuntime implements AgentRuntimeContract {
                 expectedRevision: revision,
                 requestMessageId: createId("msg") as MessageId,
                 contentBlocks: input.contentBlocks,
+                ...(input.model ? { model: input.model } : {}),
+                ...(input.usage ? { usage: input.usage } : {}),
                 calls: [{
                   toolCallId,
                   providerToolCallId,
@@ -1892,6 +1908,8 @@ export class AgentRuntime implements AgentRuntimeContract {
                 expectedRevision: revision,
                 requestMessageId: createId("msg") as MessageId,
                 contentBlocks: input.contentBlocks,
+                ...(input.model ? { model: input.model } : {}),
+                ...(input.usage ? { usage: input.usage } : {}),
                 calls: [{
                   toolCallId,
                   providerToolCallId,
@@ -1946,6 +1964,8 @@ export class AgentRuntime implements AgentRuntimeContract {
             expectedRevision: revision,
             requestMessageId: createId("msg") as MessageId,
             contentBlocks: input.contentBlocks,
+            ...(input.model ? { model: input.model } : {}),
+            ...(input.usage ? { usage: input.usage } : {}),
             calls: [{
               toolCallId,
               providerToolCallId,
@@ -1996,6 +2016,8 @@ export class AgentRuntime implements AgentRuntimeContract {
             expectedRevision: revision,
             requestMessageId: createId("msg") as MessageId,
             contentBlocks: input.contentBlocks,
+            ...(input.model ? { model: input.model } : {}),
+            ...(input.usage ? { usage: input.usage } : {}),
             calls: [{
               toolCallId,
               providerToolCallId,

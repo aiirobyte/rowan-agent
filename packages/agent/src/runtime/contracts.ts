@@ -1,6 +1,8 @@
 import Type from "typebox";
 import type {
   ContentBlock,
+  LlmTokenUsage,
+  ModelRef,
   ScopeRef,
   ThinkingLevel,
   ToolAnnotations,
@@ -114,6 +116,8 @@ export type {
 } from "../runtime-events";
 
 export type {
+  LlmTokenUsage,
+  ModelRef,
   ScopeRef,
   ToolAnnotations,
   ToolCall,
@@ -438,6 +442,8 @@ export interface OwnedStore {
     locations?: ToolCallLocation[];
     content?: ToolCallContent[];
     _meta?: JsonObject;
+    model?: ModelRef;
+    usage?: LlmTokenUsage;
   }): Promise<ToolCommit>;
   reserveToolCalls(input: {
     runId: RunId;
@@ -447,6 +453,8 @@ export interface OwnedStore {
     calls: readonly ToolCallReservation[];
     /** The model response's blocks, so the request message keeps what preceded the Tool Calls. */
     contentBlocks?: readonly ContentBlock[];
+    model?: ModelRef;
+    usage?: LlmTokenUsage;
   }): Promise<ToolBatchCommit>;
   startToolCall(input: {
     runId: RunId;
@@ -623,12 +631,14 @@ export function normalizeUserInput(input: UserInput): UserInput {
 }
 export function canonicalUserInput(input: UserInput): string { return canonicalJson(normalizeUserInput(input) as never); }
 export function isAssistantMessage(value: unknown): value is AssistantMessage {
-  return isRecord(value) && hasOnlyKeys(value, ["id", "agentId", "runId", "messageRevision", "role", "content", "metadata", "sequenceWithinRun", "createdAt", "interrupted"])
+  return isRecord(value) && hasOnlyKeys(value, ["id", "agentId", "runId", "messageRevision", "role", "content", "metadata", "sequenceWithinRun", "createdAt", "interrupted", "model", "usage"])
     && typeof value.id === "string" && typeof value.agentId === "string" && typeof value.runId === "string" && value.role === "assistant"
     && (value.messageRevision === undefined || (Number.isInteger(value.messageRevision) && (value.messageRevision as number) >= 0))
     && Number.isInteger(value.sequenceWithinRun) && (value.sequenceWithinRun as number) >= 0 && typeof value.createdAt === "string"
     && isAssistantContent(value.content) && (value.metadata === undefined || isMetadata(value.metadata))
-    && (value.interrupted === undefined || typeof value.interrupted === "boolean");
+    && (value.interrupted === undefined || typeof value.interrupted === "boolean")
+    && (value.model === undefined || (isRecord(value.model) && typeof value.model.provider === "string" && typeof value.model.id === "string"))
+    && (value.usage === undefined || isRecord(value.usage));
 }
 function isToolResult(value: unknown): value is ToolExecutionResult {
   if (!isRecord(value)) return false;

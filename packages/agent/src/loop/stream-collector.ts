@@ -86,6 +86,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     output: input.output,
     onThinkingDelta: input.onThinkingDelta,
     onToolCallDelta: input.onToolCallDelta,
+    model: input.request.model,
   });
 
   const response: LlmResponse = result.doneResponse ?? {
@@ -103,6 +104,8 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     contentBlocks: result.contentBlocks,
     toolCalls: result.toolCalls,
     stopReason: result.stopReason,
+    model: result.model ?? input.request.model,
+    usage: result.usage ?? response.usage,
     transcript: {
       request: input.request,
       response,
@@ -126,6 +129,7 @@ async function collectStreamResult(input: {
   output?: "reply" | "internal";
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
+  model?: import("@rowan-agent/models").ModelRef;
 }): Promise<StreamCollectionResult> {
   const persistAssistant = input.output !== "internal";
   let activeMessageId: string | undefined;
@@ -262,7 +266,7 @@ async function collectStreamResult(input: {
       }
 
       if (persistAssistant && activeMessageId) {
-        if (hasContent) await input.message.end(activeMessageId);
+        if (hasContent) await input.message.end(activeMessageId, { model: input.model, usage: event.response?.usage });
         else input.message.discard(activeMessageId);
         activeMessageId = undefined;
       }
@@ -272,14 +276,14 @@ async function collectStreamResult(input: {
   const abortResult = LoopGuard.checkAbort(input.config.signal);
   if (abortResult.stopReason !== "none") {
     if (persistAssistant && activeMessageId) {
-      await input.message.end(activeMessageId);
+      await input.message.end(activeMessageId, { model: input.model });
       activeMessageId = undefined;
     }
-    return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
+    return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted", model: input.model };
   }
 
   if (persistAssistant && activeMessageId) {
-    await input.message.end(activeMessageId);
+    await input.message.end(activeMessageId, { model: input.model, usage: doneResponse?.usage });
   }
 
   // Detect empty responses — model returned no text and no tool calls.
@@ -304,6 +308,8 @@ async function collectStreamResult(input: {
       toolCalls,
       stopReason: doneResponse.stopReason,
       doneResponse,
+      model: input.model,
+      usage: doneResponse.usage,
     };
   }
 
@@ -321,5 +327,5 @@ async function collectStreamResult(input: {
       return { id: b.id, name: b.name, args: parsedArgs };
     });
 
-  return { text, contentBlocks, toolCalls, stopReason };
+  return { text, contentBlocks, toolCalls, stopReason, model: input.model };
 }

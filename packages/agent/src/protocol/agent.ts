@@ -1,4 +1,4 @@
-import type { LlmContentPart } from "@rowan-agent/models";
+import type { LlmContentPart, LlmTokenUsage, ModelRef } from "@rowan-agent/models";
 import type { ContextCandidate } from "../runtime-events";
 
 export type AgentMessage = {
@@ -10,6 +10,8 @@ export type AgentMessage = {
     phase?: string;
   };
   contexts?: readonly ContextCandidate[];
+  model?: ModelRef;
+  usage?: LlmTokenUsage;
 };
 
 export type Skill = {

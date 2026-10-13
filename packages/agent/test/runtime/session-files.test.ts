@@ -21,7 +21,8 @@ async function waitForLines(filePath: string, minLines: number, timeoutMs = 2000
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error(`Timed out waiting for ${minLines} lines in ${filePath}`);
+  const actual = existsSync(filePath) ? readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean) : [];
+  throw new Error(`Timed out waiting for ${minLines} lines in ${filePath}. Actual lines (${actual.length}):\n${actual.join("\n")}`);
 }
 
 test("AgentRuntime writes pi-format session file and passes sessionId to model", async () => {
@@ -49,13 +50,39 @@ test("AgentRuntime writes pi-format session file and passes sessionId to model",
       yield { type: "tool_call_start", id, name: tool.name, partial };
       yield { type: "tool_call_delta", id, arguments: args, partial };
       yield { type: "tool_call_end", id, name: tool.name, arguments: args, partial };
-      yield { type: "done" };
+      yield {
+        type: "done",
+        response: {
+          content: "",
+          toolCalls: [{ id, name: tool.name, arguments: { query: "pi" } }],
+          stopReason: "tool_use",
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 2,
+            cacheWriteTokens: 1,
+            totalTokens: 18,
+          },
+        },
+      };
       return;
     }
 
     const text = "lookup complete";
     yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
-    yield { type: "done", response: stopResponse(text) };
+    yield {
+      type: "done",
+      response: {
+        ...stopResponse(text),
+        usage: {
+          inputTokens: 20,
+          outputTokens: 15,
+          cacheReadTokens: 4,
+          cacheWriteTokens: 2,
+          totalTokens: 41,
+        },
+      },
+    };
   };
 
   const store = new InMemoryStore();
@@ -85,8 +112,8 @@ test("AgentRuntime writes pi-format session file and passes sessionId to model",
     const fileTimestamp = agentCreatedAt.replace(/[:.]/g, "-");
     const expectedFile = join(expectedDir, `${fileTimestamp}_${agentId}.jsonl`);
 
-    const lines = await waitForLines(expectedFile, 5);
-    expect(lines.length).toBe(5);
+    const lines = await waitForLines(expectedFile, 6);
+    expect(lines.length).toBe(6);
 
     // Header line
     const header = JSON.parse(lines[0]);
@@ -112,15 +139,37 @@ test("AgentRuntime writes pi-format session file and passes sessionId to model",
       },
     });
 
+    // Model change entry preceding the first assistant entry
+    const modelChangeEntry = JSON.parse(lines[2]);
+    const modelChangeId = modelChangeEntry.id;
+    expect(modelChangeEntry).toMatchObject({
+      type: "model_change",
+      parentId: userEntry.id,
+      timestamp: expect.any(String),
+      provider: "test",
+      modelId: "model",
+    });
+
     // Assistant toolCall entry
-    const assistantEntry = JSON.parse(lines[2]);
+    const assistantEntry = JSON.parse(lines[3]);
+    const assistantId = assistantEntry.id;
     expect(assistantEntry).toMatchObject({
       type: "message",
       id: expect.any(String),
-      parentId: userEntry.id,
+      parentId: modelChangeEntry.id,
       timestamp: expect.any(String),
       message: {
         role: "assistant",
+        provider: "test",
+        model: "model",
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 2,
+          cacheWrite: 1,
+          totalTokens: 18,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
         content: [{
           type: "toolCall",
           id: "call_lookup",
@@ -131,9 +180,10 @@ test("AgentRuntime writes pi-format session file and passes sessionId to model",
         timestamp: expect.any(Number),
       },
     });
+    expect(modelChangeId).toBe(`${assistantId}:model`);
 
     // Tool result entry
-    const toolEntry = JSON.parse(lines[3]);
+    const toolEntry = JSON.parse(lines[4]);
     expect(toolEntry.id).toMatch(/:0$/);
     expect(toolEntry).toMatchObject({
       type: "message",
@@ -149,8 +199,8 @@ test("AgentRuntime writes pi-format session file and passes sessionId to model",
       },
     });
 
-    // Assistant final answer entry
-    const finalEntry = JSON.parse(lines[4]);
+    // Assistant final answer entry (no model_change precedes it since model is unchanged)
+    const finalEntry = JSON.parse(lines[5]);
     expect(finalEntry).toMatchObject({
       type: "message",
       id: expect.any(String),
@@ -158,11 +208,30 @@ test("AgentRuntime writes pi-format session file and passes sessionId to model",
       timestamp: expect.any(String),
       message: {
         role: "assistant",
+        provider: "test",
+        model: "model",
+        usage: {
+          input: 20,
+          output: 15,
+          cacheRead: 4,
+          cacheWrite: 2,
+          totalTokens: 41,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
         content: [{ type: "text", text: "lookup complete" }],
         stopReason: "stop",
         timestamp: expect.any(Number),
       },
     });
+
+    // Durable-level assertion that runtime.history assistant messages carry model and usage
+    const history = await runtime.history(agentId);
+    const assistantMessages = history.filter((m): m is import("../../src/runtime-events").AssistantMessage => m.role === "assistant");
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages[0].model).toEqual({ provider: "test", id: "model" });
+    expect(assistantMessages[0].usage).toMatchObject({ inputTokens: 10, outputTokens: 5, totalTokens: 18 });
+    expect(assistantMessages[1].model).toEqual({ provider: "test", id: "model" });
+    expect(assistantMessages[1].usage).toMatchObject({ inputTokens: 20, outputTokens: 15, totalTokens: 41 });
   } finally {
     await runtime.close();
     await rm(tempDir, { recursive: true, force: true });
@@ -260,8 +329,8 @@ test("at-least-once safety skips existing entries on restart and handles message
     const fileTimestamp = agent.createdAt.replace(/[:.]/g, "-");
     expectedFile = join(expectedDir, `${fileTimestamp}_${agentId}.jsonl`);
 
-    const lines = await waitForLines(expectedFile, 3);
-    expect(lines.length).toBe(3);
+    const lines = await waitForLines(expectedFile, 4);
+    expect(lines.length).toBe(4);
   } finally {
     await runtime.close();
   }
@@ -277,7 +346,7 @@ test("at-least-once safety skips existing entries on restart and handles message
     // Redelivery / restart should not duplicate lines
     await new Promise((resolve) => setTimeout(resolve, 80));
     let lines = readFileSync(expectedFile, "utf8").trim().split("\n").filter(Boolean);
-    expect(lines.length).toBe(3);
+    expect(lines.length).toBe(4);
 
     // Now revise the original user message
     const history = await runtime.history(agentId);
@@ -291,9 +360,9 @@ test("at-least-once safety skips existing entries on restart and handles message
       operationId: "op-1",
     });
 
-    lines = await waitForLines(expectedFile, 4);
-    expect(lines.length).toBe(4);
-    const revisedEntry = JSON.parse(lines[3]);
+    lines = await waitForLines(expectedFile, 5);
+    expect(lines.length).toBe(5);
+    const revisedEntry = JSON.parse(lines[4]);
     const originalEntry = JSON.parse(lines[1]);
     expect(revisedEntry.id).toBe(`${userEntryId(originalEntry.id)}@1`);
     expect(revisedEntry.parentId).toBe(originalEntry.parentId); // branches from original parent

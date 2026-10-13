@@ -1,6 +1,6 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
-import type { ContentBlock } from "@rowan-agent/models";
+import { calculateCost, getModel, type ContentBlock } from "@rowan-agent/models";
 import type {
   AgentId,
   AgentRuntime,
@@ -22,6 +22,7 @@ interface AgentSessionState {
   lastEntryId: string | null;
   entryIdToParentId: Map<string, string | null>;
   toolCallIdToName: Map<string, string>;
+  lastModel?: { provider: string; modelId: string };
 }
 
 export interface PiSessionHeader {
@@ -30,6 +31,15 @@ export interface PiSessionHeader {
   id: string;
   timestamp: string;
   cwd: string;
+}
+
+export interface PiSessionModelChangeEntry {
+  type: "model_change";
+  id: string;
+  parentId: string | null;
+  timestamp: string;
+  provider: string;
+  modelId: string;
 }
 
 export interface PiSessionMessageEntry {
@@ -42,6 +52,8 @@ export interface PiSessionMessageEntry {
     [key: string]: unknown;
   };
 }
+
+export type PiSessionEntry = PiSessionMessageEntry | PiSessionModelChangeEntry;
 
 function toEpochMs(isoString?: string): number {
   if (!isoString) return Date.now();
@@ -178,7 +190,7 @@ async function getFirstRunCwd(runtime: AgentRuntime, agentId: AgentId): Promise<
   return "";
 }
 
-function writeSessionEntry(state: AgentSessionState, entry: PiSessionMessageEntry): void {
+function writeSessionEntry(state: AgentSessionState, entry: PiSessionEntry): void {
   appendFileSync(state.filePath, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
   try {
     chmodSync(state.filePath, 0o600);
@@ -212,6 +224,7 @@ export function createSessionFilesWriter(
 
     const knownEntryIds = new Set<string>();
     let lastEntryId: string | null = null;
+    let lastModel: { provider: string; modelId: string } | undefined;
     const entryIdToParentId = new Map<string, string | null>();
     const toolCallIdToName = new Map<string, string>();
 
@@ -250,6 +263,9 @@ export function createSessionFilesWriter(
             entryIdToParentId.set(parsed.id, parsed.parentId ?? null);
             lastEntryId = parsed.id;
           }
+          if (parsed.type === "model_change" && typeof parsed.provider === "string" && typeof parsed.modelId === "string") {
+            lastModel = { provider: parsed.provider, modelId: parsed.modelId };
+          }
           if (parsed.type === "message" && parsed.message?.role === "assistant" && Array.isArray(parsed.message.content)) {
             for (const part of parsed.message.content) {
               if (part && part.type === "toolCall" && typeof part.id === "string" && typeof part.name === "string") {
@@ -271,6 +287,7 @@ export function createSessionFilesWriter(
       lastEntryId,
       entryIdToParentId,
       toolCallIdToName,
+      ...(lastModel ? { lastModel } : {}),
     };
     agentStates.set(agentId, state);
     return state;
@@ -308,6 +325,32 @@ export function createSessionFilesWriter(
           writeSessionEntry(state, entry);
         } else if (event.message.role === "assistant") {
           if (state.knownEntryIds.has(event.message.id)) return;
+
+          const model = event.message.model;
+          const rawUsage = event.message.usage;
+
+          if (model) {
+            const isDifferentModel = !state.lastModel
+              || state.lastModel.provider !== model.provider
+              || state.lastModel.modelId !== model.id;
+
+            if (isDifferentModel) {
+              const modelChangeId = `${event.message.id}:model`;
+              if (!state.knownEntryIds.has(modelChangeId)) {
+                const modelChangeEntry: PiSessionModelChangeEntry = {
+                  type: "model_change",
+                  id: modelChangeId,
+                  parentId: state.lastEntryId,
+                  timestamp: event.message.createdAt,
+                  provider: model.provider,
+                  modelId: model.id,
+                };
+                writeSessionEntry(state, modelChangeEntry);
+              }
+              state.lastModel = { provider: model.provider, modelId: model.id };
+            }
+          }
+
           const { parts, hasToolCall } = convertAssistantContent(
             event.message.content,
             (id, name, internalId) => {
@@ -315,17 +358,66 @@ export function createSessionFilesWriter(
               if (internalId) state.toolCallIdToName.set(internalId, name);
             },
           );
+
+          const assistantMessagePayload: Record<string, unknown> = {
+            role: "assistant",
+            content: parts,
+            stopReason: hasToolCall ? "toolUse" : "stop",
+            timestamp: toEpochMs(event.message.createdAt),
+          };
+
+          if (model || rawUsage) {
+            let modelDef: import("@rowan-agent/models").Model | undefined;
+            if (model) {
+              try {
+                modelDef = getModel(model.provider, model.id);
+              } catch {
+                // Ignore lookup failure
+              }
+              assistantMessagePayload.provider = model.provider;
+              assistantMessagePayload.model = model.id;
+              if (modelDef?.protocol) {
+                assistantMessagePayload.api = modelDef.protocol;
+              }
+            }
+
+            const input = rawUsage?.inputTokens ?? 0;
+            const output = rawUsage?.outputTokens ?? 0;
+            const cacheRead = rawUsage?.cacheReadTokens ?? 0;
+            const cacheWrite = rawUsage?.cacheWriteTokens ?? 0;
+            const totalTokens = rawUsage?.totalTokens ?? (input + output + cacheRead + cacheWrite);
+
+            let cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+            if (modelDef) {
+              try {
+                cost = calculateCost(modelDef, {
+                  inputTokens: input,
+                  outputTokens: output,
+                  cacheReadTokens: cacheRead,
+                  cacheWriteTokens: cacheWrite,
+                  totalTokens,
+                });
+              } catch {
+                // Ignore calculation failure
+              }
+            }
+
+            assistantMessagePayload.usage = {
+              input,
+              output,
+              cacheRead,
+              cacheWrite,
+              totalTokens,
+              cost,
+            };
+          }
+
           const entry: PiSessionMessageEntry = {
             type: "message",
             id: event.message.id,
             parentId: state.lastEntryId,
             timestamp: event.message.createdAt,
-            message: {
-              role: "assistant",
-              content: parts,
-              stopReason: hasToolCall ? "toolUse" : "stop",
-              timestamp: toEpochMs(event.message.createdAt),
-            },
+            message: assistantMessagePayload as PiSessionMessageEntry["message"],
           };
           writeSessionEntry(state, entry);
         } else if (event.message.role === "tool") {
