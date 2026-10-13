@@ -299,47 +299,6 @@ function buildToolsWithRouting(
   return tools;
 }
 
-function addUsage(
-  a?: import("@rowan-agent/models").LlmTokenUsage,
-  b?: import("@rowan-agent/models").LlmTokenUsage,
-): import("@rowan-agent/models").LlmTokenUsage | undefined {
-  if (!a && !b) return undefined;
-  if (!a) return b ? { ...b } : undefined;
-  if (!b) return a ? { ...a } : undefined;
-  const inputTokens = (a.inputTokens ?? 0) + (b.inputTokens ?? 0);
-  const outputTokens = (a.outputTokens ?? 0) + (b.outputTokens ?? 0);
-  const cacheReadTokens = (a.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0);
-  const cacheWriteTokens = (a.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0);
-  const cacheWrite1hTokens = (a.cacheWrite1hTokens ?? 0) + (b.cacheWrite1hTokens ?? 0);
-  const reasoningTokens = (a.reasoningTokens ?? 0) + (b.reasoningTokens ?? 0);
-  const totalA = a.totalTokens ?? ((a.inputTokens ?? 0) + (a.outputTokens ?? 0) + (a.cacheReadTokens ?? 0) + (a.cacheWriteTokens ?? 0));
-  const totalB = b.totalTokens ?? ((b.inputTokens ?? 0) + (b.outputTokens ?? 0) + (b.cacheReadTokens ?? 0) + (b.cacheWriteTokens ?? 0));
-  let cost: import("@rowan-agent/models").LlmTokenUsage["cost"];
-  if (a.cost || b.cost) {
-    const costInput = (a.cost?.input ?? 0) + (b.cost?.input ?? 0);
-    const costOutput = (a.cost?.output ?? 0) + (b.cost?.output ?? 0);
-    const costCacheRead = (a.cost?.cacheRead ?? 0) + (b.cost?.cacheRead ?? 0);
-    const costCacheWrite = (a.cost?.cacheWrite ?? 0) + (b.cost?.cacheWrite ?? 0);
-    cost = {
-      input: costInput,
-      output: costOutput,
-      cacheRead: costCacheRead,
-      cacheWrite: costCacheWrite,
-      total: costInput + costOutput + costCacheRead + costCacheWrite,
-    };
-  }
-  return {
-    inputTokens,
-    outputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    ...(cacheWrite1hTokens > 0 ? { cacheWrite1hTokens } : {}),
-    ...(reasoningTokens > 0 ? { reasoningTokens } : {}),
-    totalTokens: totalA + totalB,
-    ...(cost ? { cost } : {}),
-  };
-}
-
 function createMessageManager(
   context: AgentContext,
   onMessage?: (message: AgentMessage) => Promise<void>,
@@ -391,7 +350,7 @@ function createMessageManager(
         active.message.model = meta.model;
       }
       if (meta?.usage) {
-        active.message.usage = addUsage(active.message.usage, meta.usage);
+        active.message.usage = meta.usage;
       }
       if (!active.emitted && (active.message.content === "" || active.message.content.length === 0)) {
         activeMessages.delete(messageId);

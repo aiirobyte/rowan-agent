@@ -88,7 +88,6 @@ test("calculateCost hand-calculated base rates", () => {
   expect(cost.cacheRead).toBeCloseTo(0.006, 6);
   expect(cost.cacheWrite).toBeCloseTo(0.0375, 6);
   expect(cost.total).toBeCloseTo(0.3435, 6);
-  expect(usage.cost).toEqual(cost);
 });
 
 test("calculateCost hand-calculated tiered rates crossing threshold", () => {

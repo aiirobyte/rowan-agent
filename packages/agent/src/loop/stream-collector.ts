@@ -104,8 +104,8 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
     contentBlocks: result.contentBlocks,
     toolCalls: result.toolCalls,
     stopReason: result.stopReason,
-    model: result.model ?? input.request.model,
-    usage: result.usage ?? response.usage,
+    model: input.request.model,
+    usage: response.usage,
     transcript: {
       request: input.request,
       response,
@@ -279,7 +279,7 @@ async function collectStreamResult(input: {
       await input.message.end(activeMessageId, { model: input.model });
       activeMessageId = undefined;
     }
-    return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted", model: input.model };
+    return { text: abortResult.message, contentBlocks: [], toolCalls: [], stopReason: "aborted" };
   }
 
   if (persistAssistant && activeMessageId) {
@@ -308,8 +308,6 @@ async function collectStreamResult(input: {
       toolCalls,
       stopReason: doneResponse.stopReason,
       doneResponse,
-      model: input.model,
-      usage: doneResponse.usage,
     };
   }
 
@@ -327,5 +325,5 @@ async function collectStreamResult(input: {
       return { id: b.id, name: b.name, args: parsedArgs };
     });
 
-  return { text, contentBlocks, toolCalls, stopReason, model: input.model };
+  return { text, contentBlocks, toolCalls, stopReason };
 }

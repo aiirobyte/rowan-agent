@@ -16,8 +16,6 @@ export type SessionFilesOptions = Readonly<{ dir: string }>;
 
 interface AgentSessionState {
   filePath: string;
-  cwd: string;
-  createdAt: string;
   knownEntryIds: Set<string>;
   lastEntryId: string | null;
   entryIdToParentId: Map<string, string | null>;
@@ -95,18 +93,10 @@ function convertToolResultContent(content: unknown): Array<{ type: "text"; text:
 }
 
 function convertUserContent(content: UserContent): string | Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content.map((part) => {
-      if (part.type === "image") {
-        return { type: "image", data: part.data, mimeType: part.mimeType };
-      }
-      return { type: "text", text: part.text };
-    });
-  }
-  return String(content);
+  if (typeof content === "string") return content;
+  return content.map((part) =>
+    part.type === "image" ? { type: "image", data: part.data, mimeType: part.mimeType } : { type: "text", text: part.text },
+  );
 }
 
 function convertAssistantContent(
@@ -202,10 +192,10 @@ function writeSessionEntry(state: AgentSessionState, entry: PiSessionEntry): voi
   state.lastEntryId = entry.id;
 }
 
-export function createSessionFilesWriter(
+export async function startSessionFilesConsumer(
   runtime: AgentRuntime,
   options: SessionFilesOptions,
-) {
+): Promise<DurableConsumer> {
   const agentStates = new Map<AgentId, AgentSessionState>();
 
   async function getOrInitState(agentId: AgentId): Promise<AgentSessionState> {
@@ -233,15 +223,7 @@ export function createSessionFilesWriter(
       appendFileSync(filePath, `${JSON.stringify(header)}\n`, { encoding: "utf8", mode: 0o600 });
     };
 
-    const agentDir = dirname(filePath);
-    if (!existsSync(agentDir)) {
-      mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-      try {
-        chmodSync(agentDir, 0o700);
-      } catch {
-        // Ignore chmod failure
-      }
-    }
+    mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
 
     if (existsSync(filePath)) {
       const content = readFileSync(filePath, "utf8");
@@ -281,8 +263,6 @@ export function createSessionFilesWriter(
 
     state = {
       filePath,
-      cwd,
-      createdAt,
       knownEntryIds,
       lastEntryId,
       entryIdToParentId,
@@ -293,10 +273,7 @@ export function createSessionFilesWriter(
     return state;
   }
 
-  async function onEvent(
-    event: DurableRunEvent,
-    _context?: Readonly<{ signal: AbortSignal }>,
-  ): Promise<void> {
+  async function onEvent(event: DurableRunEvent): Promise<void> {
     try {
       if (event.kind !== "message_committed" && event.kind !== "message_revised") {
         return;
@@ -409,7 +386,6 @@ export function createSessionFilesWriter(
             const toolCallId = part.providerToolCallId ?? part.toolCallId;
             const toolName = state.toolCallIdToName.get(toolCallId)
               ?? state.toolCallIdToName.get(part.toolCallId)
-              ?? (part.providerToolCallId ? state.toolCallIdToName.get(part.providerToolCallId) : undefined)
               ?? "unknown";
 
             const isError = Boolean(
@@ -464,18 +440,6 @@ export function createSessionFilesWriter(
     }
   }
 
-  return { onEvent };
-}
-
-export async function startSessionFilesConsumer(
-  runtime: AgentRuntime,
-  options: SessionFilesOptions,
-): Promise<DurableConsumer> {
-  const writer = createSessionFilesWriter(runtime, options);
-  const controller = new AbortController();
-  return runtime.consume({
-    consumerId: "rowan:session-files",
-    signal: controller.signal,
-    onEvent: (event, context) => writer.onEvent(event, context),
-  });
+  // The runtime aborts its consumers on close; this signal is never aborted on its own.
+  return runtime.consume({ consumerId: "rowan:session-files", signal: new AbortController().signal, onEvent });
 }
