@@ -1,6 +1,6 @@
-export { ProviderError } from "./shared";
+export { ProviderError, normalizeUsage } from "./shared";
 export { resolveBaseProviderConfig } from "./shared";
-export type { ProviderFetch, BaseProviderConfig, BaseProviderConfigInput } from "./shared";
+export type { ProviderFetch, BaseProviderConfig, BaseProviderConfigInput, RawUsage } from "./shared";
 export { executeProviderRequest, streamProviderRequest } from "./http";
 export type {
   ProviderRequestSpec,

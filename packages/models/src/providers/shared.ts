@@ -1,4 +1,4 @@
-import type { LlmRequest, LlmModelUsage, LlmTokenUsage, ThinkingLevel } from "../protocol";
+import type { LlmRequest, LlmModelUsage, LlmTokenUsage, ThinkingLevel, ModelCost } from "../protocol";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -104,20 +104,65 @@ export type RawUsage = {
   total_tokens?: number;
   input_tokens?: number;
   output_tokens?: number;
-  prompt_tokens_details?: { cached_tokens?: number } | null;
-  input_tokens_details?: { cached_tokens?: number } | null;
+  cached_tokens?: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+  } | null;
+  input_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+  } | null;
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+  } | null;
+  output_tokens_details?: {
+    reasoning_tokens?: number;
+  } | null;
 };
 
 export function normalizeUsage(usage: RawUsage | undefined): LlmTokenUsage | undefined {
   if (!usage) return undefined;
 
-  const inputTokens = asNumber(usage.prompt_tokens) ?? asNumber(usage.input_tokens);
-  const outputTokens = asNumber(usage.completion_tokens) ?? asNumber(usage.output_tokens);
-  const totalTokens = asNumber(usage.total_tokens);
-  const cacheReadTokens = asNumber(usage.prompt_tokens_details?.cached_tokens)
-    ?? asNumber(usage.input_tokens_details?.cached_tokens);
+  const rawInput = asNumber(usage.prompt_tokens) ?? asNumber(usage.input_tokens);
+  const rawOutput = asNumber(usage.completion_tokens) ?? asNumber(usage.output_tokens);
 
-  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+  const cacheReadTokens = asNumber(
+    usage.prompt_tokens_details?.cached_tokens
+      ?? usage.input_tokens_details?.cached_tokens
+      ?? usage.prompt_cache_hit_tokens
+      ?? usage.cached_tokens,
+  ) ?? 0;
+
+  const cacheWriteTokens = asNumber(
+    usage.prompt_tokens_details?.cache_write_tokens
+      ?? usage.input_tokens_details?.cache_write_tokens,
+  ) ?? 0;
+
+  const reasoningTokens = asNumber(
+    usage.completion_tokens_details?.reasoning_tokens
+      ?? usage.output_tokens_details?.reasoning_tokens,
+  );
+
+  const inputTokens = rawInput !== undefined
+    ? Math.max(0, rawInput - cacheReadTokens - cacheWriteTokens)
+    : undefined;
+  const outputTokens = rawOutput;
+
+  const totalTokens = asNumber(usage.total_tokens)
+    ?? (inputTokens !== undefined || outputTokens !== undefined || cacheReadTokens > 0 || cacheWriteTokens > 0
+      ? (inputTokens ?? 0) + (outputTokens ?? 0) + cacheReadTokens + cacheWriteTokens
+      : undefined);
+
+  if (
+    inputTokens === undefined
+    && outputTokens === undefined
+    && totalTokens === undefined
+    && cacheReadTokens === 0
+    && cacheWriteTokens === 0
+    && reasoningTokens === undefined
+  ) {
     return undefined;
   }
 
@@ -126,6 +171,8 @@ export function normalizeUsage(usage: RawUsage | undefined): LlmTokenUsage | und
     ...(outputTokens !== undefined ? { outputTokens } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
   };
 }
 
@@ -152,6 +199,7 @@ export type BaseProviderConfig = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  cost?: ModelCost;
   temperature?: number;
   maxTokens?: number;
   thinkingLevel?: ThinkingLevel;
@@ -178,6 +226,7 @@ export function resolveBaseProviderConfig(
       "model.apiKey is required (set apiKey in config.yaml or pass --api-key)",
     ),
     model: requireValue("model", input.model, "model.id is required"),
+    ...(input.cost !== undefined ? { cost: input.cost } : {}),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
     ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}),

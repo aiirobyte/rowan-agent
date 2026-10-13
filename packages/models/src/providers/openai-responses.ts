@@ -12,8 +12,10 @@ import type {
   AssistantMessagePartial,
   ThinkingLevel,
   ToolCallBlock,
+  Model,
 } from "../protocol";
-import { createProviderCallContext } from "../protocol";
+import { createProviderCallContext, ZERO_COST } from "../protocol";
+import { calculateCost } from "../models";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
 import {
@@ -258,9 +260,21 @@ async function* streamResponses(
   config: OpenAIResponsesConfig,
   request: LlmRequest,
   ctx?: ProviderCallContext,
+  model?: Model,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/responses`;
+  const concreteModel: Model = model ?? {
+    id: config.model,
+    provider: (config as any).provider ?? "openai",
+    protocol: "openai-responses",
+    baseUrl: config.baseUrl,
+    reasoning: false,
+    input: ["text", "image"],
+    cost: config.cost ?? ZERO_COST,
+    contextWindow: 128_000,
+    maxTokens: 4096,
+  };
 
   yield* streamProviderRequest({
     config,
@@ -514,6 +528,10 @@ async function* streamResponses(
 
       const projected = contentBlocksResponse(accumulator.snapshot());
 
+      if (usage) {
+        usage.cost = calculateCost(concreteModel, usage);
+      }
+
       yield {
         type: "done",
         response: {
@@ -553,6 +571,7 @@ export const streamOpenAIResponses: ProviderStreamFn = (model, request, ctx) => 
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,
     headers: model.headers,
+    cost: model.cost,
   });
-  return streamResponses(config, request, ctx);
+  return streamResponses(config, request, ctx, model);
 };

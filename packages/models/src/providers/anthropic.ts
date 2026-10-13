@@ -12,8 +12,10 @@ import type {
   StreamFn,
   AssistantMessagePartial,
   ThinkingLevel,
+  Model,
 } from "../protocol";
-import { createProviderCallContext } from "../protocol";
+import { createProviderCallContext, ZERO_COST } from "../protocol";
+import { calculateCost } from "../models";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
 import {
@@ -246,6 +248,7 @@ type AnthropicUsage = {
   output_tokens?: number;
   cache_read_input_tokens?: number | null;
   cache_creation_input_tokens?: number | null;
+  cache_creation?: { ephemeral_1h_input_tokens?: number | null } | null;
 };
 
 type AnthropicStreamEvent =
@@ -273,9 +276,21 @@ async function* streamAnthropicMessages(
   config: AnthropicConfig,
   request: LlmRequest,
   ctx?: ProviderCallContext,
+  model?: Model,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/v1/messages`;
+  const concreteModel: Model = model ?? {
+    id: config.model,
+    provider: "anthropic",
+    protocol: "anthropic-messages",
+    baseUrl: config.baseUrl,
+    reasoning: false,
+    input: ["text", "image"],
+    cost: (config as any).cost ?? ZERO_COST,
+    contextWindow: 200_000,
+    maxTokens: 4096,
+  };
 
   yield* streamProviderRequest({
     config,
@@ -313,6 +328,9 @@ async function* streamAnthropicMessages(
         if (next.output_tokens != null) usage.outputTokens = next.output_tokens;
         if (next.cache_read_input_tokens != null) usage.cacheReadTokens = next.cache_read_input_tokens;
         if (next.cache_creation_input_tokens != null) usage.cacheWriteTokens = next.cache_creation_input_tokens;
+        if (next.cache_creation?.ephemeral_1h_input_tokens != null) {
+          usage.cacheWrite1hTokens = next.cache_creation.ephemeral_1h_input_tokens;
+        }
       };
 
       // Anthropic emits thinking before any text/tool block. Start the
@@ -389,7 +407,11 @@ async function* streamAnthropicMessages(
         }
       }
 
-      usage.totalTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+      usage.totalTokens = (usage.inputTokens ?? 0)
+        + (usage.outputTokens ?? 0)
+        + (usage.cacheReadTokens ?? 0)
+        + (usage.cacheWriteTokens ?? 0);
+      usage.cost = calculateCost(concreteModel, usage);
 
       yield {
         type: "done",
@@ -430,6 +452,7 @@ export const streamAnthropic: ProviderStreamFn = (model, request, ctx) => {
     maxRetries: model.maxRetries,
     retryDelayMs: model.retryDelayMs,
     headers: model.headers,
+    cost: model.cost,
   });
-  return streamAnthropicMessages(config, request, ctx);
+  return streamAnthropicMessages(config, request, ctx, model);
 };

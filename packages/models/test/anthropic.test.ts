@@ -122,10 +122,15 @@ test("Anthropic preserves successful stream events", async () => {
 
   expect(events.map((event) => event.type)).toEqual(["model_requested", "start", "text_delta", "done"]);
   const done = events.find((event) => event.type === "done");
-  expect(done?.type === "done" ? done.response : undefined).toEqual({
+  expect(done?.type === "done" && done.response).toEqual({
     content: "hello",
     stopReason: "end_turn",
-    usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
+    usage: {
+      inputTokens: 2,
+      outputTokens: 1,
+      totalTokens: 3,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
   });
 });
 
@@ -370,7 +375,13 @@ test("Anthropic captures thinking signatures in order and replays only its own",
     { type: "thinking", thinking: "", signature: "anthropic-redacted:enc" },
     { type: "tool_call", id: "t1", name: "read", args: "{\"path\":\"a\"}" },
   ]);
-  expect(done?.type === "done" && done.response?.usage).toEqual({ inputTokens: 5, outputTokens: 9, cacheReadTokens: 3, totalTokens: 14 });
+  expect(done?.type === "done" && done.response?.usage).toEqual({
+    inputTokens: 5,
+    outputTokens: 9,
+    cacheReadTokens: 3,
+    totalTokens: 17,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
 
   await collect(stream({
     model: { provider: "anthropic", id: "claude-opus-5" },
@@ -392,3 +403,78 @@ test("Anthropic captures thinking signatures in order and replays only its own",
     { type: "tool_use", id: "t1", name: "read", input: { path: "a" } },
   ]);
 });
+
+test("Anthropic computes cost from configured non-zero model cost", async () => {
+  const stream = createAnthropicStream({
+    baseUrl: "https://api.example",
+    apiKey: "test-key",
+    model: "claude-test",
+    maxRetries: 0,
+    cost: {
+      input: 3.0,
+      output: 15.0,
+      cacheRead: 0.3,
+      cacheWrite: 3.75,
+    },
+    fetch: async () => anthropicSseResponse([
+      {
+        event: "message_start",
+        data: {
+          type: "message_start",
+          message: {
+            id: "msg_1",
+            usage: {
+              input_tokens: 10_000,
+              output_tokens: 0,
+              cache_read_input_tokens: 20_000,
+              cache_creation_input_tokens: 10_000,
+            },
+          },
+        },
+      },
+      {
+        event: "content_block_start",
+        data: { type: "content_block_start", index: 0, content_block: { type: "text" } },
+      },
+      {
+        event: "content_block_delta",
+        data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+      },
+      {
+        event: "content_block_stop",
+        data: { type: "content_block_stop", index: 0 },
+      },
+      {
+        event: "message_delta",
+        data: {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 5_000 },
+        },
+      },
+      { event: "message_stop", data: { type: "message_stop" } },
+    ]),
+  });
+
+  const events = await collect(stream(
+    { model: { provider: "anthropic", id: "claude-test" }, messages: [{ role: "user", content: "hello" }] },
+    {},
+  ));
+  const done = events.find((event) => event.type === "done");
+  expect(done?.type === "done").toBe(true);
+  if (done?.type === "done") {
+    expect(done.response?.usage).toMatchObject({
+      inputTokens: 10_000,
+      outputTokens: 5_000,
+      cacheReadTokens: 20_000,
+      cacheWriteTokens: 10_000,
+      totalTokens: 45_000,
+    });
+    expect(done.response?.usage?.cost?.input).toBeCloseTo(0.03, 6);
+    expect(done.response?.usage?.cost?.output).toBeCloseTo(0.075, 6);
+    expect(done.response?.usage?.cost?.cacheRead).toBeCloseTo(0.006, 6);
+    expect(done.response?.usage?.cost?.cacheWrite).toBeCloseTo(0.0375, 6);
+    expect(done.response?.usage?.cost?.total).toBeCloseTo(0.1485, 6);
+  }
+});
+

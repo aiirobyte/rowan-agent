@@ -1275,5 +1275,53 @@ test("createOpenAICompletionsStream sends the current Chat Completions request f
   expect(bodies[0]?.max_tokens).toBeUndefined();
   expect(bodies[0]?.reasoning_effort).toBe("xhigh");
   expect(bodies[0]?.tool_choice).toEqual({ type: "function", function: { name: "read" } });
-  expect(done?.type === "done" && done.response?.usage).toEqual({ inputTokens: 10, outputTokens: 2, totalTokens: 12, cacheReadTokens: 8 });
+  expect(done?.type === "done" && done.response?.usage).toEqual({
+    inputTokens: 2,
+    outputTokens: 2,
+    totalTokens: 12,
+    cacheReadTokens: 8,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
 });
+
+test("createOpenAICompletionsStream computes cost from configured non-zero model cost", async () => {
+  const stream = createOpenAICompletionsStream({
+    baseUrl: "https://api.example/v1",
+    apiKey: "test-key",
+    model: "test-model",
+    maxRetries: 0,
+    cost: {
+      input: 10,
+      output: 20,
+      cacheRead: 2,
+      cacheWrite: 5,
+    },
+    fetch: async () => {
+      return sseResponse([
+        { data: { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }] } },
+        { data: { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, prompt_tokens_details: { cached_tokens: 8 } } } },
+      ]);
+    },
+  });
+
+  const events = await collect(stream({
+    model: { provider: "test", id: "test-model" },
+    messages: [{ role: "user", content: "hello" }],
+  }, {}));
+  const done = events.find((event) => event.type === "done");
+
+  expect(done?.type === "done" && done.response?.usage).toEqual({
+    inputTokens: 2,
+    outputTokens: 2,
+    totalTokens: 12,
+    cacheReadTokens: 8,
+    cost: {
+      input: 0.00002,
+      output: 0.00004,
+      cacheRead: 0.000016,
+      cacheWrite: 0,
+      total: 0.000076,
+    },
+  });
+});
+

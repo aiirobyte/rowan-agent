@@ -1,6 +1,6 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
-import { calculateCost, getModel, type ContentBlock } from "@rowan-agent/models";
+import type { ContentBlock } from "@rowan-agent/models";
 import type {
   AgentId,
   AgentRuntime,
@@ -367,18 +367,9 @@ export function createSessionFilesWriter(
           };
 
           if (model || rawUsage) {
-            let modelDef: import("@rowan-agent/models").Model | undefined;
             if (model) {
-              try {
-                modelDef = getModel(model.provider, model.id);
-              } catch {
-                // Ignore lookup failure
-              }
               assistantMessagePayload.provider = model.provider;
               assistantMessagePayload.model = model.id;
-              if (modelDef?.protocol) {
-                assistantMessagePayload.api = modelDef.protocol;
-              }
             }
 
             const input = rawUsage?.inputTokens ?? 0;
@@ -387,26 +378,15 @@ export function createSessionFilesWriter(
             const cacheWrite = rawUsage?.cacheWriteTokens ?? 0;
             const totalTokens = rawUsage?.totalTokens ?? (input + output + cacheRead + cacheWrite);
 
-            let cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-            if (modelDef) {
-              try {
-                cost = calculateCost(modelDef, {
-                  inputTokens: input,
-                  outputTokens: output,
-                  cacheReadTokens: cacheRead,
-                  cacheWriteTokens: cacheWrite,
-                  totalTokens,
-                });
-              } catch {
-                // Ignore calculation failure
-              }
-            }
+            const cost = rawUsage?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
             assistantMessagePayload.usage = {
               input,
               output,
               cacheRead,
               cacheWrite,
+              ...(rawUsage?.cacheWrite1hTokens !== undefined ? { cacheWrite1h: rawUsage.cacheWrite1hTokens } : {}),
+              ...(rawUsage?.reasoningTokens !== undefined ? { reasoning: rawUsage.reasoningTokens } : {}),
               totalTokens,
               cost,
             };
