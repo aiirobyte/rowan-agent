@@ -104,6 +104,7 @@ export type StoredToolCall = {
   rawOutput?: import("../runtime-events").JsonValue;
   _meta?: import("../runtime-events").JsonObject;
   external?: boolean;
+  contentIndex?: number;
 
   result?: DurableToolResult;
   resultMessageId?: MessageId;
@@ -1540,6 +1541,7 @@ export class InMemoryStore implements DurableStore {
       execution?: ExecutionToken;
       update: ToolCall | ToolCallUpdate;
       external?: boolean;
+      contentIndex?: number;
     },
   ): DurableRunEvent {
     this.assertOwner(lease);
@@ -1585,6 +1587,7 @@ export class InMemoryStore implements DurableStore {
         status: toStatus,
         state: toStatus,
         external: input.external ?? false,
+        ...(input.contentIndex === undefined ? {} : { contentIndex: input.contentIndex }),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -1614,6 +1617,7 @@ export class InMemoryStore implements DurableStore {
       transition: { from: fromStatus, to: toStatus },
       toolCall: acpToolCall,
       ...(input.external ? { external: true } : {}),
+      ...(stored.contentIndex === undefined ? {} : { contentIndex: stored.contentIndex }),
     } as any) as unknown as DurableRunEvent;
 
     this.appendEvent(event);
@@ -2147,6 +2151,7 @@ export class InMemoryStore implements DurableStore {
       transition,
       toolCall: acpToolCall,
       ...(toolCall.external ? { external: true } : {}),
+      ...(toolCall.contentIndex === undefined ? {} : { contentIndex: toolCall.contentIndex }),
     } as Extract<ToolStateChanged, { durability: "durable" }>);
   }
 
@@ -2232,7 +2237,7 @@ class MemoryOwnedStore implements OwnedStore {
     _meta?: JsonObject;
   }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   async cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
-  async recordToolCall(input: { runId: RunId; execution?: ExecutionToken; update: ToolCall | ToolCallUpdate; external?: boolean }): Promise<DurableRunEvent> { return this.store.recordToolCall(this.lease, input); }
+  async recordToolCall(input: { runId: RunId; execution?: ExecutionToken; update: ToolCall | ToolCallUpdate; external?: boolean; contentIndex?: number }): Promise<DurableRunEvent> { return this.store.recordToolCall(this.lease, input); }
   async snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   async history(agentId: AgentId): Promise<readonly Message[]> { return this.store.history(this.lease, agentId); }
   async listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }

@@ -1163,6 +1163,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             transition: { from: null, to: event.update.status ?? "in_progress" },
             toolCall: event.update,
             external: true,
+            ...(event.contentIndex === undefined ? {} : { contentIndex: event.contentIndex }),
           });
           const task = toolQueue.then(async () => {
             const active = this.executions.get(run.id);
@@ -1176,6 +1177,7 @@ export class AgentRuntime implements AgentRuntimeContract {
               execution: claim!.execution,
               update: event.update,
               external: true,
+              ...(event.contentIndex === undefined ? {} : { contentIndex: event.contentIndex }),
             });
             executionRevision = recorded.runRevision;
           });

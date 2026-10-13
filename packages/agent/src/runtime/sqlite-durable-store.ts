@@ -569,6 +569,7 @@ export class SqliteStore implements DurableStore {
       execution?: ExecutionToken;
       update: ToolCall | ToolCallUpdate;
       external?: boolean;
+      contentIndex?: number;
     },
   ): Promise<DurableRunEvent> {
     return this.invoke(lease, (store, current) => store.recordToolCall(current, input));
@@ -1388,7 +1389,7 @@ class SqliteOwnedStore implements OwnedStore {
     _meta?: JsonObject;
   }): Promise<ToolCommit> { return this.store.commitToolResult(this.lease, input); }
   cancelRun(input: { runId: RunId; expectedRevision?: number; reason?: string; output?: AssistantMessage }): Promise<RunRecord> { return this.store.cancelRun(this.lease, input); }
-  recordToolCall(input: { runId: RunId; execution?: ExecutionToken; update: ToolCall | ToolCallUpdate; external?: boolean }): Promise<DurableRunEvent> { return this.store.recordToolCall(this.lease, input); }
+  recordToolCall(input: { runId: RunId; execution?: ExecutionToken; update: ToolCall | ToolCallUpdate; external?: boolean; contentIndex?: number }): Promise<DurableRunEvent> { return this.store.recordToolCall(this.lease, input); }
   snapshotRun(runId: RunId): Promise<RunSnapshot> { return this.store.snapshotRun(this.lease, runId); }
   history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> { return this.store.history(this.lease, agentId); }
   listAgents(): Promise<readonly AgentRecord[]> { return this.store.listAgents(this.lease); }

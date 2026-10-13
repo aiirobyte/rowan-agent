@@ -184,6 +184,7 @@ export type ToolCallSnapshot = ToolCall & Readonly<{
   resultMessageId?: MessageId;
   reason?: string;
   external?: boolean;
+  contentIndex?: number;
   createdAt?: string;
   updatedAt?: string;
 }>;
@@ -255,6 +256,8 @@ export type ToolStateChanged =
       transition: Readonly<{ from: ToolCallStatus | null; to: ToolCallStatus }>;
       toolCall: ToolCall;
       external?: boolean;
+      /** For a provider-reported call: assistant content blocks streamed before it. */
+      contentIndex?: number;
     }>)
   | Readonly<{
       kind: "tool_state_changed";
@@ -264,6 +267,7 @@ export type ToolStateChanged =
       transition: Readonly<{ from: ToolCallStatus | null; to: ToolCallStatus }>;
       toolCall: ToolCall | ToolCallUpdate;
       external?: boolean;
+      contentIndex?: number;
     }>;
 
 export type DurableRunEvent =

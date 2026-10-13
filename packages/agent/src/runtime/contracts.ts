@@ -486,6 +486,7 @@ export interface OwnedStore {
     execution?: ExecutionToken;
     update: ToolCall | ToolCallUpdate;
     external?: boolean;
+    contentIndex?: number;
   }): Promise<DurableRunEvent>;
   snapshotRun(runId: RunId): Promise<RunSnapshot>;
   history(agentId: AgentId): Promise<readonly Message[]>;

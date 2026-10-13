@@ -353,6 +353,38 @@ test("provider tools.report produces tool_state_changed event with tool_call rep
   }
 });
 
+test("a provider-reported tool call records how many content blocks streamed before it", async () => {
+  const stream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as ProviderCallContext;
+    const first = { type: "thinking" as const, thinking: "look first" };
+    yield { type: "thinking_delta", thinking: "look first", partial: { role: "assistant", contentBlocks: [first] } };
+    ctx.tools.report({ toolCallId: "call-1", title: "ls", kind: "execute", status: "completed" });
+    const second = { type: "thinking" as const, thinking: "then answer" };
+    yield { type: "thinking_delta", thinking: "then answer", partial: { role: "assistant", contentBlocks: [first, second] } };
+    yield { type: "done", response: stopResponse("done") };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "agent-report-position",
+      stream,
+      options: { idempotencyKey: "agent-report-position-key" },
+    });
+    const run = await runtime.start(agentId, "list files", { idempotencyKey: "run-report-position-key" });
+    const observed: any[] = [];
+    const observer = (async () => {
+      for await (const event of runtime.observe(run.id)) observed.push(event);
+    })();
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    await observer;
+    const toolEvents = observed.filter((e) => e.kind === "tool_state_changed");
+    expect(toolEvents.length).toBeGreaterThan(0);
+    expect(toolEvents.every((e) => e.contentIndex === 1)).toBe(true);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("durable provider tool reporting survives runtime reload / SQLite persistence and merges by toolCallId", async () => {
   const directory = await mkdtemp(join(tmpdir(), "rowan-durable-tool-"));
   const dbPath = join(directory, "store.sqlite");

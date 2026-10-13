@@ -42,7 +42,7 @@ export type ModelInvokerResult = ModelInvokeOutput & {
  * falls back to partial accumulation otherwise.
  */
 export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvokerResult> {
-  const callContext: ProviderCallContext = input.callContext ?? {
+  const baseContext: ProviderCallContext = input.callContext ?? {
     signal: input.config.signal ?? new AbortController().signal,
     run: {
       id: input.config.execution.runId,
@@ -77,8 +77,25 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
       },
     },
   };
+  // A report lands between stream events, after every event before it was
+  // collected, so the blocks seen so far place it in the assistant message.
+  const position = { contentIndex: 0 };
+  const callContext: ProviderCallContext = {
+    ...baseContext,
+    tools: {
+      ...baseContext.tools,
+      report: (update) => {
+        input.config.onToolReport?.({
+          runId: input.config.execution.runId as RunId,
+          update,
+          contentIndex: position.contentIndex,
+        });
+      },
+    },
+  };
   const events = input.config.stream(input.request, callContext);
   const result = await collectStreamResult({
+    position,
     config: input.config,
     message: input.message,
     events,
@@ -126,6 +143,7 @@ async function collectStreamResult(input: {
   output?: "reply" | "internal";
   onThinkingDelta?: (event: ThinkingDeltaNotification) => void;
   onToolCallDelta?: (event: ToolCallDeltaNotification) => void;
+  position: { contentIndex: number };
 }): Promise<StreamCollectionResult> {
   const persistAssistant = input.output !== "internal";
   let activeMessageId: string | undefined;
@@ -139,6 +157,7 @@ async function collectStreamResult(input: {
   const toolArguments = new Map<string, string>();
 
   for await (const event of input.events) {
+    if ("partial" in event) input.position.contentIndex = event.partial.contentBlocks.length;
     if (event.type === "text_delta") {
       streamedOutputCharacters += event.text.length;
     } else if (event.type === "thinking_delta") {
