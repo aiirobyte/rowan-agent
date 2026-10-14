@@ -1055,13 +1055,11 @@ const DEFAULT_RETRY_DELAY_MS = 5_000;
 function isRetryableError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
-  // Check for rate limit / overloaded / server error patterns
-  if (message.includes("rate limit") || message.includes("429")) return true;
-  if (message.includes("overloaded") || message.includes("529")) return true;
-  if (message.includes("server error") || message.includes("500")) return true;
-  if (message.includes("bad gateway") || message.includes("502")) return true;
-  if (message.includes("service unavailable") || message.includes("503")) return true;
-  if (message.includes("gateway timeout") || message.includes("504")) return true;
+  // Status codes must stand alone: a stack line like `:13503:32` is not a 503.
+  if (/(?<![\d:])(429|500|502|503|504|529)(?!\d)/.test(message)) return true;
+  if (message.includes("rate limit") || message.includes("overloaded")) return true;
+  if (message.includes("server error") || message.includes("bad gateway")) return true;
+  if (message.includes("service unavailable") || message.includes("gateway timeout")) return true;
   if (message.includes("econnreset") || message.includes("econnrefused")) return true;
   if (message.includes("socket connection was closed") || message.includes("socket hang up")) return true;
   if (message.includes("fetch failed") || message.includes("etimedout")) return true;
