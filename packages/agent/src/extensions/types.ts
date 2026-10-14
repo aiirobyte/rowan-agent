@@ -166,14 +166,11 @@ export type RegisteredPhase = {
 // Skill registration
 // ---------------------------------------------------------------------------
 
-/** A loaded Skill definition used by an extension. */
-export type SkillDefinition = Skill;
-
 /** Register a Skill directory (containing SKILL.md) or a Skill object. Registering an existing name replaces it. */
 export type SkillRegistration = string | Skill;
 
 export type RegisteredSkill = {
-  definition: SkillDefinition;
+  definition: Skill;
   source: {
     extensionPath: string;
   };

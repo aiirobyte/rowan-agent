@@ -104,14 +104,14 @@ test("Extension registers a Skill directory, appears in resolved Definition cont
     // Unregister removes it from the runner
     capturedApi.skills.unregister("custom-skill");
     expect(lifetime.skills()).toEqual([]);
-    expect(registry.extensionRunner.getSkill("custom-skill")).toBeUndefined();
+    expect(registry.extensionRunner.getSkills().find((s) => s.name === "custom-skill")).toBeUndefined();
 
     // Re-register and verify disposal removes it
     await capturedApi.skills.register(skillDir);
     expect(lifetime.skills().map((s) => s.name)).toEqual(["custom-skill"]);
     await registry.closeExtensions();
     expect(lifetime.skills()).toEqual([]);
-    expect(registry.extensionRunner.getSkill("custom-skill")).toBeUndefined();
+    expect(registry.extensionRunner.getSkills().find((s) => s.name === "custom-skill")).toBeUndefined();
   } finally {
     await rm(tempDir, { recursive: true, force: true });
     await lifetime.close();

@@ -208,7 +208,6 @@ export class ExtensionRunner {
 
   // Skill management
   private readonly skills = new Map<string, RegisteredSkill>();
-  private _skillCache: Map<string, RegisteredSkill> | null = null;
 
   // Provider management
   private readonly pendingProviders: Array<
@@ -359,7 +358,6 @@ export class ExtensionRunner {
 
         this.extensions.push(extension);
         this._phaseCache = null;
-        this._skillCache = null;
         if (extension.capabilities.size > 0) {
           this.notifyCapabilitiesChanged();
         }
@@ -394,7 +392,6 @@ export class ExtensionRunner {
     this.phases.clear();
     this._phaseCache = null;
     this.skills.clear();
-    this._skillCache = null;
     this.runtime.invalidate("This Extension Runtime has been closed.");
   }
 
@@ -552,20 +549,8 @@ export class ExtensionRunner {
   // Skill management
   // ---------------------------------------------------------------------------
 
-  getSkill(name: string): Skill | undefined {
-    const reg = this.getRegisteredSkill(name);
-    if (!reg) return undefined;
-    return this.adaptToSkill(reg);
-  }
-
   getSkills(): Skill[] {
-    return [...this.collectRegisteredSkills().values()].map(
-      (s) => this.adaptToSkill(s),
-    );
-  }
-
-  private adaptToSkill(reg: RegisteredSkill): Skill {
-    return { ...reg.definition };
+    return [...this.skills.values()].map((s) => s.definition);
   }
 
   // ---------------------------------------------------------------------------
@@ -1017,7 +1002,6 @@ export class ExtensionRunner {
 
     this.skills.set(name, registered);
     extension.skills.add(name);
-    this._skillCache = null;
   }
 
   private unregisterSkill(extension: Extension, skillName: string): void {
@@ -1025,7 +1009,6 @@ export class ExtensionRunner {
     if (registered && registered.source.extensionPath === extension.path) {
       this.skills.delete(skillName);
       extension.skills.delete(skillName);
-      this._skillCache = null;
     }
   }
 
@@ -1072,16 +1055,6 @@ export class ExtensionRunner {
     return this._phaseCache;
   }
 
-  private getRegisteredSkill(name: string): RegisteredSkill | undefined {
-    return this.collectRegisteredSkills().get(name);
-  }
-
-  private collectRegisteredSkills(): Map<string, RegisteredSkill> {
-    if (this._skillCache) return this._skillCache;
-    this._skillCache = new Map(this.skills);
-    return this._skillCache;
-  }
-
   private async rollbackExtension(extension: Extension): Promise<void> {
     await this.disposeExtension(extension, "This Extension activation was rolled back.");
   }
@@ -1108,7 +1081,6 @@ export class ExtensionRunner {
       await Promise.resolve().then(() => hostDispose()).catch(() => undefined);
     }
     this._phaseCache = null;
-    this._skillCache = null;
     if (hadCapabilities) {
       this.notifyCapabilitiesChanged();
     }

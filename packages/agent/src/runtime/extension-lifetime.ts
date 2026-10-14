@@ -159,8 +159,6 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
 
   get extensionPhases(): readonly Phase[] { return this.extensions.phases(); }
 
-  get extensionSkills(): readonly Skill[] { return this.extensions.skills(); }
-
   async closeExtensions(): Promise<void> {
     await this.extensions.close();
   }

@@ -362,8 +362,8 @@ test("ExtensionAPI skills namespace registers and unregisters Skill objects and 
   };
 
   await runner.loadExtensions([ext]);
-  expect(runner.getSkill("custom-skill-v1")).toBeDefined();
-  expect(runner.getSkill("custom-skill-v1")?.description).toBe("Initial description");
+  expect(runner.getSkills().find((s) => s.name === "custom-skill-v1")).toBeDefined();
+  expect(runner.getSkills().find((s) => s.name === "custom-skill-v1")?.description).toBe("Initial description");
 
   // Re-registering existing name replaces it
   await capturedApi!.skills.register({
@@ -373,12 +373,12 @@ test("ExtensionAPI skills namespace registers and unregisters Skill objects and 
     baseDir: "/test/v2",
     content: "v2 content",
   });
-  expect(runner.getSkill("custom-skill-v1")?.description).toBe("Replaced description");
+  expect(runner.getSkills().find((s) => s.name === "custom-skill-v1")?.description).toBe("Replaced description");
   expect(runner.getSkills().length).toBe(1);
 
   // Unregister removes it
   capturedApi!.skills.unregister("custom-skill-v1");
-  expect(runner.getSkill("custom-skill-v1")).toBeUndefined();
+  expect(runner.getSkills().find((s) => s.name === "custom-skill-v1")).toBeUndefined();
   expect(runner.getSkills().length).toBe(0);
 });
 
