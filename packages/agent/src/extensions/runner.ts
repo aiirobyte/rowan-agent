@@ -853,7 +853,9 @@ export class ExtensionRunner {
     }, extension.runtime, this.events);
   }
 
-  private async registerTool(extension: Extension, tool: ToolDefinition): Promise<void> {
+  // Validation stays synchronous so a duplicate throws at the call site even
+  // when the caller does not await the Registry re-commit.
+  private registerTool(extension: Extension, tool: ToolDefinition): Promise<void> {
     if (extension.tools.has(tool.name)) {
       throw new Error(`Duplicate Tool name "${tool.name}" in extension ${extension.path}.`);
     }
@@ -875,14 +877,12 @@ export class ExtensionRunner {
       definition: tool,
       sourceInfo,
     });
-    await this.notifyResourceChange("tool");
+    return this.notifyResourceChange("tool");
   }
 
-  private async unregisterTool(extension: Extension, toolName: string): Promise<void> {
-    if (extension.tools.has(toolName)) {
-      extension.tools.delete(toolName);
-      await this.notifyResourceChange("tool");
-    }
+  private unregisterTool(extension: Extension, toolName: string): Promise<void> {
+    if (!extension.tools.delete(toolName)) return Promise.resolve();
+    return this.notifyResourceChange("tool");
   }
 
   private contributeCapability(

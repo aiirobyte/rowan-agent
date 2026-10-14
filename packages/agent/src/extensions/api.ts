@@ -65,9 +65,9 @@ export interface ExtensionAPI {
   /** Tool capabilities — register and unregister custom tools. */
   tools: {
     /** Register a custom LLM-callable tool. */
-    register(tool: ToolDefinition): void;
+    register(tool: ToolDefinition): Promise<void>;
     /** Unregister a previously registered tool by name. */
-    unregister(toolName: string): void;
+    unregister(toolName: string): Promise<void>;
   };
 
   /** Capability contributions — advertise tools or features to the host. */
@@ -295,11 +295,11 @@ export function createExtensionAPI(
     tools: {
       register: (tool) => {
         assertActive();
-        return options?.registerTool?.(tool);
+        return Promise.resolve(options?.registerTool?.(tool));
       },
       unregister: (toolName) => {
         assertActive();
-        return options?.unregisterTool?.(toolName);
+        return Promise.resolve(options?.unregisterTool?.(toolName));
       },
     },
     capabilities: {
