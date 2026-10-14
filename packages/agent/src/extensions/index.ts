@@ -86,6 +86,7 @@ export type {
   PhaseRun,
   PhaseDefinition,
   RegisteredPhase,
+  SkillRegistration,
   ScopeRef,
   ToolDefinition,
   ToolExecutionResult,

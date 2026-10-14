@@ -1,5 +1,6 @@
 import type {
   PhaseRegistration,
+  SkillRegistration,
   ToolDefinition,
   ExtensionRuntime,
   ExtensionManifest,
@@ -64,9 +65,9 @@ export interface ExtensionAPI {
   /** Tool capabilities — register and unregister custom tools. */
   tools: {
     /** Register a custom LLM-callable tool. */
-    register(tool: ToolDefinition): void;
+    register(tool: ToolDefinition): Promise<void>;
     /** Unregister a previously registered tool by name. */
-    unregister(toolName: string): void;
+    unregister(toolName: string): Promise<void>;
   };
 
   /** Capability contributions — advertise tools or features to the host. */
@@ -103,6 +104,14 @@ export interface ExtensionAPI {
     getNextPhase(): string | undefined;
     /** Get the message set by setMessage */
     getMessage(): string | undefined;
+  };
+
+  /** Skill capabilities — register and unregister standalone skills. */
+  skills: {
+    /** Register a Skill directory (containing SKILL.md) or a Skill object. Registering an existing name replaces it. */
+    register(skill: SkillRegistration): Promise<void>;
+    /** Unregister a previously registered Skill by name. */
+    unregister(skillName: string): void;
   };
 
   /** Extension manifest from package.json `rowan` field. */
@@ -143,11 +152,13 @@ export function createExtensionAPI(
   hooks?: HooksManager,
   options?: {
     registerPhase?: (registration: PhaseRegistration) => Promise<void>;
-    unregisterPhase?: (phaseName: string) => void;
+    unregisterPhase?: (phaseName: string) => void | Promise<void>;
+    registerSkill?: (registration: SkillRegistration) => Promise<void>;
+    unregisterSkill?: (skillName: string) => void | Promise<void>;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
     unregisterProvider?: (id: string) => void;
-    registerTool?: (tool: ToolDefinition) => void;
-    unregisterTool?: (toolName: string) => void;
+    registerTool?: (tool: ToolDefinition) => void | Promise<void>;
+    unregisterTool?: (toolName: string) => void | Promise<void>;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
@@ -284,11 +295,11 @@ export function createExtensionAPI(
     tools: {
       register: (tool) => {
         assertActive();
-        options?.registerTool?.(tool);
+        return Promise.resolve(options?.registerTool?.(tool));
       },
       unregister: (toolName) => {
         assertActive();
-        options?.unregisterTool?.(toolName);
+        return Promise.resolve(options?.unregisterTool?.(toolName));
       },
     },
     capabilities: {
@@ -346,7 +357,7 @@ export function createExtensionAPI(
       },
       unregister: (phaseName) => {
         assertActive();
-        options?.unregisterPhase?.(phaseName);
+        return options?.unregisterPhase?.(phaseName);
       },
       getPayload: () => outputPayload,
       setPayload: (p) => { outputPayload = p; },
@@ -355,6 +366,16 @@ export function createExtensionAPI(
       setNextPhase: (id) => { nextPhase = id; },
       getNextPhase: () => nextPhase,
       getMessage: () => outputMessage,
+    },
+    skills: {
+      register: async (skill) => {
+        assertActive();
+        await options?.registerSkill?.(skill);
+      },
+      unregister: (skillName) => {
+        assertActive();
+        return options?.unregisterSkill?.(skillName);
+      },
     },
   };
 

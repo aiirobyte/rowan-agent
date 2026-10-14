@@ -3,6 +3,7 @@
  */
 
 import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
+import type { Skill } from "../protocol";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
 import type { JsonObject, JsonValue, ToolExecutionResult } from "../runtime-events";
@@ -162,6 +163,20 @@ export type RegisteredPhase = {
 };
 
 // ---------------------------------------------------------------------------
+// Skill registration
+// ---------------------------------------------------------------------------
+
+/** Register a Skill directory (containing SKILL.md) or a Skill object. Registering an existing name replaces it. */
+export type SkillRegistration = string | Skill;
+
+export type RegisteredSkill = {
+  definition: Skill;
+  source: {
+    extensionPath: string;
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Extension manifest (from package.json)
 // ---------------------------------------------------------------------------
 
@@ -298,6 +313,7 @@ export interface Extension {
   /** Tools registered by this extension */
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
+  skills: Set<string>;
   capabilities: Map<string, ExtensionCapabilityContribution>;
   cleanup: Array<() => void | Promise<void>>;
   disposer?: ExtensionDisposer;

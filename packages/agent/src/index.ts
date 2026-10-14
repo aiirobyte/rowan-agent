@@ -202,6 +202,7 @@ export type {
   RunEndEvent,
   RunStartEvent,
   ScopeRef,
+  SkillRegistration,
   ToolDefinition,
 } from "./extensions";
 

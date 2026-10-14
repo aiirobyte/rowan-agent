@@ -1160,6 +1160,9 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
   if (phase.factory) {
     const api = createExtensionAPI(undefined, {
       registerPhase: async () => {},
+      unregisterPhase: () => {},
+      registerSkill: async () => {},
+      unregisterSkill: () => {},
       registerProvider: () => {},
       unregisterProvider: () => {},
       registerTool: () => {},

@@ -1,7 +1,7 @@
 # Extensions
 
 Extensions are loaded before an `AgentRuntime` Run and can register phases,
-Tools, model providers, and execution hooks. They do not own Agent identity,
+skills, Tools, model providers, and execution hooks. They do not own Agent identity,
 Run persistence, or lifecycle state.
 
 ## Extension factory
@@ -76,6 +76,7 @@ export default extension;
 - `phases.register(path | Phase)` / `phases.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
   directory contains `PHASE.md` and may contain direct child Skill Bundles. Also provides
   `getPayload`, `setPayload`, `setMessage`, `getCurrentPhase`, `setNextPhase`, `getNextPhase`, `getMessage`.
+- `skills.register(path | Skill)` / `skills.unregister(skillName)`: Load and register a standalone Skill directory (containing `SKILL.md`) or a Skill object. Registering an existing name replaces it. Unregistering removes it from the resource pool.
 - `hooks.on()` / `hooks.off()`: Register lifecycle hooks (`run_start`, `run_end`) and
   execution hooks (`before_phase`, `after_phase`, `before_prompt`,
   `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
