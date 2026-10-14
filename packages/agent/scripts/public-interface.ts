@@ -193,6 +193,7 @@ export const publicTypeExports = [
   "RunInteractionRequest",
   "ToolCallSnapshot",
   "ToolCallState",
+  "SkillRegistration",
   "ToolDefinition",
   "ToolExecutionResult",
   "ToolCallContext",
