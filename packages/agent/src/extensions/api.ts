@@ -116,8 +116,6 @@ export interface ExtensionAPI {
 
   /** Shared event bus for inter-extension communication. */
   events: EventBus;
-
-  readonly [key: string]: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +363,7 @@ export function createExtensionAPI(
       if (key in api) {
         throw new Error(`Host API namespace collision: "${key}" is a built-in API key.`);
       }
-      (api as Record<string, unknown>)[key] = value;
+      Object.defineProperty(api, key, { value, enumerable: true });
     }
   }
 

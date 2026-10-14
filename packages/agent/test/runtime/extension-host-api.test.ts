@@ -750,7 +750,7 @@ test("extendApi: collision with a built-in key throws", async () => {
   await runner.close();
 });
 
-test("extendApi: dispose runs exactly once on unload", async () => {
+test("extendApi: dispose runs exactly once on close", async () => {
   let disposeCount = 0;
   const host = new InMemoryExtensionHost({
     extendApi: () => ({
@@ -772,47 +772,8 @@ test("extendApi: dispose runs exactly once on unload", async () => {
   await runner.loadExtensions([ext]);
   expect(disposeCount).toBe(0);
 
-  await runner.unloadExtension("test-ext");
-  expect(disposeCount).toBe(1);
-
   await runner.close();
   expect(disposeCount).toBe(1);
-});
-
-test("extendApi: dispose runs on reload before the new load's extendApi", async () => {
-  const events: string[] = [];
-  let loadCount = 0;
-
-  const host = new InMemoryExtensionHost({
-    extendApi: (extensionId) => {
-      loadCount += 1;
-      const currentLoad = loadCount;
-      events.push(`extendApi:${currentLoad}`);
-      return {
-        namespaces: { testNs: { load: currentLoad } },
-        dispose: () => {
-          events.push(`dispose:${currentLoad}`);
-        },
-      };
-    },
-  });
-
-  const runner = createExtensionRunner({ host });
-  const ext: LoadedExtension = {
-    path: "test-ext",
-    id: "test-ext",
-    name: "test-ext",
-    factory: () => {},
-  };
-
-  await runner.loadExtensions([ext]);
-  expect(events).toEqual(["extendApi:1"]);
-
-  await runner.reloadExtension(ext);
-  expect(events).toEqual(["extendApi:1", "dispose:1", "extendApi:2"]);
-
-  await runner.close();
-  expect(events).toEqual(["extendApi:1", "dispose:1", "extendApi:2", "dispose:2"]);
 });
 
 test("extendApi: dispose runs exactly once when activation throws", async () => {

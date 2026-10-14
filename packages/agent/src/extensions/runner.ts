@@ -332,10 +332,6 @@ export class ExtensionRunner {
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
       const extensionId = ext.id ?? ext.manifest?.id ?? ext.name;
-      const existingIndex = this.extensions.findIndex((e) => e.id === extensionId);
-      if (existingIndex !== -1) {
-        await this.unloadExtension(extensionId);
-      }
       const hostApi = this.host.extendApi?.(extensionId);
       const extension: Extension = {
         id: extensionId,
@@ -369,25 +365,6 @@ export class ExtensionRunner {
         throw error;
       }
     }
-  }
-
-  /** Unload an extension by ID. */
-  async unloadExtension(extensionId: string): Promise<boolean> {
-    const index = this.extensions.findIndex((e) => e.id === extensionId);
-    if (index === -1) return false;
-    const [extension] = this.extensions.splice(index, 1);
-    if (extension) {
-      await this.disposeExtension(extension, "This extension has been unloaded.");
-      return true;
-    }
-    return false;
-  }
-
-  /** Reload an extension. Disposes the old extension before the new load's extendApi. */
-  async reloadExtension(extension: LoadedExtension): Promise<void> {
-    const extensionId = extension.id ?? extension.manifest?.id ?? extension.name;
-    await this.unloadExtension(extensionId);
-    await this.loadExtensions([extension]);
   }
 
   /** Dispose all active Extensions in reverse activation order. */
