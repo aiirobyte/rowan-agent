@@ -192,6 +192,7 @@ export type {
   ExtensionFactory,
   ExtensionFactoryResult,
   ExtensionHost,
+  HostApiExtension,
   ExtensionStateStore,
   HookEvent,
   HookEventType,
@@ -202,7 +203,6 @@ export type {
   RunStartEvent,
   ScopeRef,
   ToolDefinition,
-  HostContribution,
 } from "./extensions";
 
 export type {

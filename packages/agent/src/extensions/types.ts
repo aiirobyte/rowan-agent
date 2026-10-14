@@ -37,14 +37,6 @@ export type {
 } from "@rowan-agent/models";
 
 // ---------------------------------------------------------------------------
-// Host contributions
-// ---------------------------------------------------------------------------
-
-export type HostContribution = { readonly kind: string; readonly id: string } & {
-  readonly [key: string]: JsonValue;
-};
-
-// ---------------------------------------------------------------------------
 // Host & scope types
 // ---------------------------------------------------------------------------
 
@@ -91,6 +83,17 @@ export interface ExtensionHost {
     extensionId: string,
     key: string,
   ): Promise<void> | void;
+  /**
+   * Called once per extension load. The returned namespaces are merged into that extension's `api`
+   * (a name already used by Rowan's own API is an error). `dispose` runs when the extension is
+   * unloaded, reloaded or fails activation, so the host can drop everything that extension registered.
+   */
+  extendApi?(extensionId: string): HostApiExtension | undefined;
+}
+
+export interface HostApiExtension {
+  readonly namespaces: Readonly<Record<string, unknown>>;
+  dispose?(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,10 +299,10 @@ export interface Extension {
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
   capabilities: Map<string, ExtensionCapabilityContribution>;
-  hostContributions: Map<string, HostContribution>;
   cleanup: Array<() => void | Promise<void>>;
   disposer?: ExtensionDisposer;
   runtime: ExtensionRuntime;
+  hostApi?: HostApiExtension;
 }
 
 // ---------------------------------------------------------------------------

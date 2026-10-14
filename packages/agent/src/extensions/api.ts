@@ -6,7 +6,6 @@ import type {
   ScopeRef,
   ExtensionStateStore,
   ExtensionCapabilityContribution,
-  HostContribution,
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
@@ -106,12 +105,6 @@ export interface ExtensionAPI {
     getMessage(): string | undefined;
   };
 
-  /** Declarative host contributions. */
-  host: {
-    /** Contribute a declarative declaration to the host. Returns a disposer to remove the contribution. */
-    contribute<T extends HostContribution>(contribution: T): () => void;
-  };
-
   /** Extension manifest from package.json `rowan` field. */
   manifest?: ExtensionManifest;
 
@@ -155,7 +148,6 @@ export function createExtensionAPI(
     unregisterProvider?: (id: string) => void;
     registerTool?: (tool: ToolDefinition) => void;
     unregisterTool?: (toolName: string) => void;
-    contributeToHost?: (contribution: HostContribution) => () => void;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
@@ -170,6 +162,7 @@ export function createExtensionAPI(
       global: () => ExtensionStateStore;
     };
     contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
+    namespaces?: Readonly<Record<string, unknown>>;
   },
   runtime?: ExtensionRuntime,
   eventBus?: EventBus,
@@ -207,7 +200,7 @@ export function createExtensionAPI(
   let nextPhase: string | undefined;
   let outputMessage: string | undefined;
 
-  return {
+  const api: ExtensionAPI = {
     hooks: {
       on: (eventType, handler) => {
         assertActive();
@@ -363,23 +356,16 @@ export function createExtensionAPI(
       getNextPhase: () => nextPhase,
       getMessage: () => outputMessage,
     },
-    host: {
-      contribute: <T extends HostContribution>(contribution: T): () => void => {
-        assertActive();
-        if (!contribution || typeof contribution !== "object" || Array.isArray(contribution)) {
-          throw new TypeError("Host contribution must be an object.");
-        }
-        if (typeof contribution.kind !== "string" || contribution.kind.trim() === "") {
-          throw new TypeError("Host contribution requires a non-empty kind.");
-        }
-        if (typeof contribution.id !== "string" || contribution.id.trim() === "") {
-          throw new TypeError("Host contribution requires a non-empty id.");
-        }
-        assertJsonValue(contribution, "Host contribution");
-        const dispose = options?.contributeToHost ? options.contributeToHost(contribution) : () => {};
-        trackCleanup?.(dispose);
-        return dispose;
-      },
-    },
   };
+
+  if (options?.namespaces) {
+    for (const [key, value] of Object.entries(options.namespaces)) {
+      if (key in api) {
+        throw new Error(`Host API namespace collision: "${key}" is a built-in API key.`);
+      }
+      Object.defineProperty(api, key, { value, enumerable: true });
+    }
+  }
+
+  return api;
 }
