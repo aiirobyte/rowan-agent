@@ -160,3 +160,29 @@ test("retries network drop and transport errors", async () => {
   }
 });
 
+
+test("digits inside a stack trace are not mistaken for an HTTP status", async () => {
+  let calls = 0;
+  // An ACP adapter's crash: its stack line `:13503:32` contains "503".
+  const error = new Error(
+    'ACP process exited (1)\nerror: Executable not found in $PATH: "amp"\n    at prompt (/$bunfs/root/amp-acp-darwin-arm64:13503:32)',
+  );
+  await expect(
+    withRetry(async () => {
+      calls += 1;
+      throw error;
+    }, { retryDelayMs: 1 }),
+  ).rejects.toThrow("ACP process exited");
+  expect(calls).toBe(1);
+});
+
+test("a bare status code with trailing punctuation is still retried", async () => {
+  let calls = 0;
+  await expect(
+    withRetry(async () => {
+      calls += 1;
+      throw new Error("HTTP 503: upstream");
+    }, { retryDelayMs: 1, maxRetries: 2 }),
+  ).rejects.toThrow("HTTP 503");
+  expect(calls).toBe(3);
+});
