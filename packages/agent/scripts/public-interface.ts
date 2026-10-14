@@ -81,6 +81,7 @@ export const publicTypeExports = [
   "ExtensionToolContribution",
   "ExtensionFactory",
   "ExtensionHost",
+  "HostApiExtension",
   "ExtensionStateStore",
   "FrontmatterResult",
   "HookEvent",

@@ -80,6 +80,7 @@ export type {
   ExtensionCapabilityContribution,
   ExtensionToolContribution,
   ExtensionHost,
+  HostApiExtension,
   ExtensionStateStore,
   PhaseRegistration,
   PhaseRun,

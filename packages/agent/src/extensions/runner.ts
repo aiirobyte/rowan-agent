@@ -336,6 +336,11 @@ export class ExtensionRunner {
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
       const extensionId = ext.id ?? ext.manifest?.id ?? ext.name;
+      const existingIndex = this.extensions.findIndex((e) => e.id === extensionId);
+      if (existingIndex !== -1) {
+        await this.unloadExtension(extensionId);
+      }
+      const hostApi = this.host.extendApi?.(extensionId);
       const extension: Extension = {
         id: extensionId,
         path: ext.path,
@@ -345,9 +350,10 @@ export class ExtensionRunner {
         hostContributions: new Map(),
         cleanup: [],
         runtime: createExtensionRuntime(),
+        hostApi,
       };
       try {
-        const api = this.createExtensionAPI(extension, ext.manifest);
+        const api = this.createExtensionAPI(extension, ext.manifest, hostApi?.namespaces);
         const disposer = await ext.factory(api);
         if (typeof disposer === "function") extension.disposer = disposer;
 
@@ -371,6 +377,25 @@ export class ExtensionRunner {
         throw error;
       }
     }
+  }
+
+  /** Unload an extension by ID. */
+  async unloadExtension(extensionId: string): Promise<boolean> {
+    const index = this.extensions.findIndex((e) => e.id === extensionId);
+    if (index === -1) return false;
+    const [extension] = this.extensions.splice(index, 1);
+    if (extension) {
+      await this.disposeExtension(extension, "This extension has been unloaded.");
+      return true;
+    }
+    return false;
+  }
+
+  /** Reload an extension. Disposes the old extension before the new load's extendApi. */
+  async reloadExtension(extension: LoadedExtension): Promise<void> {
+    const extensionId = extension.id ?? extension.manifest?.id ?? extension.name;
+    await this.unloadExtension(extensionId);
+    await this.loadExtensions([extension]);
   }
 
   /** Dispose all active Extensions in reverse activation order. */
@@ -749,7 +774,11 @@ export class ExtensionRunner {
    * Registration methods write to the extension tracking object.
    * Action methods delegate to the shared runtime.
    */
-  private createExtensionAPI(extension: Extension, manifest?: ExtensionManifest): ExtensionAPI {
+  private createExtensionAPI(
+    extension: Extension,
+    manifest?: ExtensionManifest,
+    namespaces?: Readonly<Record<string, unknown>>,
+  ): ExtensionAPI {
     const runner = this;
     const extContext: ExtensionContext = {
       get cwd() { return runner.cwd; },
@@ -792,6 +821,7 @@ export class ExtensionRunner {
         this.contributeToHost(extension, contribution),
       context: extContext,
       manifest,
+      namespaces,
       trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
       config: {
         get: async (scope) => {
@@ -1066,6 +1096,11 @@ export class ExtensionRunner {
     }
     if (extension.disposer) {
       await Promise.resolve().then(() => extension.disposer!()).catch(() => undefined);
+    }
+    if (extension.hostApi?.dispose) {
+      const hostDispose = extension.hostApi.dispose;
+      extension.hostApi = { ...extension.hostApi, dispose: undefined };
+      await Promise.resolve().then(() => hostDispose()).catch(() => undefined);
     }
     this._phaseCache = null;
     if (hadCapabilities) {

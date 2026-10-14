@@ -123,6 +123,8 @@ export interface ExtensionAPI {
 
   /** Shared event bus for inter-extension communication. */
   events: EventBus;
+
+  readonly [key: string]: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +172,7 @@ export function createExtensionAPI(
       global: () => ExtensionStateStore;
     };
     contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
+    namespaces?: Readonly<Record<string, unknown>>;
   },
   runtime?: ExtensionRuntime,
   eventBus?: EventBus,
@@ -207,7 +210,7 @@ export function createExtensionAPI(
   let nextPhase: string | undefined;
   let outputMessage: string | undefined;
 
-  return {
+  const api: ExtensionAPI = {
     hooks: {
       on: (eventType, handler) => {
         assertActive();
@@ -382,4 +385,15 @@ export function createExtensionAPI(
       },
     },
   };
+
+  if (options?.namespaces) {
+    for (const [key, value] of Object.entries(options.namespaces)) {
+      if (key in api) {
+        throw new Error(`Host API namespace collision: "${key}" is a built-in API key.`);
+      }
+      (api as Record<string, unknown>)[key] = value;
+    }
+  }
+
+  return api;
 }

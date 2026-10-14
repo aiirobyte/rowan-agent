@@ -192,6 +192,7 @@ export type {
   ExtensionFactory,
   ExtensionFactoryResult,
   ExtensionHost,
+  HostApiExtension,
   ExtensionStateStore,
   HookEvent,
   HookEventType,

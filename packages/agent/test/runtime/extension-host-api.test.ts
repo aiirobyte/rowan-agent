@@ -5,11 +5,13 @@ import {
   InMemoryExtensionHost,
   InMemoryStore,
   type ExtensionFactory,
+  type ExtensionHost,
   type LoadedExtension,
   type RunEndEvent,
   type RunStartEvent,
   type ScopeRef,
 } from "../../src";
+import { createExtensionRunner } from "../../src/extensions";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
 
@@ -698,3 +700,213 @@ test("host reads contributed capabilities via AgentRuntime and receives change n
     unsubRuntime();
   }
 });
+
+test("extendApi: namespaces appear on api", async () => {
+  const host = new InMemoryExtensionHost({
+    extendApi: (extensionId) => ({
+      namespaces: {
+        ui: {
+          showDialog: () => `dialog-${extensionId}`,
+        },
+      },
+    }),
+  });
+
+  const runner = createExtensionRunner({ host });
+  let capturedApi: any;
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: (api) => {
+      capturedApi = api;
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(capturedApi.ui).toBeDefined();
+  expect(capturedApi.ui.showDialog()).toBe("dialog-test-ext");
+  await runner.close();
+});
+
+test("extendApi: collision with a built-in key throws", async () => {
+  const host = new InMemoryExtensionHost({
+    extendApi: () => ({
+      namespaces: {
+        tools: { custom: true },
+      },
+    }),
+  });
+
+  const runner = createExtensionRunner({ host });
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: () => {},
+  };
+
+  await expect(runner.loadExtensions([ext])).rejects.toThrow();
+  await runner.close();
+});
+
+test("extendApi: dispose runs exactly once on unload", async () => {
+  let disposeCount = 0;
+  const host = new InMemoryExtensionHost({
+    extendApi: () => ({
+      namespaces: { testNs: {} },
+      dispose: () => {
+        disposeCount += 1;
+      },
+    }),
+  });
+
+  const runner = createExtensionRunner({ host });
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: () => {},
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(disposeCount).toBe(0);
+
+  await runner.unloadExtension("test-ext");
+  expect(disposeCount).toBe(1);
+
+  await runner.close();
+  expect(disposeCount).toBe(1);
+});
+
+test("extendApi: dispose runs on reload before the new load's extendApi", async () => {
+  const events: string[] = [];
+  let loadCount = 0;
+
+  const host = new InMemoryExtensionHost({
+    extendApi: (extensionId) => {
+      loadCount += 1;
+      const currentLoad = loadCount;
+      events.push(`extendApi:${currentLoad}`);
+      return {
+        namespaces: { testNs: { load: currentLoad } },
+        dispose: () => {
+          events.push(`dispose:${currentLoad}`);
+        },
+      };
+    },
+  });
+
+  const runner = createExtensionRunner({ host });
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: () => {},
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(events).toEqual(["extendApi:1"]);
+
+  await runner.reloadExtension(ext);
+  expect(events).toEqual(["extendApi:1", "dispose:1", "extendApi:2"]);
+
+  await runner.close();
+  expect(events).toEqual(["extendApi:1", "dispose:1", "extendApi:2", "dispose:2"]);
+});
+
+test("extendApi: dispose runs exactly once when activation throws", async () => {
+  let disposeCount = 0;
+  const host = new InMemoryExtensionHost({
+    extendApi: () => ({
+      namespaces: { testNs: {} },
+      dispose: () => {
+        disposeCount += 1;
+      },
+    }),
+  });
+
+  const runner = createExtensionRunner({ host });
+  const ext: LoadedExtension = {
+    path: "failing-ext",
+    id: "failing-ext",
+    name: "failing-ext",
+    factory: () => {
+      throw new Error("activation failure");
+    },
+  };
+
+  await expect(runner.loadExtensions([ext])).rejects.toThrow("activation failure");
+  expect(disposeCount).toBe(1);
+
+  await runner.close();
+  expect(disposeCount).toBe(1);
+});
+
+test("extendApi: dispose runs when collision with a built-in key throws", async () => {
+  let disposeCount = 0;
+  const host = new InMemoryExtensionHost({
+    extendApi: () => ({
+      namespaces: { hooks: {} },
+      dispose: () => {
+        disposeCount += 1;
+      },
+    }),
+  });
+
+  const runner = createExtensionRunner({ host });
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: () => {},
+  };
+
+  await expect(runner.loadExtensions([ext])).rejects.toThrow();
+  expect(disposeCount).toBe(1);
+  await runner.close();
+  expect(disposeCount).toBe(1);
+});
+
+test("extendApi: no extendApi → api unchanged", async () => {
+  const host = new InMemoryExtensionHost();
+  const runner = createExtensionRunner({ host });
+  let capturedApi: any;
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: (api) => {
+      capturedApi = api;
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(capturedApi).toBeDefined();
+  expect(capturedApi.tools).toBeDefined();
+  expect(capturedApi.hooks).toBeDefined();
+  expect(capturedApi.ui).toBeUndefined();
+  await runner.close();
+});
+
+test("extendApi: extendApi returning undefined → api unchanged", async () => {
+  const host = new InMemoryExtensionHost({
+    extendApi: () => undefined,
+  });
+  const runner = createExtensionRunner({ host });
+  let capturedApi: any;
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: (api) => {
+      capturedApi = api;
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(capturedApi).toBeDefined();
+  expect(capturedApi.ui).toBeUndefined();
+  await runner.close();
+});
+

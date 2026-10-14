@@ -1,18 +1,23 @@
 import type { JsonObject, JsonValue } from "../runtime-events";
 import { assertJsonValue } from "../runtime/json";
-import type { ExtensionHost, ScopeRef } from "./types";
+import type { ExtensionHost, HostApiExtension, ScopeRef } from "./types";
 
 export class InMemoryExtensionHost implements ExtensionHost {
   private readonly configs = new Map<string, Map<string, JsonObject>>();
   private readonly agentState = new Map<string, Map<string, Map<string, JsonValue>>>();
   private readonly globalState = new Map<string, Map<string, JsonValue>>();
   private readonly listeners = new Set<(extensionId: string, scope: ScopeRef) => void>();
+  extendApi?(extensionId: string): HostApiExtension | undefined;
 
   constructor(options: {
     configs?: Record<string, Record<string, JsonObject>>;
     agentState?: Record<string, Record<string, Record<string, JsonValue>>>;
     globalState?: Record<string, Record<string, JsonValue>>;
+    extendApi?: (extensionId: string) => HostApiExtension | undefined;
   } = {}) {
+    if (options.extendApi) {
+      this.extendApi = options.extendApi;
+    }
     if (options.configs) {
       for (const [scopeKey, extMap] of Object.entries(options.configs)) {
         const map = new Map<string, JsonObject>();
