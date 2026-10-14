@@ -152,13 +152,13 @@ export function createExtensionAPI(
   hooks?: HooksManager,
   options?: {
     registerPhase?: (registration: PhaseRegistration) => Promise<void>;
-    unregisterPhase?: (phaseName: string) => void;
+    unregisterPhase?: (phaseName: string) => void | Promise<void>;
     registerSkill?: (registration: SkillRegistration) => Promise<void>;
-    unregisterSkill?: (skillName: string) => void;
+    unregisterSkill?: (skillName: string) => void | Promise<void>;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
     unregisterProvider?: (id: string) => void;
-    registerTool?: (tool: ToolDefinition) => void;
-    unregisterTool?: (toolName: string) => void;
+    registerTool?: (tool: ToolDefinition) => void | Promise<void>;
+    unregisterTool?: (toolName: string) => void | Promise<void>;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
@@ -295,11 +295,11 @@ export function createExtensionAPI(
     tools: {
       register: (tool) => {
         assertActive();
-        options?.registerTool?.(tool);
+        return options?.registerTool?.(tool);
       },
       unregister: (toolName) => {
         assertActive();
-        options?.unregisterTool?.(toolName);
+        return options?.unregisterTool?.(toolName);
       },
     },
     capabilities: {
@@ -357,7 +357,7 @@ export function createExtensionAPI(
       },
       unregister: (phaseName) => {
         assertActive();
-        options?.unregisterPhase?.(phaseName);
+        return options?.unregisterPhase?.(phaseName);
       },
       getPayload: () => outputPayload,
       setPayload: (p) => { outputPayload = p; },
@@ -374,7 +374,7 @@ export function createExtensionAPI(
       },
       unregister: (skillName) => {
         assertActive();
-        options?.unregisterSkill?.(skillName);
+        return options?.unregisterSkill?.(skillName);
       },
     },
   };

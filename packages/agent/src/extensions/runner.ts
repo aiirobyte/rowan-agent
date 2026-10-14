@@ -222,6 +222,9 @@ export class ExtensionRunner {
   // Capability change listeners
   private readonly capabilityListeners = new Set<(capabilities: readonly ExtensionCapability[]) => void>();
 
+  // Resource change listeners (for Registry live sync)
+  private readonly resourceChangeListeners = new Set<(kind: "tool" | "phase" | "skill") => Promise<void> | void>();
+
   /** Current agent context — set by the agent before each phase */
   currentContext?: AgentContext;
 
@@ -234,7 +237,7 @@ export class ExtensionRunner {
 
     if (this.host.onConfigChanged) {
       const unsub = this.host.onConfigChanged((extensionId, scope) => {
-        this.notifyConfigChanged(extensionId, scope);
+        void this.notifyConfigChanged(extensionId, scope);
       });
       if (typeof unsub === "function") {
         this.hostUnsubscribers.push(unsub);
@@ -389,9 +392,11 @@ export class ExtensionRunner {
     }
     this.extensions.length = 0;
     this.capabilityListeners.clear();
+    this.resourceChangeListeners.clear();
     this.phases.clear();
     this._phaseCache = null;
     this.skills.clear();
+    this.bound = false;
     this.runtime.invalidate("This Extension Runtime has been closed.");
   }
 
@@ -399,12 +404,12 @@ export class ExtensionRunner {
     return this.host;
   }
 
-  notifyConfigChanged(extensionId: string, scope: ScopeRef): void {
+  async notifyConfigChanged(extensionId: string, scope: ScopeRef): Promise<void> {
     const listeners = this.configChangeListeners.get(extensionId);
     if (!listeners) return;
     for (const listener of listeners) {
       try {
-        listener(scope);
+        await listener(scope);
       } catch (error) {
         this.emitError({
           extensionPath: "<runtime>",
@@ -499,6 +504,22 @@ export class ExtensionRunner {
   onCapabilitiesChanged(listener: (capabilities: readonly ExtensionCapability[]) => void): () => void {
     this.capabilityListeners.add(listener);
     return () => this.capabilityListeners.delete(listener);
+  }
+
+  /**
+   * Subscribe to resource changes (tools, phases, skills registered, unregistered, or disposed).
+   * Used by RuntimeBootstrapRegistry to re-commit implicit sources after activation.
+   */
+  onResourceChange(listener: (kind: "tool" | "phase" | "skill") => Promise<void> | void): () => void {
+    this.resourceChangeListeners.add(listener);
+    return () => this.resourceChangeListeners.delete(listener);
+  }
+
+  private async notifyResourceChange(kind: "tool" | "phase" | "skill"): Promise<void> {
+    if (!this.bound) return;
+    for (const listener of this.resourceChangeListeners) {
+      await listener(kind);
+    }
   }
 
   triggerUiAction(event: { contributionId: string; actionId: string; scope?: ScopeRef }): void {
@@ -832,7 +853,7 @@ export class ExtensionRunner {
     }, extension.runtime, this.events);
   }
 
-  private registerTool(extension: Extension, tool: ToolDefinition): void {
+  private async registerTool(extension: Extension, tool: ToolDefinition): Promise<void> {
     if (extension.tools.has(tool.name)) {
       throw new Error(`Duplicate Tool name "${tool.name}" in extension ${extension.path}.`);
     }
@@ -854,11 +875,13 @@ export class ExtensionRunner {
       definition: tool,
       sourceInfo,
     });
+    await this.notifyResourceChange("tool");
   }
 
-  private unregisterTool(extension: Extension, toolName: string): void {
+  private async unregisterTool(extension: Extension, toolName: string): Promise<void> {
     if (extension.tools.has(toolName)) {
       extension.tools.delete(toolName);
+      await this.notifyResourceChange("tool");
     }
   }
 
@@ -924,7 +947,7 @@ export class ExtensionRunner {
     throw new Error(`Phase registration requires a directory path or Phase object.`);
   }
 
-  private registerPhaseDefinition(extension: Extension, phase: import("../harness/phases/types").Phase): void {
+  private async registerPhaseDefinition(extension: Extension, phase: import("../harness/phases/types").Phase): Promise<void> {
     const name = phase.name;
     if (this.phases.has(name)) {
       throw new Error(`Duplicate phase name: ${name}`);
@@ -938,33 +961,23 @@ export class ExtensionRunner {
     this.phases.set(name, registered);
     extension.phases.add(name);
     this._phaseCache = null;
+    await this.notifyResourceChange("phase");
   }
 
-  private unregisterPhase(extension: Extension, phaseName: string): void {
+  private async unregisterPhase(extension: Extension, phaseName: string): Promise<void> {
     const registered = this.phases.get(phaseName);
     if (registered && registered.source.extensionPath === extension.path) {
       this.phases.delete(phaseName);
       extension.phases.delete(phaseName);
       this._phaseCache = null;
+      await this.notifyResourceChange("phase");
     }
   }
 
   private async loadRegisteredPhase(extension: Extension, registration: string): Promise<void> {
     const extensionBase = extension.path.startsWith("<") ? this.cwd : dirname(extension.path);
     const phase = await loadPhase(resolve(extensionBase, registration));
-    const name = phase.name;
-    if (this.phases.has(name)) {
-      throw new Error(`Duplicate phase name: ${name}`);
-    }
-
-    const registered: RegisteredPhase = {
-      definition: phase,
-      source: { extensionPath: extension.path },
-    };
-
-    this.phases.set(name, registered);
-    extension.phases.add(name);
-    this._phaseCache = null;
+    await this.registerPhaseDefinition(extension, phase);
   }
 
   private async registerSkill(
@@ -983,7 +996,7 @@ export class ExtensionRunner {
     throw new Error(`Skill registration requires a directory path or Skill object.`);
   }
 
-  private registerSkillDefinition(extension: Extension, skill: Skill): void {
+  private async registerSkillDefinition(extension: Extension, skill: Skill): Promise<void> {
     const name = skill.name;
     const existing = this.skills.get(name);
     if (existing && existing.source.extensionPath !== extension.path) {
@@ -1002,20 +1015,22 @@ export class ExtensionRunner {
 
     this.skills.set(name, registered);
     extension.skills.add(name);
+    await this.notifyResourceChange("skill");
   }
 
-  private unregisterSkill(extension: Extension, skillName: string): void {
+  private async unregisterSkill(extension: Extension, skillName: string): Promise<void> {
     const registered = this.skills.get(skillName);
     if (registered && registered.source.extensionPath === extension.path) {
       this.skills.delete(skillName);
       extension.skills.delete(skillName);
+      await this.notifyResourceChange("skill");
     }
   }
 
   private async loadRegisteredSkill(extension: Extension, registration: string): Promise<void> {
     const extensionBase = extension.path.startsWith("<") ? this.cwd : dirname(extension.path);
     const skill = await loadSkill(resolve(extensionBase, registration));
-    this.registerSkillDefinition(extension, skill);
+    await this.registerSkillDefinition(extension, skill);
   }
 
   private registerProvider(config: ProviderConfig): void {
@@ -1061,12 +1076,20 @@ export class ExtensionRunner {
 
   private async disposeExtension(extension: Extension, message: string): Promise<void> {
     extension.runtime.invalidate(message);
+    const hadTools = extension.tools.size > 0;
+    const hadPhases = extension.phases.size > 0;
+    const hadSkills = extension.skills.size > 0;
+
+    extension.tools.clear();
     for (const name of extension.phases) this.phases.delete(name);
+    extension.phases.clear();
     for (const name of extension.skills) {
       if (this.skills.get(name)?.source.extensionPath === extension.path) {
         this.skills.delete(name);
       }
     }
+    extension.skills.clear();
+
     const hadCapabilities = extension.capabilities.size > 0;
     extension.capabilities.clear();
     for (const cleanup of [...extension.cleanup].reverse()) {
@@ -1083,6 +1106,11 @@ export class ExtensionRunner {
     this._phaseCache = null;
     if (hadCapabilities) {
       this.notifyCapabilitiesChanged();
+    }
+    if (this.bound) {
+      if (hadTools) await this.notifyResourceChange("tool");
+      if (hadPhases) await this.notifyResourceChange("phase");
+      if (hadSkills) await this.notifyResourceChange("skill");
     }
   }
 }

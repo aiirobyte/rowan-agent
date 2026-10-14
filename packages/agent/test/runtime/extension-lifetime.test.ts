@@ -117,3 +117,82 @@ test("Extension registers a Skill directory, appears in resolved Definition cont
     await lifetime.close();
   }
 });
+
+test("Post-activation registrations and unregistrations reach the Registry and reflect in new snapshots", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "rowan-live-ext-"));
+  const initialSkillDir = join(tempDir, "initial-skill");
+  const freshSkillDir = join(tempDir, "fresh-skill");
+  await mkdir(initialSkillDir, { recursive: true });
+  await mkdir(freshSkillDir, { recursive: true });
+  await writeFile(
+    join(initialSkillDir, "SKILL.md"),
+    "---\nname: initial-skill\ndescription: Initial skill.\n---\nInitial content.\n",
+  );
+  await writeFile(
+    join(freshSkillDir, "SKILL.md"),
+    "---\nname: fresh-skill\ndescription: Fresh skill.\n---\nFresh content.\n",
+  );
+
+  let capturedApi!: ExtensionAPI;
+  const ext = extension("live-ext", async (api) => {
+    capturedApi = api;
+    api.tools.register({
+      name: "initial_tool",
+      description: "Initial tool description",
+      parameters: { type: "object" },
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    });
+    await api.skills.register(initialSkillDir);
+  });
+
+  const lifetime = new RuntimeExtensionLifetime();
+  const registry = new RuntimeBootstrapRegistry(lifetime);
+
+  try {
+    await registry.loadAgents({
+      sourceId: "definitions",
+      values: [{
+        name: "test-agent",
+        description: "Test agent",
+        prompt: "Prompt",
+      }],
+    });
+
+    await registry.loadExtensions([ext]);
+
+    const initialSnapshot = resolveConfigurationSnapshot(registry, {
+      identity: "run-1",
+      definition: { name: "test-agent" },
+      resourceView: { agents: ["definitions"], tools: [], skills: [], phases: [] },
+      model: { provider: "mock", id: "mock" },
+    });
+
+    expect(initialSnapshot.resources.tools.some((t) => t.name === "initial_tool")).toBe(true);
+    expect(initialSnapshot.resources.skills.some((s) => s.name === "initial-skill")).toBe(true);
+
+    // From a config-changed-style callback after activation:
+    capturedApi.config.changed(async () => {
+      capturedApi.tools.unregister("initial_tool");
+      capturedApi.skills.unregister("initial-skill");
+      await capturedApi.skills.register(freshSkillDir);
+    });
+
+    // Trigger config change
+    await registry.extensionRunner.notifyConfigChanged("live-ext", []);
+
+    // Freshly resolved configuration snapshot reflects the update
+    const updatedSnapshot = resolveConfigurationSnapshot(registry, {
+      identity: "run-2",
+      definition: { name: "test-agent" },
+      resourceView: { agents: ["definitions"], tools: [], skills: [], phases: [] },
+      model: { provider: "mock", id: "mock" },
+    });
+
+    expect(updatedSnapshot.resources.tools.some((t) => t.name === "initial_tool")).toBe(false);
+    expect(updatedSnapshot.resources.skills.some((s) => s.name === "initial-skill")).toBe(false);
+    expect(updatedSnapshot.resources.skills.some((s) => s.name === "fresh-skill")).toBe(true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    await lifetime.close();
+  }
+});

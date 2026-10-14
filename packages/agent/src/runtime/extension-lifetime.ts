@@ -92,6 +92,10 @@ export class RuntimeExtensionLifetime {
     return this.runner.extensionHost;
   }
 
+  onResourceChange(listener: (kind: "tool" | "phase" | "skill") => Promise<void> | void): () => void {
+    return this.runner.onResourceChange(listener);
+  }
+
   dropRunState(runId: string): void {
     this.runner.dropRunState(runId);
   }
@@ -106,9 +110,25 @@ export class RuntimeExtensionLifetime {
 /** Bootstrap-only Registry facade; its Extension method disappears after init. */
 export class RuntimeBootstrapRegistry extends ResourceRegistry {
   private readonly extensionSourceId = "rowan.extensions";
+  private commitQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly extensions: RuntimeExtensionLifetime = new RuntimeExtensionLifetime()) {
     super();
+    this.extensions.onResourceChange((kind) => this.recommit(kind));
+  }
+
+  private recommit(kind: "tool" | "phase" | "skill"): Promise<void> {
+    const next = this.commitQueue.then(async () => {
+      if (kind === "tool") {
+        await this.replaceImplicit("tool", this.extensionSourceId, this.extensions.tools().map(adaptExtensionTool));
+      } else if (kind === "phase") {
+        await this.replaceImplicit("phase", this.extensionSourceId, [...this.extensions.phases()]);
+      } else if (kind === "skill") {
+        await this.replaceImplicit("skill", this.extensionSourceId, [...this.extensions.skills()]);
+      }
+    });
+    this.commitQueue = next.catch(() => undefined);
+    return next;
   }
 
   get extensionHost(): import("../extensions").ExtensionHost {
@@ -135,9 +155,9 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
     // Successful Extension contributions are implicit in every view. Keep one
     // source transaction so the ordinary registry still owns collision and
     // revision semantics, while the bootstrap lifetime owns activation/close.
-    await this.replaceImplicit("tool", this.extensionSourceId, this.extensions.tools().map(adaptExtensionTool));
-    await this.replaceImplicit("phase", this.extensionSourceId, [...this.extensions.phases()]);
-    await this.replaceImplicit("skill", this.extensionSourceId, [...this.extensions.skills()]);
+    await this.recommit("tool");
+    await this.recommit("phase");
+    await this.recommit("skill");
     return {
       ...result,
       revision: `extensions:${Date.now()}`,
