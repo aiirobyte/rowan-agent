@@ -23,7 +23,6 @@ import type {
   Extension,
   ExtensionCapability,
   ExtensionCapabilityContribution,
-  HostContribution,
   ExtensionError,
   ExtensionErrorListener,
   ExtensionHost,
@@ -216,9 +215,6 @@ export class ExtensionRunner {
   // Capability change listeners
   private readonly capabilityListeners = new Set<(capabilities: readonly ExtensionCapability[]) => void>();
 
-  // Host contribution change listeners
-  private readonly hostContributionListeners = new Set<(contributions: readonly HostContribution[]) => void>();
-
   /** Current agent context — set by the agent before each phase */
   currentContext?: AgentContext;
 
@@ -347,7 +343,6 @@ export class ExtensionRunner {
         tools: new Map(),
         phases: new Set(),
         capabilities: new Map(),
-        hostContributions: new Map(),
         cleanup: [],
         runtime: createExtensionRuntime(),
         hostApi,
@@ -361,9 +356,6 @@ export class ExtensionRunner {
         this._phaseCache = null;
         if (extension.capabilities.size > 0) {
           this.notifyCapabilitiesChanged();
-        }
-        if (extension.hostContributions.size > 0) {
-          this.notifyHostContributionsChanged();
         }
       } catch (error) {
         await this.rollbackExtension(extension);
@@ -521,26 +513,6 @@ export class ExtensionRunner {
   onCapabilitiesChanged(listener: (capabilities: readonly ExtensionCapability[]) => void): () => void {
     this.capabilityListeners.add(listener);
     return () => this.capabilityListeners.delete(listener);
-  }
-
-  /** Get all contributed host elements across all extensions. */
-  getHostContributions(): readonly HostContribution[] {
-    const result: HostContribution[] = [];
-    for (const ext of this.extensions) {
-      for (const contrib of ext.hostContributions.values()) {
-        result.push(contrib);
-      }
-    }
-    return Object.freeze(result);
-  }
-
-  /**
-   * Subscribe to host contribution changes (contributions added, removed, or extensions disposed).
-   * Returns an unsubscribe function.
-   */
-  onHostContributionsChanged(listener: (contributions: readonly HostContribution[]) => void): () => void {
-    this.hostContributionListeners.add(listener);
-    return () => this.hostContributionListeners.delete(listener);
   }
 
   triggerUiAction(event: { contributionId: string; actionId: string; scope?: ScopeRef }): void {
@@ -817,8 +789,6 @@ export class ExtensionRunner {
       unregisterTool: (toolName) => this.unregisterTool(extension, toolName),
       contributeCapability: (contribution) =>
         this.contributeCapability(extension, contribution),
-      contributeToHost: (contribution) =>
-        this.contributeToHost(extension, contribution),
       context: extContext,
       manifest,
       namespaces,
@@ -940,50 +910,6 @@ export class ExtensionRunner {
     }
   }
 
-  private contributeToHost(
-    extension: Extension,
-    contribution: HostContribution,
-  ): () => void {
-    const key = `${contribution.kind}:${contribution.id}`;
-    const entry: HostContribution = {
-      ...contribution,
-    };
-    extension.hostContributions.set(key, entry);
-    if (this.extensions.includes(extension)) {
-      this.notifyHostContributionsChanged();
-    }
-
-    let disposed = false;
-    const dispose = () => {
-      if (disposed) return;
-      disposed = true;
-      if (extension.hostContributions.get(key) === entry) {
-        extension.hostContributions.delete(key);
-        if (this.extensions.includes(extension)) {
-          this.notifyHostContributionsChanged();
-        }
-      }
-    };
-    extension.cleanup.push(dispose);
-    return dispose;
-  }
-
-  private notifyHostContributionsChanged(): void {
-    const contributions = this.getHostContributions();
-    for (const listener of this.hostContributionListeners) {
-      try {
-        listener(contributions);
-      } catch (error) {
-        this.emitError({
-          extensionPath: "<runtime>",
-          event: "host_contributions_changed",
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-      }
-    }
-  }
-
   private async registerPhase(
     extension: Extension,
     registration: PhaseRegistration,
@@ -1089,8 +1015,6 @@ export class ExtensionRunner {
     for (const name of extension.phases) this.phases.delete(name);
     const hadCapabilities = extension.capabilities.size > 0;
     extension.capabilities.clear();
-    const hadHostContributions = extension.hostContributions.size > 0;
-    extension.hostContributions.clear();
     for (const cleanup of [...extension.cleanup].reverse()) {
       await Promise.resolve().then(() => cleanup()).catch(() => undefined);
     }
@@ -1105,9 +1029,6 @@ export class ExtensionRunner {
     this._phaseCache = null;
     if (hadCapabilities) {
       this.notifyCapabilitiesChanged();
-    }
-    if (hadHostContributions) {
-      this.notifyHostContributionsChanged();
     }
   }
 }

@@ -90,7 +90,6 @@ export type {
   ToolDefinition,
   ToolExecutionResult,
   RegisteredTool,
-  HostContribution,
   ExtensionError,
   ExtensionErrorListener,
   Extension,

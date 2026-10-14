@@ -570,40 +570,14 @@ test("providers.register with existing id replaces earlier provider configuratio
   }
 });
 
-test("host contributions list, change notification, dispose, and triggerUiAction", async () => {
-  let changeCount = 0;
+test("runtime.triggerUiAction emits ui.action event to extension event bus", async () => {
   let receivedUiAction: any;
 
-  let capturedApi: any;
-  let disposeCustom: (() => void) | undefined;
-
-  const customContribution = {
-    kind: "host-custom-panel",
-    id: "panel-1",
-    title: "Host Custom Panel",
-    config: {
-      theme: "dark",
-      features: ["code-lens", "status-bar"],
-    },
-  };
-
-  const modelPickerContribution = {
-    kind: "model-picker",
-    id: "mp-contrib",
-    provider: "acp-agent",
-    status: { ready: true, message: "Ready to use" },
-    actions: [{ id: "install", label: "Install Agent" }],
-  };
-
   const extension = loadExtensionFromFactory((api) => {
-    capturedApi = api;
-    disposeCustom = api.host.contribute(customContribution);
-    api.host.contribute(modelPickerContribution);
-
     api.events.on("ui.action", (event) => {
       receivedUiAction = event;
     });
-  }, process.cwd(), "<test:host-contribute-ext>");
+  }, process.cwd(), "<test:ui-action-ext>");
 
   const runtime = await AgentRuntime.init({
     store: new InMemoryStore(),
@@ -614,88 +588,17 @@ test("host contributions list, change notification, dispose, and triggerUiAction
   });
 
   try {
-    runtime.onHostContributionsChanged(() => {
-      changeCount += 1;
-    });
-
-    const contributions = runtime.listHostContributions();
-    expect(contributions).toHaveLength(2);
-    // Arbitrary host kind with arbitrary JSON payload reaches the host unchanged
-    expect(contributions.find((c) => c.kind === "host-custom-panel" && c.id === "panel-1")).toEqual(customContribution);
-    expect(contributions.find((c) => c.kind === "model-picker" && c.id === "mp-contrib")).toEqual(modelPickerContribution);
-
-    // Trigger UI action
     runtime.triggerUiAction({
-      contributionId: "mp-contrib",
-      actionId: "install",
+      contributionId: "action-1",
+      actionId: "click",
       scope: [],
     });
 
     expect(receivedUiAction).toEqual({
-      contributionId: "mp-contrib",
-      actionId: "install",
+      contributionId: "action-1",
+      actionId: "click",
       scope: [],
     });
-
-    // Dispose the custom contribution
-    expect(disposeCustom).toBeDefined();
-    disposeCustom!();
-
-    expect(changeCount).toBeGreaterThanOrEqual(1);
-
-    const remaining = runtime.listHostContributions();
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.id).toBe("mp-contrib");
-  } finally {
-    await runtime.close();
-  }
-});
-
-test("host contributions validate envelope and reject non-JSON payloads", async () => {
-  let capturedApi: any;
-  const extension = loadExtensionFromFactory((api) => {
-    capturedApi = api;
-  }, process.cwd(), "<test:host-contribute-validation>");
-
-  const runtime = await AgentRuntime.init({
-    store: new InMemoryStore(),
-    concurrency: 1,
-    bootstrap: async (registry) => {
-      await registry.loadExtensions([extension]);
-    },
-  });
-
-  try {
-    expect(capturedApi).toBeDefined();
-
-    // Rejects non-object
-    expect(() => capturedApi.host.contribute(null)).toThrow(TypeError);
-    expect(() => capturedApi.host.contribute("not-an-object")).toThrow(TypeError);
-    expect(() => capturedApi.host.contribute([1, 2, 3])).toThrow(TypeError);
-
-    // Rejects missing or empty kind
-    expect(() => capturedApi.host.contribute({ id: "valid-id" })).toThrow(TypeError);
-    expect(() => capturedApi.host.contribute({ kind: "", id: "valid-id" })).toThrow(TypeError);
-    expect(() => capturedApi.host.contribute({ kind: "   ", id: "valid-id" })).toThrow(TypeError);
-
-    // Rejects missing or empty id
-    expect(() => capturedApi.host.contribute({ kind: "valid-kind" })).toThrow(TypeError);
-    expect(() => capturedApi.host.contribute({ kind: "valid-kind", id: "" })).toThrow(TypeError);
-    expect(() => capturedApi.host.contribute({ kind: "valid-kind", id: "   " })).toThrow(TypeError);
-
-    // Rejects non-JSON payload (e.g. functions)
-    expect(() => capturedApi.host.contribute({ kind: "valid-kind", id: "valid-id", handler: () => {} })).toThrow(TypeError);
-
-    // Accepts arbitrary host kind with valid JSON payload
-    let disposeNew: (() => void) | undefined;
-    expect(() => {
-      disposeNew = capturedApi.host.contribute({
-        kind: "arbitrary-kind",
-        id: "arbitrary-id",
-        nested: { count: 123, ok: true, list: ["a", "b"] },
-      });
-    }).not.toThrow();
-    disposeNew?.();
   } finally {
     await runtime.close();
   }

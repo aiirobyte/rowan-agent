@@ -644,16 +644,6 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.resources.extensionRunner.onCapabilitiesChanged(listener);
   }
 
-  listHostContributions(): readonly import("../extensions").HostContribution[] {
-    this.assertOpen();
-    return this.resources.extensionRunner.getHostContributions();
-  }
-
-  onHostContributionsChanged(listener: (contributions: readonly import("../extensions").HostContribution[]) => void): () => void {
-    this.assertOpen();
-    return this.resources.extensionRunner.onHostContributionsChanged(listener);
-  }
-
   triggerUiAction(event: { contributionId: string; actionId: string; scope?: import("../extensions").ScopeRef }): void {
     this.assertOpen();
     this.resources.extensionRunner.triggerUiAction(event);

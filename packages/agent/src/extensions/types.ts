@@ -37,14 +37,6 @@ export type {
 } from "@rowan-agent/models";
 
 // ---------------------------------------------------------------------------
-// Host contributions
-// ---------------------------------------------------------------------------
-
-export type HostContribution = { readonly kind: string; readonly id: string } & {
-  readonly [key: string]: JsonValue;
-};
-
-// ---------------------------------------------------------------------------
 // Host & scope types
 // ---------------------------------------------------------------------------
 
@@ -307,7 +299,6 @@ export interface Extension {
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
   capabilities: Map<string, ExtensionCapabilityContribution>;
-  hostContributions: Map<string, HostContribution>;
   cleanup: Array<() => void | Promise<void>>;
   disposer?: ExtensionDisposer;
   runtime: ExtensionRuntime;

@@ -203,7 +203,6 @@ export type {
   RunStartEvent,
   ScopeRef,
   ToolDefinition,
-  HostContribution,
 } from "./extensions";
 
 export type {

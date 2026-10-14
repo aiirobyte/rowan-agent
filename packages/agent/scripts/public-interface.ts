@@ -136,7 +136,6 @@ export const publicTypeExports = [
   "SettingsItem",
   "SettingsOption",
   "SettingsSection",
-  "HostContribution",
   "ProviderCallContext",
   "ProviderStreamFn",
   "ToolAnnotations",
