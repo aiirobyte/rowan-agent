@@ -29,8 +29,10 @@ import type {
   ExtensionRuntime,
   PhaseRegistration,
   RegisteredPhase,
+  RegisteredSkill,
   RegisteredTool,
   ScopeRef,
+  SkillRegistration,
   ToolDefinition,
 } from "./types";
 import { InMemoryExtensionHost } from "./host";
@@ -38,6 +40,7 @@ import type { JsonObject, JsonValue } from "../runtime-events";
 import { assertJsonValue } from "../runtime/json";
 import type { Tool, ToolResult, AgentContext } from "../types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
+import type { Skill } from "../protocol";
 import { HooksManager } from "./hooks";
 import type {
   BeforeToolCallResult,
@@ -54,6 +57,7 @@ import type { LoadedExtension, ExtensionManifest } from "./types";
 import { createExtensionRuntime, createSourceInfo } from "./types";
 import { createEventBus, type EventBus } from "./context";
 import { loadPhase } from "../harness/phases/loader";
+import { loadSkill } from "../harness/skills";
 
 // ---------------------------------------------------------------------------
 // Command execution
@@ -202,6 +206,10 @@ export class ExtensionRunner {
   private readonly phases = new Map<string, RegisteredPhase>();
   private _phaseCache: Map<string, RegisteredPhase> | null = null;
 
+  // Skill management
+  private readonly skills = new Map<string, RegisteredSkill>();
+  private _skillCache: Map<string, RegisteredSkill> | null = null;
+
   // Provider management
   private readonly pendingProviders: Array<
     | { kind: "register"; config: ProviderConfig }
@@ -338,6 +346,7 @@ export class ExtensionRunner {
         path: ext.path,
         tools: new Map(),
         phases: new Set(),
+        skills: new Set(),
         capabilities: new Map(),
         cleanup: [],
         runtime: createExtensionRuntime(),
@@ -350,6 +359,7 @@ export class ExtensionRunner {
 
         this.extensions.push(extension);
         this._phaseCache = null;
+        this._skillCache = null;
         if (extension.capabilities.size > 0) {
           this.notifyCapabilitiesChanged();
         }
@@ -383,6 +393,8 @@ export class ExtensionRunner {
     this.capabilityListeners.clear();
     this.phases.clear();
     this._phaseCache = null;
+    this.skills.clear();
+    this._skillCache = null;
     this.runtime.invalidate("This Extension Runtime has been closed.");
   }
 
@@ -534,6 +546,26 @@ export class ExtensionRunner {
       skills: def.skills ? [...def.skills] : [],
       ...(def.input ? { input: { ...def.input } } : {}),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Skill management
+  // ---------------------------------------------------------------------------
+
+  getSkill(name: string): Skill | undefined {
+    const reg = this.getRegisteredSkill(name);
+    if (!reg) return undefined;
+    return this.adaptToSkill(reg);
+  }
+
+  getSkills(): Skill[] {
+    return [...this.collectRegisteredSkills().values()].map(
+      (s) => this.adaptToSkill(s),
+    );
+  }
+
+  private adaptToSkill(reg: RegisteredSkill): Skill {
+    return { ...reg.definition };
   }
 
   // ---------------------------------------------------------------------------
@@ -760,6 +792,10 @@ export class ExtensionRunner {
         this.registerPhase(extension, registration),
       unregisterPhase: (phaseName) =>
         this.unregisterPhase(extension, phaseName),
+      registerSkill: (registration) =>
+        this.registerSkill(extension, registration),
+      unregisterSkill: (skillName) =>
+        this.unregisterSkill(extension, skillName),
       registerProvider: (config) => this.registerProvider(config),
       unregisterProvider: (name) => this.unregisterProvider(name),
       registerTool: (tool) => this.registerTool(extension, tool),
@@ -946,6 +982,59 @@ export class ExtensionRunner {
     this._phaseCache = null;
   }
 
+  private async registerSkill(
+    extension: Extension,
+    registration: SkillRegistration,
+  ): Promise<void> {
+    if (typeof registration === "string") {
+      if (registration.length === 0) {
+        throw new Error(`Skill registration requires a directory path.`);
+      }
+      return this.loadRegisteredSkill(extension, registration);
+    }
+    if (typeof registration === "object" && registration !== null && "name" in registration) {
+      return this.registerSkillDefinition(extension, registration as Skill);
+    }
+    throw new Error(`Skill registration requires a directory path or Skill object.`);
+  }
+
+  private registerSkillDefinition(extension: Extension, skill: Skill): void {
+    const name = skill.name;
+    const existing = this.skills.get(name);
+    if (existing && existing.source.extensionPath !== extension.path) {
+      for (const ext of this.extensions) {
+        if (ext.path === existing.source.extensionPath) {
+          ext.skills.delete(name);
+          break;
+        }
+      }
+    }
+
+    const registered: RegisteredSkill = {
+      definition: skill,
+      source: { extensionPath: extension.path },
+    };
+
+    this.skills.set(name, registered);
+    extension.skills.add(name);
+    this._skillCache = null;
+  }
+
+  private unregisterSkill(extension: Extension, skillName: string): void {
+    const registered = this.skills.get(skillName);
+    if (registered && registered.source.extensionPath === extension.path) {
+      this.skills.delete(skillName);
+      extension.skills.delete(skillName);
+      this._skillCache = null;
+    }
+  }
+
+  private async loadRegisteredSkill(extension: Extension, registration: string): Promise<void> {
+    const extensionBase = extension.path.startsWith("<") ? this.cwd : dirname(extension.path);
+    const skill = await loadSkill(resolve(extensionBase, registration));
+    this.registerSkillDefinition(extension, skill);
+  }
+
   private registerProvider(config: ProviderConfig): void {
     if (this.bound) {
       applyProviderRegistration(config);
@@ -983,6 +1072,16 @@ export class ExtensionRunner {
     return this._phaseCache;
   }
 
+  private getRegisteredSkill(name: string): RegisteredSkill | undefined {
+    return this.collectRegisteredSkills().get(name);
+  }
+
+  private collectRegisteredSkills(): Map<string, RegisteredSkill> {
+    if (this._skillCache) return this._skillCache;
+    this._skillCache = new Map(this.skills);
+    return this._skillCache;
+  }
+
   private async rollbackExtension(extension: Extension): Promise<void> {
     await this.disposeExtension(extension, "This Extension activation was rolled back.");
   }
@@ -990,6 +1089,11 @@ export class ExtensionRunner {
   private async disposeExtension(extension: Extension, message: string): Promise<void> {
     extension.runtime.invalidate(message);
     for (const name of extension.phases) this.phases.delete(name);
+    for (const name of extension.skills) {
+      if (this.skills.get(name)?.source.extensionPath === extension.path) {
+        this.skills.delete(name);
+      }
+    }
     const hadCapabilities = extension.capabilities.size > 0;
     extension.capabilities.clear();
     for (const cleanup of [...extension.cleanup].reverse()) {
@@ -1004,6 +1108,7 @@ export class ExtensionRunner {
       await Promise.resolve().then(() => hostDispose()).catch(() => undefined);
     }
     this._phaseCache = null;
+    this._skillCache = null;
     if (hadCapabilities) {
       this.notifyCapabilitiesChanged();
     }

@@ -343,6 +343,45 @@ test("ExtensionAPI phase namespace registers and unregisters programmatic Phase 
   expect(runner.getPhase("custom-programmatic-phase")).toBeUndefined();
 });
 
+test("ExtensionAPI skills namespace registers and unregisters Skill objects and replaces existing names", async () => {
+  const runner = createExtensionRunner();
+  let capturedApi: ExtensionAPI | null = null;
+  const ext: LoadedExtension = {
+    path: "<test:dynamic-skill>",
+    name: "dynamic-skill",
+    factory: async (api) => {
+      capturedApi = api;
+      await api.skills.register({
+        name: "custom-skill-v1",
+        description: "Initial description",
+        filePath: "/test/v1/SKILL.md",
+        baseDir: "/test/v1",
+        content: "v1 content",
+      });
+    },
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(runner.getSkill("custom-skill-v1")).toBeDefined();
+  expect(runner.getSkill("custom-skill-v1")?.description).toBe("Initial description");
+
+  // Re-registering existing name replaces it
+  await capturedApi!.skills.register({
+    name: "custom-skill-v1",
+    description: "Replaced description",
+    filePath: "/test/v2/SKILL.md",
+    baseDir: "/test/v2",
+    content: "v2 content",
+  });
+  expect(runner.getSkill("custom-skill-v1")?.description).toBe("Replaced description");
+  expect(runner.getSkills().length).toBe(1);
+
+  // Unregister removes it
+  capturedApi!.skills.unregister("custom-skill-v1");
+  expect(runner.getSkill("custom-skill-v1")).toBeUndefined();
+  expect(runner.getSkills().length).toBe(0);
+});
+
 test("ExtensionAPI capabilities namespace contributes, updates, unregisters, and disposes tool capabilities", async () => {
   const runner = createExtensionRunner();
   let capturedApi: ExtensionAPI | null = null;

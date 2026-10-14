@@ -121,7 +121,7 @@ bun run release
 | [Examples](examples) | Config templates, extension examples, phase examples |
 | [Phases](packages/agent/docs/phases.md) | `PHASE.md` format, routing, execution modes, parallel phases |
 | [Phase Interactions](packages/agent/docs/phase-interactions.md) | Suspendable Phase execution, typed interactions, and resume |
-| [Extensions](packages/agent/docs/extensions.md) | Extension discovery, hooks, tools, phases, providers, event bus |
+| [Extensions](packages/agent/docs/extensions.md) | Extension discovery, hooks, tools, phases, skills, providers, event bus |
 
 ## Acknowledgements
 

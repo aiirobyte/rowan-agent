@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test";
-import { RuntimeExtensionLifetime } from "../../src/runtime/extension-lifetime";
-import type { LoadedExtension } from "../../src/extensions";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  RuntimeBootstrapRegistry,
+  RuntimeExtensionLifetime,
+} from "../../src/runtime/extension-lifetime";
+import { resolveConfigurationSnapshot } from "../../src/runtime/configuration-snapshot";
+import { assembleRegisteredExtensions } from "../../src/runtime/extensions";
+import type { ExtensionAPI, LoadedExtension } from "../../src/extensions";
 
 const extension = (
   path: string,
@@ -47,4 +55,65 @@ test("global Extension activation freezes after bootstrap and disposes in revers
   await lifetime.close();
   expect(disposed).toEqual(["second", "first"]);
   await lifetime.close();
+});
+
+test("Extension registers a Skill directory, appears in resolved Definition context by name, and unregister / disposal removes it", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "rowan-skill-ext-"));
+  const skillDir = join(tempDir, "custom-skill");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    join(skillDir, "SKILL.md"),
+    "---\nname: custom-skill\ndescription: A custom extension skill.\n---\nSkill instructions.\n",
+  );
+
+  let capturedApi!: ExtensionAPI;
+  const ext = extension("skill-ext", async (api) => {
+    capturedApi = api;
+    await api.skills.register(skillDir);
+  });
+
+  const lifetime = new RuntimeExtensionLifetime();
+  const registry = new RuntimeBootstrapRegistry(lifetime);
+
+  try {
+    await registry.loadAgents({
+      sourceId: "definitions",
+      values: [{
+        name: "test-agent",
+        description: "Test agent",
+        prompt: "Prompt",
+        skills: ["custom-skill"],
+      }],
+    });
+
+    const activation = await registry.loadExtensions([ext]);
+    expect(activation.active).toEqual(["skill-ext"]);
+    expect(lifetime.skills().map((s) => s.name)).toEqual(["custom-skill"]);
+
+    // Appears in resolved Definition context (selected by name)
+    const snapshot = resolveConfigurationSnapshot(registry, {
+      identity: "test-run",
+      definition: { name: "test-agent" },
+      resourceView: { agents: ["definitions"], tools: [], skills: [], phases: [] },
+      model: { provider: "mock", id: "mock" },
+    });
+    const assembly = assembleRegisteredExtensions(snapshot, registry.extensionRunner);
+    expect(assembly.context.skills.map((s) => s.name)).toEqual(["custom-skill"]);
+    expect(assembly.context.skills[0].description).toBe("A custom extension skill.");
+
+    // Unregister removes it from the runner
+    capturedApi.skills.unregister("custom-skill");
+    expect(lifetime.skills()).toEqual([]);
+    expect(registry.extensionRunner.getSkill("custom-skill")).toBeUndefined();
+
+    // Re-register and verify disposal removes it
+    await capturedApi.skills.register(skillDir);
+    expect(lifetime.skills().map((s) => s.name)).toEqual(["custom-skill"]);
+    await registry.closeExtensions();
+    expect(lifetime.skills()).toEqual([]);
+    expect(registry.extensionRunner.getSkill("custom-skill")).toBeUndefined();
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    await lifetime.close();
+  }
 });

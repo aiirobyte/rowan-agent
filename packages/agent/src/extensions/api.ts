@@ -1,5 +1,6 @@
 import type {
   PhaseRegistration,
+  SkillRegistration,
   ToolDefinition,
   ExtensionRuntime,
   ExtensionManifest,
@@ -105,6 +106,14 @@ export interface ExtensionAPI {
     getMessage(): string | undefined;
   };
 
+  /** Skill capabilities — register and unregister standalone skills. */
+  skills: {
+    /** Register a Skill directory (containing SKILL.md) or a Skill object. Registering an existing name replaces it. */
+    register(skill: SkillRegistration): Promise<void>;
+    /** Unregister a previously registered Skill by name. */
+    unregister(skillName: string): void;
+  };
+
   /** Extension manifest from package.json `rowan` field. */
   manifest?: ExtensionManifest;
 
@@ -144,6 +153,8 @@ export function createExtensionAPI(
   options?: {
     registerPhase?: (registration: PhaseRegistration) => Promise<void>;
     unregisterPhase?: (phaseName: string) => void;
+    registerSkill?: (registration: SkillRegistration) => Promise<void>;
+    unregisterSkill?: (skillName: string) => void;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
     unregisterProvider?: (id: string) => void;
     registerTool?: (tool: ToolDefinition) => void;
@@ -355,6 +366,16 @@ export function createExtensionAPI(
       setNextPhase: (id) => { nextPhase = id; },
       getNextPhase: () => nextPhase,
       getMessage: () => outputMessage,
+    },
+    skills: {
+      register: async (skill) => {
+        assertActive();
+        await options?.registerSkill?.(skill);
+      },
+      unregister: (skillName) => {
+        assertActive();
+        options?.unregisterSkill?.(skillName);
+      },
     },
   };
 

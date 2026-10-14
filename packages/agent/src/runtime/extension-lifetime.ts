@@ -8,6 +8,7 @@ import type {
 } from "../extensions";
 import { loadExtensionsFromPath } from "../extensions/loader";
 import type { Phase } from "../harness/phases/types";
+import type { Skill } from "../protocol";
 import { createCorePhases } from "../harness/phases/core-phases";
 import { createRouteTool } from "../harness/tools/route-tool";
 import { ResourceRegistry, type LoadInput, type ResourceDiagnostic } from "./resource-registry";
@@ -79,6 +80,10 @@ export class RuntimeExtensionLifetime {
     return this.runner.getPhases();
   }
 
+  skills(): readonly Skill[] {
+    return this.runner.getSkills();
+  }
+
   get extensionRunner(): ExtensionRunner {
     return this.runner;
   }
@@ -132,6 +137,7 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
     // revision semantics, while the bootstrap lifetime owns activation/close.
     await this.replaceImplicit("tool", this.extensionSourceId, this.extensions.tools().map(adaptExtensionTool));
     await this.replaceImplicit("phase", this.extensionSourceId, [...this.extensions.phases()]);
+    await this.replaceImplicit("skill", this.extensionSourceId, [...this.extensions.skills()]);
     return {
       ...result,
       revision: `extensions:${Date.now()}`,
@@ -152,6 +158,8 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
   get extensionTools(): readonly RegisteredTool[] { return this.extensions.tools(); }
 
   get extensionPhases(): readonly Phase[] { return this.extensions.phases(); }
+
+  get extensionSkills(): readonly Skill[] { return this.extensions.skills(); }
 
   async closeExtensions(): Promise<void> {
     await this.extensions.close();

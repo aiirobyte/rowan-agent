@@ -750,6 +750,29 @@ test("extendApi: collision with a built-in key throws", async () => {
   await runner.close();
 });
 
+test("extendApi: collision with built-in skills key throws", async () => {
+  const host = new InMemoryExtensionHost({
+    extendApi: () => ({
+      namespaces: {
+        skills: { custom: true },
+      },
+    }),
+  });
+
+  const runner = createExtensionRunner({ host });
+  const ext: LoadedExtension = {
+    path: "test-ext",
+    id: "test-ext",
+    name: "test-ext",
+    factory: () => {},
+  };
+
+  await expect(runner.loadExtensions([ext])).rejects.toThrow(
+    'Host API namespace collision: "skills" is a built-in API key.',
+  );
+  await runner.close();
+});
+
 test("extendApi: dispose runs exactly once on close", async () => {
   let disposeCount = 0;
   const host = new InMemoryExtensionHost({
