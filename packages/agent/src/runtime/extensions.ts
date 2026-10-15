@@ -56,6 +56,7 @@ export function assembleRegisteredExtensions(
         agentId: input.context.agentId,
         toolCallId: input.context.toolCallId,
         metadata: input.context.runMetadata,
+        ...(input.context.agentMetadata === undefined ? {} : { agentMetadata: input.context.agentMetadata }),
         answer: input.answer,
         scope: input.context.scope,
         turn: input.context.turn,

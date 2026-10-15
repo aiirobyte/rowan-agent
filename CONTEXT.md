@@ -89,8 +89,9 @@ _Avoid_: Caller revision, ConfigRef, mutable current config
 
 **Extension**:
 A Runtime-global executable module activated during bootstrap before the
-Scheduler becomes ready. It is implicit in every Resource View, remains active
-for the Runtime lifetime, and is never selected by a Definition or Phase.
+Scheduler becomes ready. Its registrations are stored in per-Scope sources
+(`extensionSourceId(scope)`: `rowan.extensions` for Global, `rowan.extensions:<scopeToKey>` for scoped) and
+resolved explicitly through Resource Views. Only `rowan.core` remains implicit.
 _Avoid_: Resource Candidate, Agent Extension, Scoped Extension
 
 **Extension State**:

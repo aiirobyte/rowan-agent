@@ -65,9 +65,9 @@ export interface ExtensionAPI {
   /** Tool capabilities — register and unregister custom tools. */
   tools: {
     /** Register a custom LLM-callable tool. */
-    register(tool: ToolDefinition): Promise<void>;
+    register(tool: ToolDefinition, scope?: ScopeRef): Promise<void>;
     /** Unregister a previously registered tool by name. */
-    unregister(toolName: string): Promise<void>;
+    unregister(toolName: string, scope?: ScopeRef): Promise<void>;
   };
 
   /** Capability contributions — advertise tools or features to the host. */
@@ -87,9 +87,9 @@ export interface ExtensionAPI {
   /** Phase execution capabilities — provides Phase In/Out, phase identity, phase routing, and registration. */
   phases: {
     /** Register a Phase directory bundle or Phase object. */
-    register(phase: PhaseRegistration): Promise<void>;
+    register(phase: PhaseRegistration, scope?: ScopeRef): Promise<void>;
     /** Unregister a previously registered phase by name. */
-    unregister(phaseName: string): void;
+    unregister(phaseName: string, scope?: ScopeRef): Promise<void> | void;
     /** Phase In: get payload from previous phase */
     getPayload(): unknown;
     /** Phase Out: set payload for next phase */
@@ -109,9 +109,9 @@ export interface ExtensionAPI {
   /** Skill capabilities — register and unregister standalone skills. */
   skills: {
     /** Register a Skill directory (containing SKILL.md) or a Skill object. Registering an existing name replaces it. */
-    register(skill: SkillRegistration): Promise<void>;
+    register(skill: SkillRegistration, scope?: ScopeRef): Promise<void>;
     /** Unregister a previously registered Skill by name. */
-    unregister(skillName: string): void;
+    unregister(skillName: string, scope?: ScopeRef): Promise<void> | void;
   };
 
   /** Extension manifest from package.json `rowan` field. */
@@ -151,14 +151,14 @@ export type ExtensionFactory = (api: ExtensionAPI) => ExtensionFactoryResult | P
 export function createExtensionAPI(
   hooks?: HooksManager,
   options?: {
-    registerPhase?: (registration: PhaseRegistration) => Promise<void>;
-    unregisterPhase?: (phaseName: string) => void | Promise<void>;
-    registerSkill?: (registration: SkillRegistration) => Promise<void>;
-    unregisterSkill?: (skillName: string) => void | Promise<void>;
+    registerPhase?: (registration: PhaseRegistration, scope?: ScopeRef) => Promise<void>;
+    unregisterPhase?: (phaseName: string, scope?: ScopeRef) => void | Promise<void>;
+    registerSkill?: (registration: SkillRegistration, scope?: ScopeRef) => Promise<void>;
+    unregisterSkill?: (skillName: string, scope?: ScopeRef) => void | Promise<void>;
     registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
     unregisterProvider?: (id: string) => void;
-    registerTool?: (tool: ToolDefinition) => void | Promise<void>;
-    unregisterTool?: (toolName: string) => void | Promise<void>;
+    registerTool?: (tool: ToolDefinition, scope?: ScopeRef) => void | Promise<void>;
+    unregisterTool?: (toolName: string, scope?: ScopeRef) => void | Promise<void>;
     context?: ExtensionContext;
     manifest?: ExtensionManifest;
     phase?: PhaseContext;
@@ -293,13 +293,13 @@ export function createExtensionAPI(
       },
     },
     tools: {
-      register: (tool) => {
+      register: (tool, scope) => {
         assertActive();
-        return Promise.resolve(options?.registerTool?.(tool));
+        return Promise.resolve(options?.registerTool?.(tool, scope));
       },
-      unregister: (toolName) => {
+      unregister: (toolName, scope) => {
         assertActive();
-        return Promise.resolve(options?.unregisterTool?.(toolName));
+        return Promise.resolve(options?.unregisterTool?.(toolName, scope));
       },
     },
     capabilities: {
@@ -351,13 +351,13 @@ export function createExtensionAPI(
       }
       : { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
     phases: {
-      register: async (registration) => {
+      register: async (registration, scope) => {
         assertActive();
-        await options?.registerPhase?.(registration);
+        await options?.registerPhase?.(registration, scope);
       },
-      unregister: (phaseName) => {
+      unregister: (phaseName, scope) => {
         assertActive();
-        return options?.unregisterPhase?.(phaseName);
+        return options?.unregisterPhase?.(phaseName, scope);
       },
       getPayload: () => outputPayload,
       setPayload: (p) => { outputPayload = p; },
@@ -368,13 +368,13 @@ export function createExtensionAPI(
       getMessage: () => outputMessage,
     },
     skills: {
-      register: async (skill) => {
+      register: async (skill, scope) => {
         assertActive();
-        await options?.registerSkill?.(skill);
+        await options?.registerSkill?.(skill, scope);
       },
-      unregister: (skillName) => {
+      unregister: (skillName, scope) => {
         assertActive();
-        return options?.unregisterSkill?.(skillName);
+        return options?.unregisterSkill?.(skillName, scope);
       },
     },
   };

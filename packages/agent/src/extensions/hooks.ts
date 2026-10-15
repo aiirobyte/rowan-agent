@@ -32,6 +32,8 @@ export interface BeforeToolCallEvent {
   readonly agentId?: string;
   readonly toolCallId?: string;
   readonly metadata?: Readonly<Record<string, unknown>>;
+  /** The invoking Agent's metadata, as the Tool's own call context carries it. */
+  readonly agentMetadata?: Readonly<Record<string, unknown>>;
   readonly answer?: unknown;
   readonly scope?: ScopeRef;
   readonly turn?: JsonObject;

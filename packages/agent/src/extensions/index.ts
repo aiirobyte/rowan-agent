@@ -60,7 +60,7 @@ export type {
 export { InMemoryExtensionHost, scopeToKey } from "./host";
 
 // Runner
-export { ExtensionRunner, createExtensionRunner } from "./runner";
+export { ExtensionRunner, createExtensionRunner, extensionSourceId } from "./runner";
 export type { ExtensionRunnerOptions } from "./runner";
 
 // EventBus
@@ -87,6 +87,7 @@ export type {
   PhaseDefinition,
   RegisteredPhase,
   SkillRegistration,
+  RegisteredSkill,
   ScopeRef,
   ToolDefinition,
   ToolExecutionResult,

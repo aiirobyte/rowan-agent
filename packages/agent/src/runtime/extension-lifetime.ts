@@ -4,6 +4,8 @@ import {
 } from "../extensions";
 import type {
   LoadedExtension,
+  RegisteredPhase,
+  RegisteredSkill,
   RegisteredTool,
 } from "../extensions";
 import { loadExtensionsFromPath } from "../extensions/loader";
@@ -11,7 +13,13 @@ import type { Phase } from "../harness/phases/types";
 import type { Skill } from "../protocol";
 import { createCorePhases } from "../harness/phases/core-phases";
 import { createRouteTool } from "../harness/tools/route-tool";
-import { ResourceRegistry, type LoadInput, type ResourceDiagnostic } from "./resource-registry";
+import {
+  ResourceRegistry,
+  type LoadInput,
+  type ResourceDiagnostic,
+  type ResourceKind,
+  type ToolContribution,
+} from "./resource-registry";
 
 export type ExtensionContribution = LoadedExtension;
 export type ExtensionLoadInput = LoadInput<ExtensionContribution>;
@@ -80,8 +88,16 @@ export class RuntimeExtensionLifetime {
     return this.runner.getPhases();
   }
 
+  registeredPhases(): readonly RegisteredPhase[] {
+    return this.runner.getRegisteredPhases();
+  }
+
   skills(): readonly Skill[] {
     return this.runner.getSkills();
+  }
+
+  registeredSkills(): readonly RegisteredSkill[] {
+    return this.runner.getRegisteredSkills();
   }
 
   get extensionRunner(): ExtensionRunner {
@@ -109,7 +125,7 @@ export class RuntimeExtensionLifetime {
 
 /** Bootstrap-only Registry facade; its Extension method disappears after init. */
 export class RuntimeBootstrapRegistry extends ResourceRegistry {
-  private readonly extensionSourceId = "rowan.extensions";
+  private readonly knownSources = new Map<ResourceKind, Set<string>>();
   private commitQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly extensions: RuntimeExtensionLifetime = new RuntimeExtensionLifetime()) {
@@ -119,12 +135,26 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
 
   private recommit(kind: "tool" | "phase" | "skill"): Promise<void> {
     const next = this.commitQueue.then(async () => {
-      if (kind === "tool") {
-        await this.replaceImplicit("tool", this.extensionSourceId, this.extensions.tools().map(adaptExtensionTool));
-      } else if (kind === "phase") {
-        await this.replaceImplicit("phase", this.extensionSourceId, [...this.extensions.phases()]);
-      } else if (kind === "skill") {
-        await this.replaceImplicit("skill", this.extensionSourceId, [...this.extensions.skills()]);
+      const entries: (readonly [string, unknown])[] = kind === "tool"
+        ? this.extensions.tools().map((tool) => [tool.sourceId, adaptExtensionTool(tool)] as const)
+        : kind === "phase"
+          ? this.extensions.registeredPhases().map((reg) => [reg.sourceId, this.extensions.extensionRunner.adaptToPhase(reg)] as const)
+          : this.extensions.registeredSkills().map((reg) => [reg.sourceId, reg.definition] as const);
+      const bySource = new Map<string, unknown[]>();
+      for (const [sourceId, value] of entries) bySource.set(sourceId, [...(bySource.get(sourceId) ?? []), value]);
+
+      const known = this.knownSources.get(kind) ?? new Set<string>();
+      this.knownSources.set(kind, known);
+      for (const [sourceId, values] of bySource) {
+        known.add(sourceId);
+        if (kind === "tool") await this.loadTools({ sourceId, values: values as ToolContribution[] });
+        else if (kind === "phase") await this.loadPhases({ sourceId, values: values as Phase[] });
+        else await this.loadSkills({ sourceId, values: values as Skill[] });
+      }
+      for (const sourceId of [...known]) {
+        if (bySource.has(sourceId)) continue;
+        known.delete(sourceId);
+        await this.unload({ kind, sourceId });
       }
     });
     this.commitQueue = next.catch(() => undefined);
@@ -152,9 +182,7 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
         })();
     const normalized = await loaded;
     const result = await this.extensions.activate(normalized.extensions);
-    // Successful Extension contributions are implicit in every view. Keep one
-    // source transaction so the ordinary registry still owns collision and
-    // revision semantics, while the bootstrap lifetime owns activation/close.
+    // Extension contributions are committed to their per-Scope sources.
     await this.recommit("tool");
     await this.recommit("phase");
     await this.recommit("skill");
