@@ -48,7 +48,9 @@ export default extension;
   extension for a specific agent, persisted via the host.
 - `state.global()`: Access extension-wide durable key-value state private to the
   extension, surviving process restarts and not tied to an Agent, persisted via the host.
-- `tools.register(tool)` / `tools.unregister(toolName)`: Register or remove a tool that the LLM can call.
+- `tools.register(tool, scope?)` / `tools.unregister(toolName, scope?)`: Register or remove a tool that the LLM can call.
+  Registrations without scope are Global (`rowan.extensions`), while scoped registrations are stored under `rowan.extensions:<scopeToKey(scope)>`; `extensionSourceId(scope)` returns that source id.
+  Extension sources are resolved explicitly by Resource Views rather than auto-attached.
   Tools can specify `kind`, `annotations`, MCP-standard `_meta?: JsonObject` (passed untouched to `tools.list()` summaries for hosts and i18n), and an optional pure presentation function:
   ```ts
   present?(call: {
@@ -73,14 +75,15 @@ export default extension;
     - `signal?: AbortSignal`: Aborts that single tool call without cancelling the Run.
     - `onUpdate?(toolCall: ToolCall, progress?: ToolProgress): void`: Receives the merged `ToolCall` on every state change (start, progress-driven `present` updates, final state). Passes the raw `progress` object when triggered by a progress report.
   - `tools.report(update)`: Report external tool execution states and progress.
-- `phases.register(path | Phase)` / `phases.unregister(phaseName)`: Load and register a Phase directory Bundle or programmatic Phase object. The
+- `phases.register(path | Phase, scope?)` / `phases.unregister(phaseName, scope?)`: Load and register a Phase directory Bundle or programmatic Phase object (Global or scoped). The
   directory contains `PHASE.md` and may contain direct child Skill Bundles. Also provides
   `getPayload`, `setPayload`, `setMessage`, `getCurrentPhase`, `setNextPhase`, `getNextPhase`, `getMessage`.
-- `skills.register(path | Skill)` / `skills.unregister(skillName)`: Load and register a standalone Skill directory (containing `SKILL.md`) or a Skill object. Registering an existing name replaces it. Unregistering removes it from the resource pool.
+- `skills.register(path | Skill, scope?)` / `skills.unregister(skillName, scope?)`: Load and register a standalone Skill directory (containing `SKILL.md`) or a Skill object (Global or scoped). Registering an existing name replaces it. Unregistering removes it from the resource pool.
 - `hooks.on()` / `hooks.off()`: Register lifecycle hooks (`run_start`, `run_end`) and
   execution hooks (`before_phase`, `after_phase`, `before_prompt`,
   `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
-  `scope` and per-turn input `turn`.
+  `scope` and per-turn input `turn`; `before_tool_call` also carries the invoking
+  Agent's `agentMetadata` beside the Run's `metadata`.
 - `context`: Access the working directory, `AbortSignal`, command execution,
   and the current resource summary.
 - `events`: Publish custom events between extensions.

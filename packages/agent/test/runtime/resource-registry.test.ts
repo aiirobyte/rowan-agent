@@ -81,7 +81,7 @@ test("unload removes one complete source and leaves unrelated sources intact", a
 
   await registry.unload({ kind: "tool", sourceId: "project-a" });
 
-  expect(() => registry.resolveView(emptyView(["project-a"]))).toThrow(/Unknown resource source/);
+  expect(registry.resolveView(emptyView(["project-a"])).tools.map(({ name }) => name)).toEqual([]);
   expect(registry.resolveView(emptyView(["project-b"])).tools.map(({ name }) => name)).toEqual(["b"]);
 });
 

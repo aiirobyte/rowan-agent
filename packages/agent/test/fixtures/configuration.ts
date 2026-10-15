@@ -50,13 +50,11 @@ export async function seedResources(
     await runtime.loadTools({ sourceId: TEST_SOURCE, values: input.tools });
     seeded.push("tools");
   }
-  // A view may only name sources that exist for a kind. The Runtime's own
-  // sources — `rowan.core` with the core Phases, `rowan.extensions` with an
-  // Extension's contributions — are implicit in every view, so a view never
-  // names them.
+  // Include "rowan.extensions" in tools/skills/phases so test extension contributions are visible.
+  // Unregistered extension sources are treated as empty per R3.
   const ids = (kind: keyof SeededResources): readonly string[] =>
-    seeded.includes(kind) ? [TEST_SOURCE] : [];
-  return { agents: ids("agents"), tools: ids("tools"), skills: ids("skills"), phases: ids("phases") };
+    seeded.includes(kind) ? [TEST_SOURCE, "rowan.extensions"] : ["rowan.extensions"];
+  return { agents: seeded.includes("agents") ? [TEST_SOURCE] : [], tools: ids("tools"), skills: ids("skills"), phases: ids("phases") };
 }
 
 type ConfigurationInput = Readonly<{

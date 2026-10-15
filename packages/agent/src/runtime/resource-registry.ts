@@ -8,8 +8,6 @@ import type { Phase } from "../harness/phases/types";
 import { loadSkill } from "../harness/skills";
 import type { Skill } from "../protocol";
 import type { Tool } from "./contracts";
-import { CORE_PHASE_NAMES } from "../harness/phases/core-phases";
-import { CORE_TOOL_NAMES } from "./core-tools";
 
 export type { AgentDefinition } from "../harness/definitions";
 
@@ -92,7 +90,7 @@ type SourceRecord<T extends RegistryValue = RegistryValue> = Readonly<{
 }>;
 
 const RESOURCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
-const SOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const SOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 /**
  * Runtime Resource Registry source transaction and view resolver.
@@ -212,15 +210,7 @@ export class ResourceRegistry {
 
   private withImplicit(kind: ResourceKind, sourceIds: readonly ResourceSourceId[]): ResourceSourceId[] {
     const combined = [...sourceIds];
-    let hasCore = false;
-    for (const sourceId of this.implicitSources.get(kind) ?? []) {
-      if (sourceId === "rowan.core") {
-        hasCore = true;
-      } else if (!combined.includes(sourceId)) {
-        combined.push(sourceId);
-      }
-    }
-    if (hasCore && !combined.includes("rowan.core")) {
+    if (this.hasImplicit(kind, "rowan.core") && !combined.includes("rowan.core")) {
       combined.push("rowan.core");
     }
     return combined;
@@ -309,9 +299,6 @@ export class ResourceRegistry {
           if (source.sourceId === "rowan.core") {
             continue;
           }
-          if (source.sourceId === "rowan.extensions" && isCoreResourceName(kind, value.name)) {
-            continue;
-          }
           throw new ResourceRegistryError(
             "resource_collision",
             `Duplicate ${capitalize(kind)} resource "${value.name}" in Resource View.`,
@@ -337,9 +324,6 @@ export class ResourceRegistry {
           if (source.sourceId === "rowan.core") {
             continue;
           }
-          if (source.sourceId === "rowan.extensions" && isCoreResourceName(kind, value.name)) {
-            continue;
-          }
           throw new ResourceRegistryError("resource_collision", `Duplicate ${capitalize(kind)} resource "${value.name}" in Resource View.`);
         }
         seenNames.add(value.name);
@@ -359,10 +343,7 @@ export class ResourceRegistry {
       seen.add(sourceId);
       const source = bySource?.get(sourceId);
       if (!source) {
-        throw new ResourceRegistryError(
-          "unknown_resource_source",
-          `Unknown resource source "${sourceId}" for ${kind}.`,
-        );
+        continue;
       }
       sources.push(source);
     }
@@ -423,11 +404,6 @@ function capitalize(value: string): string {
  * Tool is assembled by the loop and cannot be shadowed by a host source. */
 function isImplicitCoreName(kind: ResourceKind, name: string): boolean {
   return kind === "tool" && name === "route";
-}
-
-function isCoreResourceName(kind: ResourceKind, name: string): boolean {
-  return (kind === "tool" && CORE_TOOL_NAMES.has(name))
-    || (kind === "phase" && CORE_PHASE_NAMES.has(name));
 }
 
 type DirectoryValues<T extends RegistryValue> = {

@@ -94,7 +94,7 @@ test("Extension registers a Skill directory, appears in resolved Definition cont
     const snapshot = resolveConfigurationSnapshot(registry, {
       identity: "test-run",
       definition: { name: "test-agent" },
-      resourceView: { agents: ["definitions"], tools: [], skills: [], phases: [] },
+      resourceView: { agents: ["definitions"], tools: [], skills: ["rowan.extensions"], phases: [] },
       model: { provider: "mock", id: "mock" },
     });
     const assembly = assembleRegisteredExtensions(snapshot, registry.extensionRunner);
@@ -163,7 +163,7 @@ test("Post-activation registrations and unregistrations reach the Registry and r
     const initialSnapshot = resolveConfigurationSnapshot(registry, {
       identity: "run-1",
       definition: { name: "test-agent" },
-      resourceView: { agents: ["definitions"], tools: [], skills: [], phases: [] },
+      resourceView: { agents: ["definitions"], tools: ["rowan.extensions"], skills: ["rowan.extensions"], phases: [] },
       model: { provider: "mock", id: "mock" },
     });
 
@@ -184,7 +184,7 @@ test("Post-activation registrations and unregistrations reach the Registry and r
     const updatedSnapshot = resolveConfigurationSnapshot(registry, {
       identity: "run-2",
       definition: { name: "test-agent" },
-      resourceView: { agents: ["definitions"], tools: [], skills: [], phases: [] },
+      resourceView: { agents: ["definitions"], tools: ["rowan.extensions"], skills: ["rowan.extensions"], phases: [] },
       model: { provider: "mock", id: "mock" },
     });
 

@@ -32,6 +32,7 @@ export const publicValueExports = [
   "RunInteractionBoundary",
   "RunInteractionCancelledError",
   "mergeToolCall",
+  "extensionSourceId",
 ] as const;
 
 export const publicTypeExports = [

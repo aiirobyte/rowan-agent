@@ -160,6 +160,8 @@ export type RegisteredPhase = {
   source: {
     extensionPath: string;
   };
+  sourceId: string;
+  scope?: ScopeRef;
 };
 
 // ---------------------------------------------------------------------------
@@ -174,6 +176,8 @@ export type RegisteredSkill = {
   source: {
     extensionPath: string;
   };
+  sourceId: string;
+  scope?: ScopeRef;
 };
 
 // ---------------------------------------------------------------------------
@@ -254,6 +258,8 @@ export type { ToolExecutionResult } from "../runtime-events";
 export interface RegisteredTool {
   definition: ToolDefinition;
   sourceInfo: SourceInfo;
+  sourceId: string;
+  scope?: ScopeRef;
 }
 
 // ---------------------------------------------------------------------------
