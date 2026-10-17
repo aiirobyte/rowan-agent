@@ -1,6 +1,6 @@
 # Issue slices: Host-declared core resources and Phase controls
 
-Status: ready-for-agent. Do not publish to GitHub, tag, or push without a
+Status: implemented; not published. Do not publish to GitHub, tag, or push without a
 separate request.
 
 Decision: [ADR-0016](../adr/0016-host-core-resources-and-phase-controls.md)
