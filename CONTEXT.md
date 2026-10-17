@@ -142,6 +142,10 @@ _Avoid_: Runtime State, Session, canonical transcript
 A durable FIFO processing request created from Agent Input. It may be queued, running, waiting for input, or terminal, and it can have multiple Execution Attempts separated by Run Interactions.
 _Avoid_: Job, Workflow Run, Turn Promise
 
+**Control Phase Run**:
+A Run the host starts directly into one Phase with `runPhase`. Its outcome is hidden (`display: false`); an empty input adds no user message; and `yieldToInput` cancels it when an ordinary Run is created for the same Agent. Compaction is one.
+_Avoid_: Control Run, System Run, Background Job
+
 **Execution Attempt**:
 One fenced period in which the Scheduler claims an Agent Run and executes it until an input or terminal boundary.
 _Avoid_: Worker, Lease, Agent process

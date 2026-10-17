@@ -277,7 +277,15 @@ async function completeRun(
   return createRunResult(config, state, outcome);
 }
 
+function isControlPhaseRun(metadata?: Readonly<Record<string, unknown>>): boolean {
+  const rowan = metadata?.rowan;
+  return typeof rowan === "object"
+    && rowan !== null
+    && (rowan as { kind?: unknown }).kind === "phase";
+}
+
 function createTerminalOutcome(
+  config: AgentConfig,
   phase: Phase,
   output: PhaseOutput,
   transcript: AgentMessage[],
@@ -285,7 +293,7 @@ function createTerminalOutcome(
   const outcome = phase.run || phase.factory
     ? createOutcome.phase(output, transcript)
     : createOutcome.default(output, transcript);
-  return phase.name === "compact" ? { ...outcome, display: false } : outcome;
+  return isControlPhaseRun(config.execution.runMetadata) ? { ...outcome, display: false } : outcome;
 }
 
 function shouldRunStopPhase(phase: Phase, output: PhaseOutput): boolean {
@@ -950,7 +958,7 @@ async function runPhaseLoop(
       removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
       previousPhaseInputMsgId = undefined;
-      return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+      return completeRun(config, state, createTerminalOutcome(config, phase, output, config.context.messages));
     }
 
     if (phase.run || phase.factory) {
@@ -967,7 +975,7 @@ async function runPhaseLoop(
       removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
       previousPhaseMsgId = undefined;
       previousPhaseInputMsgId = undefined;
-      return completeRun(config, state, createOutcome.default(output, config.context.messages));
+      return completeRun(config, state, createTerminalOutcome(config, phase, output, config.context.messages));
     }
 
     // Handle "continue" — re-execute current phase
@@ -993,7 +1001,7 @@ async function runPhaseLoop(
           removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
           previousPhaseMsgId = undefined;
           previousPhaseInputMsgId = undefined;
-          return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+          return completeRun(config, state, createTerminalOutcome(config, phase, output, config.context.messages));
         }
         currentPhaseId = STOP_PHASE_ID;
         previousPayload = undefined;
@@ -1022,7 +1030,7 @@ async function runPhaseLoop(
         removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
         previousPhaseInputMsgId = undefined;
-        return completeRun(config, state, createTerminalOutcome(phase, output, config.context.messages));
+        return completeRun(config, state, createTerminalOutcome(config, phase, output, config.context.messages));
       }
       currentPhaseId = STOP_PHASE_ID;
       previousPayload = output.payload;

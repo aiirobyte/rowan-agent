@@ -2298,7 +2298,7 @@ function userInputMetadata(input: UserInput): Metadata | undefined {
   return typeof input === "string" ? undefined : input.metadata;
 }
 
-function isControlMetadata(metadata?: Metadata): boolean {
+export function isControlMetadata(metadata?: Metadata): boolean {
   const rowan = metadata?.rowan;
   return typeof rowan === "object"
     && rowan !== null
@@ -2306,7 +2306,7 @@ function isControlMetadata(metadata?: Metadata): boolean {
     && (rowan as { kind: string }).kind.length > 0;
 }
 
-function isControlRun(run: RunRecord): boolean {
+export function isControlRun(run: RunRecord): boolean {
   return isControlMetadata(run.metadata);
 }
 

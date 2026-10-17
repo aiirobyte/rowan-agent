@@ -70,7 +70,7 @@ import type { PhaseRegistry } from "../harness/phases/types";
 import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import type { ToolCall, ToolResult } from "../protocol";
-import { defaultToolCallContent } from "./durable-store";
+import { defaultToolCallContent, isControlMetadata, isControlRun } from "./durable-store";
 import { assertJsonValue, isJsonValue } from "./json";
 import {
   mergeToolCall,
@@ -460,23 +460,34 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.owned.contextStatus(agentId, contextWindow);
   }
 
-  async compactContext(agentId: AgentId, options: { input?: UserInput; instructions?: string; idempotencyKey?: string } = {}): Promise<AgentRun> {
+  async runPhase(
+    agentId: AgentId,
+    options: {
+      phase: string;
+      payload?: JsonValue;
+      input?: UserInput;
+      yieldToInput?: boolean;
+      idempotencyKey?: string;
+    },
+  ): Promise<AgentRun> {
     this.assertOpen();
     const agent = await this.requireAgent(agentId);
     if (!agent.activatedAt || !agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
     const active = (await this.owned.listRuns({ agentId }))
       .filter((run) => ["queued", "running", "input_required"].includes(run.state));
-    const existing = active.find((run) => controlRunKind(run) === "compact");
+    const existing = active.find((run) => controlRunPhase(run) === options.phase);
     if (existing) return new DurableRun(this, existing.id);
     // An input-required Run is paused and does not consume the execution
-    // slot; manual compaction is explicitly allowed while it waits for the
-    // next user input. Only queued/running work blocks a Control Run.
-    const blocking = active.find((run) => run.state === "queued" || run.state === "running");
+    // slot; manual control runs are explicitly allowed while it waits for
+    // the next user input. Only queued/running work blocks a Control Run.
+    const blocking = active.find((run) => (run.state === "queued" || run.state === "running") && !isControlRun(run));
     if (blocking) throw new RuntimeError("context_busy", { agentId, runId: blocking.id, actual: blocking.state });
     const metadata: Metadata = {
       rowan: {
-        kind: "compact",
-        ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
+        kind: "phase",
+        phase: options.phase,
+        ...(options.payload === undefined ? {} : { payload: options.payload }),
+        ...(options.yieldToInput ? { yieldToInput: true } : {}),
       },
     };
     const run = await this.owned.createRun({
@@ -485,10 +496,19 @@ export class AgentRuntime implements AgentRuntimeContract {
       // represents a user invocation and is committed by the Durable Store.
       input: options.input ?? "",
       metadata,
-      idempotencyKey: options.idempotencyKey ?? createId("compact"),
+      idempotencyKey: options.idempotencyKey ?? createId(`phase-${options.phase}`),
     });
     void this.pump();
     return new DurableRun(this, run.id);
+  }
+
+  async compactContext(agentId: AgentId, options: { input?: UserInput; instructions?: string; idempotencyKey?: string } = {}): Promise<AgentRun> {
+    return this.runPhase(agentId, {
+      phase: COMPACT_PHASE_ID,
+      ...(options.instructions !== undefined ? { payload: { instructions: options.instructions } } : {}),
+      ...(options.input !== undefined ? { input: options.input } : {}),
+      ...(options.idempotencyKey !== undefined ? { idempotencyKey: options.idempotencyKey } : {}),
+    });
   }
 
   async start(
@@ -512,6 +532,17 @@ export class AgentRuntime implements AgentRuntimeContract {
     }
     const agent = await this.requireAgent(agentId);
     if (!agent.activatedAt || !agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
+
+    if (!isControlMetadata(options.metadata)) {
+      const activeRuns = (await this.owned.listRuns({ agentId }))
+        .filter((r) => !["completed", "failed", "cancelled"].includes(r.state));
+      for (const run of activeRuns) {
+        if (isYieldingControlPhaseRun(run)) {
+          await this.cancel(run.id, "Yielded to input.");
+        }
+      }
+    }
+
     let phasePayload: JsonValue | undefined;
     let pinnedConfigToken = agent.currentConfigToken;
     if (options.phasePayload !== undefined) {
@@ -790,7 +821,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         const queued = await this.owned.listRuns({ states: ["queued"] });
         const next = queued
           .filter((run) => !this.activeAgents.has(run.agentId))
-          .sort((left, right) => Number(controlRunKind(right) === "compact") - Number(controlRunKind(left) === "compact"))[0];
+          .sort((left, right) => Number(isCompactControlRun(right)) - Number(isCompactControlRun(left)))[0];
         if (!next) return;
         this.activeAgents.add(next.agentId);
         const task = this.execute(next).finally(() => {
@@ -862,8 +893,9 @@ export class AgentRuntime implements AgentRuntimeContract {
         }
       }
       const config = this.resolveConfig(resolvedConfig);
-      const controlKind = controlRunKind(run);
-      if (!controlKind && !this.autoCompactionRuns.has(run.id)) {
+      const controlPhase = controlRunPhase(run);
+      const controlPayload = controlRunPayload(run);
+      if (!controlPhase && !this.autoCompactionRuns.has(run.id)) {
         const contextWindow = await resolveContextWindowForConfig(config);
         const status = await this.owned.contextStatus(run.agentId, contextWindow);
         const inputTokens = estimateRunInputTokens(run.input);
@@ -874,9 +906,12 @@ export class AgentRuntime implements AgentRuntimeContract {
             input: "",
             metadata: {
               rowan: {
-                kind: "compact",
-                trigger: "auto",
-                sourceRunId: String(run.id),
+                kind: "phase",
+                phase: "compact",
+                payload: {
+                  trigger: "auto",
+                  sourceRunId: String(run.id),
+                },
               },
             },
             idempotencyKey: `auto-compact:${run.id}`,
@@ -930,6 +965,26 @@ export class AgentRuntime implements AgentRuntimeContract {
         : { provider: config.model.provider, id: config.model.id } satisfies ModelRef;
       const stream = "stream" in config && config.stream ? config.stream as StreamFn : createModelStream(config.model as never);
       const phaseRegistry = normalizePhaseRegistry(assembly.context.phases);
+      if (controlPhase && !phaseRegistry.phases.has(controlPhase)) {
+        const failure: RunFailure = {
+          code: "execution_failed",
+          message: `Phase "${controlPhase}" not found in Configuration Snapshot.`,
+        };
+        const committed = await this.owned.commitOutcome({
+          runId: run.id,
+          execution: claim.execution,
+          expectedRevision: executionRevision,
+          failure,
+        });
+        this.transientEvents.clear(run.id, claim.execution.executionId);
+        await this.handleRunEnd(run.id, run.agentId, {
+          id: createId("out"),
+          status: "failed",
+          message: failure.message,
+          error: committed.failure ?? failure,
+        });
+        return;
+      }
       let modelMessages = await this.owned.contextMessages(run.agentId);
       const buildExecutionContext = (messages: readonly import("../runtime-events").Message[], phaseId?: string) => {
         const executionContext = projectModelContext({
@@ -941,10 +996,11 @@ export class AgentRuntime implements AgentRuntimeContract {
           agentId: run.agentId,
           runId: run.id,
         });
-        if (phaseId === COMPACT_PHASE_ID || controlKind === "compact") {
+        const targetPhase = phaseId ?? controlPhase;
+        if (targetPhase !== undefined) {
           executionContext.phases = {
             ...executionContext.phases!,
-            entryPhaseId: COMPACT_PHASE_ID,
+            entryPhaseId: targetPhase,
           };
         }
         return executionContext;
@@ -976,7 +1032,9 @@ export class AgentRuntime implements AgentRuntimeContract {
         stream,
         maxAttempts: config.maxAttempts,
         checkpoint: claim!.run.checkpoint,
-        ...(claim!.run.phasePayload === undefined ? {} : { initialPhasePayload: claim!.run.phasePayload }),
+        ...(claim!.run.phasePayload !== undefined || controlPayload !== undefined
+          ? { initialPhasePayload: claim!.run.phasePayload ?? controlPayload }
+          : {}),
         ...(claim!.run.entryPhases === undefined ? {} : { entryPhases: claim!.run.entryPhases }),
         interactionAnswers: claim!.run.interactionAnswers,
         signal: controller.signal,
@@ -995,8 +1053,7 @@ export class AgentRuntime implements AgentRuntimeContract {
               && !controller.signal.aborted
             ) {
               const summary = compactSummary(effectiveOutput.payload);
-              const instructions = compactInstructions(run)
-                ?? compactOutputInstructions(effectiveOutput.payload);
+              const instructions = compactOutputInstructions(effectiveOutput.payload);
               if (summary) {
                 const covered = claim!.history.at(-1);
                 const record: ContextCompactionRecord = {
@@ -1335,7 +1392,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         } satisfies AgentRuntimePort,
       });
       let result = await executeModel(executionContext);
-      if (!controlKind && result.type === "failed" && isContextOverflowError(result.error)) {
+      if (!controlPhase && result.type === "failed" && isContextOverflowError(result.error)) {
         const compactContext = buildExecutionContext(await this.owned.contextMessages(run.agentId), COMPACT_PHASE_ID);
         const compactResult = await executeModel(compactContext);
         const summary = compactResult.type === "completed" ? compactSummary(compactResult.outcome.payload) : undefined;
@@ -2603,18 +2660,31 @@ function boundaryFromSnapshot(snapshot: RunSnapshot): RunBoundary {
 
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-function controlRunKind(run: RunRecord): string | undefined {
+function controlRunPhase(run: RunRecord): string | undefined {
   const rowan = run.metadata?.rowan;
-  if (typeof rowan !== "object" || rowan === null || !("kind" in rowan)) return undefined;
-  const kind = (rowan as { kind?: unknown }).kind;
-  return typeof kind === "string" ? kind : undefined;
+  if (typeof rowan !== "object" || rowan === null) return undefined;
+  if ((rowan as { kind?: unknown }).kind !== "phase") return undefined;
+  const phase = (rowan as { phase?: unknown }).phase;
+  return typeof phase === "string" && phase.length > 0 ? phase : undefined;
 }
 
-function compactInstructions(run: RunRecord): string | undefined {
+function controlRunPayload(run: RunRecord): JsonValue | undefined {
   const rowan = run.metadata?.rowan;
-  if (typeof rowan !== "object" || rowan === null || !("instructions" in rowan)) return undefined;
-  const instructions = (rowan as { instructions?: unknown }).instructions;
-  return typeof instructions === "string" && instructions.trim().length > 0 ? instructions : undefined;
+  if (typeof rowan !== "object" || rowan === null) return undefined;
+  if ((rowan as { kind?: unknown }).kind !== "phase") return undefined;
+  return (rowan as { payload?: JsonValue }).payload;
+}
+
+function isYieldingControlPhaseRun(run: RunRecord): boolean {
+  const rowan = run.metadata?.rowan;
+  return typeof rowan === "object"
+    && rowan !== null
+    && (rowan as { kind?: unknown }).kind === "phase"
+    && (rowan as { yieldToInput?: unknown }).yieldToInput === true;
+}
+
+function isCompactControlRun(run: RunRecord): boolean {
+  return controlRunPhase(run) === COMPACT_PHASE_ID;
 }
 
 function compactSummary(payload: unknown): string | undefined {

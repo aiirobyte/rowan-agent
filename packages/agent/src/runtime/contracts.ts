@@ -555,6 +555,13 @@ export interface AgentRuntime {
   run(runId: RunId): AgentRun;
   contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
   compactContext(agentId: AgentId, options?: { input?: UserInput; instructions?: string; idempotencyKey?: string }): Promise<AgentRun>;
+  runPhase(agentId: AgentId, options: {
+    phase: string;
+    payload?: JsonValue;
+    input?: UserInput;
+    yieldToInput?: boolean;
+    idempotencyKey?: string;
+  }): Promise<AgentRun>;
   listInvocations(agentId: AgentId, options: { source: InvocationSource }): Promise<readonly InvocationCatalogEntry[]>;
   history(agentId: AgentId): Promise<readonly Message[]>;
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
