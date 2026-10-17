@@ -15,10 +15,11 @@ the first resource that needs all four.
 
 - **Core is a registration attribute.** A resource value whose registrant sets
   `core: true` is core. Rowan never reads `core` from PHASE.md, SKILL.md, or
-  Definition frontmatter. Rowan's own `rowan.core` resources keep their reserved
-  names and stay core. A core Tool or Phase is always selected: no Definition
-  list, Definition Layer, or Phase `tools` filter removes it. Only its
-  registrant removes it, by unloading or replacing its source.
+  Definition frontmatter. Rowan's own `rowan.core` resources stay core, and a
+  host may still replace one by registering its name. A core Tool or Phase is
+  always selected: no Definition list, Definition Layer, or Phase `tools`
+  filter removes it. Only its registrant removes it, by unloading or replacing
+  its source.
 - **`previous` is a reserved route target**, next to `continue` and `stop`. No
   resource may be named `previous`. Routing to `previous` returns to the Phase
   that routed into the current one, taken from the latest recorded Phase

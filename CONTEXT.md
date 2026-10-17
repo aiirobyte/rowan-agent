@@ -60,6 +60,13 @@ Definition and Phase narrowing. Candidates are never supplied as concrete
 values in an Agent Configuration.
 _Avoid_: Allowed Resource, Resource Reference, Registered Capability
 
+**Core Resource**:
+A host-registered Tool or Phase whose registrant sets `core: true`. Rowan always
+selects it despite Definition, Definition Layer, and Phase Tool filters. Only
+its registrant can remove it by unloading or replacing its source; frontmatter
+cannot set `core`.
+_Avoid_: Frontmatter Core, Core Selection
+
 **Phase Bundle**:
 One file Phase plus its direct child Skill values, loaded and snapshotted as a
 single Phase contribution. Nested Skills have no independent Rowan Source ID or

@@ -163,6 +163,78 @@ test("a Definition Layer cannot widen a parent selection", async () => {
   }
 });
 
+test("host-declared Core Tools and Phases survive empty selections and Definition Layers", async () => {
+  const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    const registry = new ResourceRegistry();
+    await registry.loadAgents({
+      sourceId: "definitions",
+      values: [
+        {
+          name: "empty",
+          description: "Empty selections",
+          prompt: "Prompt",
+          tools: [],
+          phases: { entryPhaseId: null, phaseIds: [] },
+        },
+        {
+          name: "narrowed",
+          description: "Layer-narrowed selections",
+          prompt: "Prompt",
+          tools: ["ordinary"],
+          phases: { entryPhaseId: "ordinary-phase", phaseIds: ["ordinary-phase"] },
+        },
+      ],
+    });
+    await registry.loadTools({
+      sourceId: "project-tools",
+      values: [tool("host-core-tool"), tool("ordinary")].map((value) =>
+        value.name === "host-core-tool" ? { ...value, core: true } : value),
+    });
+    await registry.loadPhases({
+      sourceId: "project-phases",
+      values: [
+        { name: "host-core-phase", description: "Core", content: "Core", filePath: "<core>", baseDir: "<core>", core: true },
+        { name: "ordinary-phase", description: "Ordinary", content: "Ordinary", filePath: "<ordinary>", baseDir: "<ordinary>" },
+      ],
+    });
+
+    const empty = resolveConfigurationSnapshot(registry, {
+      identity: "core-empty-v1",
+      definition: { name: "empty" },
+      resourceView: view,
+      model: { provider: "test", id: "model" },
+    });
+    expect(empty.resources.tools.map(({ name }) => name)).toEqual(["host-core-tool"]);
+    expect([...empty.resources.phases!.phases.keys()]).toEqual(["host-core-phase"]);
+    expect(empty.resources.refs.tool).toEqual([
+      { kind: "tool", sourceId: "project-tools", name: "host-core-tool" },
+    ]);
+    expect(empty.resources.refs.phase).toEqual([
+      { kind: "phase", sourceId: "project-phases", name: "host-core-phase" },
+    ]);
+
+    const narrowed = resolveConfigurationSnapshot(registry, {
+      identity: "core-layer-v1",
+      definition: {
+        name: "narrowed",
+        layer: {
+          tools: [],
+          phases: { entryPhaseId: null, phaseIds: [] },
+        },
+      },
+      resourceView: view,
+      model: { provider: "test", id: "model" },
+    });
+    expect(narrowed.resources.tools.map(({ name }) => name)).toEqual(["host-core-tool"]);
+    expect([...narrowed.resources.phases!.phases.keys()]).toEqual(["host-core-phase"]);
+    expect(narrowed.resources.tools[0]?.core).toBe(true);
+    expect(narrowed.resources.phases!.phases.get("host-core-phase")?.core).toBe(true);
+  } finally {
+    warnings.mockRestore();
+  }
+});
+
 test("the built-in default entry is valid with an empty authored Phase selection", async () => {
   const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
   try {
