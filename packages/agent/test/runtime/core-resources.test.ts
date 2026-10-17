@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,14 +8,16 @@ import {
   STOP_PHASE_ID,
   createCorePhases,
   loadPhase,
+  loadPhases,
   loadSkill,
 } from "../../src";
 import type { StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore } from "../../src/runtime";
 import type { AgentDefinition } from "../../src/harness/definitions";
-import { configuration, seedResources } from "../fixtures/configuration";
+import { configuration, createAgentWith, seedResources } from "../fixtures/configuration";
 import type { Phase } from "../../src/harness/phases/types";
 import { RuntimeBootstrapRegistry } from "../../src/runtime/extension-lifetime";
+import { stopResponse } from "./route-test-utils";
 
 test("Rowan Core Phases are immutable and expose the invocation policy matrix", () => {
   const phases = createCorePhases();
@@ -75,6 +77,100 @@ Skill guidance.
   expect(phase.disableImplicitInvocation).toBe(false);
   expect(skill.disableAutoInvocation).toBe(true);
   expect(skill.disableImplicitInvocation).toBe(true);
+});
+
+test("PHASE.md frontmatter cannot declare a Core Phase", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-core-frontmatter-"));
+  try {
+    const phaseDir = join(root, "host-phase");
+    await mkdir(phaseDir, { recursive: true });
+    await writeFile(join(phaseDir, "PHASE.md"), `---
+name: host-phase
+description: Host phase
+core: true
+---
+Host work.
+`);
+
+    const phases = await loadPhases(root);
+    expect(phases.phases.get("host-phase")?.core).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host Core resources survive Phase-local filters and enter the automatic route catalog", async () => {
+  let phaseToolNames: string[] = [];
+  let routeDescription = "";
+  const work: Phase = {
+    name: "work",
+    description: "Work",
+    content: "Work",
+    filePath: "<work>",
+    baseDir: "<work>",
+    tools: [],
+    run: async (context) => {
+      phaseToolNames = context.tools.map(({ name }) => name);
+      routeDescription = context.tools.find(({ name }) => name === "route")?.description ?? "";
+      return { message: "Work complete.", route: "stop" };
+    },
+  };
+  const stream: StreamFn = async function* () {
+    yield { type: "done", response: stopResponse("Done.") };
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "host-core-phase-local-filter-v1",
+      definition: {
+        name: "core-phase-local-filter",
+        description: "Core phase local filtering",
+        prompt: "Run work.",
+        tools: [],
+        phases: { entryPhaseId: "work", phaseIds: ["work"] },
+      },
+      tools: [{
+        name: "host_core_tool",
+        core: true,
+        description: "Host core tool",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ ok: true as const, content: null }),
+      }],
+      phases: [
+        work,
+        {
+          name: "host_auto_phase",
+          core: true,
+          description: "Automatically routable host core phase",
+          content: "Automatic.",
+          filePath: "<auto>",
+          baseDir: "<auto>",
+        },
+        {
+          name: "host_manual_phase",
+          core: true,
+          description: "Non-automatic host core phase",
+          content: "Manual.",
+          disableAutoInvocation: true,
+          filePath: "<manual>",
+          baseDir: "<manual>",
+        },
+      ],
+      stream,
+      options: { idempotencyKey: "host-core-phase-local-filter-agent" },
+    });
+
+    const run = await runtime.start(agentId, "Run.", {
+      idempotencyKey: "host-core-phase-local-filter-run",
+    });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+
+    expect(phaseToolNames).toContain("host_core_tool");
+    expect(routeDescription).toContain("host_auto_phase");
+    expect(routeDescription).not.toContain("host_manual_phase");
+  } finally {
+    await runtime.close();
+  }
 });
 
 test("Runtime invocation catalog applies policy after authored selection and keeps Core Phases", async () => {

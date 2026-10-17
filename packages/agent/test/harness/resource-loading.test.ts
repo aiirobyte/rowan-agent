@@ -134,6 +134,52 @@ Review the change.
   }
 });
 
+test("Phase loading accepts previous targets and parses prompt-guidelines", async () => {
+  const root = await createResourceDir("rowan-phase-guidelines-", "PHASE.md", "review-phase");
+  try {
+    const phasePath = join(root, "review-phase", "PHASE.md");
+    await writeFile(phasePath, `---
+name: review-phase
+description: Review the current change.
+target: previous
+prompt-guidelines:
+  - Preserve existing behavior.
+  - Report only verified findings.
+---
+Review the change.
+`);
+
+    const phase = await loadPhase(phasePath);
+    expect(phase.target).toBe("previous");
+    expect(phase.promptGuidelines).toEqual([
+      "Preserve existing behavior.",
+      "Report only verified findings.",
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Phase prompt-guidelines reject empty or non-string entries", async () => {
+  const root = await createResourceDir("rowan-phase-invalid-guidelines-", "PHASE.md", "review-phase");
+  try {
+    const phasePath = join(root, "review-phase", "PHASE.md");
+    await writeFile(phasePath, `---
+name: review-phase
+description: Review the current change.
+prompt-guidelines:
+  - Preserve existing behavior.
+  - " "
+---
+Review the change.
+`);
+
+    await expect(loadPhase(phasePath)).rejects.toThrow("prompt-guidelines[1] must be a non-empty string");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Phase loading bundles direct child Skills", async () => {
   const root = await createResourceDir("rowan-phase-skills-", "PHASE.md", "review-phase");
   try {

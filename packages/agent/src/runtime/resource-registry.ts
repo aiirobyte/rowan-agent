@@ -254,10 +254,10 @@ export class ResourceRegistry {
           `${capitalize(kind)} resource "${value.name}" is reserved by Rowan core.`,
         );
       }
-      if (kind === "phase" && value.name === "continue") {
+      if (kind === "phase" && (value.name === "continue" || value.name === "previous")) {
         throw new ResourceRegistryError(
           "resource_collision",
-          `Phase resource "continue" is reserved by Rowan routing controls.`,
+          `Phase resource "${value.name}" is reserved by Rowan routing controls.`,
         );
       }
       if (names.has(value.name)) {
@@ -373,6 +373,9 @@ function snapshotResourceValue<T extends RegistryValue>(kind: ResourceKind, valu
     disableAutoInvocation: phase.disableAutoInvocation ?? false,
     disableImplicitInvocation: phase.disableImplicitInvocation ?? false,
     ...(phase.tools ? { tools: Object.freeze([...phase.tools]) as unknown as Phase["tools"] } : {}),
+    ...(phase.promptGuidelines
+      ? { promptGuidelines: Object.freeze([...phase.promptGuidelines]) as unknown as Phase["promptGuidelines"] }
+      : {}),
     skills: Object.freeze((phase.skills ?? []).map((skill) => Object.freeze({ ...skill }))) as unknown as Phase["skills"],
     ...(phase.input ? { input: Object.freeze({ ...phase.input }) as unknown as Phase["input"] } : {}),
     ...(phase.model ? { model: Object.freeze({ ...phase.model }) as unknown as Phase["model"] } : {}),

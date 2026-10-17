@@ -102,7 +102,7 @@ function optionalString(value: unknown, field: string): string | undefined {
   return value.trim();
 }
 
-function optionalStringList(value: unknown, field: string): readonly string[] | undefined {
+export function optionalStringList(value: unknown, field: string): readonly string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new TypeError(`${field} must be an array of strings`);
   const names: string[] = [];

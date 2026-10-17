@@ -18,7 +18,7 @@ import {
   loadMarkdown,
   inferResourceName,
 } from "../loader";
-import { normalizeAgentDefinition } from "../definitions";
+import { normalizeAgentDefinition, optionalStringList } from "../definitions";
 import { formatResourceOutput } from "../context/resource-formatter";
 import {
   ResourceMetadataError,
@@ -62,13 +62,16 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   const metadata = frontmatter as Record<string, unknown>;
   const frontmatterName = typeof metadata.name === "string" ? metadata.name : undefined;
   let definition;
+  let promptGuidelines: readonly string[] | undefined;
   try {
     // A Phase's Skill set is defined by its directory Bundle. Ignore the old
     // frontmatter selector before shared Definition parsing so malformed legacy
     // values remain a silent no-op.
     const phaseMetadata = { ...metadata };
     delete phaseMetadata.skills;
+    delete phaseMetadata["prompt-guidelines"];
     definition = normalizeAgentDefinition(phaseMetadata, body, { fallbackName: directoryName });
+    promptGuidelines = optionalStringList(metadata["prompt-guidelines"], "prompt-guidelines");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     warnResourceDiagnostics("phase", resolved, [message]);
@@ -100,6 +103,7 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
     tools: definition.tools ? [...definition.tools] : undefined,
     skills,
     target: metadata.target as string | undefined,
+    ...(promptGuidelines === undefined ? {} : { promptGuidelines: [...promptGuidelines] }),
     ...(input === undefined ? {} : { input }),
     isolated: metadata.isolated as boolean | undefined,
     filePath: resolved,

@@ -140,11 +140,11 @@ export function createCompactPhase(): Phase {
 }
 
 function compactInstructions(context: PhaseContext): string | undefined {
-  const rowan = context.execution.runMetadata?.rowan;
-  if (typeof rowan === "object" && rowan !== null && !Array.isArray(rowan)) {
-    const configured = (rowan as { instructions?: unknown }).instructions;
-    if (typeof configured === "string" && configured.trim().length > 0) {
-      return configured.trim();
+  const payload = context.state.payload;
+  if (typeof payload === "object" && payload !== null && "instructions" in payload) {
+    const instructions = (payload as { instructions?: unknown }).instructions;
+    if (typeof instructions === "string" && instructions.trim().length > 0) {
+      return instructions.trim();
     }
   }
 
@@ -157,8 +157,7 @@ function compactInstructions(context: PhaseContext): string | undefined {
       .map((part) => part.text)
       .join("");
   const match = text.match(/^\/compact(?:\s+([\s\S]*))?$/i);
-  const instructions = match?.[1]?.trim();
-  return instructions || undefined;
+  return match?.[1]?.trim() || undefined;
 }
 
 export function createCorePhases(): Phase[] {
