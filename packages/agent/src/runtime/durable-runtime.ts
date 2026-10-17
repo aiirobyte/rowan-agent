@@ -2668,7 +2668,7 @@ function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegis
   const core = createCorePhases();
   const coreNames = CORE_PHASE_NAMES;
   for (const [name] of registry?.phases ?? []) {
-    if (name === "continue") {
+    if (name === "continue" || name === "previous") {
       throw new TypeError(`Configured Phase name "${name}" is reserved by Rowan routing controls.`);
     }
   }

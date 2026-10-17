@@ -160,6 +160,9 @@ function snapshotPhase(phase: Phase): Phase {
   return Object.freeze({
     ...phase,
     ...(phase.tools ? { tools: Object.freeze([...phase.tools]) as unknown as Phase["tools"] } : {}),
+    ...(phase.promptGuidelines
+      ? { promptGuidelines: Object.freeze([...phase.promptGuidelines]) as unknown as Phase["promptGuidelines"] }
+      : {}),
     skills: Object.freeze((phase.skills ?? []).map((skill) => Object.freeze({ ...skill }))),
     ...(phase.input ? { input: Object.freeze({ ...phase.input }) as unknown as Phase["input"] } : {}),
     ...(phase.model ? { model: Object.freeze({ ...phase.model }) as unknown as Phase["model"] } : {}),

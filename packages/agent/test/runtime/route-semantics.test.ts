@@ -168,6 +168,232 @@ test("route(default) is available from every Phase", async () => {
   }
 });
 
+test("route(previous) returns to the Phase that routed into the current Phase", async () => {
+  const phaseVisits: string[] = [];
+  let modelCalls = 0;
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    const messages = request.messages
+      .map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content))
+      .join("\n");
+    phaseVisits.push(messages.includes('<phase_content name="b">') ? "b" : "a");
+    yield {
+      type: "done",
+      response: modelCalls === 1
+        ? routeResponse([{ phase: "b" }], "")
+        : modelCalls === 2
+          ? routeResponse([{ phase: "previous" }], "")
+          : stopResponse("finished"),
+    };
+  };
+  const phases = new Map([
+    ["a", workPhase({ name: "a" })],
+    ["b", workPhase({ name: "b" })],
+  ]) as Map<string, Phase>;
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "a" },
+      undefined, [],
+      { idempotencyKey: "route-previous-agent" },
+    );
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-previous-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(phaseVisits).toEqual(["a", "b", "a"]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("Phase target previous returns to the Phase that routed into it", async () => {
+  const phaseVisits: string[] = [];
+  let modelCalls = 0;
+  const stream: StreamFn = async function* (request) {
+    modelCalls += 1;
+    const messages = request.messages
+      .map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content))
+      .join("\n");
+    phaseVisits.push(messages.includes('<phase_content name="b">') ? "b" : "a");
+    yield {
+      type: "done",
+      response: modelCalls === 1
+        ? routeResponse([{ phase: "b" }], "")
+        : modelCalls === 2
+          ? { content: "back", stopReason: "stop" }
+          : stopResponse("finished"),
+    };
+  };
+  const phases = new Map([
+    ["a", workPhase({ name: "a" })],
+    ["b", workPhase({ name: "b", target: "previous" })],
+  ]) as Map<string, Phase>;
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "a" },
+      undefined, [],
+      { idempotencyKey: "phase-target-previous-agent" },
+    );
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-target-previous-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(phaseVisits).toEqual(["a", "b", "a"]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("route(previous) from the entry Phase stops when no Phase transition exists", async () => {
+  let modelCalls = 0;
+  const stream: StreamFn = async function* () {
+    modelCalls += 1;
+    yield { type: "done", response: routeResponse([{ phase: "previous" }], "finished") };
+  };
+  const phases = new Map([["work", workPhase()]]) as Map<string, Phase>;
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await routeAgent(
+      runtime,
+      stream, { phases, entryPhaseId: "work" },
+      undefined, [],
+      { idempotencyKey: "route-previous-entry-agent" },
+    );
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-previous-entry-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(modelCalls).toBe(1);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("programmatic Phase returning route: previous re-enters previous phase", async () => {
+  let aCalls = 0;
+  const phaseA = workPhase({
+    name: "a",
+    run: async () => {
+      aCalls += 1;
+      return aCalls === 1
+        ? { message: "go to b", route: "b" }
+        : { message: "done in a", route: "stop" };
+    },
+  });
+  const phaseB = workPhase({
+    name: "b",
+    run: async () => ({ message: "go back", route: "previous" }),
+  });
+  const phases = new Map([["a", phaseA], ["b", phaseB]]);
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await routeAgent(
+      runtime,
+      async function* () { yield { type: "done" }; },
+      { phases, entryPhaseId: "a" },
+      undefined, [],
+      { idempotencyKey: "programmatic-route-previous-agent" },
+    );
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "programmatic-route-previous-run" });
+    const result = await run.wait();
+    expect(result).toMatchObject({
+      type: "completed",
+      outcome: { message: "done in a" },
+    });
+    expect(aCalls).toBe(2);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("durable runtime rejects configured Phase named previous", async () => {
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore() });
+  try {
+    const invalidConfig = {
+      identity: "invalid-previous-agent",
+      definition: {
+        name: "test",
+        prompt: "test",
+        description: "test",
+        phases: { entryPhaseId: "previous", phaseIds: ["previous"] },
+      },
+      resourceView: { agents: [], tools: [], skills: [], phases: [] },
+      model: { provider: "test", id: "model" },
+      resources: {
+        tools: [],
+        skills: [],
+        phases: {
+          entryPhaseId: "previous",
+          phases: new Map([["previous", workPhase({ name: "previous" })]]),
+        },
+        revisions: { agent: [], tool: [], skill: [], phase: [] },
+        refs: { agent: [], tool: [], skill: [], phase: [] },
+      },
+      contexts: [],
+      additionalContexts: [],
+    } as unknown as import("../../src/runtime/configuration-snapshot").AgentConfiguration;
+
+    const agentId = await runtime.createAgent(invalidConfig);
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "test-run" });
+    await expect(run.wait()).resolves.toMatchObject({
+      type: "failed",
+      failure: {
+        message: 'Configured Phase name "previous" is reserved by Rowan routing controls.',
+      },
+    });
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("auto-invocable Phase guidelines join Tool guidelines once", async () => {
+  const sharedGuideline = "Keep the result concise.";
+  let systemPrompt = "";
+  const stream: StreamFn = async function* (request) {
+    systemPrompt = request.system ?? "";
+    yield { type: "done", response: stopResponse("finished") };
+  };
+  const phases = [
+    workPhase({ name: "work", promptGuidelines: [sharedGuideline] }),
+    workPhase({ name: "selectable", promptGuidelines: ["Check assumptions."] }),
+    workPhase({
+      name: "hidden",
+      disableAutoInvocation: true,
+      promptGuidelines: ["Do not auto-invoke guidance."],
+    }),
+    workPhase({ name: "unselected", promptGuidelines: ["Unselected guidance."] }),
+  ];
+  const guidanceTool: Tool = {
+    name: "guidance",
+    description: "Guidance tool",
+    parameters: Type.Object({}),
+    promptGuidelines: [sharedGuideline],
+    execute: async () => ({ ok: true, content: null }),
+  };
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await createAgentWith(runtime, {
+      identity: "phase-guidelines-v1",
+      stream,
+      phases,
+      tools: [guidanceTool],
+      definition: {
+        phases: {
+          entryPhaseId: "work",
+          phaseIds: ["work", "selectable", "hidden"],
+        },
+      },
+      options: { idempotencyKey: "phase-guidelines-agent" },
+    });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "phase-guidelines-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(systemPrompt.match(/Keep the result concise\./g)).toHaveLength(1);
+    expect(systemPrompt.match(/Check assumptions\./g)).toHaveLength(1);
+    expect(systemPrompt).not.toContain("Do not auto-invoke guidance.");
+    expect(systemPrompt).not.toContain("Unselected guidance.");
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("a mixed stop route is invalid and leaves the current Phase waiting for input", async () => {
   let modelCalls = 0;
   const stream: StreamFn = async function* () {

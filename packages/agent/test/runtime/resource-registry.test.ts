@@ -6,6 +6,7 @@ import {
   ResourceRegistry,
   type ResourceView,
 } from "../../src/runtime/resource-registry";
+import type { Phase } from "../../src/harness/phases/types";
 
 const emptyView = (tools: readonly string[] = []): ResourceView => ({
   agents: [],
@@ -32,6 +33,22 @@ test("source transaction rejects duplicates without changing the previous revisi
 
   const resolved = registry.resolveView(emptyView(["project-a"]));
   expect(resolved.tools.map(({ name }) => name)).toEqual(["keep"]);
+});
+
+test("Phase resource name previous is reserved for routing", async () => {
+  const registry = new ResourceRegistry();
+  const phase: Phase = {
+    name: "previous",
+    description: "Reserved",
+    filePath: "<inline>",
+    baseDir: "<inline>",
+    content: "Reserved",
+  };
+
+  await expect(registry.loadPhases({
+    sourceId: "project-a",
+    values: [phase],
+  })).rejects.toMatchObject({ code: "resource_collision" });
 });
 
 test("Agent source transactions reject legacy Definition fields before replacement", async () => {
