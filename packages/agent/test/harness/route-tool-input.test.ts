@@ -58,3 +58,11 @@ test("route keeps payload unrestricted for a Phase without input", () => {
     decision: [{ phase: "review", payload: { any: ["json", 1, true] } }],
   })).toBe(true);
 });
+
+test("route exposes previous as a return target", () => {
+  const tool = createRouteTool([phase()]);
+  const validator = Schema.Compile(tool.parameters);
+
+  expect(validator.Check({ decision: [{ phase: "previous" }] })).toBe(true);
+  expect(tool.description).toContain("Return to the phase that routed here; stops when there is none");
+});

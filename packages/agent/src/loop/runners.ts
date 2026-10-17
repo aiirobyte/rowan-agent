@@ -113,20 +113,26 @@ type ResolvedRouteDecision = RouteToolArgs & {
 function resolveRouteDecision(
   route: RouteToolArgs | undefined,
   registry: PhaseRegistry,
+  state: ExecutionState,
 ): ResolvedRouteDecision | undefined {
   if (!route || route.decision.length === 0) return undefined;
 
   const requestedCount = route.decision.length;
-  const hasStop = route.decision.some(({ phase }) => phase === "stop");
+  const previousPhaseId = state.metrics.phaseTransitions.at(-1)?.from;
+  const decision = route.decision.map((candidate) => ({
+    ...candidate,
+    phase: candidate.phase === "previous" ? previousPhaseId ?? "stop" : candidate.phase,
+  }));
+  const hasStop = decision.some(({ phase }) => phase === "stop");
   if (hasStop) {
     // stop is terminal and must be the only original target, even if another
     // target would later be filtered as invalid; the loop may run the
     // built-in Stop Phase before completing when the reply is empty.
     if (requestedCount !== 1) return undefined;
-    return { ...route, requestedCount };
+    return { ...route, decision, requestedCount };
   }
 
-  const decision = route.decision.flatMap((candidate) => {
+  const validDecision = decision.flatMap((candidate) => {
     const target = registry.phases.get(candidate.phase);
     if (!target) return [];
     try {
@@ -139,20 +145,22 @@ function resolveRouteDecision(
       return [];
     }
   });
-  if (decision.length === 0) return undefined;
-  return { ...route, decision, requestedCount: decision.length };
+  if (validDecision.length === 0) return undefined;
+  return { ...route, decision: validDecision, requestedCount: validDecision.length };
 }
 
 function resolveModelRouteDecision(
   toolCalls: PhaseOutput["toolCalls"],
   registry: PhaseRegistry,
+  state: ExecutionState,
 ): ResolvedRouteDecision | undefined {
-  return resolveRouteDecision(toolCalls ? extractRouteCall(toolCalls) : undefined, registry);
+  return resolveRouteDecision(toolCalls ? extractRouteCall(toolCalls) : undefined, registry, state);
 }
 
 function resolveHookRouteDecision(
   output: PhaseOutput,
   registry: PhaseRegistry,
+  state: ExecutionState,
 ): ResolvedRouteDecision | undefined {
   if (output.route === undefined || output.route === "continue") return undefined;
   return resolveRouteDecision({
@@ -161,7 +169,13 @@ function resolveHookRouteDecision(
       ...(output.routeReason ? { reason: output.routeReason } : {}),
       ...(output.payload === undefined ? {} : { payload: output.payload }),
     }],
-  }, registry);
+  }, registry, state);
+}
+
+function resolvePhaseTarget(target: string, state: ExecutionState): string {
+  return target === "previous"
+    ? state.metrics.phaseTransitions.at(-1)?.from ?? "stop"
+    : target;
 }
 
 /** Inject phase content as a user context message.
@@ -285,7 +299,7 @@ function shouldRunStopPhase(phase: Phase, output: PhaseOutput): boolean {
 
 function buildToolsWithRouting(
   config: AgentConfig,
-  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation'>[],
+  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[],
 ) {
   // The Runtime Resource Registry keeps Rowan's reserved route Tool in the
   // implicit core source. Routing, however, is phase-registry-specific: build
@@ -579,7 +593,7 @@ async function runPhaseLoop(
   const completedPhases: string[] = [];
 
   // Build available phases list for route tool from the explicit registry.
-  const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation'>[] = [];
+  const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[] = [];
   for (const [, phase] of registry.phases) {
     availablePhases.push({
       name: phase.name,
@@ -589,6 +603,7 @@ async function runPhaseLoop(
       input: phase.input,
       isolated: phase.isolated,
       disableAutoInvocation: phase.disableAutoInvocation,
+      promptGuidelines: phase.promptGuidelines,
     });
   }
 
@@ -876,7 +891,7 @@ async function runPhaseLoop(
     // Extract and normalize a model route. Invalid targets are filtered, but
     // an explicit stop mixed with any other original target invalidates the
     // whole decision.
-    let modelRouteDecision = resolveModelRouteDecision(output.toolCalls, registry);
+    let modelRouteDecision = resolveModelRouteDecision(output.toolCalls, registry, state);
     let routeDecision = modelRouteDecision;
     if (routeDecision) applyFirstDecision(routeDecision, output);
 
@@ -892,7 +907,7 @@ async function runPhaseLoop(
       }
       if (extAfter.retry && (phase.run || phase.factory)) {
         output = await executePhase(runtime);
-        modelRouteDecision = resolveModelRouteDecision(output.toolCalls, registry);
+        modelRouteDecision = resolveModelRouteDecision(output.toolCalls, registry, state);
         routeDecision = modelRouteDecision;
         if (routeDecision) applyFirstDecision(routeDecision, output);
       }
@@ -902,7 +917,7 @@ async function runPhaseLoop(
         if (hookHasRoute) {
           // A Hook route is authoritative and cancels a model fan-out. The
           // special programmatic continue sentinel remains handled below.
-          routeDecision = resolveHookRouteDecision(output, registry);
+          routeDecision = resolveHookRouteDecision(output, registry, state);
           if (routeDecision) applyFirstDecision(routeDecision, output);
         } else if (phase.run || phase.factory) {
           // Programmatic Phase output omission retains its historical stop
@@ -969,7 +984,9 @@ async function runPhaseLoop(
       // In parallel mode, the original phase's target field determines where to go after
       // all parallel phases complete. If "stop", enter the built-in Stop
       // Phase only when the current model response has no user-facing text.
-      const entryPhaseId = phase.target ?? registry.entryPhaseId!;
+      const entryPhaseId = phase.target
+        ? resolvePhaseTarget(phase.target, state)
+        : registry.entryPhaseId!;
       if (entryPhaseId === "stop") {
         if (!shouldRunStopPhase(phase, output)) {
           removePhaseMessage(config.context.messages, previousPhaseMsgId);
@@ -990,9 +1007,9 @@ async function runPhaseLoop(
     // Resolve next phase: target > route > stop
     let nextRoute: string;
     if (phase.target) {
-      nextRoute = phase.target;
+      nextRoute = resolvePhaseTarget(phase.target, state);
     } else if (output.route) {
-      nextRoute = output.route;
+      nextRoute = resolvePhaseTarget(output.route, state);
     } else {
       nextRoute = "stop";
     }
@@ -1516,7 +1533,7 @@ async function executeParallelPhase(
   payload: unknown,
   instruction: string | undefined,
   context: AgentMessage[],
-  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated'>[],
+  availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[],
   instanceId: string,
   groupId: string,
   index: number,

@@ -73,7 +73,7 @@ export function validateDescription(value: unknown): DescriptionValidation {
 export function validatePhaseTarget(value: unknown): string[] {
   if (value === undefined) return [];
   if (typeof value !== "string") return ["target must be a string"];
-  if (value === "stop") return [];
+  if (value === "stop" || value === "previous") return [];
   return validateResourceId(value, "target");
 }
 

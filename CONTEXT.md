@@ -73,6 +73,9 @@ single Phase contribution. Nested Skills have no independent Rowan Source ID or
 revision; entering the Phase merges them after the active Agent Context Skills
 and replaces same-name values, and Rowan does not interpret the host concept
 that owns the directory.
+A Phase may declare `prompt-guidelines` in frontmatter; while the Phase is in
+the current auto route catalog, its guidelines join the System Prompt
+Guidelines de-duplicated with Tool prompt guidelines.
 _Avoid_: Nested Resource Registry, Workflow Bundle, Phase Dependency Graph
 
 **Definition Layer**:
@@ -144,7 +147,7 @@ One fenced period in which the Scheduler claims an Agent Run and executes it unt
 _Avoid_: Worker, Lease, Agent process
 
 **Phase Execution**:
-One invocation of a selected Phase inside an Execution Attempt, governed by the Run's Phase state, routing, Execution Checkpoint, and Run Interaction Driver. It is not an independent durable Tool Call and has no Tool-style automatic retry contract.
+One invocation of a selected Phase inside an Execution Attempt, governed by the Run's Phase state, routing, Execution Checkpoint, and Run Interaction Driver. Routing recognizes reserved control targets: `continue` re-executes the current phase, `stop` completes the task (entering the Stop Phase when the reply has no final text), and `previous` returns to the Phase that routed into the current one (falling back to `stop` when none exists). A Phase may also declare `target: previous`. It is not an independent durable Tool Call and has no Tool-style automatic retry contract.
 _Avoid_: Tool Call, Phase Job, Generic Invocation
 
 **Phase Status**:

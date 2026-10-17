@@ -189,6 +189,8 @@ export interface PhaseFrontmatter {
   tools?: string[];
   /** Forced next phase name */
   target?: string;
+  /** Additional system-prompt guidance while this Phase is in the auto route catalog. */
+  "prompt-guidelines"?: string[];
   /** Structural JSON-safe input defaults */
   input?: PhaseInput;
   /** If true, phase gets a fresh context (empty messages) when executed in parallel */
@@ -209,6 +211,7 @@ export interface PhaseConfig {
   description: string;
   tools?: string[];
   target?: string;
+  promptGuidelines?: string[];
   filePath?: string;
   baseDir?: string;
   content: string;
@@ -233,6 +236,8 @@ export interface Phase {
   skills?: Skill[];
   /** Forced next phase */
   target?: string;
+  /** Additional system-prompt guidance while this Phase is in the auto route catalog. */
+  promptGuidelines?: string[];
   /** Structural JSON-safe input defaults */
   input?: PhaseInput;
   /** If true, phase gets a fresh context when executed in parallel */
