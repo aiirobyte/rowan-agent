@@ -47,7 +47,7 @@ test("route exposes and enforces a target Phase's inferred input shape", () => {
     decision: [{ phase: "review", payload: { unexpected: true } }],
   })).toBe(false);
   expect(tool.description).toContain("payload_schema");
-  expect(tool.description).toContain("&quot;provider&quot;:{&quot;type&quot;:&quot;string&quot;");
+  expect(tool.description).toContain('"provider":{"type":"string"');
 });
 
 test("route keeps payload unrestricted for a Phase without input", () => {
