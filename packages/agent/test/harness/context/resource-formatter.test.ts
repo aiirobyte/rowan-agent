@@ -1,8 +1,14 @@
 import { expect, test } from "bun:test";
 import {
+  escapeXml,
+  escapeXmlText,
   formatResourceOutput,
   detectResourceType,
   buildPhaseDirectiveMessage,
+  buildStructuredSection,
+  buildSkillsDescription,
+  buildContextDescription,
+  jsonToXml,
 } from "../../../src/harness/context/resource-formatter";
 
 test("detectResourceType identifies skill files", () => {
@@ -114,4 +120,100 @@ test("buildPhaseDirectiveMessage preserves direct-route instructions without a p
 
   expect(output).toContain("<prev_phase_outputs>");
   expect(output).toContain("<instruction>Check the current result.</instruction>");
+});
+
+test("escapeXml escapes all five XML entities", () => {
+  expect(escapeXml(`<&>"'`)).toBe("&lt;&amp;&gt;&quot;&apos;");
+});
+
+test("escapeXmlText escapes only &, <, and >, keeping quotes literal", () => {
+  expect(escapeXmlText(`<&>"'`)).toBe("&lt;&amp;&gt;\"'");
+  expect(escapeXmlText('He said "it\'s fine" & left <now>')).toBe(
+    'He said "it\'s fine" &amp; left &lt;now&gt;',
+  );
+});
+
+test("jsonToXml preserves quotes and escapes &, <, > in element text", () => {
+  const result = jsonToXml(
+    {
+      scalar: 'He said "hello" & \'goodbye\' <now>',
+      array: ['"quoted"', "'single'", "a & b <tag>"],
+      nested: {
+        msg: 'Rock & Roll: "classic"',
+      },
+    },
+    0,
+  );
+
+  expect(result).toContain('<scalar>He said "hello" &amp; \'goodbye\' &lt;now&gt;</scalar>');
+  expect(result).toContain('<item>"quoted"</item>');
+  expect(result).toContain("<item>'single'</item>");
+  expect(result).toContain("<item>a &amp; b &lt;tag&gt;</item>");
+  expect(result).toContain('<msg>Rock &amp; Roll: "classic"</msg>');
+  expect(result).not.toContain("&quot;");
+  expect(result).not.toContain("&apos;");
+});
+
+test("buildStructuredSection preserves quotes and escapes &, <, > in element text", () => {
+  const section = buildStructuredSection("entry", [
+    {
+      summary: 'He said "ok" & smiled',
+      detail: "<tag> and 'quotes'",
+    },
+  ]);
+
+  expect(section).toContain('<summary>He said "ok" &amp; smiled</summary>');
+  expect(section).toContain("<detail>&lt;tag&gt; and 'quotes'</detail>");
+  expect(section).not.toContain("&quot;");
+  expect(section).not.toContain("&apos;");
+});
+
+test("buildSkillsDescription preserves quotes and escapes &, <, > in element text", () => {
+  const skills = [
+    {
+      name: 'skill "alpha"',
+      description: "It's <great> & fast",
+      filePath: '/path/"dir"/\'file\'/<name>.md',
+    },
+  ];
+  const output = buildSkillsDescription(skills);
+
+  expect(output).toContain('<name>skill "alpha"</name>');
+  expect(output).toContain("<description>It's &lt;great&gt; &amp; fast</description>");
+  expect(output).toContain('<location>/path/"dir"/\'file\'/&lt;name&gt;.md</location>');
+  expect(output).not.toContain("&quot;");
+  expect(output).not.toContain("&apos;");
+});
+
+test("buildContextDescription keeps attribute quotes escaped while body preserves quotes", () => {
+  const output = buildContextDescription([
+    {
+      name: 'ctx"1"',
+      value: { note: 'It\'s "fine" & <ok>' },
+    },
+  ]);
+
+  expect(output).toContain('<context name="ctx&quot;1&quot;">');
+  expect(output).toContain('<note>It\'s "fine" &amp; &lt;ok&gt;</note>');
+  expect(output).not.toContain("&apos;");
+});
+
+test("buildPhaseDirectiveMessage keeps quotes literal in instruction element text and escapes attributes", () => {
+  const output = buildPhaseDirectiveMessage(
+    { name: 'phase"1"', content: "Phase content." },
+    {
+      instruction: 'Do "task" & don\'t <fail>',
+      results: [
+        {
+          name: 'source"phase"',
+          output: { response: 'Output with "quotes" & <tag>' },
+        },
+      ],
+    },
+  );
+
+  expect(output).toContain('<phase_content name="phase&quot;1&quot;">');
+  expect(output).toContain('<instruction>Do "task" &amp; don\'t &lt;fail&gt;</instruction>');
+  expect(output).toContain('<phase name="source&quot;phase&quot;">');
+  expect(output).toContain('<response>Output with "quotes" &amp; &lt;tag&gt;</response>');
 });

@@ -16,6 +16,14 @@ export function escapeXml(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
+/** Escape XML special characters in element text. */
+export function escapeXmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 /** Build a structured section from items with tag-based formatting. */
 export function buildStructuredSection(
   tag: string,
@@ -25,7 +33,7 @@ export function buildStructuredSection(
   for (const item of items) {
     lines.push(`  <${tag}>`);
     for (const [key, value] of Object.entries(item)) {
-      lines.push(`    <${key}>${escapeXml(value)}</${key}>`);
+      lines.push(`    <${key}>${escapeXmlText(value)}</${key}>`);
     }
     lines.push(`  </${tag}>`);
   }
@@ -42,9 +50,9 @@ export function buildSkillsDescription(
   const lines = ["<available_skills>"];
   for (const skill of visibleSkills) {
     lines.push("  <skill>");
-    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
-    lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push(`    <name>${escapeXmlText(skill.name)}</name>`);
+    lines.push(`    <description>${escapeXmlText(skill.description)}</description>`);
+    lines.push(`    <location>${escapeXmlText(skill.filePath)}</location>`);
     lines.push("  </skill>");
   }
   lines.push("</available_skills>");
@@ -126,7 +134,7 @@ export function jsonToXml(value: unknown, depth: number): string {
   const indent = "  ".repeat(depth);
 
   if (value === null || value === undefined) return "";
-  if (typeof value !== "object") return `${indent}${escapeXml(String(value))}`;
+  if (typeof value !== "object") return `${indent}${escapeXmlText(String(value))}`;
 
   // Array → <item> elements
   if (Array.isArray(value)) {
@@ -134,7 +142,7 @@ export function jsonToXml(value: unknown, depth: number): string {
       if (typeof item === "object" && item !== null) {
         return `${indent}<item>\n${jsonToXml(item, depth + 1)}\n${indent}</item>`;
       }
-      return `${indent}<item>${escapeXml(String(item))}</item>`;
+      return `${indent}<item>${escapeXmlText(String(item))}</item>`;
     }).join("\n");
   }
 
@@ -144,7 +152,7 @@ export function jsonToXml(value: unknown, depth: number): string {
     if (typeof val === "object" && val !== null) {
       return `${indent}<${tag}>\n${jsonToXml(val, depth + 1)}\n${indent}</${tag}>`;
     }
-    return `${indent}<${tag}>${escapeXml(String(val))}</${tag}>`;
+    return `${indent}<${tag}>${escapeXmlText(String(val))}</${tag}>`;
   }).join("\n");
 }
 
@@ -181,7 +189,7 @@ export function buildPhaseDirectiveMessage(
   if ((output.results && output.results.length > 0) || output.instruction) {
     parts.push(`  <prev_phase_outputs>`);
     if (output.instruction) {
-      parts.push(`    <instruction>${escapeXml(output.instruction)}</instruction>`);
+      parts.push(`    <instruction>${escapeXmlText(output.instruction)}</instruction>`);
     }
     for (const r of output.results ?? []) {
       parts.push(`    <phase name="${escapeXml(r.name)}">`);
