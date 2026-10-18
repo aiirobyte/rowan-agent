@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
-import type { LlmRequest, StreamFn } from "@rowan-agent/models";
-import type { AgentMessage, Tool, ToolCall, ToolResult } from "../../src/types";
-import { createMessage } from "../../src/types";
+import type { LlmRequest, LlmToolCall, StreamFn } from "@rowan-agent/models";
+import type { Tool } from "../../src/runtime/contracts";
+import type { ToolResultRecord } from "../../src/runtime-events";
+import type { AgentMessage } from "../../src/protocol/agent";
+import { createMessage } from "../../src/loop/messages";
 import type { PhaseContext } from "../../src/harness/phases/types";
 import type { InternalModelLoopOptions, ModelInvokeOutput, PhaseExecution } from "../../src/loop/execution";
 import { runInternalModelLoop } from "../../src/harness/phases/core-phases";
@@ -14,13 +16,11 @@ function createDummyTool(name: string): Tool {
     name,
     description: `Dummy tool ${name}`,
     parameters: {} as Tool["parameters"],
-    execute: async (_, context) => ({
-      toolCallId: context.toolCallId,
-      toolName: name,
+    execute: async () => ({
       ok: true,
       content: `${name} output`,
     }),
-  } as Tool;
+  };
 }
 
 function createTestContext(options?: { tools?: Tool[]; messages?: AgentMessage[] }): PhaseContext {
@@ -37,14 +37,14 @@ function createTestContext(options?: { tools?: Tool[]; messages?: AgentMessage[]
 
 function createMockExecution(handlers: {
   invokeModel: (context: PhaseContext, options?: { output?: "reply" | "internal" }) => Promise<ModelInvokeOutput>;
-  executeTools?: (context: PhaseContext, toolCalls: readonly ToolCall[]) => Promise<readonly ToolResult[]>;
+  executeTools?: (context: PhaseContext, toolCalls: readonly LlmToolCall[]) => Promise<readonly ToolResultRecord[]>;
 }) {
-  const executeToolsCalls: Array<readonly ToolCall[]> = [];
+  const executeToolsCalls: Array<readonly LlmToolCall[]> = [];
   const execution = {
-    executeTools: async (ctx: PhaseContext, toolCalls: readonly ToolCall[]) => {
+    executeTools: async (ctx: PhaseContext, toolCalls: readonly LlmToolCall[]) => {
       executeToolsCalls.push(toolCalls);
       if (handlers.executeTools) return handlers.executeTools(ctx, toolCalls);
-      return toolCalls.map((c) => ({ toolCallId: c.id, toolName: c.name, ok: true, content: `result for ${c.name}` }));
+      return toolCalls.map((c) => ({ toolCallId: c.id as any, toolName: c.name, ok: true, content: `result for ${c.name}` }));
     },
     invokeModel: handlers.invokeModel,
   } as unknown as PhaseExecution;
@@ -54,7 +54,11 @@ function createMockExecution(handlers: {
 }
 
 const reply = (text: string): ModelInvokeOutput => ({ text, contentBlocks: [{ type: "text", text }], toolCalls: [] });
-const calls = (...toolCalls: ToolCall[]): ModelInvokeOutput => ({ text: "", contentBlocks: [], toolCalls });
+const calls = (...toolCalls: Array<{ id: string; name: string; args?: unknown; arguments?: unknown }>): ModelInvokeOutput => ({
+  text: "",
+  contentBlocks: [],
+  toolCalls: toolCalls.map((c) => ({ id: c.id, name: c.name, arguments: c.arguments !== undefined ? c.arguments : c.args })),
+});
 
 test("works on a copy: context.messages is unchanged and only the prompt is appended", async () => {
   const initialMessages = [createMessage("user", "Initial request"), createMessage("assistant", "Initial response")];
@@ -121,7 +125,7 @@ test("refuses calls to Tools outside tools, and route, with error results", asyn
   expect(executeToolsCalls.map((batch) => batch.map((c) => c.name))).toEqual([["read"]]);
   const results = lastWorking
     .filter((m) => m.role === "tool")
-    .map((m) => JSON.parse((m.content as Array<{ content: string }>)[0]!.content) as ToolResult);
+    .map((m) => JSON.parse((m.content as Array<{ content: string }>)[0]!.content) as ToolResultRecord);
   expect(results.map((r) => [r.toolName, r.ok])).toEqual([["read", true], ["write", false], ["route", false]]);
   expect(results[1]).toMatchObject({ error: "Tool write is not available in Phase audit" });
 });
@@ -141,7 +145,7 @@ test("allows every Tool but route when tools is omitted, through executeTools wi
   await loop(context, { prompt: "Go." });
 
   expect(executeToolsCalls).toHaveLength(1);
-  expect(executeToolsCalls[0]!.map((c) => [c.name, c.args])).toEqual([["write", { path: "a.md", content: "x" }]]);
+  expect(executeToolsCalls[0]!.map((c) => [c.name, c.arguments])).toEqual([["write", { path: "a.md", content: "x" }]]);
 });
 
 test("respects maxToolRounds", async () => {
@@ -150,7 +154,7 @@ test("respects maxToolRounds", async () => {
   const { loop, executeToolsCalls } = createMockExecution({
     invokeModel: async () => {
       invokeCount += 1;
-      return { text: `Round ${invokeCount}`, contentBlocks: [], toolCalls: [{ id: `c_${invokeCount}`, name: "read", args: {} }] };
+      return { text: `Round ${invokeCount}`, contentBlocks: [], toolCalls: [{ id: `c_${invokeCount}`, name: "read", arguments: {} }] };
     },
   });
 

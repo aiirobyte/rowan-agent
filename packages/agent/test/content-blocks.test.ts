@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { contentBlocksToMessageContent } from "../src/types";
+import { contentBlocksToMessageContent } from "../src/loop/messages";
 
 test("streamed thinking keeps its provider signature for replay", () => {
   expect(contentBlocksToMessageContent([

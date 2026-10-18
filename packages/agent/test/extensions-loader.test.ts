@@ -142,7 +142,7 @@ test("before_tool_call hook can block tool execution", async () => {
     name: "blocked",
     description: "Test tool",
     parameters: Type.Object({}),
-    execute: async () => ({ toolCallId: "1", toolName: "blocked", ok: true, content: "ok" }),
+    execute: async () => ({ ok: true as const, content: "ok" }),
   };
 
   const result = await runner.emitBeforeToolCall(tool, {});

@@ -13,12 +13,12 @@ import type { Phase } from "../harness/phases/types";
 import type { Skill } from "../protocol";
 import { createCorePhases } from "../harness/phases/core-phases";
 import { createRouteTool } from "../harness/tools/route-tool";
+import type { Tool } from "./contracts";
 import {
   ResourceRegistry,
   type LoadInput,
   type ResourceDiagnostic,
   type ResourceKind,
-  type ToolContribution,
 } from "./resource-registry";
 
 export type ExtensionContribution = LoadedExtension;
@@ -147,7 +147,7 @@ export class RuntimeBootstrapRegistry extends ResourceRegistry {
       this.knownSources.set(kind, known);
       for (const [sourceId, values] of bySource) {
         known.add(sourceId);
-        if (kind === "tool") await this.loadTools({ sourceId, values: values as ToolContribution[] });
+        if (kind === "tool") await this.loadTools({ sourceId, values: values as Tool[] });
         else if (kind === "phase") await this.loadPhases({ sourceId, values: values as Phase[] });
         else await this.loadSkills({ sourceId, values: values as Skill[] });
       }

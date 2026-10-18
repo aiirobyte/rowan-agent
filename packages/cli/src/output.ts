@@ -1,6 +1,6 @@
-import type { MessageContent, ToolExecutionResult } from "@rowan-agent/agent";
+import type { MessageContent, ToolResult } from "@rowan-agent/agent";
 
-type CliToolResult = Readonly<{ toolCallId: string; toolName: string } & ToolExecutionResult>;
+type CliToolResult = Readonly<{ toolCallId: string; toolName: string } & ToolResult>;
 
 const TOOL_ARGS_PREVIEW_LIMIT = 60;
 

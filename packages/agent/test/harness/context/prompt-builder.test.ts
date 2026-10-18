@@ -4,8 +4,9 @@ import {
   buildModelRequest,
   latestUserInput,
 } from "../../../src/harness/context/prompt-builder";
-import type { AgentMessage } from "../../../src/types";
-import { createMessage, type Tool } from "../../../src/types";
+import type { AgentMessage } from "../../../src/protocol/agent";
+import { createMessage } from "../../../src/loop/messages";
+import type { Tool } from "../../../src/runtime/contracts";
 import type { Skill } from "../../../src/protocol";
 
 type TestInput = {
@@ -19,16 +20,14 @@ function buildRequest(input: TestInput) {
   return buildModelRequest(input);
 }
 
-const echoTool: Tool<{ message: string }> = {
+const echoTool: Tool = {
   name: "echo",
   description: "Returns the input message.",
   parameters: Type.Object({ message: Type.String() }),
-  async execute(args, context) {
+  async execute(args) {
     return {
-      toolCallId: context.toolCallId,
-      toolName: "echo",
       ok: true,
-      content: args.message,
+      content: (args as { message: string }).message,
     };
   },
 };
@@ -100,7 +99,7 @@ test("buildModelRequest omits tools when empty", () => {
 });
 
 test("buildModelRequest renders passed tools and skills in output", () => {
-  const tool: Tool<{ message: string }> = {
+  const tool: Tool = {
     ...echoTool,
     promptSnippet: "Visible echo tool.",
   };

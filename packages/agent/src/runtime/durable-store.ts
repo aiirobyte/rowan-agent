@@ -36,7 +36,6 @@ import type {
   MessageRevised,
   MessageCommitted,
   MessageId,
-  Metadata,
   Outcome,
   OwnerLease,
   OwnerToken,
@@ -67,13 +66,14 @@ import { normalizeUserInput } from "./contracts";
 import { mergeToolCall } from "./tool-call-merge";
 import type {
   AssistantContent,
-  DurableToolResult,
   EventId,
   InteractionRecord,
   JsonObject,
+  StreamBlock,
   ToolCallId,
   ToolCallSnapshot,
-  ToolExecutionResult,
+  ToolResult,
+  ToolResultRecord,
   ToolStateChanged,
   UserContent,
   UserMessage,
@@ -85,37 +85,9 @@ export type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 export type StoredAgent = Mutable<AgentRecord>;
 export type StoredRun = Mutable<RunRecord>;
 export type StoredOwner = Mutable<OwnerLease>;
-export type StoredToolCall = {
-  id: ToolCallId;
-  providerToolCallId?: string;
-  agentId: AgentId;
-  runId: RunId;
-  executionId?: ExecutionId;
-  requestMessageId?: MessageId;
-  name?: string;
-  args?: import("../runtime-events").JsonValue;
-  state?: import("../runtime-events").ToolCallState;
+export type StoredToolCall = Mutable<ToolCallSnapshot>;
 
-  toolCallId: string;
-  title: string;
-  kind: ToolKind;
-  status: ToolCallStatus;
-  content?: ToolCallContent[];
-  locations?: ToolCallLocation[];
-  rawInput?: import("../runtime-events").JsonValue;
-  rawOutput?: import("../runtime-events").JsonValue;
-  _meta?: import("../runtime-events").JsonObject;
-  external?: boolean;
-  contentIndex?: number;
-
-  result?: DurableToolResult;
-  resultMessageId?: MessageId;
-  reason?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export function defaultToolCallContent(result: ToolExecutionResult): ToolCallContent[] {
+export function defaultToolCallContent(result: ToolResult): ToolCallContent[] {
   if ("content" in result && Array.isArray(result.content)) {
     return (result.content as readonly (ContentBlock | ToolCallContent)[]).map((block) => {
       if (typeof block === "object" && block !== null && "type" in block && (block.type === "content" || block.type === "diff" || block.type === "terminal")) {
@@ -450,7 +422,7 @@ export class InMemoryStore implements DurableStore {
     this.owner = undefined;
   }
 
-  reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: HistorySeed }): AgentRecord {
+  reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: HistorySeed }): AgentRecord {
     this.assertOwner(lease);
     const scope = createIdempotencyScope("create_agent", input.idempotencyKey);
     const payload = canonicalJson({
@@ -775,7 +747,7 @@ export class InMemoryStore implements DurableStore {
     return record;
   }
 
-  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
+  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
     this.assertOwner(lease);
     this.requireAgent(input.agentId);
     if (input.phasePayload !== undefined && input.entryPhases !== undefined) {
@@ -1152,7 +1124,7 @@ export class InMemoryStore implements DurableStore {
     requestMessageId: MessageId;
     calls: readonly ToolCallReservation[];
     /** The model response's blocks, so the request message keeps what preceded the Tool Calls. */
-    contentBlocks?: readonly ContentBlock[];
+    contentBlocks?: readonly StreamBlock[];
     model?: ModelRef;
     usage?: LlmTokenUsage;
   }): ToolBatchCommit {
@@ -1321,7 +1293,7 @@ export class InMemoryStore implements DurableStore {
     execution: ExecutionToken;
     expectedRevision: number;
     toolCallId: ToolCallId;
-    result: import("../runtime-events").ToolExecutionResult;
+    result: import("../runtime-events").ToolResult;
     state: "completed" | "failed" | "indeterminate";
     reason?: string;
     title?: string;
@@ -1348,7 +1320,7 @@ export class InMemoryStore implements DurableStore {
     if (toolCall.executionId !== input.execution.executionId) throw new RuntimeError("runtime_ownership_lost", { reason: "epoch_advanced", expectedEpoch: input.execution.ownerEpoch, actualEpoch: this.ownerEpoch });
     const fromStatus = (toolCall.status ?? (toolCall.state === "in_progress" ? "in_progress" : toolCall.state)) as ToolCallStatus;
     const toStatus: ToolCallStatus = input.state === "completed" ? "completed" : "failed";
-    const durableResult: DurableToolResult = { toolCallId: toolCall.id, toolName: toolCall.name ?? toolCall.title, ...clone(input.result) };
+    const durableResult: ToolResultRecord = { toolCallId: toolCall.id, toolName: toolCall.name ?? toolCall.title, ...clone(input.result) };
     const resultMessageId = createId("msg") as MessageId;
     const message: Message = {
       id: resultMessageId,
@@ -1925,8 +1897,8 @@ export class InMemoryStore implements DurableStore {
   }
 
   private interruptToolCall(run: StoredRun, toolCall: StoredToolCall, reason: string): void {
-    const result: ToolExecutionResult = { ok: false, content: null, error: reason };
-    const durableResult: DurableToolResult = { toolCallId: toolCall.id, toolName: toolCall.name ?? toolCall.title, ...result };
+    const result: ToolResult = { ok: false, content: null, error: reason };
+    const durableResult: ToolResultRecord = { toolCallId: toolCall.id, toolName: toolCall.name ?? toolCall.title, ...result };
     const message: Message = {
       id: createId("msg") as MessageId,
       agentId: run.agentId,
@@ -2197,7 +2169,7 @@ export class InMemoryStore implements DurableStore {
 class MemoryOwnedStore implements OwnedStore {
   constructor(private readonly store: InMemoryStore, public lease: OwnerLease) {}
 
-  async reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
+  async reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   async activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   async updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
   async deleteAgent(input: AgentDeletionRequest): Promise<void> { this.store.deleteAgent(this.lease, input); }
@@ -2221,7 +2193,7 @@ class MemoryOwnedStore implements OwnedStore {
   async commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> {
     return this.store.commitContextCompaction(this.lease, record);
   }
-  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
+  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
   async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[]; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
@@ -2230,7 +2202,7 @@ class MemoryOwnedStore implements OwnedStore {
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject; model?: ModelRef; usage?: LlmTokenUsage }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
-  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly import("./contracts").ToolCallReservation[]; contentBlocks?: readonly ContentBlock[]; model?: ModelRef; usage?: LlmTokenUsage }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
+  async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly import("./contracts").ToolCallReservation[]; contentBlocks?: readonly StreamBlock[]; model?: ModelRef; usage?: LlmTokenUsage }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
   async startToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject }): Promise<ToolCommit> { return this.store.startToolCall(this.lease, input); }
   async suspendToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; toolCallId: ToolCallId }): Promise<ToolCommit> { return this.store.suspendToolCall(this.lease, input); }
   async commitToolResult(input: {
@@ -2238,7 +2210,7 @@ class MemoryOwnedStore implements OwnedStore {
     execution: ExecutionToken;
     expectedRevision: number;
     toolCallId: ToolCallId;
-    result: ToolExecutionResult;
+    result: ToolResult;
     state: "completed" | "failed" | "indeterminate";
     reason?: string;
     title?: string;
@@ -2294,11 +2266,11 @@ function hasUserInput(input: UserInput): boolean {
   return content.length > 0;
 }
 
-function userInputMetadata(input: UserInput): Metadata | undefined {
+function userInputMetadata(input: UserInput): JsonObject | undefined {
   return typeof input === "string" ? undefined : input.metadata;
 }
 
-export function isControlMetadata(metadata?: Metadata): boolean {
+export function isControlMetadata(metadata?: JsonObject): boolean {
   const rowan = metadata?.rowan;
   return typeof rowan === "object"
     && rowan !== null
@@ -2341,7 +2313,7 @@ function messageContentText(content: unknown): string {
   }).join("\n");
 }
 
-function targetInput(input: UserInput, metadata: Metadata | undefined): UserInput {
+function targetInput(input: UserInput, metadata: JsonObject | undefined): UserInput {
   const content = typeof input === "string" ? input : input.content;
   return metadata === undefined ? { content } : { content, metadata: clone(metadata) };
 }
@@ -2404,7 +2376,7 @@ function assertToolValue(value: import("../runtime-events").JsonValue, argument:
  */
 function requestMessageContent(
   toolCalls: readonly StoredToolCall[],
-  contentBlocks: readonly ContentBlock[] | undefined,
+  contentBlocks: readonly StreamBlock[] | undefined,
 ): Exclude<AssistantContent, string>[number][] {
   const toolUse = (toolCall: StoredToolCall) => ({
     type: "tool_use" as const,

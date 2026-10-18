@@ -1,12 +1,11 @@
 import { DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
 import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import { buildContextDescription } from "../harness/context/resource-formatter";
-import type { ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool, ToolExecutionResult } from "./contracts";
+import type { ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool } from "./contracts";
 import type { ConfigurationSnapshot } from "./configuration-snapshot";
 import type { JsonValue } from "../runtime-events";
-import { projectTool } from "./model-context";
-import type { BeforePhaseHook, AfterPhaseHook, BeforePromptHook } from "../loop/types";
-import type { AgentContext, ToolResult } from "../types";
+import type { BeforePhaseHook, AfterPhaseHook, BeforePromptHook, AgentContext } from "../loop/types";
+import type { ToolResult } from "@rowan-agent/models";
 import { createRuntimeCoreTools } from "./core-tools";
 
 export type ExtensionAssembly = Readonly<{
@@ -50,8 +49,7 @@ export function assembleRegisteredExtensions(
     afterPhase: (phaseId, output) => runner.emitAfterPhase(phaseId, output),
     beforePrompt: (phaseId, input) => runner.emitBeforePrompt(phaseId, input),
     beforeToolCall: async (input) => {
-      const tool = projectTool(input.tool, input.context.agentId, input.context.runId);
-      const decision = await runner.emitBeforeToolCall(tool, input.args, {
+      const decision = await runner.emitBeforeToolCall(input.tool, input.args, {
         runId: input.context.runId,
         agentId: input.context.agentId,
         toolCallId: input.context.toolCallId,
@@ -68,10 +66,9 @@ export function assembleRegisteredExtensions(
       return decision.allow ? { allow: true } : { allow: false, reason: decision.reason ?? "Extension hook rejected the Tool." };
     },
     afterToolCall: async (input) => {
-      const tool = projectTool(input.tool, input.context.agentId, input.context.runId);
-      const result = await runner.emitAfterToolCall(
-        tool,
-        toLoopResult(input.result, input.context.toolCallId, input.tool.name),
+      return runner.emitAfterToolCall(
+        input.tool,
+        input.result,
         {
           runId: input.context.runId,
           agentId: input.context.agentId,
@@ -82,7 +79,6 @@ export function assembleRegisteredExtensions(
           ...(input.context.phase === undefined ? {} : { phase: input.context.phase }),
         },
       );
-      return fromLoopResult(result);
     },
     setContext: (context) => {
       runner.currentContext = context;
@@ -143,36 +139,5 @@ function resolveDefinitionContext(
     skills,
     phases: { phases, entryPhaseId },
     ...(snapshot.cwd ? { cwd: snapshot.cwd } : {}),
-  };
-}
-
-function toLoopResult(result: ToolExecutionResult, toolCallId: string, toolName: string): ToolResult {
-  const ok = "ok" in result && typeof result.ok === "boolean" ? result.ok : !result.isError;
-  const error = "error" in result && typeof result.error === "string" ? result.error : undefined;
-  return {
-    toolCallId,
-    toolName,
-    ok,
-    content: result.content,
-    ...(!ok && error ? { error } : {}),
-    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
-    ...(result.isError !== undefined ? { isError: result.isError } : {}),
-  };
-}
-
-function fromLoopResult(result: ToolResult): ToolExecutionResult {
-  if (Array.isArray(result.content)) {
-    return {
-      content: result.content as unknown as readonly import("@rowan-agent/models").ContentBlock[],
-      ...(result.ok !== undefined ? { ok: result.ok } : {}),
-      ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent as JsonValue } : {}),
-      ...(result.isError !== undefined ? { isError: result.isError } : (!result.ok ? { isError: true } : {})),
-      ...(result.error !== undefined ? { error: result.error } : {}),
-    };
-  }
-  return {
-    ...(result.ok ? { ok: true } : { ok: false, error: result.error ?? "Extension hook rejected the Tool result." }),
-    content: result.content as JsonValue,
-    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent as JsonValue } : {}),
   };
 }

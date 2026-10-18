@@ -1,7 +1,7 @@
 import type { ModelRef } from "@rowan-agent/models";
 import type { AgentMessage, Skill } from "../../protocol";
 import type { JsonValue, UserContent } from "../../runtime-events";
-import type { Tool } from "../../types";
+import type { Tool } from "../../runtime/contracts";
 import type { PhaseExecution } from "../../loop/execution";
 import type { ExtensionAPI } from "../../extensions/api";
 
@@ -29,7 +29,7 @@ export type PhaseOutput = {
   /** Phase name that produced this output */
   phase?: string;
   /** Tool calls from the model invocation (used by framework for route extraction) */
-  toolCalls?: Array<{ id: string; name: string; args: unknown }>;
+  toolCalls?: Array<{ id: string; name: string; arguments?: unknown; args?: unknown }>;
   /** Route reason extracted from route tool call (for hooks to inspect) */
   routeReason?: string;
   /** Structured data from this phase, passed to the next phase */

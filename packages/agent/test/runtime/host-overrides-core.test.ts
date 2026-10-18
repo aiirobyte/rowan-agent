@@ -235,7 +235,7 @@ test("Host-resource Tool named edit directly replaces Core edit and leaves file 
     expect(modelEditTool).toBeDefined();
     expect(modelEditTool?.description).toBe("Host registered document session edit tool.");
     expect(modelEditTool?.description).not.toContain("Apply exact text replacements");
-    expect(modelEditTool?.parameters).toEqual(hostEditTool.parameters);
+    expect(modelEditTool?.parameters).toEqual(hostEditTool.parameters as any);
 
     expect(observedModelRequest?.system).toContain("- edit: Edit files via document session.");
     expect(observedModelRequest?.system).not.toContain("Apply exact text replacements.");

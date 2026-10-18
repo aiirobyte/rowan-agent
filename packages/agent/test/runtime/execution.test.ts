@@ -7,7 +7,9 @@ import {
   EXECUTION_CHECKPOINT_VERSION,
   ExecutionCheckpointError,
 } from "../../src/runtime/execution";
-import { createMessage, type AgentContext, type StreamFn } from "../../src/types";
+import { createMessage } from "../../src/loop/messages";
+import type { AgentContext } from "../../src/loop/types";
+import type { StreamFn } from "@rowan-agent/models";
 import type { ExecutionState } from "../../src/loop/types";
 import type { Phase, PhaseRegistry } from "../../src/harness/phases/types";
 

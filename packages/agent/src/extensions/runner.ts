@@ -34,12 +34,13 @@ import type {
   RegisteredTool,
   ScopeRef,
   SkillRegistration,
-  ToolDefinition,
+  Tool,
 } from "./types";
 import { InMemoryExtensionHost, scopeToKey } from "./host";
 import type { JsonObject, JsonValue } from "../runtime-events";
 import { assertJsonValue } from "../runtime/json";
-import type { Tool, ToolResult, AgentContext } from "../types";
+import type { ToolResult } from "@rowan-agent/models";
+import type { AgentContext } from "../loop/types";
 import type { Phase, PhaseContext, PhaseOutput, PhaseRegistry } from "../harness/phases/types";
 import type { Skill } from "../protocol";
 import { HooksManager } from "./hooks";
@@ -936,7 +937,7 @@ export class ExtensionRunner {
 
   // Validation stays synchronous so a duplicate throws at the call site even
   // when the caller does not await the Registry re-commit.
-  private registerTool(extension: Extension, tool: ToolDefinition, scope?: ScopeRef): Promise<void> {
+  private registerTool(extension: Extension, tool: Tool, scope?: ScopeRef): Promise<void> {
     const sourceId = extensionSourceId(scope);
     const regKey = `${sourceId}::${tool.name}`;
     if (extension.tools.has(regKey)) {

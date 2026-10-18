@@ -8,7 +8,7 @@ import {
   createOpenAICompletionsStream,
   createOpenAIResponsesStream,
 } from "../../../models/src/providers";
-import type { ContentBlock, LlmRequest, StreamFn } from "../../../models/src/protocol";
+import type { LlmRequest, StreamBlock, StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime/index";
 import type { DurableStore } from "../../src/runtime/index";
 import type { AgentId, AssistantMessage, Message, RunId } from "../../src/runtime-events";
@@ -21,7 +21,7 @@ type Segment =
 
 type Scenario = {
   segments: Segment[];
-  expected: ContentBlock[];
+  expected: StreamBlock[];
   /** The case asserts a provider thinking signature, which only some providers emit. */
   signed?: boolean;
 };

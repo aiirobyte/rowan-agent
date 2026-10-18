@@ -1,9 +1,6 @@
 export type {
   AgentMessage,
-  Outcome,
   Skill,
-  ToolCall,
-  ToolResult,
 } from "./agent";
 export type {
   LlmRequest,
@@ -13,6 +10,7 @@ export type {
   StreamFn,
   ThinkingLevel,
   ToolAnnotations,
+  ToolCall,
   ToolCallContent,
   ToolCallLocation,
   ToolCallOptions,
@@ -23,5 +21,4 @@ export type {
 } from "@rowan-agent/models";
 
 export * from "./model";
-export * from "./tool";
 export * from "./turn";

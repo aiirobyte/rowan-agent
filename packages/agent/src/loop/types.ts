@@ -1,21 +1,19 @@
-import type { ToolCallPhase } from "../runtime/contracts";
+import type { ToolCallPhase, Tool, BeforeToolCall, AfterToolCall, EntryPhaseSpec } from "../runtime/contracts";
+import type { AgentMessage, Skill } from "../protocol/agent";
 import type {
-  AgentContext,
-  AgentMessage,
-  AfterToolCall,
-  BeforeToolCall,
   ModelRef,
   StreamFn,
-  ToolCall,
   ToolResult,
-} from "../types";
-import type { PhaseContext, PhaseExecutionIdentity, PhaseInvocation, PhaseOutput, PhaseStatus } from "../harness/phases/types";
+  LlmToolCall,
+  StreamBlock,
+  JsonObject,
+  ThinkingLevel,
+} from "@rowan-agent/models";
+import type { PhaseContext, PhaseExecutionIdentity, PhaseInvocation, PhaseOutput, PhaseStatus, PhaseRegistry } from "../harness/phases/types";
 import type { RunInteractionDriver, RunInteractionState } from "../harness/phases/interactions";
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
-import type { ContentBlock, JsonObject, ThinkingLevel } from "@rowan-agent/models";
-import type { JsonValue } from "../runtime-events";
-import type { EntryPhaseSpec } from "../runtime/contracts";
+import type { JsonValue, Outcome, ToolResultRecord } from "../runtime-events";
 
 export const DEFAULT_MAX_ATTEMPTS = 16;
 
@@ -102,6 +100,20 @@ export type ExecutionContinuationState = {
   previousPhaseMessageId?: string;
 };
 
+export type AgentContext = {
+  /** System prompt included with the request. */
+  systemPrompt: string;
+  /** Transcript visible to the model. */
+  messages: AgentMessage[];
+  /** Tools available for this run. */
+  tools: Tool[];
+  /** Skills available for this run. */
+  skills: Skill[];
+  /** Custom phases for this run. Rowan normalizes this with the built-in default phase. */
+  phases?: PhaseRegistry;
+  cwd?: string;
+};
+
 export type AgentConfig = {
   model: ModelRef;
   thinkingLevel?: ThinkingLevel;
@@ -139,7 +151,7 @@ export type AgentConfig = {
   interact?: (request: import("@rowan-agent/models").RunInteractionRequest) => Promise<import("../runtime-events").JsonValue>;
   /** Internal / testing only: retry delay in milliseconds. */
   retryDelayMs?: number;
-  onOutcome?: (outcome: import("../types").Outcome) => Promise<void>;
+  onOutcome?: (outcome: Outcome) => Promise<void>;
   /** Internal: await next user messages before retrying the same phase. */
   waitForInput?: (state?: ExecutionState, inputRequest?: InputRequestPrompt) => Promise<AgentMessage[]>;
 };
@@ -147,9 +159,9 @@ export type AgentConfig = {
 
 export type ToolRunnerInput = {
   config: AgentConfig;
-  toolCall: ToolCall;
+  toolCall: LlmToolCall;
   /** The model response's blocks, so a managed Runtime can commit them with the Tool Call. */
-  contentBlocks?: readonly ContentBlock[];
+  contentBlocks?: readonly StreamBlock[];
   driver?: RunInteractionDriver;
   options?: import("@rowan-agent/models").ToolCallOptions;
   /** Set when a Provider issued this call through ProviderCallContext.tools.call. */
@@ -162,8 +174,8 @@ export type ToolRunnerInput = {
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
 export type ToolBatchRunner = (input: {
   config: AgentConfig;
-  toolCalls: readonly ToolCall[];
-  contentBlocks?: readonly ContentBlock[];
+  toolCalls: readonly LlmToolCall[];
+  contentBlocks?: readonly StreamBlock[];
   driver?: RunInteractionDriver;
   options?: import("@rowan-agent/models").ToolCallOptions;
   model?: import("@rowan-agent/models").ModelRef;

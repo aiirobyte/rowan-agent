@@ -8,10 +8,10 @@ import {
   SqliteStore,
   type AgentConfiguration,
   type DurableStore,
-  type Tool,
 } from "@rowan-agent/agent/runtime";
 import type {
   RunEvent,
+  Tool,
   ToolInvocationContext,
 } from "@rowan-agent/agent";
 import Type from "typebox";
@@ -1197,7 +1197,7 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
     });
     api.hooks.on("after_tool_call", (event) => {
       afterCalls += 1;
-      return { result: { ...event.result, content: { wrapped: event.result.content } } };
+      return { result: { ok: true as const, content: { wrapped: event.result.content } } };
     });
   }, process.cwd(), "<runtime-extension>");
   let modelCalls = 0;

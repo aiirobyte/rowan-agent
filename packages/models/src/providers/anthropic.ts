@@ -1,5 +1,5 @@
 import type {
-  LlmContentPart,
+  LlmContentBlock,
   LlmMessage,
   LlmRequest,
   LlmStopReason,
@@ -117,7 +117,7 @@ type AnthropicMessage =
   | { role: "user"; content: string | AnthropicContentBlock[] }
   | { role: "assistant"; content: string | AnthropicContentBlock[] };
 
-function convertContentPart(part: LlmContentPart): AnthropicContentBlock | undefined {
+function convertContentPart(part: LlmContentBlock): AnthropicContentBlock | undefined {
   switch (part.type) {
     case "text":
       return { type: "text", text: part.text };
@@ -151,7 +151,7 @@ function convertContentPart(part: LlmContentPart): AnthropicContentBlock | undef
   }
 }
 
-function convertContent(content: string | LlmContentPart[]): string | AnthropicContentBlock[] {
+function convertContent(content: string | LlmContentBlock[]): string | AnthropicContentBlock[] {
   if (typeof content === "string") return content;
   const blocks = content.flatMap((part) => convertContentPart(part) ?? []);
   return blocks.every((block) => block.type === "text")

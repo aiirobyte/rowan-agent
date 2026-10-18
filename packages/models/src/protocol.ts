@@ -198,38 +198,26 @@ export type LlmModelUsage = LlmTokenUsage & {
 // Content types
 // ---------------------------------------------------------------------------
 
-export type LlmTextContent = {
-  type: "text";
-  text: string;
-};
-
-export type LlmImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
-
-export type LlmThinkingContent = {
-  type: "thinking";
-  thinking: string;
-  signature?: string;
-};
-
-export type LlmToolUseContent = {
+export type LlmToolUseBlock = {
   type: "tool_use";
   id: string;
   name: string;
   input: unknown;
 };
 
-export type LlmToolResultContent = {
+export type LlmToolResultBlock = {
   type: "tool_result";
   toolUseId: string;
   content: string | ContentBlock[];
   isError?: boolean;
 };
 
-export type LlmContentPart = LlmTextContent | LlmImageContent | LlmThinkingContent | LlmToolUseContent | LlmToolResultContent;
+export type LlmContentBlock =
+  | TextBlock
+  | ImageBlock
+  | ThinkingBlock
+  | LlmToolUseBlock
+  | LlmToolResultBlock;
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -237,18 +225,19 @@ export type LlmContentPart = LlmTextContent | LlmImageContent | LlmThinkingConte
 
 export type LlmMessage = {
   role: "user" | "assistant" | "tool";
-  content: string | LlmContentPart[];
+  content: string | LlmContentBlock[];
 };
 
 // ---------------------------------------------------------------------------
 // Tools
 // ---------------------------------------------------------------------------
 
-export type LlmToolDefinition = {
+export type LlmToolDefinition = Readonly<{
   name: string;
   description: string;
-  parameters: unknown;
-};
+  parameters: JsonObject;
+  _meta?: JsonObject;
+}>;
 
 export type LlmToolCall = {
   id: string;
@@ -291,16 +280,16 @@ export type LlmResponse = {
 // Content blocks (for streaming partial accumulation)
 // ---------------------------------------------------------------------------
 
-export type TextBlock = {
+export type TextBlock = Readonly<{
   type: "text";
   text: string;
-};
+}>;
 
-export type ImageBlock = {
+export type ImageBlock = Readonly<{
   type: "image";
   data: string;
   mimeType: string;
-};
+}>;
 
 export type AudioBlock = {
   type: "audio";
@@ -326,12 +315,12 @@ export type ResourceBlock = {
   };
 };
 
-export type ThinkingBlock = {
+export type ThinkingBlock = Readonly<{
   type: "thinking";
   thinking: string;
   /** Opaque provider token that lets the same provider verify a replayed block. */
   signature?: string;
-};
+}>;
 
 export type ToolCallBlock = {
   type: "tool_call";
@@ -345,9 +334,9 @@ export type ContentBlock =
   | ImageBlock
   | AudioBlock
   | ResourceLinkBlock
-  | ResourceBlock
-  | ThinkingBlock
-  | ToolCallBlock;
+  | ResourceBlock;
+
+export type StreamBlock = TextBlock | ThinkingBlock | ToolCallBlock;
 
 /**
  * Accumulated assistant message partial, carried by each streaming event.
@@ -355,7 +344,7 @@ export type ContentBlock =
  */
 export type AssistantMessagePartial = {
   role: "assistant";
-  contentBlocks: ContentBlock[];
+  contentBlocks: StreamBlock[];
   stopReason?: LlmStopReason;
 };
 
@@ -460,16 +449,10 @@ export type RunInteractionRequest = Readonly<{
   }>;
 }>;
 
-export type ToolDefinitionSummary = Readonly<{
-  name: string;
-  description: string;
-  parameters?: JsonValue;
-  _meta?: JsonObject;
-}>;
-
-export type ToolCallOutcome =
-  | Readonly<{ ok: true; content: JsonValue }>
-  | Readonly<{ ok: false; error: string; content?: JsonValue }>;
+export type ToolResult =
+  | Readonly<{ ok: true; content: JsonValue; structuredContent?: JsonValue; isError?: boolean }>
+  | Readonly<{ ok: false; content: JsonValue; error: string; structuredContent?: JsonValue; isError?: boolean }>
+  | Readonly<{ content: readonly ContentBlock[]; structuredContent?: JsonValue; isError?: boolean; ok?: boolean; error?: string }>;
 
 export type ToolProgress = {
   progress: number;
@@ -510,8 +493,8 @@ export type ProviderCallContext = {
   interact(request: RunInteractionRequest): Promise<JsonValue>;
   /** The tools this Run would give the model, and ways to call or report tool execution. */
   tools: {
-    list(): readonly ToolDefinitionSummary[];
-    call(name: string, args: JsonValue, options?: ToolCallOptions): Promise<ToolCallOutcome>;
+    list(): readonly LlmToolDefinition[];
+    call(name: string, args: JsonValue, options?: ToolCallOptions): Promise<ToolResult>;
     /** Report execution of an external tool call or an update to one. */
     report(update: ToolCall | ToolCallUpdate): void;
   };

@@ -2,14 +2,15 @@ import type { AgentMessage, Skill } from "../../protocol";
 import type {
   LlmRequest,
   LlmMessage,
-  LlmContentPart,
+  LlmContentBlock,
+  LlmToolDefinition,
   ModelRef,
   ThinkingLevel,
   JsonObject,
 } from "@rowan-agent/models";
 import { buildContextDescription } from "./resource-formatter";
 import { buildSystemPrompt } from "./system-prompt";
-import { messageContentText } from "../../types";
+import { messageContentText } from "../../loop/messages";
 
 export type PromptTool = { name: string; description: string; parameters: unknown };
 
@@ -57,7 +58,7 @@ export function conversationMessages(messages: AgentMessage[]): LlmMessage[] {
     if (message.role === "user") {
       if (message.contexts && message.contexts.length > 0) {
         const turnContextText = `<turn_context>\n${buildContextDescription(message.contexts)}\n</turn_context>`;
-        const contentParts: LlmContentPart[] = [
+        const contentParts: LlmContentBlock[] = [
           { type: "text", text: turnContextText },
           ...(typeof message.content === "string"
             ? [{ type: "text" as const, text: message.content }]
@@ -88,9 +89,9 @@ export function conversationMessages(messages: AgentMessage[]): LlmMessage[] {
 type ModelRequestInput = {
   systemPrompt: string;
   messages: AgentMessage[];
-  tools: Array<{ name: string; description: string; parameters: unknown; promptSnippet?: string; promptGuidelines?: string[] }>;
+  tools: Array<{ name: string; description: string; parameters: unknown; promptSnippet?: string; promptGuidelines?: readonly string[] }>;
   skills: Skill[];
-  promptGuidelines?: string[];
+  promptGuidelines?: readonly string[];
   appendSystemPrompt?: string;
 };
 
@@ -115,10 +116,10 @@ export function buildModelRequest(
 
   const messages: LlmMessage[] = [...conversationMessages(input.messages)];
 
-  const modelTools = input.tools.map((t) => ({
+  const modelTools: LlmToolDefinition[] = input.tools.map((t) => ({
     name: t.name,
     description: t.description,
-    parameters: t.parameters,
+    parameters: (t.parameters ?? {}) as JsonObject,
   }));
 
   return {

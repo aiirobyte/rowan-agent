@@ -1,9 +1,21 @@
 import type { RunInteraction } from "./harness/phases/interactions";
 import type { PhaseStatus } from "./harness/phases/types";
 import type {
+  AudioBlock,
   ContentBlock,
+  ImageBlock,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
   LlmTokenUsage,
   ModelRef,
+  ResourceBlock,
+  ResourceLinkBlock,
+  RunInteractionKind,
+  RunInteractionRequest,
+  StreamBlock,
+  TextBlock,
+  ThinkingBlock,
   ToolAnnotations,
   ToolCall,
   ToolCallContent,
@@ -11,12 +23,26 @@ import type {
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,
+  ToolProgress,
+  ToolResult,
 } from "@rowan-agent/models";
 
 export type {
+  AudioBlock,
   ContentBlock,
+  ImageBlock,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
   LlmTokenUsage,
   ModelRef,
+  ResourceBlock,
+  ResourceLinkBlock,
+  RunInteractionKind,
+  RunInteractionRequest,
+  StreamBlock,
+  TextBlock,
+  ThinkingBlock,
   ToolAnnotations,
   ToolCall,
   ToolCallContent,
@@ -24,6 +50,8 @@ export type {
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,
+  ToolProgress,
+  ToolResult,
 } from "@rowan-agent/models";
 
 declare const opaqueIdBrand: unique symbol;
@@ -45,18 +73,12 @@ export type EventCursor = OpaqueId<"EventCursor">;
 export type AgentListCursor = OpaqueId<"AgentListCursor">;
 export type RunListCursor = OpaqueId<"RunListCursor">;
 
-export type JsonPrimitive = null | boolean | number | string;
-export type JsonValue =
-  | JsonPrimitive
-  | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
-export type JsonObject = Readonly<Record<string, JsonValue>>;
-export type Metadata = JsonObject;
+export type ToolResultRecord = Readonly<{
+  toolCallId: ToolCallId;
+  toolName: string;
+}> & ToolResult;
 
-export type TextContent = Readonly<{ type: "text"; text: string }>;
-export type ImageContent = Readonly<{ type: "image"; data: string; mimeType: string }>;
-export type ThinkingContent = Readonly<{ type: "thinking"; thinking: string; signature?: string }>;
-export type ToolUseContent = Readonly<{
+export type ToolUseBlock = Readonly<{
   type: "tool_use";
   toolCallId: ToolCallId;
   /** Provider/model correlation, retained only to reconstruct the next request. */
@@ -65,27 +87,17 @@ export type ToolUseContent = Readonly<{
   input: JsonValue;
 }>;
 
-export type ToolExecutionResult =
-  | Readonly<{ ok: true; content: JsonValue; structuredContent?: JsonValue; isError?: boolean }>
-  | Readonly<{ ok: false; content: JsonValue; error: string; structuredContent?: JsonValue; isError?: boolean }>
-  | Readonly<{ content: readonly ContentBlock[]; structuredContent?: JsonValue; isError?: boolean; ok?: boolean; error?: string }>;
-
-export type DurableToolResult = Readonly<{
-  toolCallId: ToolCallId;
-  toolName: string;
-}> & ToolExecutionResult;
-
-export type ToolResultContent = Readonly<{
+export type ToolResultBlock = Readonly<{
   type: "tool_result";
   toolCallId: ToolCallId;
   /** Provider/model correlation, retained only to reconstruct the next request. */
   providerToolCallId?: string;
-  result: ToolExecutionResult;
+  result: ToolResult;
 }>;
 
-export type UserContent = string | readonly (TextContent | ImageContent)[];
-export type AssistantContent = string | readonly (TextContent | ThinkingContent | ToolUseContent)[];
-export type ToolMessageContent = readonly [ToolResultContent, ...ToolResultContent[]];
+export type UserContent = string | readonly (TextBlock | ImageBlock)[];
+export type AssistantContent = string | readonly (TextBlock | ThinkingBlock | ToolUseBlock)[];
+export type ToolMessageContent = readonly [ToolResultBlock, ...ToolResultBlock[]];
 export type MessageContent = UserContent | AssistantContent | ToolMessageContent;
 
 export type MessageBase = Readonly<{
@@ -94,7 +106,7 @@ export type MessageBase = Readonly<{
   runId: RunId;
   /** Monotonic active revision. Omitted on legacy/initial messages and read as 0. */
   messageRevision?: number;
-  metadata?: Metadata;
+  metadata?: JsonObject;
   sequenceWithinRun: number;
   createdAt: string;
 }>;
@@ -114,29 +126,25 @@ export type AssistantMessage = MessageBase & Readonly<{
   usage?: LlmTokenUsage;
 }>;
 export type ToolMessage = MessageBase & Readonly<{ role: "tool"; content: ToolMessageContent }>;
-export type InteractionRecord = MessageBase & Readonly<{
-  role: "interaction";
-  interactionId: string;
-  kind: "user_input" | "permission" | "elicitation" | "confirmation";
-  prompt: string;
-  phase: string;
-  status: "answered" | "replied" | "cancelled";
-  answer?: JsonValue;
-  reply?: string;
-  toolCallId?: ToolCallId;
-  result?: Readonly<{
-    answered?: string;
-    replied?: string;
-    cancelled?: string;
-  }>;
-}>;
+export type InteractionRecord = MessageBase &
+  Readonly<{
+    role: "interaction";
+    interactionId: string;
+    kind: RunInteractionKind;
+    phase: string;
+    status: "answered" | "replied" | "cancelled";
+    answer?: JsonValue;
+    reply?: string;
+    toolCallId?: ToolCallId;
+  }> &
+  Pick<RunInteractionRequest, "prompt" | "result">;
 export type Message = UserMessage | AssistantMessage | ToolMessage | InteractionRecord;
 
 export type Outcome = Readonly<{
   id: OutcomeId;
   message: string;
   payload?: JsonValue;
-  toolResults?: readonly DurableToolResult[];
+  toolResults?: readonly ToolResultRecord[];
 }>;
 
 export type RunState =
@@ -179,24 +187,23 @@ export type RunningRunFailure = Extract<
   { code: "runtime_interrupted" | "tool_indeterminate" | "execution_failed" }
 >;
 
-export type ToolCallState = ToolCallStatus;
 export type ToolCallSnapshot = ToolCall & Readonly<{
   id: ToolCallId;
   providerToolCallId?: string;
-  agentId?: AgentId;
-  runId?: RunId;
+  agentId: AgentId;
+  runId: RunId;
   executionId?: ExecutionId;
   requestMessageId?: MessageId;
   name?: string;
   args?: JsonValue;
   state?: ToolCallStatus;
-  result?: DurableToolResult;
+  result?: ToolResultRecord;
   resultMessageId?: MessageId;
   reason?: string;
   external?: boolean;
   contentIndex?: number;
-  createdAt?: string;
-  updatedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }>;
 
 export type DurableEventBase = Readonly<{
@@ -207,7 +214,7 @@ export type DurableEventBase = Readonly<{
   agentId: AgentId;
   runId: RunId;
   runRevision: number;
-  metadata?: Metadata;
+  metadata?: JsonObject;
   createdAt: string;
 }>;
 

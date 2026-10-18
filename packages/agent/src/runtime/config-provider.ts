@@ -1,7 +1,7 @@
 import { createId } from "../utils";
 import type { ConfigProvider, ConfigPutResult, ConfigResolution } from "./contracts";
 import { isConfigurationSnapshot, type AgentConfiguration, type ConfigurationSnapshot } from "./configuration-snapshot";
-import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
+import type { AgentId, ConfigToken, JsonObject } from "../runtime-events";
 import { CONFIG_TOKEN_BYTES } from "./idempotency";
 import { assertUtf8ByteLimit, canonicalJson } from "./json";
 import type { JsonValue } from "../runtime-events";
@@ -28,7 +28,7 @@ export class InMemoryConfigProvider implements ConfigProvider {
 
   async put(input: {
     agentId: AgentId;
-    agentMetadata?: Metadata;
+    agentMetadata?: JsonObject;
     config: AgentConfiguration | ConfigurationSnapshot;
     operationId: string;
     signal: AbortSignal;
@@ -52,7 +52,7 @@ export class InMemoryConfigProvider implements ConfigProvider {
 
   async resolve(input: {
     agentId: AgentId;
-    agentMetadata?: Metadata;
+    agentMetadata?: JsonObject;
     token: ConfigToken;
     signal: AbortSignal;
   }): Promise<ConfigResolution> {

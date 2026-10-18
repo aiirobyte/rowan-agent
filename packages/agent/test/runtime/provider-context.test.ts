@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModelStream, isValidToolProgress, type ProviderCallContext, type ProviderStreamFn, type StreamFn, type ToolCall, type ToolCallOutcome, type ToolProgress } from "@rowan-agent/models";
+import { createModelStream, isValidToolProgress, type ProviderCallContext, type ProviderStreamFn, type StreamFn, type ToolCall, type ToolProgress, type ToolResult } from "@rowan-agent/models";
 import Type from "typebox";
 import {
   AgentRuntime,
@@ -660,7 +660,7 @@ test("ctx.tools.call options.onUpdate receives start, progress update with raw T
   };
 
   const updates: { toolCall: ToolCall; progress?: ToolProgress }[] = [];
-  let callOutcome: ToolCallOutcome | undefined;
+  let callOutcome: ToolResult | undefined;
 
   const stream: StreamFn = async function* (_request, rawCtx) {
     const ctx = rawCtx as ProviderCallContext;
@@ -914,8 +914,8 @@ test("ctx.tools.call per-call abort cancels only that call while the Run continu
     },
   };
 
-  let firstCallOutcome: ToolCallOutcome | undefined;
-  let secondCallOutcome: ToolCallOutcome | undefined;
+  let firstCallOutcome: ToolResult | undefined;
+  let secondCallOutcome: ToolResult | undefined;
   const updates: ToolCall[] = [];
   let providerSignalAbortedDuringExecution: boolean | undefined;
 
@@ -1000,7 +1000,7 @@ test("ctx.tools.call per-call abort cancels only that call while the Run continu
 
 test("provider tools.call whose before_tool_call hook asks a permission: observe() yields open and resolve events, host answers, Tool runs", async () => {
   let executions = 0;
-  let callOutcome: ToolCallOutcome | undefined;
+  let callOutcome: ToolResult | undefined;
 
   const extension = loadExtensionFromFactory((api) => {
     api.tools.register({
@@ -1079,8 +1079,8 @@ test("provider tools.call whose before_tool_call hook asks a permission: observe
 
 test("declining a provider tool interaction fails that call and leaves the Run able to call other tools", async () => {
   let executions = 0;
-  let firstOutcome: ToolCallOutcome | undefined;
-  let secondOutcome: ToolCallOutcome | undefined;
+  let firstOutcome: ToolResult | undefined;
+  let secondOutcome: ToolResult | undefined;
 
   const extension = loadExtensionFromFactory((api) => {
     api.tools.register({
@@ -1149,8 +1149,8 @@ test("declining a provider tool interaction fails that call and leaves the Run a
 });
 
 test("after an answered call, a later tools.call in the same execution gets its own Tool Call record", async () => {
-  let firstOutcome: ToolCallOutcome | undefined;
-  let secondOutcome: ToolCallOutcome | undefined;
+  let firstOutcome: ToolResult | undefined;
+  let secondOutcome: ToolResult | undefined;
   let executions = 0;
 
   const extension = loadExtensionFromFactory((api) => {
@@ -1303,7 +1303,7 @@ test("Tool that asks from execute re-runs with its answer", async () => {
     });
   }, process.cwd(), "<test:provider-tool-execute-interaction>");
 
-  let callOutcome: ToolCallOutcome | undefined;
+  let callOutcome: ToolResult | undefined;
   const stream: StreamFn = async function* (_request, rawCtx) {
     const ctx = rawCtx as ProviderCallContext;
     callOutcome = await ctx.tools.call("asking_tool", {});
@@ -1363,8 +1363,8 @@ test("two consecutive provider tools.call to a permission-gated tool both requir
     });
   }, process.cwd(), "<test:provider-consecutive-guarded-tools>");
 
-  let outcome1: ToolCallOutcome | undefined;
-  let outcome2: ToolCallOutcome | undefined;
+  let outcome1: ToolResult | undefined;
+  let outcome2: ToolResult | undefined;
 
   const stream: StreamFn = async function* (_request, rawCtx) {
     const ctx = rawCtx as ProviderCallContext;
@@ -1443,8 +1443,8 @@ test("declined first provider tool call does not auto-decline a subsequent provi
     });
   }, process.cwd(), "<test:provider-declined-does-not-leak>");
 
-  let outcome1: ToolCallOutcome | undefined;
-  let outcome2: ToolCallOutcome | undefined;
+  let outcome1: ToolResult | undefined;
+  let outcome2: ToolResult | undefined;
 
   const stream: StreamFn = async function* (_request, rawCtx) {
     const ctx = rawCtx as ProviderCallContext;

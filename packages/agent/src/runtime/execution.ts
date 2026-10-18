@@ -1,12 +1,13 @@
 import type {
-  AgentContext,
-  AgentMessage,
   AfterToolCall,
   BeforeToolCall,
-  ModelRef,
-  Outcome,
-  StreamFn,
-} from "../types";
+  EntryPhaseSpec,
+  ExecutionCheckpoint,
+} from "./contracts";
+import type { Outcome } from "../runtime-events";
+import type { AgentMessage } from "../protocol/agent";
+import type { AgentContext } from "../loop/types";
+import type { ModelRef, StreamFn } from "@rowan-agent/models";
 import { snapshotMessages } from "../loop/state";
 import { startPhaseLoop } from "../loop/runners";
 import type {
@@ -27,7 +28,6 @@ import type { ModelTranscript } from "../protocol/turn";
 import type { JsonValue } from "../runtime-events";
 import type { JsonObject, ThinkingLevel } from "@rowan-agent/models";
 import { assertJsonValue, canonicalJson, isJsonValue } from "./json";
-import type { EntryPhaseSpec, ExecutionCheckpoint } from "./contracts";
 import { createId } from "../utils";
 
 export const EXECUTION_CHECKPOINT_CODEC = "rowan.agent.execution";

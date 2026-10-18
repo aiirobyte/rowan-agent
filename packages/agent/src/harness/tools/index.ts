@@ -3,8 +3,14 @@ import { basename, dirname, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import Type from "typebox";
 import Schema from "typebox/schema";
-import type { ToolCall, ToolResult } from "../../protocol";
-import type { AfterToolCall, BeforeToolCall, Tool, ToolContext } from "../../types";
+import type { JsonObject, JsonValue, LlmToolCall, ToolResult } from "@rowan-agent/models";
+import type {
+  AfterToolCall,
+  BeforeToolCall,
+  BeforeToolCallDecision,
+  Tool,
+  ToolInvocationContext,
+} from "../../runtime/contracts";
 import { formatResourceOutput, detectResourceType, type ResourceType } from "../context/resource-formatter";
 import { parseFrontmatter, inferResourceName } from "../loader";
 import { normalizeRelativePath } from "../path";
@@ -86,16 +92,16 @@ type ToolArgsValidator = {
   Parse(value: unknown): unknown;
 };
 
-const validatorCache = new WeakMap<Type.TSchema, ToolArgsValidator>();
+const validatorCache = new WeakMap<object, ToolArgsValidator>();
 
-function validatorFor(schema: Type.TSchema): ToolArgsValidator {
-  const cached = validatorCache.get(schema);
+function validatorFor(schema: Type.TSchema | JsonObject): ToolArgsValidator {
+  const cached = validatorCache.get(schema as object);
   if (cached) {
     return cached;
   }
 
-  const validator = Schema.Compile(schema);
-  validatorCache.set(schema, validator);
+  const validator = Schema.Compile(schema as any);
+  validatorCache.set(schema as object, validator);
   return validator;
 }
 
@@ -115,8 +121,8 @@ export type RuntimeToolExecutionEvent =
 
 export type RuntimeToolExecutionInput = {
   tools: Tool[];
-  toolCall: ToolCall;
-  toolContext: ToolContext;
+  toolCall: LlmToolCall;
+  toolContext: ToolInvocationContext;
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
   signal?: AbortSignal;
@@ -158,27 +164,19 @@ function resolveCoreToolPath(context: Pick<NormalizedCoreToolContext, "root">, p
 }
 
 function toolResult(input: {
-  context: ToolContext;
-  toolName: string;
   ok: boolean;
-  content: unknown;
+  content: JsonValue;
   error?: string;
 }): ToolResult {
-  return {
-    toolCallId: input.context.toolCallId,
-    toolName: input.toolName,
-    ok: input.ok,
-    content: input.content,
-    ...(input.error ? { error: input.error } : {}),
-  };
+  return input.ok
+    ? { ok: true, content: input.content }
+    : { ok: false, content: input.content, error: input.error ?? "Tool execution failed" };
 }
 
 export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): Promise<ToolResult> {
   const tool = input.tools.find((candidate) => candidate.name === input.toolCall.name);
   if (!tool) {
     const result = toolResult({
-      context: input.toolContext,
-      toolName: input.toolCall.name,
       ok: false,
       content: null,
       error: `Unknown tool: ${input.toolCall.name}`,
@@ -189,11 +187,10 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
 
   let args: unknown;
   try {
-    args = validatorFor(tool.parameters).Parse(input.toolCall.args);
+    const rawArgs = input.toolCall.arguments;
+    args = validatorFor(tool.parameters).Parse(rawArgs);
   } catch (error) {
     const result = toolResult({
-      context: input.toolContext,
-      toolName: tool.name,
       ok: false,
       content: null,
       error: error instanceof Error ? error.message : String(error),
@@ -202,17 +199,15 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
     return result;
   }
 
-  let decision:
-    | { allow: true }
-    | { allow: false; reason: string }
-    | { interaction: import("../../extensions/hooks").RunInteractionRequest }
-    | undefined;
+  let decision: BeforeToolCallDecision | undefined;
+  const effectiveSignal = input.signal ?? new AbortController().signal;
   if (input.beforeToolCall) {
     await input.observe?.({ type: "approval_requested", tool, args });
     decision = await input.beforeToolCall({
       tool,
-      args,
-      toolCallId: input.toolCall.id,
+      args: args as JsonValue,
+      context: input.toolContext,
+      signal: effectiveSignal,
     });
     if (decision && "allow" in decision) {
       await input.observe?.({
@@ -226,8 +221,6 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
 
   if (decision && "interaction" in decision) {
     const result = toolResult({
-      context: input.toolContext,
-      toolName: tool.name,
       ok: false,
       content: null,
       error: `Tool interaction required: ${decision.interaction.prompt}`,
@@ -238,8 +231,6 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
 
   if (decision && "allow" in decision && !decision.allow) {
     const result = toolResult({
-      context: input.toolContext,
-      toolName: tool.name,
       ok: false,
       content: null,
       error: decision.reason,
@@ -251,14 +242,25 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
   await input.observe?.({ type: "tool_start", tool, args });
 
   try {
-    let result = await tool.execute(args, input.toolContext, input.signal);
+    let result = await tool.execute(args as JsonValue, input.toolContext, effectiveSignal);
+    if (!("ok" in result)) {
+      result = { ok: !result.isError, ...result };
+    }
     if (input.afterToolCall) {
       await input.observe?.({
         type: "result_review_requested",
         tool,
         result,
       });
-      result = await input.afterToolCall({ tool, result });
+      result = await input.afterToolCall({
+        tool,
+        result,
+        context: input.toolContext,
+        signal: effectiveSignal,
+      });
+      if (!("ok" in result)) {
+        result = { ok: !result.isError, ...result };
+      }
       await input.observe?.({
         type: "result_review_result",
         tool,
@@ -270,8 +272,6 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
     return result;
   } catch (error) {
     const result = toolResult({
-      context: input.toolContext,
-      toolName: tool.name,
       ok: false,
       content: null,
       error: error instanceof Error ? error.message : "Tool execution failed.",
@@ -353,21 +353,19 @@ function boundedPreview(text: string, maxBytes: number): { text: string; truncat
   return { text: new TextDecoder().decode(bytes.subarray(0, maxBytes)), truncated: true };
 }
 
-export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArgs> {
+export function createReadTool(context: NormalizedCoreToolContext): Tool {
   return {
     name: "read",
     description: "Read a file using the host process filesystem permissions.",
     parameters: ReadArgsSchema,
     promptSnippet: "Read file contents.",
     promptGuidelines: ["Read files before editing them."],
-    async execute(args: ReadArgs, toolContext: ToolContext): Promise<ToolResult> {
+    async execute(args: JsonValue, toolContext: ToolInvocationContext): Promise<ToolResult> {
       const parsed = ReadArgsValidator.Parse(args);
       const offsetError = parsed.offset === undefined ? undefined : positiveInteger(parsed.offset, "offset");
       const limitError = parsed.limit === undefined ? undefined : positiveInteger(parsed.limit, "limit");
       if (offsetError || limitError) {
         return toolResult({
-          context: toolContext,
-          toolName: "read",
           ok: false,
           content: null,
           error: offsetError ?? limitError,
@@ -379,8 +377,6 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
       const invalidLimit = positiveNumber(maxBytes, "maxBytes");
       if (invalidLimit) {
         return toolResult({
-          context: toolContext,
-          toolName: "read",
           ok: false,
           content: null,
           error: invalidLimit,
@@ -392,8 +388,6 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
         fileStat = await stat(resolved.absolutePath);
       } catch (error) {
         return toolResult({
-          context: toolContext,
-          toolName: "read",
           ok: false,
           content: null,
           error: error instanceof Error ? error.message : String(error),
@@ -402,8 +396,6 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
 
       if (!fileStat.isFile()) {
         return toolResult({
-          context: toolContext,
-          toolName: "read",
           ok: false,
           content: null,
           error: `Not a file: ${resolved.relativePath}`,
@@ -415,8 +407,6 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
         bytes = await readFile(resolved.absolutePath);
       } catch (error) {
         return toolResult({
-          context: toolContext,
-          toolName: "read",
           ok: false,
           content: null,
           error: error instanceof Error ? error.message : String(error),
@@ -462,8 +452,6 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
       }
 
       return toolResult({
-        context: toolContext,
-        toolName: "read",
         ok: true,
         content,
       });
@@ -471,22 +459,20 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool<ReadArg
   };
 }
 
-export function createWriteTool(context: NormalizedCoreToolContext): Tool<WriteArgs> {
+export function createWriteTool(context: NormalizedCoreToolContext): Tool {
   return {
     name: "write",
     description: "Create or overwrite a file using the host process filesystem permissions.",
     parameters: WriteArgsSchema,
     promptSnippet: "Create or overwrite files.",
     promptGuidelines: ["Use edit for partial changes."],
-    async execute(args: WriteArgs, toolContext: ToolContext): Promise<ToolResult> {
+    async execute(args: JsonValue, toolContext: ToolInvocationContext): Promise<ToolResult> {
       const parsed = WriteArgsValidator.Parse(args);
       const resolved = resolveCoreToolPath(context, parsed.path);
       await mkdir(dirname(resolved.absolutePath), { recursive: true });
       await writeFile(resolved.absolutePath, parsed.content, "utf8");
 
       return toolResult({
-        context: toolContext,
-        toolName: "write",
         ok: true,
         content: `Successfully wrote ${parsed.content.length} bytes to ${resolved.relativePath}.`,
       });
@@ -534,14 +520,14 @@ function applyEditReplacements(
   return { content, replacements: matches.length };
 }
 
-export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArgs> {
+export function createEditTool(context: NormalizedCoreToolContext): Tool {
   return {
     name: "edit",
     description: "Apply exact text replacements using the host process filesystem permissions.",
     parameters: EditArgsSchema,
     promptSnippet: "Apply exact text replacements.",
     promptGuidelines: ["Read the file first; each oldText must match exactly once."],
-    async execute(args: EditArgs, toolContext: ToolContext): Promise<ToolResult> {
+    async execute(args: JsonValue, toolContext: ToolInvocationContext): Promise<ToolResult> {
       const parsed = EditArgsValidator.Parse(args);
       const resolved = resolveCoreToolPath(context, parsed.path);
       const current = await readFile(resolved.absolutePath, "utf8");
@@ -553,8 +539,6 @@ export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArg
         replacements = result.replacements;
       } catch (error) {
         return toolResult({
-          context: toolContext,
-          toolName: "edit",
           ok: false,
           content: null,
           error: error instanceof Error ? error.message : String(error),
@@ -563,8 +547,6 @@ export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArg
       await writeFile(resolved.absolutePath, next, "utf8");
 
       return toolResult({
-        context: toolContext,
-        toolName: "edit",
         ok: true,
         content: `Successfully replaced ${replacements} block(s) in ${resolved.relativePath}.`,
       });
@@ -572,14 +554,14 @@ export function createEditTool(context: NormalizedCoreToolContext): Tool<EditArg
   };
 }
 
-export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArgs> {
+export function createBashTool(context: NormalizedCoreToolContext): Tool {
   return {
     name: "bash",
     description: "Run a bash command with the host process filesystem permissions; root is the working directory.",
     parameters: BashArgsSchema,
     promptSnippet: "Run shell commands.",
     promptGuidelines: ["Use read/write/edit for file operations."],
-    async execute(args: BashArgs, toolContext: ToolContext, signal?: AbortSignal): Promise<ToolResult> {
+    async execute(args: JsonValue, toolContext: ToolInvocationContext, signal?: AbortSignal): Promise<ToolResult> {
       const parsed = BashArgsValidator.Parse(args);
       const timeoutMs = parsed.timeout === undefined ? context.bashTimeoutMs : parsed.timeout * 1000;
       const maxOutputBytes = context.maxBashOutputBytes;
@@ -588,8 +570,6 @@ export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArg
 
       if (invalidTimeout || invalidOutputLimit) {
         return toolResult({
-          context: toolContext,
-          toolName: "bash",
           ok: false,
           content: null,
           error: invalidTimeout ?? invalidOutputLimit,
@@ -632,8 +612,6 @@ export function createBashTool(context: NormalizedCoreToolContext): Tool<BashArg
         content += `\n\n[Full result: ${archivePath}, offset 0]`;
 
         return toolResult({
-          context: toolContext,
-          toolName: "bash",
           ok,
           content,
           ...(ok

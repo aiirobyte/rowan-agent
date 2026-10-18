@@ -1,8 +1,7 @@
-import type { LlmContentPart } from "@rowan-agent/models";
-import type { AgentMessage, AgentContext, Tool as LoopTool, ToolResult } from "../types";
-import type { ResolvedAgentContext, Tool as DurableTool } from "./contracts";
-import { createRunInteractionDriver } from "../harness/phases/interactions";
-import type { RunInteractionDriver } from "../harness/phases/interactions";
+import type { LlmContentBlock, TextBlock } from "@rowan-agent/models";
+import type { AgentMessage } from "../protocol/agent";
+import type { AgentContext } from "../loop/types";
+import type { ResolvedAgentContext } from "./contracts";
 import type {
   AgentId,
   AssistantContent,
@@ -113,7 +112,7 @@ export function projectModelContext(input: {
   return {
     systemPrompt: input.context.systemPrompt,
     messages: projectedMessages,
-    tools: input.context.tools.map((tool) => projectTool(tool, input.agentId, input.runId)),
+    tools: [...input.context.tools],
     skills: [...input.context.skills],
     ...(input.context.phases ? { phases: input.context.phases } : {}),
   };
@@ -145,7 +144,7 @@ export function projectAssistantMessage(
 function durableInterruptedAssistantContent(content: AgentMessage["content"]): AssistantContent {
   if (typeof content === "string") return content;
   return content
-    .filter((part) => part.type === "text")
+    .filter((part): part is TextBlock => part.type === "text")
     .map((part) => ({ type: "text", text: part.text }));
 }
 
@@ -215,12 +214,12 @@ function durableAssistantContent(content: AgentMessage["content"]): AssistantCon
   return projected;
 }
 
-function projectUserContent(content: UserContent): string | LlmContentPart[] {
+function projectUserContent(content: UserContent): string | LlmContentBlock[] {
   if (typeof content === "string") return content;
   return content.map((part) => ({ ...part }));
 }
 
-function projectAssistantContent(content: AssistantContent): string | LlmContentPart[] {
+function projectAssistantContent(content: AssistantContent): string | LlmContentBlock[] {
   if (typeof content === "string") return content;
   return content.map((part) => {
     if (part.type === "text") return { ...part };
@@ -229,7 +228,7 @@ function projectAssistantContent(content: AssistantContent): string | LlmContent
   });
 }
 
-function projectToolContent(content: Extract<Message, { role: "tool" }>["content"]): LlmContentPart[] {
+function projectToolContent(content: Extract<Message, { role: "tool" }>["content"]): LlmContentBlock[] {
   return content.map((part) => {
     const isError = "isError" in part.result ? Boolean(part.result.isError) : !part.result.ok;
     const textContent = Array.isArray(part.result.content)
@@ -242,46 +241,6 @@ function projectToolContent(content: Extract<Message, { role: "tool" }>["content
       ...(isError ? { isError: true } : {}),
     };
   });
-}
-
-function inertRunInteraction(signal?: AbortSignal): RunInteractionDriver {
-  const controller = signal ? undefined : new AbortController();
-  const state = {
-    currentPhase: "default",
-    attempt: 0,
-    status: "running" as const,
-    metrics: { iterations: 0, phaseTransitions: [], compactionCount: 0, retryCount: 0, startedAt: new Date().toISOString(), startedAtMs: Date.now() },
-  };
-  const driver = createRunInteractionDriver(state, "default", signal ?? controller!.signal);
-  return {
-    ...driver,
-    request: () => { throw new Error("Run interactions require an active interaction driver."); },
-    suspend: () => { throw new Error("Run interactions require an active interaction driver."); },
-  };
-}
-
-export function projectTool(tool: DurableTool, agentId: AgentId, runId: RunId): LoopTool {
-  return {
-    name: tool.name,
-    ...(tool.core ? { core: true } : {}),
-    description: tool.description,
-    parameters: tool.parameters,
-    ...(tool.promptSnippet ? { promptSnippet: tool.promptSnippet } : {}),
-    ...(tool.promptGuidelines ? { promptGuidelines: [...tool.promptGuidelines] } : {}),
-    ...(tool._meta !== undefined ? { _meta: tool._meta } : {}),
-    execute: async (args, context, signal): Promise<ToolResult> => {
-      const result = await tool.execute(args as JsonValue, {
-        agentId,
-        runId,
-        toolCallId: context.toolCallId as never,
-        providerToolCallId: context.toolCallId,
-        reportProgress: () => undefined,
-        interaction: context.interaction ?? inertRunInteraction(signal),
-      }, signal ?? new AbortController().signal);
-      const ok = "ok" in result && typeof result.ok === "boolean" ? result.ok : !result.isError;
-      return { toolCallId: context.toolCallId, toolName: tool.name, ok, ...result };
-    },
-  };
 }
 
 function jsonText(value: JsonValue): string {
