@@ -20,7 +20,6 @@ import type {
   PhaseToolExecutionManager,
   ModelInvokeOutput,
   PhaseExecution,
-  PhaseContextSnapshot,
 } from "./execution";
 import { invokeModel, type ModelInvokerInput } from "./stream-collector";
 import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
@@ -1341,24 +1340,6 @@ function createPhaseExecution(
   const execution: PhaseExecution = {
     interaction,
     messages: messageManager,
-    snapshot(): PhaseContextSnapshot {
-      return {
-        systemPrompt: config.context.systemPrompt,
-        messages: [...config.context.messages],
-        currentPhase: state.currentPhase ?? "",
-        availablePhases: Array.from(registry.phases.keys()),
-        turnNumber: state.metrics.iterations,
-      };
-    },
-
-    restore(snapshot: PhaseContextSnapshot): void {
-      config.context.systemPrompt = snapshot.systemPrompt;
-      config.context.messages.length = 0;
-      config.context.messages.push(...snapshot.messages);
-      state.currentPhase = snapshot.currentPhase;
-      state.metrics.iterations = snapshot.turnNumber;
-    },
-
     async invokeModel(phaseContext: PhaseContext, options: { output?: "reply" | "internal" } = {}): Promise<ModelInvokeOutput> {
       // Allow extensions to transform PhaseContext before building request
       if (config.beforePrompt) {
@@ -1482,7 +1463,6 @@ function createPhaseExecution(
       await config.onPhaseStatus?.(phase.name, status);
     },
 
-    executeTool: executePhaseTool,
 
     async executeTools(
       phaseContext: AgentContext,

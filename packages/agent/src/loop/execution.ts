@@ -25,24 +25,11 @@ export type InternalModelLoopOptions = {
   maxToolRounds?: number;
 };
 
-/** Snapshot of phase-level context for restore */
-export type PhaseContextSnapshot = {
-  systemPrompt: string;
-  messages: AgentMessage[];
-  currentPhase: string;
-  availablePhases: string[];
-  turnNumber: number;
-  payload?: unknown;
-};
-
 /** Execution capabilities for a phase — operates on PhaseContext. */
 export type PhaseExecution = {
-  snapshot(): PhaseContextSnapshot;
-  restore(snapshot: PhaseContextSnapshot): void;
   invokeModel(context: PhaseContext, options?: { output?: "reply" | "internal" }): Promise<ModelInvokeOutput>;
   runInternalModelLoop(context: PhaseContext, options: InternalModelLoopOptions): Promise<ModelInvokeOutput>;
   reportStatus(status: PhaseStatus): Promise<void>;
-  executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
   executeTools(
     context: AgentContext,
     toolCalls: readonly ToolCall[],
