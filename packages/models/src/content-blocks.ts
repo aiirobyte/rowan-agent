@@ -1,4 +1,9 @@
-import type { ContentBlock, LlmToolCall, ToolCallBlock } from "./protocol";
+import type { LlmToolCall, StreamBlock, ToolCallBlock } from "./protocol";
+
+type MutableTextBlock = { type: "text"; text: string };
+type MutableThinkingBlock = { type: "thinking"; thinking: string; signature?: string };
+type MutableToolCallBlock = { type: "tool_call"; id: string; name: string; args: string };
+type MutableStreamBlock = MutableTextBlock | MutableThinkingBlock | MutableToolCallBlock;
 
 type ToolCallBlockUpdate = Partial<Pick<ToolCallBlock, "id" | "name" | "args">>;
 
@@ -6,7 +11,7 @@ type ToolCallBlockUpdate = Partial<Pick<ToolCallBlock, "id" | "name" | "args">>;
  * The `done` response a provider reports, projected from its accumulated blocks.
  * A provider that streams a response builds blocks once and reads them here.
  */
-export function contentBlocksResponse(blocks: readonly ContentBlock[]): {
+export function contentBlocksResponse(blocks: readonly StreamBlock[]): {
   content: string;
   thinking?: string;
   toolCalls?: LlmToolCall[];
@@ -33,7 +38,7 @@ export function contentBlocksResponse(blocks: readonly ContentBlock[]): {
 
 /** Shared ordered assembly for provider stream partials. */
 export class ContentBlockAccumulator {
-  private readonly blocks: ContentBlock[] = [];
+  private readonly blocks: MutableStreamBlock[] = [];
   private readonly keyedIndexes = new Map<string, number>();
 
   appendText(text: string): number {
@@ -105,23 +110,23 @@ export class ContentBlockAccumulator {
   }
 
   /** A copy of the block a key opened, so providers read without mutating. */
-  block(key: string): ContentBlock | undefined {
+  block(key: string): StreamBlock | undefined {
     const index = this.keyedIndexes.get(key);
     return index === undefined ? undefined : { ...this.blocks[index]! };
   }
 
-  snapshot(): ContentBlock[] {
+  snapshot(): StreamBlock[] {
     return this.blocks.map((block) => ({ ...block }));
   }
 
-  private open(key: string, block: ContentBlock): void {
+  private open(key: string, block: MutableStreamBlock): void {
     if (this.keyedIndexes.has(key)) throw new TypeError(`Content block ${key} already exists.`);
     const index = this.blocks.length;
     this.blocks.push(block);
     this.keyedIndexes.set(key, index);
   }
 
-  private get(key: string): ContentBlock {
+  private get(key: string): MutableStreamBlock {
     const index = this.keyedIndexes.get(key);
     if (index === undefined) throw new TypeError(`Content block ${key} does not exist.`);
     return this.blocks[index]!;

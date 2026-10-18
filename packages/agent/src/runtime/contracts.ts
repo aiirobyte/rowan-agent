@@ -1,9 +1,17 @@
 import Type from "typebox";
 import type {
+  AudioBlock,
   ContentBlock,
+  ImageBlock,
   LlmTokenUsage,
+  LlmToolDefinition,
   ModelRef,
+  ResourceBlock,
+  ResourceLinkBlock,
   ScopeRef,
+  StreamBlock,
+  TextBlock,
+  ThinkingBlock,
   ThinkingLevel,
   ToolAnnotations,
   ToolCall,
@@ -13,6 +21,7 @@ import type {
   ToolCallUpdate,
   ToolKind,
   ToolProgress,
+  ToolResult,
 } from "@rowan-agent/models";
 import type {
   AgentId,
@@ -31,7 +40,6 @@ import type {
   MessageDelta,
   MessageId,
   MessageRevised,
-  Metadata,
   ModelRetry,
   OwnerToken,
   Outcome,
@@ -43,7 +51,9 @@ import type {
   QueuedRunFailure,
   ToolCallId,
   ToolCallSnapshot,
-  ToolExecutionResult,
+  ToolResultRecord,
+  ToolResultBlock,
+  ToolUseBlock,
   UserContent,
   UserMessage,
   WithdrawnUserInput,
@@ -65,15 +75,16 @@ export type {
   AgentListCursor,
   AssistantContent,
   AssistantMessage,
+  AudioBlock,
   ConfigToken,
+  ContentBlock,
   ContextCandidate,
   DurableEventBase,
   DurableRunEvent,
-  DurableToolResult,
   EventCursor,
   EventId,
   ExecutionId,
-  ImageContent,
+  ImageBlock,
   InteractionRecord,
   JsonObject,
   JsonPrimitive,
@@ -89,27 +100,29 @@ export type {
   MessageContent,
   MessageId,
   MessageRevised,
-  Metadata,
   OpaqueId,
   OwnerToken,
   Outcome,
+  ResourceBlock,
+  ResourceLinkBlock,
   RunFailure,
   RunId,
   RunEvent,
   RunListCursor,
   RunState,
   RunStateChanged,
-  TextContent,
-  ThinkingContent,
+  StreamBlock,
+  TextBlock,
+  ThinkingBlock,
   ToolCallId,
   ToolCallSnapshot,
-  ToolCallState,
-  ToolExecutionResult,
   ToolMessage,
   ToolMessageContent,
-  ToolResultContent,
+  ToolResult,
+  ToolResultBlock,
+  ToolResultRecord,
   ToolStateChanged,
-  ToolUseContent,
+  ToolUseBlock,
   UserContent,
   UserMessage,
   WithdrawnUserInput,
@@ -117,6 +130,7 @@ export type {
 
 export type {
   LlmTokenUsage,
+  LlmToolDefinition,
   ModelRef,
   ScopeRef,
   ToolAnnotations,
@@ -130,7 +144,7 @@ export type {
 
 export type { RunInteraction, RunInteractionDriver, RunInteractionKind, RunInteractionRequest, RunInteractionState, RunInteractionStatus } from "../harness/phases/interactions";
 
-export type UserInput = string | Readonly<{ content: UserContent; metadata?: Metadata; thinkingLevel?: ThinkingLevel; providerOptions?: JsonObject }>;
+export type UserInput = string | Readonly<{ content: UserContent; metadata?: JsonObject; thinkingLevel?: ThinkingLevel; providerOptions?: JsonObject }>;
 export type HistorySeed = readonly Message[];
 export type ContextStatus = Readonly<{
   tokens: number;
@@ -177,8 +191,8 @@ export type ToolCallContext = Readonly<{
   runId: RunId;
   /** Opaque JSON metadata captured from the Agent and Run records. Rowan does
    * not interpret host/domain fields. */
-  agentMetadata?: Metadata;
-  runMetadata?: Metadata;
+  agentMetadata?: JsonObject;
+  runMetadata?: JsonObject;
   toolCallId: ToolCallId;
   /** The model's id for this call, matching `tool_call_delta` events; absent when a host runs the tool itself. */
   providerToolCallId?: string;
@@ -201,12 +215,13 @@ export type Tool = Readonly<{
   /** Rowan-owned Core Tool; Core Tools bypass Definition/Phase filtering. */
   core?: boolean;
   description: string;
-  parameters: Type.TSchema;
+  parameters: Type.TSchema | JsonObject;
   promptSnippet?: string;
   promptGuidelines?: readonly string[];
   kind?: ToolKind;
   annotations?: ToolAnnotations;
   _meta?: JsonObject;
+  executionMode?: "sequential" | "parallel";
   present?(call: import("./tool-call-merge").ToolCallPresentationInput): {
     title?: string;
     content?: ToolCallContent[];
@@ -218,9 +233,8 @@ export type Tool = Readonly<{
     locations?: ToolCallLocation[];
     _meta?: JsonObject;
   } | undefined | void>;
-  execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolExecutionResult>;
+  execute(args: JsonValue, context: ToolInvocationContext, signal: AbortSignal): Promise<ToolResult>;
 }>;
-export type ProviderToolDefinition = Readonly<{ name: string; description: string; parameters: JsonObject }>;
 export type BeforeToolCallDecision =
   | Readonly<{ allow: true }>
   | Readonly<{ allow: false; reason: string }>
@@ -235,10 +249,10 @@ export type BeforeToolCall = (input: Readonly<{
 }>) => BeforeToolCallDecision | Promise<BeforeToolCallDecision>;
 export type AfterToolCall = (input: Readonly<{
   tool: Tool;
-  result: ToolExecutionResult;
+  result: ToolResult;
   context: ToolInvocationContext;
   signal: AbortSignal;
-}>) => ToolExecutionResult | Promise<ToolExecutionResult>;
+}>) => ToolResult | Promise<ToolResult>;
 export type InvocationSource = "auto" | "implicit" | "external";
 export type InvocationCatalogEntry = Readonly<{
   kind: "phase" | "skill";
@@ -258,7 +272,7 @@ export type ResolvedAgentContext = Readonly<{
 }>;
 export type AgentRecord = Readonly<{
   id: AgentId;
-  metadata?: Metadata;
+  metadata?: JsonObject;
   currentConfigToken?: ConfigToken;
   currentConfigIdentity?: string;
   createdAt: string;
@@ -300,7 +314,7 @@ export type RunRecord = Readonly<{
   cwd?: string;
   initialMessageId?: MessageId;
   invalidatedBy?: Readonly<{ messageId: MessageId; messageRevision: number }>;
-  metadata?: Metadata;
+  metadata?: JsonObject;
   phasePayload?: JsonValue;
   entryPhases?: readonly EntryPhaseSpec[];
   pinnedConfigToken?: ConfigToken;
@@ -329,8 +343,8 @@ export type RetentionResult = Readonly<{
   retentionFloor: EventCursor;
   skipped?: "active_consumers" | "no_eligible_events";
 }>;
-export type AgentSummary = Readonly<{ id: AgentId; metadata?: Metadata; currentConfigIdentity?: string; createdAt: string; activatedAt: string; updatedAt: string }>;
-export type RunSummary = Readonly<{ id: RunId; agentId: AgentId; agentSequence: number; state: RunState; metadata?: Metadata; createdAt: string; updatedAt: string }>;
+export type AgentSummary = Readonly<{ id: AgentId; metadata?: JsonObject; currentConfigIdentity?: string; createdAt: string; activatedAt: string; updatedAt: string }>;
+export type RunSummary = Readonly<{ id: RunId; agentId: AgentId; agentSequence: number; state: RunState; metadata?: JsonObject; createdAt: string; updatedAt: string }>;
 export type Page<T, Cursor> = Readonly<{ items: readonly T[]; next?: Cursor }>;
 export type RunSnapshotBase = Readonly<{
   runId: RunId;
@@ -340,7 +354,7 @@ export type RunSnapshotBase = Readonly<{
   input: UserInput;
   scope?: ScopeRef;
   cwd?: string;
-  metadata?: Metadata;
+  metadata?: JsonObject;
   /** Effective entry Phase payload the Run started with (defaults filled). */
   phasePayload?: JsonValue;
   entryPhases?: readonly EntryPhaseSpec[];
@@ -379,12 +393,12 @@ export type ConfigResolution = Readonly<
 >;
 export type ConfigPutResult = Readonly<{ kind: "stored"; token: string } | { kind: "identity_conflict" }>;
 export interface ConfigProvider {
-  put(input: { agentId: AgentId; agentMetadata?: Metadata; config: AgentConfiguration | ConfigurationSnapshot; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult>;
-  resolve(input: { agentId: AgentId; agentMetadata?: Metadata; token: ConfigToken; signal: AbortSignal }): Promise<ConfigResolution>;
+  put(input: { agentId: AgentId; agentMetadata?: JsonObject; config: AgentConfiguration | ConfigurationSnapshot; operationId: string; signal: AbortSignal }): Promise<ConfigPutResult>;
+  resolve(input: { agentId: AgentId; agentMetadata?: JsonObject; token: ConfigToken; signal: AbortSignal }): Promise<ConfigResolution>;
 }
 export interface OwnedStore {
   readonly lease: OwnerLease;
-  reserveAgent(input: { idempotencyKey: string; metadata?: Metadata; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord>;
+  reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord>;
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord>;
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord>;
   deleteAgent(input: AgentDeletionRequest): Promise<void>;
@@ -400,7 +414,7 @@ export interface OwnedStore {
   contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus>;
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
-  createRun(input: { agentId: AgentId; input: UserInput; metadata?: Metadata; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
+  createRun(input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
   claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[] }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord>;
@@ -455,7 +469,7 @@ export interface OwnedStore {
     requestMessageId: MessageId;
     calls: readonly ToolCallReservation[];
     /** The model response's blocks, so the request message keeps what preceded the Tool Calls. */
-    contentBlocks?: readonly ContentBlock[];
+    contentBlocks?: readonly StreamBlock[];
     model?: ModelRef;
     usage?: LlmTokenUsage;
   }): Promise<ToolBatchCommit>;
@@ -481,7 +495,7 @@ export interface OwnedStore {
     execution: ExecutionToken;
     expectedRevision: number;
     toolCallId: ToolCallId;
-    result: ToolExecutionResult;
+    result: ToolResult;
     state: "completed" | "failed" | "indeterminate";
     reason?: string;
     title?: string;
@@ -536,7 +550,7 @@ export interface AgentRuntime {
   loadPhases(input: LoadInput<import("../harness/phases/types").Phase>): Promise<LoadResult>;
   loadTools(input: Readonly<{ sourceId: string; values: readonly Tool[] }>): Promise<LoadResult>;
   unload(input: Readonly<{ kind: import("./resource-registry").ResourceKind; sourceId: string }>): Promise<LoadResult>;
-  createAgent(config: AgentConfiguration, options?: { idempotencyKey?: string; metadata?: Metadata; historySeed?: HistorySeed }): Promise<AgentId>;
+  createAgent(config: AgentConfiguration, options?: { idempotencyKey?: string; metadata?: JsonObject; historySeed?: HistorySeed }): Promise<AgentId>;
   updateAgentConfig(agentId: AgentId, config: AgentConfiguration, options: { idempotencyKey: string }): Promise<void>;
   deleteAgent(input: AgentDeletionRequest): Promise<void>;
   revise(agentId: AgentId, input: {
@@ -549,7 +563,7 @@ export interface AgentRuntime {
   compact(input?: { now?: string; retentionMs?: number }): Promise<RetentionResult>;
   start(agentId: AgentId, input: UserInput, options: {
     idempotencyKey: string;
-    metadata?: Metadata;
+    metadata?: JsonObject;
     scope?: ScopeRef;
     cwd?: string;
     phasePayload?: JsonValue;
@@ -587,7 +601,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasOnlyKeys(value: object, allowed: readonly string[]): boolean {
   return Reflect.ownKeys(value).every((key) => typeof key === "string" && allowed.includes(key));
 }
-function isMetadata(value: unknown): value is Metadata {
+function isMetadata(value: unknown): value is JsonObject {
   if (!isRecord(value) || !isJsonValue(value)) return false;
   try {
     assertUtf8ByteLimit(canonicalJson(value), METADATA_LIMIT, "metadata");
@@ -596,7 +610,7 @@ function isMetadata(value: unknown): value is Metadata {
     return false;
   }
 }
-function assertMetadata(value: unknown, argument: string): asserts value is Metadata {
+function assertMetadata(value: unknown, argument: string): asserts value is JsonObject {
   if (!isMetadata(value)) throw new TypeError(`${argument} must be a JSON-safe metadata object`);
 }
 export function assertEntryPhases(value: unknown, argument = "entryPhases"): asserts value is readonly EntryPhaseSpec[] {
@@ -649,7 +663,7 @@ export function isAssistantMessage(value: unknown): value is AssistantMessage {
     && (value.model === undefined || (isRecord(value.model) && typeof value.model.provider === "string" && typeof value.model.id === "string"))
     && (value.usage === undefined || isRecord(value.usage));
 }
-function isToolResult(value: unknown): value is ToolExecutionResult {
+function isToolResult(value: unknown): value is ToolResult {
   if (!isRecord(value)) return false;
   if (value.structuredContent !== undefined && !isJsonValue(value.structuredContent)) return false;
   if (Array.isArray(value.content)) {
@@ -662,7 +676,7 @@ function isToolResult(value: unknown): value is ToolExecutionResult {
   if (JSON.stringify(keys) !== JSON.stringify(expected)) return false;
   return value.ok || typeof value.error === "string";
 }
-function isDurableToolResult(value: unknown): boolean {
+function isToolResultRecord(value: unknown): boolean {
   if (!isRecord(value) || typeof value.toolCallId !== "string" || typeof value.toolName !== "string") return false;
   const result = { ...value };
   delete result.toolCallId;
@@ -673,7 +687,7 @@ function isOutcome(value: unknown): value is Outcome {
   return isRecord(value) && hasOnlyKeys(value, ["id", "message", "payload", "toolResults"])
     && typeof value.id === "string" && typeof value.message === "string"
     && (value.payload === undefined || isJsonValue(value.payload))
-    && (value.toolResults === undefined || (Array.isArray(value.toolResults) && value.toolResults.every(isDurableToolResult)));
+    && (value.toolResults === undefined || (Array.isArray(value.toolResults) && value.toolResults.every(isToolResultRecord)));
 }
 function isWithdrawnUserInput(value: unknown): value is WithdrawnUserInput {
   return isRecord(value) && hasOnlyKeys(value, ["messageId", "content"])
@@ -757,12 +771,17 @@ export function assertAgentConfiguration(config: AgentConfiguration): void {
     assertJsonValue(context.value, `Additional Context candidate "${context.name}" value`);
   }
 }
-export function assertToolExecutionResult(value: unknown): asserts value is ToolExecutionResult {
+export function assertToolExecutionResult(value: unknown): asserts value is ToolResult {
   if (!isToolResult(value)) throw new TypeError("Tool result must be JSON-safe and contain no Runtime identity");
 }
-export function projectToolDefinition(tool: Tool): ProviderToolDefinition {
+export function projectToolDefinition(tool: Tool): LlmToolDefinition {
   if (typeof tool.name !== "string" || tool.name.length === 0 || typeof tool.description !== "string") throw new TypeError("Tool definition is invalid");
   assertJsonValue(tool.parameters, "tool.parameters");
   if (!isRecord(tool.parameters)) throw new TypeError("tool.parameters must be a JSON object");
-  return { name: tool.name, description: tool.description, parameters: JSON.parse(canonicalJson(tool.parameters)) as JsonObject };
+  return {
+    name: tool.name,
+    description: tool.description,
+    parameters: JSON.parse(canonicalJson(tool.parameters)) as JsonObject,
+    ...(tool._meta !== undefined ? { _meta: tool._meta } : {}),
+  };
 }

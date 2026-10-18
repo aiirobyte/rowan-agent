@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { Skill } from "../protocol";
+import type { Skill } from "../protocol/agent";
 import {
   loadMarkdown,
   FrontmatterParseError,

@@ -1,5 +1,5 @@
 import type { ScopeRef } from "@rowan-agent/models";
-import type { AgentId, JsonValue, Metadata } from "../runtime-events";
+import type { AgentId, JsonObject, JsonValue } from "../runtime-events";
 import type { EntryPhaseSpec, UserInput } from "./contracts";
 import { assertUtf8ByteLimit, canonicalJson } from "./json";
 import { normalizeUserInput } from "./contracts";
@@ -39,7 +39,7 @@ export function encodeIdempotencyScope(storeIncarnation: string, scope: Idempote
 }
 export function canonicalStartRunRequest(
   input: UserInput,
-  metadata?: Metadata,
+  metadata?: JsonObject,
   phasePayload?: JsonValue,
   pinnedConfigToken?: string,
   entryPhases?: readonly EntryPhaseSpec[],

@@ -46,16 +46,13 @@ export type {
   ConfigResolution,
   ConfigToken,
   DurableStore,
-  DurableToolResult,
   EntryPhaseSpec,
   ExecutionCheckpoint,
   ExecutionId,
   ExecutionToken,
   HistorySeed,
-  InteractionRecord,
   InvocationCatalogEntry,
   InvocationSource,
-  Metadata,
   ModelRetry,
   OpaqueId,
   Outcome,
@@ -64,7 +61,6 @@ export type {
   RetentionResult,
   RunClaim,
   RunRecord,
-  Tool,
 } from "./runtime/contracts";
 export type {
   AnyRuntimeError,
@@ -89,7 +85,6 @@ export type { CoreToolContext } from "./harness/tools";
 export type {
   LoadInput,
   LoadResult,
-  PhaseContribution,
   ResourceDiagnostic,
   ResourceKind,
   ResourceRef,
@@ -97,7 +92,6 @@ export type {
   ResourceSourceId,
   ResourceView,
   ResolvedResourceView,
-  ToolContribution,
 } from "./runtime/resource-registry";
 export type { PhaseRegistry } from "./harness/phases/types";
 export type { Skill } from "./protocol";

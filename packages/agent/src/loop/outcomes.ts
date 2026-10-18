@@ -1,8 +1,12 @@
-import type { Outcome, AgentMessage } from "../types";
+import type { JsonValue } from "@rowan-agent/models";
+import type { Outcome, OutcomeId, ToolCallId, ToolResultRecord } from "../runtime-events";
+import type { AgentMessage } from "../protocol/agent";
 import type { PhaseOutput } from "../harness/phases/types";
 import { createId } from "../utils";
 
-type ExtractedToolResult = NonNullable<Outcome["toolResults"]>[number];
+export type LoopOutcome = Outcome & Readonly<{ display?: boolean }>;
+
+type ExtractedToolResult = ToolResultRecord;
 
 function parseToolResult(content: string): ExtractedToolResult | undefined {
   try {
@@ -12,12 +16,18 @@ function parseToolResult(content: string): ExtractedToolResult | undefined {
       typeof parsed.toolName === "string" &&
       typeof parsed.ok === "boolean"
     ) {
-      return {
-        toolCallId: parsed.toolCallId,
+      const base = {
+        toolCallId: parsed.toolCallId as ToolCallId,
         toolName: parsed.toolName,
-        ok: parsed.ok,
-        content: parsed.content,
-        ...(parsed.error ? { error: parsed.error } : {}),
+        content: (parsed.content as JsonValue) ?? null,
+      };
+      if (parsed.ok) {
+        return { ...base, ok: true };
+      }
+      return {
+        ...base,
+        ok: false,
+        error: typeof (parsed as any).error === "string" ? (parsed as any).error : "Tool execution failed.",
       };
     }
   } catch {
@@ -27,7 +37,7 @@ function parseToolResult(content: string): ExtractedToolResult | undefined {
 }
 
 function extractToolResults(transcript: AgentMessage[]): NonNullable<Outcome["toolResults"]> {
-  const results: NonNullable<Outcome["toolResults"]> = [];
+  const results: ExtractedToolResult[] = [];
   for (const msg of transcript) {
     if (msg.role !== "tool") continue;
     if (typeof msg.content === "string") {
@@ -52,42 +62,37 @@ function extractToolResults(transcript: AgentMessage[]): NonNullable<Outcome["to
 }
 
 export const createOutcome = {
-  phaseNotFound(output: PhaseOutput): Outcome {
+  phaseNotFound(output: PhaseOutput): LoopOutcome {
     return {
-      id: createId("out"),
+      id: createId("out") as OutcomeId,
       message: `Phase "${output.phase ?? "Unknown"}" not found.`,
       display: true,
     };
   },
 
-  default(output: PhaseOutput, transcript?: AgentMessage[]): Outcome {
+  default(output: PhaseOutput, transcript?: AgentMessage[]): LoopOutcome {
     const toolResults = transcript ? extractToolResults(transcript) : [];
     const message = output.message || output.routeReason || `${output.phase ?? "Unknown"} phase completed.`;
-    const outcome: Outcome = {
-      id: createId("out"),
+    return {
+      id: createId("out") as OutcomeId,
       message,
+      ...(output.payload !== undefined ? { payload: output.payload as never } : {}),
+      ...(toolResults.length > 0 ? { toolResults } : {}),
     };
-    if (output.payload !== undefined) {
-      outcome.payload = output.payload;
-    }
-    if (toolResults.length > 0) {
-      outcome.toolResults = toolResults;
-    }
-    return outcome;
   },
 
-  phase(output: PhaseOutput, transcript?: AgentMessage[]): Outcome {
+  phase(output: PhaseOutput, transcript?: AgentMessage[]): LoopOutcome {
     return {
       ...this.default(output, transcript),
       display: true,
     };
   },
 
-  aborted(): Outcome {
-    return { id: createId("out"), message: "Agent run aborted." };
+  aborted(): LoopOutcome {
+    return { id: createId("out") as OutcomeId, message: "Agent run aborted." };
   },
 
-  error(message: string): Outcome {
-    return { id: createId("out"), message, display: true };
+  error(message: string): LoopOutcome {
+    return { id: createId("out") as OutcomeId, message, display: true };
   },
 };

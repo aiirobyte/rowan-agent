@@ -1,12 +1,12 @@
-import type { LlmContentPart, LlmTokenUsage, ModelRef } from "@rowan-agent/models";
+import type { JsonObject, LlmContentBlock, LlmMessage, LlmTokenUsage, ModelRef } from "@rowan-agent/models";
 import type { ContextCandidate } from "../runtime-events";
 
-export type AgentMessage = {
+export type AgentMessage = Omit<LlmMessage, "role" | "content"> & {
   id: string;
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | LlmContentPart[];
+  role: "system" | LlmMessage["role"];
+  content: string | LlmContentBlock[];
   createdAt: string;
-  metadata?: Record<string, unknown> & {
+  metadata?: JsonObject & {
     phase?: string;
   };
   contexts?: readonly ContextCandidate[];
@@ -29,35 +29,4 @@ export type Skill = {
   disableImplicitInvocation?: boolean;
   /** @deprecated Use disableAutoInvocation; kept only for old in-memory callers during cutover. */
   disableModelInvocation?: boolean;
-};
-
-export type Outcome = {
-  id: string;
-  message: string;
-  /** Publish this outcome's message as an assistant message before completing the run. */
-  display?: boolean;
-  payload?: unknown;
-  toolResults?: Array<{
-    toolCallId: string;
-    toolName: string;
-    ok: boolean;
-    content: unknown;
-    error?: string;
-  }>;
-};
-
-export type ToolCall = {
-  id: string;
-  name: string;
-  args: unknown;
-};
-
-export type ToolResult = {
-  toolCallId: string;
-  toolName: string;
-  ok: boolean;
-  content: unknown;
-  error?: string;
-  structuredContent?: unknown;
-  isError?: boolean;
 };

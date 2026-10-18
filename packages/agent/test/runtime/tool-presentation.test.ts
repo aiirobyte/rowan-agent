@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import Type from "typebox";
-import type { StreamFn, ToolCallContent, ToolDefinitionSummary } from "@rowan-agent/models";
+import type { LlmToolDefinition, StreamFn, ToolCallContent } from "@rowan-agent/models";
 import {
   AgentRuntime,
   InMemoryStore,
@@ -445,7 +445,7 @@ test("Tool definition _meta is preserved untouched in tools.list() summaries", a
     },
   };
 
-  let capturedTools: readonly ToolDefinitionSummary[] | undefined;
+  let capturedTools: readonly LlmToolDefinition[] | undefined;
   const stream: StreamFn = async function* (req, ctx) {
     capturedTools = ctx?.tools?.list();
     yield { type: "text_delta", text: "done", partial: { role: "assistant", contentBlocks: [{ type: "text", text: "done" }] } };

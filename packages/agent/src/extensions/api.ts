@@ -1,7 +1,7 @@
 import type {
   PhaseRegistration,
   SkillRegistration,
-  ToolDefinition,
+  Tool,
   ExtensionRuntime,
   ScopeRef,
   ExtensionStateStore,
@@ -132,7 +132,7 @@ export interface ExtensionAPI {
   /** Tool capabilities — register and unregister custom tools. */
   tools: {
     /** Register a custom LLM-callable tool. */
-    register(tool: ToolDefinition, scope?: ScopeRef): Promise<void>;
+    register(tool: Tool, scope?: ScopeRef): Promise<void>;
     /** Unregister a previously registered tool by name. */
     unregister(toolName: string, scope?: ScopeRef): Promise<void>;
   };
@@ -202,7 +202,7 @@ export interface CreateExtensionAPIOptions {
   unregisterSkill?: (skillName: string, scope?: ScopeRef) => void | Promise<void>;
   registerProvider?: (config: ProviderConfig) => void;
   unregisterProvider?: (id: string) => void;
-  registerTool?: (tool: ToolDefinition, scope?: ScopeRef) => void | Promise<void>;
+  registerTool?: (tool: Tool, scope?: ScopeRef) => void | Promise<void>;
   unregisterTool?: (toolName: string, scope?: ScopeRef) => void | Promise<void>;
   context?: ExtensionContext;
   trackCleanup?: (cleanup: () => void | Promise<void>) => void;

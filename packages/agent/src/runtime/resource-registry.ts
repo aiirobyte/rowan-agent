@@ -14,11 +14,6 @@ export type { AgentDefinition } from "../harness/definitions";
 export type ResourceKind = "agent" | "tool" | "skill" | "phase";
 export type ResourceSourceId = string;
 
-/** Rowan-native contribution aliases. Hosts may adapt their domain handlers to
- * these existing Tool/Phase lifecycles without importing host Scope types. */
-export type ToolContribution = Tool;
-export type PhaseContribution = Phase;
-
 export type ResourceView = Readonly<{
   agents: readonly ResourceSourceId[];
   tools: readonly ResourceSourceId[];
@@ -124,7 +119,7 @@ export class ResourceRegistry {
 
   async loadTools(input: Readonly<{
     sourceId: ResourceSourceId;
-    values: readonly ToolContribution[];
+    values: readonly Tool[];
   }>): Promise<LoadResult> {
     assertSourceId(input.sourceId);
     return this.commit("tool", input.sourceId, input.values, []);

@@ -1,5 +1,6 @@
-import type { ToolCallPhase } from "../runtime/contracts";
-import type { Outcome, Tool, ToolResult } from "../types";
+import type { ToolCallPhase, Tool } from "../runtime/contracts";
+import type { Outcome } from "../runtime-events";
+import type { ToolResult } from "@rowan-agent/models";
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { RunInteractionKind, RunInteractionRequest } from "../harness/phases/interactions";
 import type { JsonObject } from "../runtime-events";

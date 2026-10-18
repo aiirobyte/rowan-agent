@@ -1,16 +1,15 @@
-import type {
-  LlmStreamEvent,
-  ToolCall,
-} from "../types";
-import { contentBlocksToMessageContent } from "../types";
+import { contentBlocksToMessageContent } from "./messages";
 import type { AgentConfig } from "./types";
 import type {
   AssistantMessagePartial,
-  TextBlock,
-  ToolCallBlock,
   LlmRequest,
   LlmResponse,
+  LlmStreamEvent,
+  LlmToolCall,
   ProviderCallContext,
+  StreamBlock,
+  TextBlock,
+  ToolCallBlock,
 } from "@rowan-agent/models";
 import type { ModelInvokeOutput, PhaseMessageManager } from "./execution";
 import type { ThinkingDeltaNotification, ToolCallDeltaNotification } from "./types";
@@ -76,11 +75,7 @@ export async function invokeModel(input: ModelInvokerInput): Promise<ModelInvoke
 
   const response: LlmResponse = result.doneResponse ?? {
     content: result.text,
-    toolCalls: result.toolCalls.map(tc => ({
-      id: tc.id,
-      name: tc.name,
-      arguments: tc.args,
-    })),
+    toolCalls: result.toolCalls,
     stopReason: result.stopReason as LlmResponse["stopReason"],
   };
 
@@ -284,11 +279,7 @@ async function collectStreamResult(input: {
 
   // Use done.response as final truth when available
   if (doneResponse) {
-    const toolCalls: ToolCall[] = (doneResponse.toolCalls ?? []).map(tc => ({
-      id: tc.id,
-      name: tc.name,
-      args: tc.arguments,
-    }));
+    const toolCalls: LlmToolCall[] = doneResponse.toolCalls ?? [];
     return {
       text: doneResponse.content,
       contentBlocks: lastPartial?.contentBlocks ?? [],
@@ -304,12 +295,12 @@ async function collectStreamResult(input: {
     .filter((b): b is TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("");
-  const toolCalls: ToolCall[] = contentBlocks
+  const toolCalls: LlmToolCall[] = contentBlocks
     .filter((b): b is ToolCallBlock => b.type === "tool_call")
     .map((b) => {
       let parsedArgs: unknown = b.args;
       try { parsedArgs = JSON.parse(b.args); } catch { /* keep raw */ }
-      return { id: b.id, name: b.name, args: parsedArgs };
+      return { id: b.id, name: b.name, arguments: parsedArgs };
     });
 
   return { text, contentBlocks, toolCalls, stopReason };

@@ -1,4 +1,4 @@
 export type {
   AfterToolCall,
   BeforeToolCall,
-} from "../../types";
+} from "../../runtime/contracts";

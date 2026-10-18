@@ -9,7 +9,7 @@ import type { ToolInvocationContext } from "../../src";
 const invocationContext = {
   skills: [],
   toolCallId: "tool-1",
-} as unknown as import("../../src/types").ToolContext;
+} as unknown as ToolInvocationContext;
 
 test("core tools use the process permissions outside the working root", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "rowan-core-tools-"));

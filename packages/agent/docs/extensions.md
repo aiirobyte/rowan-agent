@@ -57,7 +57,7 @@ export default extension;
     status: ToolCallStatus;
     args: JsonValue;
     progress?: ToolProgress;
-    result?: ToolExecutionResult;
+    result?: ToolResult;
   }): { title?: string; content?: ToolCallContent[]; locations?: ToolCallLocation[]; _meta?: JsonObject } | void | Promise<...>;
   ```
   Rowan calls `present` at call reservation (`pending`), start of execution (`in_progress`), on each progress report via `ctx.reportProgress(progress)` (`status: "in_progress", progress`), and on completion/failure (`status: "completed" | "failed", result`). Outputs are merged using `mergeToolCall`. When omitted or on error, Rowan falls back to default presentation without failing the tool call.

@@ -1,5 +1,5 @@
 import Type from "typebox";
-import type { Tool } from "../../types";
+import type { Tool } from "../../runtime/contracts";
 import type { Phase } from "../../harness/phases/types";
 import { phaseInputSchema } from "../../harness/phases/input";
 import { buildStructuredSection } from "../context/resource-formatter";
@@ -64,7 +64,7 @@ function buildRouteDescription(availablePhases: Pick<Phase, 'name' | 'descriptio
  * The execute function is a no-op placeholder - phase routing is handled by
  * intercepting route tool calls in each phase's run function.
  */
-export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[]): Tool<RouteToolArgs> {
+export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[]): Tool {
   const routablePhases = availablePhases.filter(({ name }) => name !== "stop" && name !== "previous");
   const phaseGuidelines = availablePhases
     .filter((phase) => phase.disableAutoInvocation !== true)
@@ -105,9 +105,7 @@ export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'descripti
       instruction: Type.Optional(Type.String({ description: "Overall instruction, passed as context" })),
     }),
     // No-op: this tool is intercepted by phases, never executed via tool execution
-    execute: async (_, context) => ({
-      toolCallId: context.toolCallId,
-      toolName: PhaseRouteTool,
+    execute: async () => ({
       ok: true,
       content: "",
     }),
@@ -115,15 +113,16 @@ export function createRouteTool(availablePhases: Pick<Phase, 'name' | 'descripti
 }
 
 /** Extract route tool call from collected tool calls. Returns undefined if not found. */
-export function extractRouteCall(toolCalls: Array<{ name: string; args: unknown }>): RouteToolArgs | undefined {
+export function extractRouteCall(toolCalls: Array<{ name: string; args?: unknown; arguments?: unknown }>): RouteToolArgs | undefined {
   const routeCalls = toolCalls.filter(t => t.name === PhaseRouteTool);
   if (routeCalls.length !== 1) return undefined;
   const routeCall = routeCalls[0]!;
+  const callArgs = routeCall.arguments !== undefined ? routeCall.arguments : routeCall.args;
 
   let args: Record<string, unknown>;
-  if (typeof routeCall.args === "string") {
+  if (typeof callArgs === "string") {
     try {
-      const parsed: unknown = JSON.parse(routeCall.args);
+      const parsed: unknown = JSON.parse(callArgs);
       args = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
         ? parsed as Record<string, unknown>
         : {};
@@ -131,8 +130,8 @@ export function extractRouteCall(toolCalls: Array<{ name: string; args: unknown 
       return { decision: [{ phase: "" }] };
     }
   } else {
-    args = routeCall.args !== null && typeof routeCall.args === "object"
-      ? routeCall.args as Record<string, unknown>
+    args = callArgs !== null && typeof callArgs === "object"
+      ? callArgs as Record<string, unknown>
       : {};
   }
 

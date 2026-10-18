@@ -1,10 +1,14 @@
+import type { AgentContext } from "./types";
+import type { AgentMessage } from "../protocol/agent";
 import type {
-  AgentContext,
-  AgentMessage,
-  ToolCall,
+  LlmContentBlock,
+  LlmToolCall,
+  LlmTokenUsage,
+  ModelRef,
+  StreamBlock,
   ToolResult,
-} from "../types";
-import type { ContentBlock, LlmContentPart, LlmTokenUsage, ModelRef } from "@rowan-agent/models";
+} from "@rowan-agent/models";
+import type { ToolResultRecord } from "../runtime-events";
 import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
 import type { RunInteractionDriver } from "../harness/phases/interactions";
 
@@ -12,8 +16,8 @@ export type { PhaseOutput };
 
 export type ModelInvokeOutput = {
   text: string;
-  contentBlocks: ContentBlock[];
-  toolCalls: ToolCall[];
+  contentBlocks: StreamBlock[];
+  toolCalls: LlmToolCall[];
   stopReason?: string;
   model?: ModelRef;
   usage?: LlmTokenUsage;
@@ -32,10 +36,10 @@ export type PhaseExecution = {
   reportStatus(status: PhaseStatus): Promise<void>;
   executeTools(
     context: AgentContext,
-    toolCalls: readonly ToolCall[],
-    contentBlocks?: readonly ContentBlock[],
+    toolCalls: readonly LlmToolCall[],
+    contentBlocks?: readonly StreamBlock[],
     meta?: { model?: ModelRef; usage?: LlmTokenUsage },
-  ): Promise<readonly ToolResult[]>;
+  ): Promise<readonly ToolResultRecord[]>;
   interaction: RunInteractionDriver;
   /** Message lifecycle manager for streaming updates from programmatic phases */
   messages: PhaseMessageManager;
@@ -52,7 +56,7 @@ export type PhaseMessageManager = {
   /** Stream a text delta */
   update(messageId: string, delta: string): Promise<void>;
   /** Replace the active message content with model-native content parts */
-  replaceContent(messageId: string, content: string | LlmContentPart[]): void;
+  replaceContent(messageId: string, content: string | LlmContentBlock[]): void;
   /** End the message stream, appends to transcript */
   end(messageId: string, meta?: { model?: ModelRef; usage?: LlmTokenUsage }): Promise<void>;
   /** Drop an unstarted stream that produced no content. */

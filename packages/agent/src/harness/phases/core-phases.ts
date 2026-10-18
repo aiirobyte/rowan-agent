@@ -1,8 +1,9 @@
 import type { Phase, PhaseContext } from "./types";
 import type { InternalModelLoopOptions, ModelInvokeOutput, PhaseExecution } from "../../loop/execution";
 import { PhaseRouteTool } from "../tools/route-tool";
-import type { ToolCall, ToolResult } from "../../types";
-import { contentBlocksToMessageContent, createMessage } from "../../types";
+import type { LlmToolCall } from "@rowan-agent/models";
+import type { ToolCallId, ToolResultRecord } from "../../runtime-events";
+import { contentBlocksToMessageContent, createMessage } from "../../loop/messages";
 
 export const DEFAULT_PHASE_ID = "default";
 export const STOP_PHASE_ID = "stop";
@@ -71,19 +72,22 @@ export async function runInternalModelLoop(
   for (let attempt = 0; attempt < maxRounds && result.toolCalls.length > 0; attempt += 1) {
     // A round with no allowed call ends the loop, as compaction always did.
     if (!result.toolCalls.some((call) => isAllowedTool(call.name))) break;
-    const normalizedCalls = result.toolCalls.map((call) => ({
-      ...call,
-      args: typeof call.args === "string"
-        ? (() => {
-            try { return JSON.parse(call.args); } catch { return call.args; }
-          })()
-        : call.args,
-    }));
+    const normalizedCalls: LlmToolCall[] = result.toolCalls.map((call) => {
+      const callArgs = call.arguments;
+      return {
+        ...call,
+        arguments: typeof callArgs === "string"
+          ? (() => {
+              try { return JSON.parse(callArgs); } catch { return callArgs; }
+            })()
+          : callArgs,
+      };
+    });
     const toolUseParts = normalizedCalls.map((call) => ({
       type: "tool_use" as const,
       id: call.id,
       name: call.name,
-      input: call.args,
+      input: call.arguments,
     }));
     const assistantContent = result.contentBlocks.length > 0
       ? contentBlocksToMessageContent(result.contentBlocks)
@@ -104,12 +108,12 @@ export async function runInternalModelLoop(
           result.model ? { model: result.model, usage: result.usage } : undefined,
         )
       : [];
-    const executedByCallId = new Map(executedResults.map((r) => [r.toolCallId, r]));
+    const executedByCallId = new Map<string, ToolResultRecord>(executedResults.map((r) => [r.toolCallId, r]));
 
-    const createErrorResult = (call: ToolCall): ToolResult => {
+    const createErrorResult = (call: LlmToolCall): ToolResultRecord => {
       const message = `Tool ${call.name} is not available in Phase ${phase}`;
       return {
-        toolCallId: call.id,
+        toolCallId: call.id as ToolCallId,
         toolName: call.name,
         ok: false,
         error: message,

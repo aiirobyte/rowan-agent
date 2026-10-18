@@ -66,8 +66,8 @@ Stream functions receive a `ProviderCallContext` with:
 - `signal: AbortSignal` — the run-level cancellation signal.
 - `run: { id, agentId, scope, cwd }` — active execution metadata.
 - `interact(request): Promise<JsonValue>` — request live interaction from the user.
-- `tools.list(): readonly ToolDefinitionSummary[]` — registered tool definitions with metadata.
-- `tools.call(name, args, options?): Promise<ToolCallOutcome>` — invoke a registered tool.
+- `tools.list(): readonly LlmToolDefinition[]` — registered tool definitions with metadata.
+- `tools.call(name, args, options?): Promise<ToolResult>` — invoke a registered tool.
   - `options.signal?: AbortSignal` — aborts that single tool call without cancelling the Run.
   - `options.onUpdate?(toolCall: ToolCall, progress?: ToolProgress): void` — receives the merged ToolCall every time it changes during execution (start, each progress-driven `present` update, final). The raw `progress` object is passed when the update was triggered by a progress report.
 - `tools.report(update: ToolCall | ToolCallUpdate): void` — report external tool execution.

@@ -2,7 +2,7 @@ export interface SystemPromptOptions {
   /** Base system prompt. */
   systemPrompt: string;
   /** Additional guideline bullets appended to the default runtime instructions. */
-  promptGuidelines?: string[];
+  promptGuidelines?: readonly string[];
   /** Text to append after the default runtime instructions. */
   appendSystemPrompt?: string;
   /** Active tools — snippets and guidelines are included in the prompt. */
@@ -10,7 +10,7 @@ export interface SystemPromptOptions {
     name: string;
     description?: string;
     promptSnippet?: string;
-    promptGuidelines?: string[];
+    promptGuidelines?: readonly string[];
   }>;
   /** Loaded skills — serialized into the prompt. */
   skills?: Array<{

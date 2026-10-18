@@ -1,7 +1,9 @@
+import type { ResourceKind as RegistryResourceKind } from "../runtime/resource-registry";
+
 export const MAX_RESOURCE_ID_LENGTH = 64;
 export const MAX_DESCRIPTION_LENGTH = 1024;
 
-export type ResourceKind = "skill" | "phase";
+export type ResourceKind = Extract<RegistryResourceKind, "skill" | "phase">;
 
 /** Error raised after a resource has emitted a metadata warning and cannot be loaded. */
 export class ResourceMetadataError extends Error {

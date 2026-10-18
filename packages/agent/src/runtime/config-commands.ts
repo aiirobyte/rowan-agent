@@ -1,6 +1,6 @@
 import type { AgentConfiguration, ConfigurationSnapshot } from "./configuration-snapshot";
 import type { AgentRecord, ConfigProvider, ConfigResolution, HistorySeed, OwnedStore } from "./contracts";
-import type { AgentId, ConfigToken, Metadata } from "../runtime-events";
+import type { AgentId, ConfigToken, JsonObject } from "../runtime-events";
 import { assertAgentConfiguration } from "./contracts";
 import { brandConfigToken, validateConfigResolution } from "./config-provider";
 import { CONFIG_IDENTITY_BYTES } from "./idempotency";
@@ -16,7 +16,7 @@ export class ConfigCommandService {
     private readonly storeIncarnation: string,
   ) {}
 
-  async createAgent(input: { config: AgentConfiguration; metadata?: Metadata; historySeed?: HistorySeed; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
+  async createAgent(input: { config: AgentConfiguration; metadata?: JsonObject; historySeed?: HistorySeed; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
     assertAgentConfiguration(input.config);
     assertIdentity(input.config.identity);
     const reserved = await this.store.reserveAgent({
@@ -102,7 +102,7 @@ export class ConfigCommandService {
 
   private async put(input: {
     agentId: AgentId;
-    agentMetadata?: Metadata;
+    agentMetadata?: JsonObject;
     config: AgentConfiguration | ConfigurationSnapshot;
     operationId: string;
     signal?: AbortSignal;

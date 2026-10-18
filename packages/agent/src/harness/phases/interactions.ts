@@ -2,41 +2,21 @@ import { createId, createTimestamp } from "../../utils";
 import type { JsonValue } from "../../runtime-events";
 import type { ExecutionState } from "../../loop/types";
 import { assertJsonValue, canonicalJson } from "../../runtime/json";
+import type { RunInteractionKind, RunInteractionRequest } from "@rowan-agent/models";
 
-export type RunInteractionKind = "user_input" | "permission" | "elicitation" | "confirmation";
+export type { RunInteractionKind, RunInteractionRequest } from "@rowan-agent/models";
+
 export type RunInteractionStatus = "pending" | "answered" | "replied" | "cancelled";
 
-export type RunInteraction = Readonly<{
+export type RunInteraction = RunInteractionRequest & Readonly<{
   id: string;
   phase: string;
-  kind: RunInteractionKind;
-  prompt: string;
-  payload?: JsonValue;
   createdAt: string;
   status: RunInteractionStatus;
   answer?: JsonValue;
   reply?: string;
   /** The Run is only waiting for the next user message, not asking a question. */
   turnBoundary?: true;
-  toolCallId?: string;
-  result?: Readonly<{
-    answered?: string;
-    replied?: string;
-    cancelled?: string;
-  }>;
-}>;
-
-export type RunInteractionRequest = Readonly<{
-  id?: string;
-  kind: RunInteractionKind;
-  prompt: string;
-  payload?: JsonValue;
-  toolCallId?: string;
-  result?: Readonly<{
-    answered?: string;
-    replied?: string;
-    cancelled?: string;
-  }>;
 }>;
 
 export type RunInteractionState = Readonly<{

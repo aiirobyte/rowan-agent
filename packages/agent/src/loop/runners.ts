@@ -1,15 +1,18 @@
-import type { ToolCallPhase } from "../runtime/contracts";
-import type { ContentBlock, RunInteractionRequest, ToolCallOptions, ToolCallOutcome } from "@rowan-agent/models";
-import type { JsonObject, JsonValue } from "../runtime-events";
+import type { ToolCallPhase, Tool, ToolInvocationContext } from "../runtime/contracts";
 import type {
-  AgentMessage,
-  AgentContext,
-  Outcome,
-  Tool,
-  ToolCall,
+  LlmContentBlock,
+  LlmToolCall,
+  LlmTokenUsage,
+  ModelRef,
+  RunInteractionRequest,
+  StreamBlock,
+  ToolCallOptions,
   ToolResult,
-} from "../types";
-import { createMessage } from "../types";
+} from "@rowan-agent/models";
+import type { AgentId, JsonObject, JsonValue, Outcome, RunId, ToolCallId, ToolResultRecord } from "../runtime-events";
+import type { AgentMessage } from "../protocol/agent";
+import type { AgentContext } from "./types";
+import { createMessage } from "./messages";
 import { createId, createTimestamp, combineSignals } from "../utils";
 import type { ExecutionState, AgentConfig, InputRequestPrompt, MessageDeltaNotification } from "./types";
 import { DEFAULT_MAX_ATTEMPTS, validateMaxAttempts } from "./types";
@@ -39,10 +42,9 @@ import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTo
 import type { RouteToolArgs } from "../harness/tools";
 import { buildModelRequest } from "../harness/context/prompt-builder";
 import { LoopGuard } from "./errors";
-import { createOutcome } from "./outcomes";
+import { createOutcome, type LoopOutcome } from "./outcomes";
 import { snapshotMessages } from "./state";
 import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
-import type { LlmContentPart } from "@rowan-agent/models";
 import { runInternalModelLoop, STOP_PHASE_ID } from "../harness/phases/core-phases";
 
 // ============================================================================
@@ -260,7 +262,7 @@ function createRunResult(
 async function completeRun(
   config: AgentConfig,
   state: ExecutionState,
-  outcome: Outcome,
+  outcome: LoopOutcome,
 ): Promise<LoopResult> {
   if (outcome.display) {
     const messages = createMessageManager(config.context, config.onMessage, config.onMessageDelta);
@@ -289,7 +291,7 @@ function createTerminalOutcome(
   phase: Phase,
   output: PhaseOutput,
   transcript: AgentMessage[],
-): Outcome {
+): LoopOutcome {
   const outcome = phase.run
     ? createOutcome.phase(output, transcript)
     : createOutcome.default(output, transcript);
@@ -396,25 +398,25 @@ function createToolExecutionManager(): PhaseToolExecutionManager {
   };
 }
 
-function createToolResultContent(result: ToolResult): LlmContentPart[] {
+function createToolResultContent(result: ToolResultRecord): LlmContentBlock[] {
   return [
     {
       type: "tool_result",
       toolUseId: result.toolCallId,
-      content: JSON.stringify(result),
+      content: typeof result.content === "string" ? result.content : JSON.stringify(result),
       isError: !result.ok,
     },
   ];
 }
 
 function createRouteToolResultContent(
-  toolCall: ToolCall,
+  toolCall: LlmToolCall,
   error?: string,
   executionContext?: {
     completedPhases?: readonly string[];
     phaseTransitions?: readonly { from: string; to: string }[];
   },
-): LlmContentPart[] {
+): LlmContentBlock[] {
   const result: Record<string, unknown> = error
     ? { ok: false, error }
     : { ok: true };
@@ -456,19 +458,19 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       messages: ctx.messageManager.visible(),
     };
 
-    let executableToolCalls: readonly ToolCall[];
-    let roundContentBlocks: readonly ContentBlock[] | undefined;
+    let executableToolCalls: readonly LlmToolCall[];
+    let roundContentBlocks: readonly StreamBlock[] | undefined;
     let collected: ModelInvokeOutput | undefined;
     const checkpoint = ctx.execution.interaction.checkpoint();
     if (checkpoint && typeof checkpoint === "object" && (checkpoint as any).kind === "tool_call_suspension") {
       const toolSuspension = checkpoint as {
         kind: "tool_call_suspension";
-        toolCalls: readonly ToolCall[];
+        toolCalls: readonly LlmToolCall[];
         pendingIndex: number;
         interactionId?: string;
-        completedResults: readonly ToolResult[];
+        completedResults: readonly ToolResultRecord[];
       };
-      executableToolCalls = toolSuspension.toolCalls.filter((toolCall: ToolCall) =>
+      executableToolCalls = toolSuspension.toolCalls.filter((toolCall: LlmToolCall) =>
         executableToolNames.has(toolCall.name),
       );
       output = {
@@ -836,7 +838,7 @@ async function runPhaseLoop(
         previousPhaseInputMsgId = undefined;
         if (extBefore.skip.route === "stop") {
           return completeRun(config, state, {
-            id: "skip",
+            id: createId("out") as import("../runtime-events").OutcomeId,
             message: extBefore.skip.message || "Skipped.",
           });
         }
@@ -1186,16 +1188,32 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
   return executePhaseWithModel(ctx);
 }
 
+function inertRunInteraction(signal?: AbortSignal): RunInteractionDriver {
+  const controller = signal ? undefined : new AbortController();
+  const state: ExecutionState = {
+    currentPhase: "default",
+    attempt: 0,
+    status: "running" as const,
+    metrics: { iterations: 0, phaseTransitions: [], compactionCount: 0, retryCount: 0, startedAt: new Date().toISOString(), startedAtMs: Date.now() },
+  };
+  const driver = createRunInteractionDriver(state, "default", signal ?? controller!.signal);
+  return {
+    ...driver,
+    request: () => { throw new Error("Run interactions require an active interaction driver."); },
+    suspend: () => { throw new Error("Run interactions require an active interaction driver."); },
+  };
+}
+
 async function executeToolCall(input: {
   config: AgentConfig;
   tools: Tool[];
-  toolCall: ToolCall;
-  contentBlocks?: readonly ContentBlock[];
+  toolCall: LlmToolCall;
+  contentBlocks?: readonly StreamBlock[];
   driver?: RunInteractionDriver;
   options?: ToolCallOptions;
   providerInitiated?: boolean;
   phase?: ToolCallPhase;
-}): Promise<ToolResult> {
+}): Promise<ToolResultRecord> {
   let result: ToolResult;
   if (input.config.runtime?.tools) {
     result = await input.config.runtime.tools({
@@ -1208,14 +1226,19 @@ async function executeToolCall(input: {
       ...(input.phase !== undefined ? { phase: input.phase } : {}),
     });
   } else {
-    const toolContext = {
-      skills: input.config.context.skills,
-      toolCallId: input.toolCall.id,
+    const toolInvocationContext: ToolInvocationContext = {
+      agentId: input.config.execution.agentId as AgentId,
+      runId: input.config.execution.runId as RunId,
+      toolCallId: input.toolCall.id as ToolCallId,
+      providerToolCallId: input.toolCall.id,
+      reportProgress: () => {},
+      interaction: input.driver ?? inertRunInteraction(input.config.signal),
+      ...(input.phase !== undefined ? { phase: input.phase } : {}),
     };
     result = await executeRuntimeToolCall({
       tools: input.tools,
       toolCall: input.toolCall,
-      toolContext,
+      toolContext: toolInvocationContext,
       beforeToolCall: input.config.beforeToolCall,
       afterToolCall: input.config.afterToolCall,
       signal: combineSignals(input.config.signal, input.options?.signal),
@@ -1226,7 +1249,7 @@ async function executeToolCall(input: {
   // the provider Call identity may cross this model-facing execution seam.
   return {
     ...result,
-    toolCallId: input.toolCall.id,
+    toolCallId: input.toolCall.id as ToolCallId,
     toolName: input.toolCall.name,
   };
 }
@@ -1234,13 +1257,13 @@ async function executeToolCall(input: {
 async function executeToolCalls(input: {
   config: AgentConfig;
   tools: Tool[];
-  toolCalls: readonly ToolCall[];
-  contentBlocks?: readonly ContentBlock[];
+  toolCalls: readonly LlmToolCall[];
+  contentBlocks?: readonly StreamBlock[];
   driver?: RunInteractionDriver;
   model?: import("@rowan-agent/models").ModelRef;
   usage?: import("@rowan-agent/models").LlmTokenUsage;
   phase?: ToolCallPhase;
-}): Promise<readonly ToolResult[]> {
+}): Promise<readonly ToolResultRecord[]> {
   if (input.config.runtime?.toolsBatch) {
     const results = await input.config.runtime.toolsBatch({
       config: input.config,
@@ -1254,11 +1277,11 @@ async function executeToolCalls(input: {
     if (results.length !== input.toolCalls.length) throw new Error("Runtime returned an invalid Tool batch result");
     return results.map((result, index) => ({
       ...result,
-      toolCallId: input.toolCalls[index]!.id,
+      toolCallId: input.toolCalls[index]!.id as ToolCallId,
       toolName: input.toolCalls[index]!.name,
     }));
   }
-  const results: ToolResult[] = [];
+  const results: ToolResultRecord[] = [];
   for (const toolCall of input.toolCalls) {
     results.push(await executeToolCall({ ...input, toolCall }));
   }
@@ -1284,12 +1307,12 @@ function createPhaseExecution(
   const interaction = createRunInteractionDriver(state, phase.name, config.signal);
   const executePhaseTool = async (
     phaseContext: AgentContext,
-    toolCall: ToolCall,
+    toolCall: LlmToolCall,
     options?: ToolCallOptions,
     providerInitiated = false,
-  ): Promise<ToolResult> => {
+  ): Promise<ToolResultRecord> => {
     return runTurn(async () => {
-      await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
+      await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.arguments);
       const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
       const result = await executeToolCall({
         config: {
@@ -1345,7 +1368,8 @@ function createPhaseExecution(
           request.tools = phaseContext.tools.map((t) => ({
             name: t.name,
             description: t.description,
-            parameters: t.parameters,
+            parameters: t.parameters as JsonObject,
+            ...(t._meta !== undefined ? { _meta: t._meta } : {}),
           }));
         }
       }
@@ -1375,21 +1399,20 @@ function createPhaseExecution(
             return tools.map((t) => ({
               name: t.name,
               description: t.description,
-              parameters: t.parameters as JsonValue | undefined,
+              parameters: (t.parameters ?? {}) as JsonObject,
               ...(t._meta !== undefined ? { _meta: t._meta } : {}),
             }));
           },
-          call: async (name: string, args: JsonValue, options?: ToolCallOptions): Promise<ToolCallOutcome> => {
+          call: async (name: string, args: JsonValue, options?: ToolCallOptions): Promise<ToolResult> => {
             const toolCallId = createId("call");
-            const toolCall: ToolCall = {
+            const toolCall: LlmToolCall = {
               id: toolCallId,
               name,
-              args,
+              arguments: args,
             };
             const res = await executePhaseTool(phaseContext, toolCall, options, true);
-            return res.ok
-              ? { ok: true, content: res.content as JsonValue }
-              : { ok: false, error: res.error ?? "Tool execution failed", ...(res.content !== undefined ? { content: res.content as JsonValue } : {}) };
+            const { toolCallId: _id, toolName: _name, ...result } = res;
+            return result;
           },
         },
       };
@@ -1440,14 +1463,14 @@ function createPhaseExecution(
 
     async executeTools(
       phaseContext: AgentContext,
-      toolCalls: readonly ToolCall[],
-      contentBlocks?: readonly ContentBlock[],
+      toolCalls: readonly LlmToolCall[],
+      contentBlocks?: readonly StreamBlock[],
       meta?: { model?: import("@rowan-agent/models").ModelRef; usage?: import("@rowan-agent/models").LlmTokenUsage },
-    ): Promise<readonly ToolResult[]> {
+    ): Promise<readonly ToolResultRecord[]> {
       return runTurn(async () => {
         const tools = phaseContext.tools.filter((tool) => tool.name !== PhaseRouteTool);
         for (const toolCall of toolCalls) {
-          await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.args);
+          await toolExecutionManager.start(toolCall.id, toolCall.name, toolCall.arguments);
         }
         const results = await executeToolCalls({
           config: {

@@ -6,7 +6,8 @@ import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { Skill } from "../protocol";
 import type { PhaseExecution } from "../loop/execution";
 import type { ExtensionDisposer, ExtensionFactory } from "./api";
-import type { JsonObject, JsonValue, ToolExecutionResult } from "../runtime-events";
+import type { JsonObject, JsonValue } from "../runtime-events";
+import type { Tool } from "../runtime/contracts";
 import type {
   ProviderConfig,
   ProviderModelConfig,
@@ -20,6 +21,7 @@ import type {
   ToolAnnotations,
   ToolProgress,
   ContentBlock,
+  ToolResult,
 } from "@rowan-agent/models";
 
 export type {
@@ -35,7 +37,10 @@ export type {
   ToolCallUpdate,
   ToolAnnotations,
   ContentBlock,
+  ToolResult,
 } from "@rowan-agent/models";
+
+export type { Tool } from "../runtime/contracts";
 
 // ---------------------------------------------------------------------------
 // Host & scope types
@@ -197,66 +202,10 @@ export type ExtensionPackageManifest = {
 // ---------------------------------------------------------------------------
 
 /**
- * Tool definition for registering LLM-callable tools via `api.tools.register()`.
- *
- * @example
- * ```typescript
- * api.tools.register({
- *   name: "search_docs",
- *   description: "Search documentation",
- *   parameters: { type: "object", properties: { query: { type: "string" } } },
- *   execute: async (args, ctx) => {
- *     return { content: [{ type: "text", text: "result" }] };
- *   },
- * });
- * ```
- */
-export interface ToolDefinition {
-  /** Tool name (used in LLM tool calls) */
-  name: string;
-  /** Description for LLM */
-  description: string;
-  /** Parameter schema (JSON Schema) */
-  parameters: Record<string, unknown>;
-  /** Optional: one-line snippet shown in the system prompt tool list */
-  promptSnippet?: string;
-  /** Optional: additional guidelines appended to system prompt */
-  promptGuidelines?: string[];
-  kind?: ToolKind;
-  annotations?: ToolAnnotations;
-  _meta?: JsonObject;
-  present?: (call: {
-    status: ToolCallStatus;
-    args: JsonValue;
-    progress?: ToolProgress;
-    result?: ToolExecutionResult;
-  }) => {
-    title?: string;
-    content?: ToolCallContent[];
-    locations?: ToolCallLocation[];
-    _meta?: JsonObject;
-  } | undefined | void | Promise<{
-    title?: string;
-    content?: ToolCallContent[];
-    locations?: ToolCallLocation[];
-    _meta?: JsonObject;
-  } | undefined | void>;
-  /** Execute the tool */
-  execute: (args: unknown, context: import("../runtime/contracts").ToolInvocationContext, signal?: AbortSignal) => Promise<ToolExecutionResult>;
-  /** Optional: per-tool execution mode override */
-  executionMode?: "sequential" | "parallel";
-}
-
-/**
- * Result from tool execution.
- */
-export type { ToolExecutionResult } from "../runtime-events";
-
-/**
  * Registered tool with source metadata.
  */
 export interface RegisteredTool {
-  definition: ToolDefinition;
+  definition: Tool;
   sourceInfo: SourceInfo;
   sourceId: string;
   scope?: ScopeRef;

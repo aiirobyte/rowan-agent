@@ -18,7 +18,7 @@ import {
   type RuntimeErrorCode,
 } from "../../src/runtime/index";
 import type { RunSnapshot, UserInput } from "@rowan-agent/agent";
-import type { AgentId, EventCursor, Message, RunId, ToolExecutionResult, ToolUseContent } from "../../src/runtime-events";
+import type { AgentId, EventCursor, Message, RunId, ToolResult, ToolUseBlock } from "../../src/runtime-events";
 import { configuration } from "../fixtures/configuration";
 
 const agentId = "agent-1" as AgentId;
@@ -166,9 +166,9 @@ test("Tool schemas retain TypeBox and project only JSON-safe provider data", () 
     model: { provider: "test", id: "model" },
   }))).toThrow();
   // @ts-expect-error Provider correlation IDs are not durable ToolCall IDs.
-  const invalidToolUse: ToolUseContent = { type: "tool_use", id: "provider-id", name: "lookup", input: null };
+  const invalidToolUse: ToolUseBlock = { type: "tool_use", id: "provider-id", name: "lookup", input: null };
   // @ts-expect-error Tool results cannot choose a Runtime ToolCall ID.
-  const invalidResult: ToolExecutionResult = { ok: true, content: null, toolCallId: "tool-id" };
+  const invalidResult: ToolResult = { ok: true, content: null, toolCallId: "tool-id" };
   void invalidToolUse;
   void invalidResult;
 });
