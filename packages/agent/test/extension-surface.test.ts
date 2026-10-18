@@ -197,6 +197,7 @@ test("api.agents.* reach the runtime and consume is durable, checkpointed, and s
     // 6. api.agents.runs reads runs for the agent
     const runs = await capturedApi.agents.runs(agentId);
     expect(runs.items.length).toBeGreaterThanOrEqual(1);
+    await expect(capturedApi.agents.run(String(runs.items[0]!.id))).resolves.toMatchObject({ runId: runs.items[0]!.id });
 
     // 7. api.agents.runPhase starts a Control Run
     const phaseRun = await capturedApi.agents.runPhase(agentId, {

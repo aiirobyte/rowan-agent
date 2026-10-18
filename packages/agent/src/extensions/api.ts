@@ -25,6 +25,7 @@ import type {
   Message,
   Page,
   RunListCursor,
+  RunSnapshot,
   RunState,
   RunSummary,
   UserInput,
@@ -51,6 +52,8 @@ export interface ExtensionAgentsAPI {
     agentId: AgentId | string,
     filter?: { states?: readonly RunState[]; after?: RunListCursor; limit?: number },
   ): Promise<Page<RunSummary, RunListCursor>>;
+  /** One Run in full, including its outcome once it ended. */
+  run(runId: string): Promise<RunSnapshot>;
   runPhase(
     agentId: AgentId | string,
     options: {
@@ -72,6 +75,7 @@ export interface ExtensionAgentsRuntimeDelegate {
   history(agentId: AgentId): Promise<readonly Message[]>;
   contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[]; after?: RunListCursor; limit?: number }): Promise<Page<RunSummary, RunListCursor>>;
+  snapshot(runId: RunSnapshot["runId"]): Promise<RunSnapshot>;
   runPhase(agentId: AgentId, options: {
     phase: string;
     payload?: JsonValue;
@@ -396,6 +400,11 @@ export function createExtensionAPI(
         assertActive();
         if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
         return agentsDelegate.listRuns({ agentId: agentId as AgentId, ...filter });
+      },
+      run: async (runId) => {
+        assertActive();
+        if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
+        return agentsDelegate.snapshot(runId as RunSnapshot["runId"]);
       },
       runPhase: async (agentId, runOpt) => {
         assertActive();

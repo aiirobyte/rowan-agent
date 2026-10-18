@@ -75,6 +75,7 @@ export default extension;
   - `agents.history(agentId)`: Read committed transcript messages.
   - `agents.contextStatus(agentId)`: Query context window token usage.
   - `agents.runs(agentId, filter?)`: List runs for an agent.
+  - `agents.run(runId)`: One Run in full (`RunSnapshot`), including its outcome once it ended.
   - `agents.runPhase(agentId, options)`: Trigger a Control Run for a phase.
   - `agents.consume(consumerId, onEvent)`: Durable, checkpointed event consumer that automatically stops on extension disposal.
 - `hooks.on()` / `hooks.off()`: Register lifecycle hooks (`run_start`, `run_end`) and
