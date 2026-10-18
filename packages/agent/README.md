@@ -12,7 +12,7 @@ import {
   InMemoryStore,
   loadPhases,
   loadSkills,
-} from "@rowan-agent/agent";
+} from "@rowan-agent/agent/runtime";
 
 const skills = await loadSkills("./.rowan/skills");
 const phases = await loadPhases("./.rowan/phases");

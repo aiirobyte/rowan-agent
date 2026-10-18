@@ -5,11 +5,13 @@ import Type from "typebox";
 import {
   AgentRuntime,
   InMemoryStore,
-  type EventCursor,
-  type RunEvent,
   type Tool,
-  type ToolInvocationContext,
-} from "../../src";
+} from "@rowan-agent/agent/runtime";
+import type {
+  EventCursor,
+  RunEvent,
+  ToolInvocationContext,
+} from "@rowan-agent/agent";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
 

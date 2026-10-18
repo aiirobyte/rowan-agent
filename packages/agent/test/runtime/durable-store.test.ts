@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   InMemoryStore,
   RuntimeError,
-} from "../../src/runtime";
+} from "../../src/runtime/index";
 import type {
   AgentId,
   AssistantMessage,

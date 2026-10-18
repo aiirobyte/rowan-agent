@@ -10,6 +10,7 @@
     "types": ["bun"],
     "paths": {
       "@rowan-agent/agent": ["./packages/agent/src/index.ts"],
+      "@rowan-agent/agent/runtime": ["./packages/agent/src/runtime.ts"],
       "@rowan-agent/agent/*": ["./packages/agent/src/*"],
       "@rowan-agent/models": ["./packages/models/src/index.ts"],
       "@rowan-agent/models/*": ["./packages/models/src/*"],

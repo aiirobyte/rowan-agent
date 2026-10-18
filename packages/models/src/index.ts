@@ -1,6 +1,92 @@
-export * from "./protocol";
-export * from "./sse";
-export * from "./models";
-export * from "./models.generated";
-export * from "./providers";
-export * from "./registry";
+// Public model, provider, and stream contract. Provider implementations and
+// transport helpers remain private to this package.
+export {
+  calculateCost,
+  getAllModels,
+  getModel,
+  getModels,
+  getProviders,
+  registerModel,
+  resolveModel,
+  unregisterProviderModels,
+} from "./models";
+export { MODELS } from "./models.generated";
+export {
+  getApiProvider,
+  listApiProviders,
+  parseModelRef,
+  registerApiProvider,
+  registerBuiltInApiProviders,
+  unregisterApiProvider,
+  stream,
+  streamByRef,
+  createModelStream,
+} from "./registry";
+export { ProviderError } from "./providers/shared";
+// Used by the agent runtime to validate provider tool progress.
+export { isValidToolProgress } from "./protocol";
+
+export type {
+  ApiProvider,
+} from "./registry";
+
+export type {
+  AssistantMessagePartial,
+  AudioBlock,
+  ContentBlock,
+  ImageBlock,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+  KnownProtocol,
+  KnownProvider,
+  LlmContentPart,
+  LlmImageContent,
+  LlmMessage,
+  LlmModelUsage,
+  LlmRequest,
+  LlmResponse,
+  LlmStopReason,
+  LlmStreamEvent,
+  LlmTextContent,
+  LlmThinkingContent,
+  LlmTokenUsage,
+  LlmToolCall,
+  LlmToolChoice,
+  LlmToolDefinition,
+  LlmToolResultContent,
+  LlmToolUseContent,
+  Model,
+  ModelConfig,
+  ModelCost,
+  ModelCostRates,
+  ModelCostTier,
+  ModelRef,
+  Protocol,
+  Provider,
+  ProviderCallContext,
+  ProviderConfig,
+  ProviderModelConfig,
+  ProviderStreamFn,
+  ResourceBlock,
+  ResourceLinkBlock,
+  RunInteractionKind,
+  RunInteractionRequest,
+  ScopeRef,
+  StreamFn,
+  TextBlock,
+  ThinkingBlock,
+  ThinkingLevel,
+  ToolAnnotations,
+  ToolCall,
+  ToolCallBlock,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallOptions,
+  ToolCallOutcome,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolDefinitionSummary,
+  ToolKind,
+  ToolProgress,
+} from "./protocol";

@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, type ContextCandidate } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, type ContextCandidate } from "../../src/runtime/index";
 import type { AgentDefinition } from "../../src/harness/definitions";
 import { configuration, createAgentWith, seedResources, TEST_SOURCE } from "../fixtures/configuration";
 import type { Phase } from "../../src/harness/phases/types";

@@ -5,11 +5,13 @@ import {
   AgentRuntime,
   InMemoryStore,
   mergeToolCall,
-  isValidPresentationOutput,
-  type ToolCallPresentationInput,
-  type ToolCallPresentationOutput,
-} from "../../src/runtime";
-import { InMemoryExtensionHost } from "../../src";
+} from "@rowan-agent/agent/runtime";
+import { isValidPresentationOutput } from "../../src/runtime/tool-call-merge";
+import type {
+  ToolCallPresentationInput,
+  ToolCallPresentationOutput,
+} from "@rowan-agent/agent";
+import { InMemoryExtensionHost } from "@rowan-agent/agent/runtime";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
 

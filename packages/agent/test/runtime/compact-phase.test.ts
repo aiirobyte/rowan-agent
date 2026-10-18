@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmMessage, LlmRequest, StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime/index";
 import type { ContextCompactionRecord } from "../../src/runtime/contracts";
 import type { Phase } from "../../src/harness/phases/types";
 import { createAgentWith, createPhaseAgent } from "../fixtures/configuration";

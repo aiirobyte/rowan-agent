@@ -5,7 +5,7 @@ import { createMessage } from "../../src/types";
 import type { PhaseContext } from "../../src/harness/phases/types";
 import type { InternalModelLoopOptions, ModelInvokeOutput, PhaseExecution } from "../../src/loop/execution";
 import { runInternalModelLoop } from "../../src/harness/phases/core-phases";
-import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime/index";
 import { createPhaseAgent } from "../fixtures/configuration";
 import { stopResponse } from "../runtime/route-test-utils";
 

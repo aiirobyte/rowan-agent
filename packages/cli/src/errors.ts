@@ -1,4 +1,4 @@
-import { isRuntimeError } from "../../agent/src";
+import { isRuntimeError } from "@rowan-agent/agent/runtime";
 
 export function formatCliError(error: unknown, databasePath = ".rowan/runtime.sqlite"): string {
   if (isRuntimeError(error)) {

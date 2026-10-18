@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryConfigProvider, InMemoryStore, SqliteStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryConfigProvider, InMemoryStore, SqliteStore } from "../../src/runtime/index";
 import type { Phase } from "../../src/harness/phases/types";
 import { createPhaseAgent } from "../fixtures/configuration";
 import { routeResponse, stopResponse } from "./route-test-utils";
@@ -273,10 +273,11 @@ test("Extension Phases read the same effective payload through the generic API",
     baseDir: "<test>",
     content: "Extension.",
     input: { provider: "codex", options: { includeTests: true } },
-    factory: async (api) => {
-      observed = api.phases.getPayload();
-      api.phases.setMessage("extended");
-      api.phases.setNextPhase("stop");
+    extensionFactory: async (api) => {
+      api.phases.execute(async (context) => {
+        observed = context.state.payload;
+        return { message: "extended", route: "stop" };
+      });
     },
   };
   const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });

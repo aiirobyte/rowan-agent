@@ -3,21 +3,88 @@ import type {
   SkillRegistration,
   ToolDefinition,
   ExtensionRuntime,
-  ExtensionManifest,
   ScopeRef,
   ExtensionStateStore,
   ExtensionCapabilityContribution,
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
-import type { PhaseContext } from "../harness/phases/types";
-import type { ExtensionContext, ExtensionUtils } from "./context";
-import type { JsonObject } from "../runtime-events";
+import type { PhaseRunHandler } from "../harness/phases/types";
+import type { PhaseExecution } from "../loop/execution";
+import type { ExtensionContext } from "./context";
+import type { JsonObject, JsonValue } from "../runtime-events";
 import { assertJsonValue } from "../runtime/json";
+import type {
+  AgentId,
+  AgentListCursor,
+  AgentRun,
+  AgentSummary,
+  ContextStatus,
+  DurableConsumer,
+  DurableRunEvent,
+  Message,
+  Page,
+  RunListCursor,
+  RunState,
+  RunSummary,
+  UserInput,
+} from "../runtime/contracts";
+import type { ProviderConfig } from "@rowan-agent/models";
 
 // ---------------------------------------------------------------------------
 // ExtensionAPI - Main API for extension developers
 // ---------------------------------------------------------------------------
+
+export type { PhaseRunHandler } from "../harness/phases/types";
+
+export type ExtensionAgentConsumerDisposer = (() => void) & {
+  readonly stop: () => void;
+  readonly caughtUp: Promise<void>;
+  readonly done: Promise<void>;
+};
+
+export interface ExtensionAgentsAPI {
+  list(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
+  history(agentId: AgentId | string): Promise<readonly Message[]>;
+  contextStatus(agentId: AgentId | string, options?: { contextWindow?: number }): Promise<ContextStatus>;
+  runs(
+    agentId: AgentId | string,
+    filter?: { states?: readonly RunState[]; after?: RunListCursor; limit?: number },
+  ): Promise<Page<RunSummary, RunListCursor>>;
+  runPhase(
+    agentId: AgentId | string,
+    options: {
+      phase: string;
+      payload?: JsonValue;
+      input?: UserInput;
+      yieldToInput?: boolean;
+      idempotencyKey?: string;
+    },
+  ): Promise<AgentRun>;
+  consume(
+    consumerId: string,
+    onEvent: (event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>) => void | Promise<void>,
+  ): Promise<ExtensionAgentConsumerDisposer>;
+}
+
+export interface ExtensionAgentsRuntimeDelegate {
+  listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
+  history(agentId: AgentId): Promise<readonly Message[]>;
+  contextStatus(agentId: AgentId, options?: { contextWindow?: number }): Promise<ContextStatus>;
+  listRuns(input?: { agentId?: AgentId; states?: readonly RunState[]; after?: RunListCursor; limit?: number }): Promise<Page<RunSummary, RunListCursor>>;
+  runPhase(agentId: AgentId, options: {
+    phase: string;
+    payload?: JsonValue;
+    input?: UserInput;
+    yieldToInput?: boolean;
+    idempotencyKey?: string;
+  }): Promise<AgentRun>;
+  consume(input: {
+    consumerId: string;
+    signal: AbortSignal;
+    onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void>;
+  }): Promise<DurableConsumer>;
+}
 
 /**
  * Extension API object passed to extension factory function.
@@ -70,42 +137,6 @@ export interface ExtensionAPI {
     unregister(toolName: string, scope?: ScopeRef): Promise<void>;
   };
 
-  /** Capability contributions — advertise tools or features to the host. */
-  capabilities: {
-    /** Contribute a capability to the host. Returns a disposer to remove the contribution. */
-    contribute(contribution: ExtensionCapabilityContribution): () => void;
-  };
-
-  /** Model provider registration. */
-  providers: {
-    /** Register a model provider. Registering with an existing id replaces it. */
-    register(config: import("@rowan-agent/models").ProviderConfig): void;
-    /** Unregister a model provider by id. */
-    unregister(id: string): void;
-  };
-
-  /** Phase execution capabilities — provides Phase In/Out, phase identity, phase routing, and registration. */
-  phases: {
-    /** Register a Phase directory bundle or Phase object. */
-    register(phase: PhaseRegistration, scope?: ScopeRef): Promise<void>;
-    /** Unregister a previously registered phase by name. */
-    unregister(phaseName: string, scope?: ScopeRef): Promise<void> | void;
-    /** Phase In: get payload from previous phase */
-    getPayload(): unknown;
-    /** Phase Out: set payload for next phase */
-    setPayload(payload: unknown): void;
-    /** Phase Out: set outcome message */
-    setMessage(message: string): void;
-    /** Get current phase name */
-    getCurrentPhase(): string;
-    /** Set next phase (lower priority than PHASE.md target) */
-    setNextPhase(phaseName: string): void;
-    /** Get the next phase set by setNextPhase */
-    getNextPhase(): string | undefined;
-    /** Get the message set by setMessage */
-    getMessage(): string | undefined;
-  };
-
   /** Skill capabilities — register and unregister standalone skills. */
   skills: {
     /** Register a Skill directory (containing SKILL.md) or a Skill object. Registering an existing name replaces it. */
@@ -114,17 +145,38 @@ export interface ExtensionAPI {
     unregister(skillName: string, scope?: ScopeRef): Promise<void> | void;
   };
 
-  /** Extension manifest from package.json `rowan` field. */
-  manifest?: ExtensionManifest;
+  /** Phase capabilities — register, unregister, and execute. */
+  phases: {
+    /** Register a Phase directory bundle or Phase object. */
+    register(phase: PhaseRegistration, scope?: ScopeRef): Promise<void>;
+    /** Unregister a previously registered phase by name. */
+    unregister(phaseName: string, scope?: ScopeRef): Promise<void> | void;
+    /** Set the Phase's execution handler. Only available within an Extension Phase factory. */
+    execute(handler: PhaseRunHandler): void;
+  };
 
-  /** Utility functions. */
-  utils: ExtensionUtils;
+  /** Model provider registration. */
+  models: {
+    /** Register a model provider. Registering with an existing id replaces it. */
+    registerProvider(config: ProviderConfig): void;
+    /** Unregister a model provider by id. */
+    unregisterProvider(id: string): void;
+  };
 
-  /** Runtime context — cwd, signal, exec, message access, etc. */
-  context: ExtensionContext;
+  /** Runtime Agent control and consumption. Delegates to the AgentRuntime the Extension is activated in. */
+  agents: ExtensionAgentsAPI;
 
   /** Shared event bus for inter-extension communication. */
   events: EventBus;
+
+  /** Capability contributions — advertise tools or features to the host. */
+  capabilities: {
+    /** Contribute a capability to the host. Returns a disposer to remove the contribution. */
+    contribute(contribution: ExtensionCapabilityContribution): () => void;
+  };
+
+  /** Runtime context — cwd, signal, exec. */
+  context: ExtensionContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,73 +195,54 @@ export type ExtensionFactory = (api: ExtensionAPI) => ExtensionFactoryResult | P
 // createExtensionAPI
 // ---------------------------------------------------------------------------
 
+export interface CreateExtensionAPIOptions {
+  registerPhase?: (registration: PhaseRegistration, scope?: ScopeRef) => Promise<void>;
+  unregisterPhase?: (phaseName: string, scope?: ScopeRef) => void | Promise<void>;
+  registerSkill?: (registration: SkillRegistration, scope?: ScopeRef) => Promise<void>;
+  unregisterSkill?: (skillName: string, scope?: ScopeRef) => void | Promise<void>;
+  registerProvider?: (config: ProviderConfig) => void;
+  unregisterProvider?: (id: string) => void;
+  registerTool?: (tool: ToolDefinition, scope?: ScopeRef) => void | Promise<void>;
+  unregisterTool?: (toolName: string, scope?: ScopeRef) => void | Promise<void>;
+  context?: ExtensionContext;
+  trackCleanup?: (cleanup: () => void | Promise<void>) => void;
+  config?: {
+    get: (scope?: ScopeRef) => Promise<JsonObject | null>;
+    changed: (handler: (scope: ScopeRef) => void) => void;
+  };
+  state?: {
+    run: (runId: string) => ExtensionStateStore;
+    agent: (agentId: string) => ExtensionStateStore;
+    global: () => ExtensionStateStore;
+  };
+  contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
+  namespaces?: Readonly<Record<string, unknown>>;
+  runtimeAgents?: ExtensionAgentsRuntimeDelegate;
+  isExtensionPhase?: boolean;
+  onExecute?: (handler: PhaseRunHandler) => void;
+}
+
 /**
  * @internal
  * Create ExtensionAPI instance.
- * Works for both extension context (with hooks/runtime/eventBus) and phase context (without).
  */
 export function createExtensionAPI(
   hooks?: HooksManager,
-  options?: {
-    registerPhase?: (registration: PhaseRegistration, scope?: ScopeRef) => Promise<void>;
-    unregisterPhase?: (phaseName: string, scope?: ScopeRef) => void | Promise<void>;
-    registerSkill?: (registration: SkillRegistration, scope?: ScopeRef) => Promise<void>;
-    unregisterSkill?: (skillName: string, scope?: ScopeRef) => void | Promise<void>;
-    registerProvider?: (config: import("@rowan-agent/models").ProviderConfig) => void;
-    unregisterProvider?: (id: string) => void;
-    registerTool?: (tool: ToolDefinition, scope?: ScopeRef) => void | Promise<void>;
-    unregisterTool?: (toolName: string, scope?: ScopeRef) => void | Promise<void>;
-    context?: ExtensionContext;
-    manifest?: ExtensionManifest;
-    phase?: PhaseContext;
-    trackCleanup?: (cleanup: () => void | Promise<void>) => void;
-    config?: {
-      get: (scope?: ScopeRef) => Promise<JsonObject | null>;
-      changed: (handler: (scope: ScopeRef) => void) => void;
-    };
-    state?: {
-      run: (runId: string) => ExtensionStateStore;
-      agent: (agentId: string) => ExtensionStateStore;
-      global: () => ExtensionStateStore;
-    };
-    contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
-    namespaces?: Readonly<Record<string, unknown>>;
-  },
+  options?: CreateExtensionAPIOptions,
   runtime?: ExtensionRuntime,
   eventBus?: EventBus,
 ): ExtensionAPI {
-  let idCounter = 0;
-  const createId = (prefix: string): string => {
-    idCounter++;
-    return `${prefix}_${Date.now().toString(36)}_${idCounter}`;
-  };
-
-  const formatJson = (value: unknown): string => {
-    try {
-      return JSON.stringify(value, null, 2) ?? "undefined";
-    } catch {
-      return "[unserializable]";
-    }
-  };
-
   const assertActive = () => runtime?.assertActive?.();
 
   const noopContext: ExtensionContext = {
     cwd: "",
     signal: undefined,
-    isIdle: () => false,
-    abort: () => {},
     exec: async () => ({ exitCode: 1, stdout: "", stderr: "not available" }),
   };
 
   const ctx = options?.context ?? noopContext;
-  const phaseIn = options?.phase;
   const trackCleanup = options?.trackCleanup;
-
-  // Phase state — API holds it, runner reads after execution
-  let outputPayload: unknown = phaseIn?.state?.payload;
-  let nextPhase: string | undefined;
-  let outputMessage: string | undefined;
+  const agentsDelegate = options?.runtimeAgents;
 
   const api: ExtensionAPI = {
     hooks: {
@@ -302,6 +335,110 @@ export function createExtensionAPI(
         return Promise.resolve(options?.unregisterTool?.(toolName, scope));
       },
     },
+    skills: {
+      register: async (skill, scope) => {
+        assertActive();
+        await options?.registerSkill?.(skill, scope);
+      },
+      unregister: (skillName, scope) => {
+        assertActive();
+        return options?.unregisterSkill?.(skillName, scope);
+      },
+    },
+    phases: {
+      register: async (registration, scope) => {
+        assertActive();
+        await options?.registerPhase?.(registration, scope);
+      },
+      unregister: (phaseName, scope) => {
+        assertActive();
+        return options?.unregisterPhase?.(phaseName, scope);
+      },
+      execute: (handler) => {
+        assertActive();
+        if (!options?.isExtensionPhase) {
+          throw new Error("api.phases.execute is only available inside an Extension Phase.");
+        }
+        if (typeof handler !== "function") {
+          throw new TypeError("api.phases.execute requires a handler function.");
+        }
+        options.onExecute?.(handler);
+      },
+    },
+    models: {
+      registerProvider: (config) => {
+        assertActive();
+        options?.registerProvider?.(config);
+        trackCleanup?.(() => options?.unregisterProvider?.(config.id));
+      },
+      unregisterProvider: (id) => {
+        assertActive();
+        options?.unregisterProvider?.(id);
+      },
+    },
+    agents: {
+      list: async (input) => {
+        assertActive();
+        if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
+        return agentsDelegate.listAgents(input);
+      },
+      history: async (agentId) => {
+        assertActive();
+        if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
+        return agentsDelegate.history(agentId as AgentId);
+      },
+      contextStatus: async (agentId, opt) => {
+        assertActive();
+        if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
+        return agentsDelegate.contextStatus(agentId as AgentId, opt);
+      },
+      runs: async (agentId, filter) => {
+        assertActive();
+        if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
+        return agentsDelegate.listRuns({ agentId: agentId as AgentId, ...filter });
+      },
+      runPhase: async (agentId, runOpt) => {
+        assertActive();
+        if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
+        return agentsDelegate.runPhase(agentId as AgentId, runOpt);
+      },
+      consume: async (consumerId, onEvent) => {
+        assertActive();
+        if (!agentsDelegate) throw new Error("AgentRuntime is not available in this extension context.");
+        const controller = new AbortController();
+        const consumer = await agentsDelegate.consume({
+          consumerId,
+          signal: controller.signal,
+          onEvent,
+        });
+        let stopped = false;
+        const stop = () => {
+          if (stopped) return;
+          stopped = true;
+          controller.abort();
+          consumer.stop();
+        };
+        trackCleanup?.(stop);
+        return Object.assign(stop, {
+          stop,
+          caughtUp: consumer.caughtUp,
+          done: consumer.done,
+        });
+      },
+    },
+    events: eventBus
+      ? {
+        on: (event, listener) => {
+          const unsubscribe = eventBus.on(event, listener);
+          trackCleanup?.(unsubscribe);
+          return unsubscribe;
+        },
+        off: (event) => eventBus.off(event),
+        emit: (event, ...args) => eventBus.emit(event, ...args),
+        has: (event) => eventBus.has(event),
+        count: (event) => eventBus.count(event),
+      }
+      : { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
     capabilities: {
       contribute: (contribution) => {
         assertActive();
@@ -320,63 +457,7 @@ export function createExtensionAPI(
         return options?.contributeCapability ? options.contributeCapability(contribution) : () => {};
       },
     },
-    providers: {
-      register: (config) => {
-        assertActive();
-        options?.registerProvider?.(config);
-        trackCleanup?.(() => options?.unregisterProvider?.(config.id));
-      },
-      unregister: (id) => {
-        assertActive();
-        options?.unregisterProvider?.(id);
-      },
-    },
-    manifest: options?.manifest,
-    utils: {
-      createId,
-      formatJson,
-    },
     context: ctx,
-    events: eventBus
-      ? {
-        on: (event, listener) => {
-          const unsubscribe = eventBus.on(event, listener);
-          trackCleanup?.(unsubscribe);
-          return unsubscribe;
-        },
-        off: (event) => eventBus.off(event),
-        emit: (event, ...args) => eventBus.emit(event, ...args),
-        has: (event) => eventBus.has(event),
-        count: (event) => eventBus.count(event),
-      }
-      : { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
-    phases: {
-      register: async (registration, scope) => {
-        assertActive();
-        await options?.registerPhase?.(registration, scope);
-      },
-      unregister: (phaseName, scope) => {
-        assertActive();
-        return options?.unregisterPhase?.(phaseName, scope);
-      },
-      getPayload: () => outputPayload,
-      setPayload: (p) => { outputPayload = p; },
-      setMessage: (msg) => { outputMessage = msg; },
-      getCurrentPhase: () => phaseIn?.state?.current ?? "",
-      setNextPhase: (id) => { nextPhase = id; },
-      getNextPhase: () => nextPhase,
-      getMessage: () => outputMessage,
-    },
-    skills: {
-      register: async (skill, scope) => {
-        assertActive();
-        await options?.registerSkill?.(skill, scope);
-      },
-      unregister: (skillName, scope) => {
-        assertActive();
-        return options?.unregisterSkill?.(skillName, scope);
-      },
-    },
   };
 
   if (options?.namespaces) {

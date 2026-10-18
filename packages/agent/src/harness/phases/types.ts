@@ -221,6 +221,11 @@ export interface PhaseConfig {
   metadata?: Readonly<Record<string, JsonValue>>;
 }
 
+export type PhaseRunHandler = (
+  context: PhaseContext,
+  execution: PhaseExecution,
+) => Promise<PhaseOutput | void> | PhaseOutput | void;
+
 /**
  * Loaded Phase object
  */
@@ -256,10 +261,10 @@ export interface Phase {
   /** Do not expose this Phase to direct user invocation. */
   disableImplicitInvocation?: boolean;
   metadata?: Readonly<Record<string, JsonValue>>;
-  /** ExtensionAPI factory function used for registration or programmatic execution. */
-  factory?: (api: ExtensionAPI) => Promise<void>;
+  /** Extension factory function used for Extension Phase execution. */
+  extensionFactory?: import("../../extensions/api").ExtensionFactory;
   /** Direct run function */
-  run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
+  run?: PhaseRunHandler;
 }
 
 /**

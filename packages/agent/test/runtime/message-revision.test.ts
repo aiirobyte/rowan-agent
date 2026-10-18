@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryStore, SqliteStore } from "../../src/runtime";
+import { InMemoryStore, SqliteStore } from "../../src/runtime/index";
 import type { ConfigToken, MessageId, Message, RunId } from "../../src/runtime-events";
 
 const token = "config-revision" as ConfigToken;

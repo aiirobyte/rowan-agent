@@ -25,7 +25,7 @@ export type ExtensionAssembly = Readonly<{
 export function assembleRegisteredExtensions(
   snapshot: ConfigurationSnapshot,
   runner: import("../extensions").ExtensionRunner,
-  options: Readonly<{ toolArchiveDir?: string }> = {},
+  options: Readonly<{ toolArchiveDir?: string; scope?: import("@rowan-agent/models").ScopeRef }> = {},
 ): ExtensionAssembly {
   // Extension contributions reach this assembly the way every other resource
   // does: through the Resource View's implicit Extension source. The assembly
@@ -43,7 +43,7 @@ export function assembleRegisteredExtensions(
     ...snapshot.resources.tools,
     ...coreTools.filter((tool) => !replacingNames.has(tool.name)),
   ];
-  const context = resolveDefinitionContext(snapshot, tools);
+  const context = resolveDefinitionContext(snapshot, tools, runner, options.scope);
   return {
     context,
     beforePhase: (phaseId, input) => runner.emitBeforePhase(phaseId, input),
@@ -93,6 +93,8 @@ export function assembleRegisteredExtensions(
 function resolveDefinitionContext(
   snapshot: ConfigurationSnapshot,
   assembled: readonly Tool[],
+  runner?: import("../extensions").ExtensionRunner,
+  scope?: import("@rowan-agent/models").ScopeRef,
 ): ResolvedAgentContext {
   const coreTools = assembled.filter((tool) => tool.core);
   const authoredTools = assembled.filter((tool) => !tool.core);
@@ -120,7 +122,10 @@ function resolveDefinitionContext(
   const selectedPhases = [
     ...corePhases,
     ...selectNamedResources(authoredPhases, authoredPhaseIds, "Phase"),
-  ];
+  ].map((phase) => {
+    const handler = runner?.getPhaseHandler(phase.name, scope);
+    return handler && !phase.run ? { ...phase, run: handler } : phase;
+  });
   const phases = new Map(selectedPhases.map((phase) => [phase.name, phase]));
   const requestedEntry = snapshot.definition.phases
     ? snapshot.definition.phases.entryPhaseId

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime/index";
 import { ResourceRegistry } from "../../src/runtime/resource-registry";
 import { createAgentWith, seedResources, TEST_SOURCE } from "../fixtures/configuration";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";

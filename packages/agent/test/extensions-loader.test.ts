@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Type from "typebox";
-import { clearModels, getModel } from "@rowan-agent/models";
+import { getModel } from "@rowan-agent/models";
+import { clearModels } from "../../models/src/models";
 import {
   createExtensionRunner,
   createEventBus,
@@ -56,8 +57,9 @@ test("ExtensionAPI utils provide helper functions", async () => {
   await runner.loadExtensions([ext]);
 
   expect(capturedCtx).not.toBeNull();
-  expect(capturedCtx!.utils.createId("test")).toMatch(/^test_/);
-  expect(capturedCtx!.utils.formatJson({ a: 1 })).toBe(JSON.stringify({ a: 1 }, null, 2));
+  expect(Object.keys(capturedCtx!).sort()).toEqual([
+    "agents", "capabilities", "config", "context", "events", "hooks", "models", "phases", "skills", "state", "tools",
+  ]);
 });
 
 test("loadExtensionsFromPath loads TypeScript extensions from a directory", async () => {
@@ -181,14 +183,14 @@ test("ExtensionAPI tools.register registers LLM-callable tools", async () => {
   expect(runner.getToolDefinition("nonexistent")).toBeUndefined();
 });
 
-test("ExtensionAPI providers.register preserves model transport configuration", async () => {
+test("ExtensionAPI models.registerProvider preserves model transport configuration", async () => {
   clearModels();
   const runner = createExtensionRunner();
   const ext: LoadedExtension = {
     path: "<test:provider>",
     name: "test-provider",
     factory: (ctx) => {
-      ctx.providers.register({
+      ctx.models.registerProvider({
         id: "extension-provider",
         baseUrl: "https://provider.example/v1",
         apiKey: "extension-key",

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime/index";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 
 const tool = (name: string) => ({

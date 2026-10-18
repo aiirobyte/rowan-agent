@@ -1,15 +1,20 @@
 import { readFile } from "node:fs/promises";
-import { publicTypeExports, publicValueExports } from "./public-interface";
+import {
+  authorTypeExports,
+  authorValueExports,
+  runtimeTypeExports,
+  runtimeValueExports,
+} from "./public-interface";
 
-const declarationFile = new URL("../dist/index.d.ts", import.meta.url);
-const declaration = await readFile(declarationFile, "utf8");
-const blocks = [...declaration.matchAll(/export\s*\{([^}]*)\}(?:\s*from\s*[^;]+)?;/g)];
-if (blocks.length === 0) throw new Error("Built declaration has no export block");
-
-const declarations = blocks.flatMap((block) => block[1]!
-  .split(",")
-  .map((entry) => entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/).at(-1)!)
-  .filter(Boolean));
+async function declarationsFor(file: string): Promise<string[]> {
+  const declaration = await readFile(new URL(file, import.meta.url), "utf8");
+  const blocks = [...declaration.matchAll(/export\s*\{([^}]*)\}(?:\s*from\s*[^;]+)?;/g)];
+  if (blocks.length === 0) throw new Error(`${file} has no export block`);
+  return blocks.flatMap((block) => block[1]!
+    .split(",")
+    .map((entry) => entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/).at(-1)!)
+    .filter(Boolean));
+}
 
 function assertExact(label: string, actual: string[], expected: readonly string[]) {
   const actualSorted = [...actual].sort();
@@ -19,11 +24,13 @@ function assertExact(label: string, actual: string[], expected: readonly string[
   }
 }
 
-assertExact(
-  "public declaration exports",
-  declarations,
-  [...publicValueExports, ...publicTypeExports],
-);
+const authorExports = await declarationsFor("../dist/index.d.ts");
+const runtimeExports = await declarationsFor("../dist/runtime.d.ts");
+
+assertExact("authoring declaration exports", authorExports, [...authorValueExports, ...authorTypeExports]);
+assertExact("runtime declaration exports", runtimeExports, [...runtimeValueExports, ...runtimeTypeExports]);
+assertExact("duplicate entry-point exports", authorExports.filter((name) => runtimeExports.includes(name)), []);
+
 console.log(
-  `Public interface verified: ${publicValueExports.length} runtime values, ${publicTypeExports.length} types`,
+  `Public interfaces verified: authoring ${authorValueExports.length} values / ${authorTypeExports.length} types, runtime ${runtimeValueExports.length} values / ${runtimeTypeExports.length} types. Zero overlap.`,
 );

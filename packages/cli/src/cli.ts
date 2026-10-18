@@ -18,24 +18,27 @@ import {
   loadSkills,
   type AgentConfiguration,
   type AgentDefinition,
-  type AgentId,
-  type AgentListCursor,
-  type AgentRun,
-  type AgentSummary,
   type ConfigurationSnapshot,
   type ConfigProvider,
+  type ConfigToken,
   type PhaseRegistry,
   type ResourceView,
   type Skill,
-  type RunBoundary,
-  type RunListCursor,
-  type RunSnapshot,
-  type ModelRef,
-} from "../../agent/src";
+} from "@rowan-agent/agent/runtime";
+import type {
+  AgentId,
+  AgentListCursor,
+  AgentRun,
+  AgentSummary,
+  RunBoundary,
+  RunListCursor,
+  RunSnapshot,
+} from "@rowan-agent/agent";
+import type { ModelRef } from "@rowan-agent/models";
 import {
   brandConfigToken,
-} from "../../agent/src/runtime/config-provider";
-import type { ConfigPutResult, ConfigResolution } from "../../agent/src/runtime/contracts";
+} from "@rowan-agent/agent/runtime";
+import type { ConfigPutResult, ConfigResolution } from "@rowan-agent/agent/runtime";
 import {
   pinoDurableRunEventLogger,
   type DurableRunEventLogLevel,
@@ -98,7 +101,7 @@ class CliConfigProvider implements ConfigProvider {
     return { kind: "stored", token };
   }
 
-  async resolve(input: { agentId: AgentId; token: import("../../agent/src").ConfigToken; signal: AbortSignal }): Promise<ConfigResolution> {
+  async resolve(input: { agentId: AgentId; token: ConfigToken; signal: AbortSignal }): Promise<ConfigResolution> {
     if (input.signal.aborted) throw abortError();
     const entry = this.manifests.get(String(input.token));
     const config = this.configs.get(String(input.token));
@@ -503,7 +506,7 @@ function createConfigSnapshot(
               : "default",
     },
     skills: args.skills.map((skill) => ({ idOrPath: skill })),
-    tools: tools.map((tool) => tool.name),
+    tools: tools.map((tool: any) => tool.name),
   };
 }
 
@@ -655,7 +658,7 @@ async function createConfiguredAgent(
     runtime = await AgentRuntime.init({
       store,
       configs,
-      bootstrap: async (registry) => {
+      bootstrap: async (registry: any) => {
         await registry.loadExtensions(extensions);
         await registry.loadAgents({ sourceId: CLI_SOURCE, values: [definition] });
         if (skills.length > 0) await registry.loadSkills({ sourceId: CLI_SOURCE, values: skills });
@@ -665,7 +668,7 @@ async function createConfiguredAgent(
       },
     });
     const existing = args.agentId
-      ? (await runtime.listAgents()).items.find((agent) => agent.id === args.agentId)
+      ? (await runtime.listAgents()).items.find((agent: any) => agent.id === args.agentId)
       : undefined;
     const agentId = args.agentId ?? await runtime.createAgent(config);
     configs.bind(agentId, config);
@@ -892,7 +895,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     waitingForInput = false;
     resetActiveRunReady();
     activeAgentRun = await configured.runtime.start(configured.agentId, prompt, { idempotencyKey: `run:${crypto.randomUUID()}` });
-    activeRun = runPrompt(activeAgentRun, {
+    activeRun = runPrompt(activeAgentRun!, {
       ...options,
       onInputWait: () => { waitingForInput = true; markActiveRunReady(); },
     }).finally(() => {
@@ -911,7 +914,7 @@ async function runInteractiveCommand(args: CliArgs): Promise<void> {
     if (interactionId) {
       await activeAgentRun.respondInteraction({ interactionId, input: prompt });
     }
-    activeRun = runPrompt(activeAgentRun, {
+    activeRun = runPrompt(activeAgentRun!, {
       onInputWait: () => { waitingForInput = true; markActiveRunReady(); },
     }).finally(() => {
       activeRun = undefined;

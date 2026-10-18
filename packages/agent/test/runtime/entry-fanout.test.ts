@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime/index";
 import type { Phase } from "../../src/harness/phases/types";
 import { createPhaseAgent } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";

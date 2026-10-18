@@ -4,7 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModelStream, isValidToolProgress, type ProviderCallContext, type ProviderStreamFn, type StreamFn, type ToolCall, type ToolCallOutcome, type ToolProgress } from "@rowan-agent/models";
 import Type from "typebox";
-import { AgentRuntime, InMemoryStore, SqliteStore, type LiveInteractionEvent, type RunSnapshot, type ToolCallPresentationInput, type ToolCallPresentationOutput } from "../../src";
+import {
+  AgentRuntime,
+  InMemoryStore,
+  SqliteStore,
+} from "@rowan-agent/agent/runtime";
+import type {
+  LiveInteractionEvent,
+  RunSnapshot,
+  ToolCallPresentationInput,
+  ToolCallPresentationOutput,
+} from "@rowan-agent/agent";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";
@@ -498,7 +508,7 @@ test("providers.register with existing id replaces earlier provider configuratio
   let registeredApi: any;
   const extension = loadExtensionFromFactory((api) => {
     registeredApi = api;
-    api.providers.register({
+    api.models.registerProvider({
       id: "dynamic-provider",
       displayName: "Dynamic Provider V1",
       baseUrl: "https://dynamic.example.com",
@@ -529,7 +539,7 @@ test("providers.register with existing id replaces earlier provider configuratio
 
   try {
     // Replace with V2
-    registeredApi.providers.register({
+    registeredApi.models.registerProvider({
       id: "dynamic-provider",
       displayName: "Dynamic Provider V2",
       baseUrl: "https://dynamic.example.com",

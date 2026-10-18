@@ -1,6 +1,7 @@
 {
   "entry": [
-    "./src/index.ts"
+    "./src/index.ts",
+    "./src/runtime.ts"
   ],
   "format": [
     "esm"

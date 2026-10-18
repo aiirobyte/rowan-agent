@@ -13,7 +13,7 @@ import { parsePhaseInput } from "./input";
 import type { PhaseOutput } from "./types";
 import type { PhaseContext } from "./types";
 import type { PhaseExecution } from "../../loop/execution";
-import { createExtensionAPI, type ExtensionAPI } from "../../extensions/api";
+import type { ExtensionFactory } from "../../extensions/api";
 import type { Skill } from "../../protocol";
 import {
   FrontmatterParseError,
@@ -143,8 +143,8 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   const codePath = await discoverPhaseCode(baseDir);
   if (codePath) {
     const code = await loadPhaseCode(codePath);
-    if (code.factory) {
-      phase.factory = code.factory;
+    if (code.extensionFactory) {
+      phase.extensionFactory = code.extensionFactory;
     }
     if (code.run) {
       phase.run = code.run;
@@ -303,13 +303,14 @@ async function discoverPhaseCode(baseDir: string): Promise<string | null> {
 /**
  * Load phase execution code using jiti.
  * Supports two patterns:
- * - factory: export default function(api: ExtensionAPI) { ... }
+ * - default ExtensionFactory: export default function(api: ExtensionAPI) { ... }
  * - run: export async function run(context, execution) { ... }
+ * Not both.
  */
 async function loadPhaseCode(
   codePath: string,
 ): Promise<{
-  factory?: (api: ExtensionAPI) => Promise<void>;
+  extensionFactory?: ExtensionFactory;
   run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 }> {
   const { createJiti } = await import("jiti");
@@ -325,19 +326,21 @@ async function loadPhaseCode(
   const mod = await jiti.import(codePath) as unknown;
   const namespace = mod && typeof mod === "object" ? mod as Record<string, unknown> : {};
 
-  // Pattern 1: export default function(api) { ... }
-  // jiti may expose the default export directly or under namespace.default
   const fn = typeof mod === "function" ? mod : namespace.default;
   const run = namespace.run;
-  if (typeof fn === "function" || typeof run === "function") {
-    return {
-      ...(typeof fn === "function"
-        ? { factory: fn as (api: ExtensionAPI) => Promise<void> }
-        : {}),
-      ...(typeof run === "function"
-        ? { run: run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> }
-        : {}),
-    };
+
+  const hasFactory = typeof fn === "function";
+  const hasRun = typeof run === "function";
+
+  if (hasFactory && hasRun) {
+    throw new Error(`Phase code at "${codePath}" cannot export both run and default.`);
+  }
+
+  if (hasFactory) {
+    return { extensionFactory: fn as ExtensionFactory };
+  }
+  if (hasRun) {
+    return { run: run as (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void> };
   }
 
   throw new Error(`Phase code at "${codePath}" must export a default function or a run() function.`);
