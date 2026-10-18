@@ -225,7 +225,12 @@ export type {
   SettingsOption,
   SettingsSection,
 } from "./harness/phases/types";
-export type { PhaseExecution, PhaseMessageManager } from "./loop/execution";
+export type {
+  InternalModelLoopOptions,
+  ModelInvokeOutput,
+  PhaseExecution,
+  PhaseMessageManager,
+} from "./loop/execution";
 export type {
   RunInteraction,
   RunInteractionDriver,

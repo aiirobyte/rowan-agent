@@ -19,6 +19,12 @@ export type ModelInvokeOutput = {
   usage?: LlmTokenUsage;
 };
 
+export type InternalModelLoopOptions = {
+  prompt: string;
+  tools?: readonly string[];
+  maxToolRounds?: number;
+};
+
 /** Snapshot of phase-level context for restore */
 export type PhaseContextSnapshot = {
   systemPrompt: string;
@@ -34,6 +40,7 @@ export type PhaseExecution = {
   snapshot(): PhaseContextSnapshot;
   restore(snapshot: PhaseContextSnapshot): void;
   invokeModel(context: PhaseContext, options?: { output?: "reply" | "internal" }): Promise<ModelInvokeOutput>;
+  runInternalModelLoop(context: PhaseContext, options: InternalModelLoopOptions): Promise<ModelInvokeOutput>;
   reportStatus(status: PhaseStatus): Promise<void>;
   executeTool(context: AgentContext, toolCall: ToolCall): Promise<ToolResult>;
   executeTools(
