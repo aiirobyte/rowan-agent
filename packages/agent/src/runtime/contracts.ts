@@ -170,6 +170,8 @@ export function providerOptionsFromUserInput(input: UserInput): JsonObject | und
 /** Who is calling which tool, without the ability to ask or suspend. Hosts that
  * describe a call before it runs (for example to build a confirmation) only
  * have this much. */
+/** The Phase whose execution issued a Tool call, with its PHASE.md metadata. */
+export type ToolCallPhase = Readonly<{ name: string; metadata?: Readonly<Record<string, JsonValue>> }>;
 export type ToolCallContext = Readonly<{
   agentId: AgentId;
   runId: RunId;
@@ -182,6 +184,7 @@ export type ToolCallContext = Readonly<{
   providerToolCallId?: string;
   scope?: ScopeRef;
   turn?: JsonObject;
+  phase?: ToolCallPhase;
   reportProgress(progress: ToolProgress): void;
 }>;
 export type ToolInvocationContext = ToolCallContext & Readonly<{

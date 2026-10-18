@@ -163,6 +163,7 @@ input:                       # JSON-safe structural defaults shown in route tool
   task: "The task to perform"
   context: "Additional context"
 isolated: true               # Fresh context when executed in parallel
+owner: docs-team             # Any other key: host metadata, kept on Phase.metadata
 ---
 ```
 
@@ -175,6 +176,7 @@ isolated: true               # Fresh context when executed in parallel
 | `target` | string | No | Forced next phase name. Overrides route tool |
 | `input` | JSON-safe mapping | No | Structural payload shape and defaults; omitted fields use these defaults |
 | `isolated` | boolean | No | Fresh message context in parallel execution |
+| (custom keys) | JSON-safe value | No | Host-defined extra metadata passed to `phase.metadata`; non-JSON-safe values are dropped with a warning |
 
 ### Body Content
 
@@ -523,6 +525,7 @@ interface Phase {
   filePath: string;                    // path to PHASE.md
   baseDir: string;                     // phase directory
   content: string;                     // PHASE.md body
+  metadata?: Readonly<Record<string, JsonValue>>; // extra JSON-safe frontmatter metadata
   factory?: (api: ExtensionAPI) => Promise<void>;
   run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 }

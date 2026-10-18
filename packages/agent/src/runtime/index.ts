@@ -47,6 +47,7 @@ export type {
   RunSnapshot,
   Tool as RuntimeTool,
   ToolCallContext,
+  ToolCallPhase,
   ToolInvocationContext,
   ToolCallPresentationInput,
   ToolCallPresentationOutput,

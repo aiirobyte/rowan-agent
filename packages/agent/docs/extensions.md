@@ -83,7 +83,9 @@ export default extension;
   execution hooks (`before_phase`, `after_phase`, `before_prompt`,
   `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
   `scope` and per-turn input `turn`; `before_tool_call` also carries the invoking
-  Agent's `agentMetadata` beside the Run's `metadata`.
+  Agent's `agentMetadata` beside the Run's `metadata`. Both hooks carry
+  `phase?: ToolCallPhase` (`{ name, metadata? }`): the Phase that issued the
+  call and its extra PHASE.md frontmatter.
 - `context`: Access the working directory, `AbortSignal`, command execution,
   and the current resource summary.
 - `events`: Publish custom events between extensions.

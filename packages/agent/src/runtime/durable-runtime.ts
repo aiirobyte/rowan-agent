@@ -1,3 +1,4 @@
+import type { ToolCallPhase } from "./contracts";
 import { mkdir, chmod, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -1238,7 +1239,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         onContext: assembly.setContext,
         runtime: {
           interact: (request) => this.liveInteract(run.id, request, controller.signal),
-          tools: ({ toolCall, contentBlocks, driver, options, providerInitiated, model: callModel, usage: callUsage }: ToolRunnerInput) => {
+          tools: ({ toolCall, contentBlocks, driver, options, providerInitiated, model: callModel, usage: callUsage, phase: callPhase }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               if (!providerInitiated) {
                 const execution = await this.executeToolBatch({
@@ -1254,6 +1255,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                   options,
                   model: callModel ?? model,
                   usage: callUsage,
+                  phase: callPhase,
                   onRevision: (rev) => { executionRevision = rev; },
                 });
                 executionRevision = execution.revision;
@@ -1279,6 +1281,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                       interactionIds,
                       model: callModel ?? model,
                       usage: callUsage,
+                      phase: callPhase,
                       onRevision: (rev) => { executionRevision = rev; },
                     });
                     executionRevision = execution.revision;
@@ -1366,7 +1369,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             toolQueue = task.then(() => undefined, () => undefined);
             return task;
           },
-          toolsBatch: ({ toolCalls, contentBlocks, driver, options, model: batchModel, usage: batchUsage }: Parameters<ToolBatchRunner>[0]) => {
+          toolsBatch: ({ toolCalls, contentBlocks, driver, options, model: batchModel, usage: batchUsage, phase: batchPhase }: Parameters<ToolBatchRunner>[0]) => {
             const task = toolQueue.then(async () => {
               const execution = await this.executeToolBatch({
                 run,
@@ -1381,6 +1384,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                 options,
                 model: batchModel ?? model,
                 usage: batchUsage,
+                phase: batchPhase,
                 onRevision: (rev) => { executionRevision = rev; },
               });
               executionRevision = execution.revision;
@@ -1557,6 +1561,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     driver?: RunInteractionDriver;
     model?: import("@rowan-agent/models").ModelRef;
     usage?: import("@rowan-agent/models").LlmTokenUsage;
+    phase?: ToolCallPhase;
   }): Promise<{ result: ToolResult; revision: number }> {
     const batch = await this.executeToolBatch({ ...input, toolCalls: [input.toolCall] });
     return { result: batch.results[0]!, revision: batch.revision };
@@ -1577,6 +1582,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     interactionIds?: readonly string[];
     model?: import("@rowan-agent/models").ModelRef;
     usage?: import("@rowan-agent/models").LlmTokenUsage;
+    phase?: ToolCallPhase;
     onRevision?: (revision: number) => void;
   }): Promise<{ results: readonly ToolResult[]; revision: number }> {
     const scope = input.run.scope ?? [];
@@ -1628,6 +1634,7 @@ export class AgentRuntime implements AgentRuntimeContract {
           scope,
           ...(cwd ? { cwd } : {}),
           turn,
+          ...(input.phase === undefined ? {} : { phase: input.phase }),
           interaction: createRunInteractionDriver({
             currentPhase: "default",
             attempt: 0,
@@ -1776,6 +1783,7 @@ export class AgentRuntime implements AgentRuntimeContract {
             afterToolCall: input.toolConfig.afterToolCall,
             currentToolState,
             options: input.options,
+            ...(input.phase === undefined ? {} : { phase: input.phase }),
           });
           results.push(toolResult);
         }
@@ -1901,6 +1909,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         scope,
         ...(cwd ? { cwd } : {}),
         turn,
+        ...(input.phase === undefined ? {} : { phase: input.phase }),
         interaction: interactionDriver,
         reportProgress: () => {},
       } as const;
@@ -2125,6 +2134,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         currentToolState,
         options: input.options,
         providerInitiated: input.providerInitiated,
+        ...(input.phase === undefined ? {} : { phase: input.phase }),
       });
       results.push(toolResult);
     }
@@ -2158,6 +2168,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     currentToolState: ToolCallMergeTarget;
     options?: ToolCallOptions;
     providerInitiated?: boolean;
+    phase?: ToolCallPhase;
   }): Promise<ToolResult> {
     let progressActive = true;
     let progressQueue: Promise<void> = Promise.resolve();
@@ -2208,6 +2219,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       scope: input.scope,
       ...(input.cwd ? { cwd: input.cwd } : {}),
       turn: input.turn,
+      ...(input.phase === undefined ? {} : { phase: input.phase }),
       interaction: interactionDriver,
       reportProgress: (progress: ToolProgress) => {
         const active = this.executions.get(input.runId);

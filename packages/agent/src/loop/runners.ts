@@ -1,3 +1,4 @@
+import type { ToolCallPhase } from "../runtime/contracts";
 import type { ContentBlock, RunInteractionRequest, ToolCallOptions, ToolCallOutcome } from "@rowan-agent/models";
 import type { JsonObject, JsonValue } from "../runtime-events";
 import type {
@@ -1229,6 +1230,7 @@ async function executeToolCall(input: {
   driver?: RunInteractionDriver;
   options?: ToolCallOptions;
   providerInitiated?: boolean;
+  phase?: ToolCallPhase;
 }): Promise<ToolResult> {
   let result: ToolResult;
   if (input.config.runtime?.tools) {
@@ -1239,6 +1241,7 @@ async function executeToolCall(input: {
       driver: input.driver,
       options: input.options,
       ...(input.providerInitiated ? { providerInitiated: true } : {}),
+      ...(input.phase !== undefined ? { phase: input.phase } : {}),
     });
   } else {
     const toolContext = {
@@ -1272,6 +1275,7 @@ async function executeToolCalls(input: {
   driver?: RunInteractionDriver;
   model?: import("@rowan-agent/models").ModelRef;
   usage?: import("@rowan-agent/models").LlmTokenUsage;
+  phase?: ToolCallPhase;
 }): Promise<readonly ToolResult[]> {
   if (input.config.runtime?.toolsBatch) {
     const results = await input.config.runtime.toolsBatch({
@@ -1281,6 +1285,7 @@ async function executeToolCalls(input: {
       driver: input.driver,
       model: input.model,
       usage: input.usage,
+      ...(input.phase !== undefined ? { phase: input.phase } : {}),
     });
     if (results.length !== input.toolCalls.length) throw new Error("Runtime returned an invalid Tool batch result");
     return results.map((result, index) => ({
@@ -1308,6 +1313,10 @@ function createPhaseExecution(
   toolExecutionManager: PhaseToolExecutionManager,
   registry: PhaseRegistry,
 ): PhaseExecution {
+  const phaseInfo: ToolCallPhase = Object.freeze({
+    name: phase.name,
+    ...(phase.metadata !== undefined ? { metadata: phase.metadata } : {}),
+  });
   const interaction = createRunInteractionDriver(state, phase.name, config.signal);
   const executePhaseTool = async (
     phaseContext: AgentContext,
@@ -1332,6 +1341,7 @@ function createPhaseExecution(
         driver: interaction,
         options,
         providerInitiated,
+        phase: phaseInfo,
       });
       await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);
       return result;
@@ -1490,6 +1500,7 @@ function createPhaseExecution(
           driver: interaction,
           model: meta?.model,
           usage: meta?.usage,
+          phase: phaseInfo,
         });
         for (const result of results) {
           await toolExecutionManager.end(result.toolCallId, result.toolName, result, !result.ok);

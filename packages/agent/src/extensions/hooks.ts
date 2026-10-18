@@ -1,3 +1,4 @@
+import type { ToolCallPhase } from "../runtime/contracts";
 import type { Outcome, Tool, ToolResult } from "../types";
 import type { PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { RunInteractionKind, RunInteractionRequest } from "../harness/phases/interactions";
@@ -37,6 +38,7 @@ export interface BeforeToolCallEvent {
   readonly answer?: unknown;
   readonly scope?: ScopeRef;
   readonly turn?: JsonObject;
+  readonly phase?: ToolCallPhase;
 }
 
 export interface AfterToolCallEvent {
@@ -49,6 +51,7 @@ export interface AfterToolCallEvent {
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly scope?: ScopeRef;
   readonly turn?: JsonObject;
+  readonly phase?: ToolCallPhase;
 }
 
 export interface RunStartEvent {

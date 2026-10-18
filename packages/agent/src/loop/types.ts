@@ -1,3 +1,4 @@
+import type { ToolCallPhase } from "../runtime/contracts";
 import type {
   AgentContext,
   AgentMessage,
@@ -155,6 +156,7 @@ export type ToolRunnerInput = {
   providerInitiated?: boolean;
   model?: import("@rowan-agent/models").ModelRef;
   usage?: import("@rowan-agent/models").LlmTokenUsage;
+  phase?: ToolCallPhase;
 };
 
 export type ToolRunner = (input: ToolRunnerInput) => Promise<ToolResult>;
@@ -166,6 +168,7 @@ export type ToolBatchRunner = (input: {
   options?: import("@rowan-agent/models").ToolCallOptions;
   model?: import("@rowan-agent/models").ModelRef;
   usage?: import("@rowan-agent/models").LlmTokenUsage;
+  phase?: ToolCallPhase;
 }) => Promise<readonly ToolResult[]>;
 
 export type AgentRuntimePort = {
