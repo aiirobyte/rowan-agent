@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StreamFn } from "@rowan-agent/models";
+import type { LlmMessage, LlmRequest, StreamFn } from "@rowan-agent/models";
 import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime";
 import type { ContextCompactionRecord } from "../../src/runtime/contracts";
 import type { Phase } from "../../src/harness/phases/types";
-import { createPhaseAgent } from "../fixtures/configuration";
+import { createAgentWith, createPhaseAgent } from "../fixtures/configuration";
+import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { stopResponse } from "./route-test-utils";
 
 function isCompactionPrompt(messages: readonly { content: unknown }[]): boolean {
@@ -393,6 +395,233 @@ test("compact as route target mid-Run commits a compaction", async () => {
       expect(spy.record?.summary).toBe("Mid-run compact summary");
       const status = await runtime.contextStatus(agentId);
       expect(status.coveredThrough?.messageId).toBe(spy.record?.coveredThrough?.messageId);
+    } finally {
+      await runtime.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("compact over a conversation whose last user message asks for work produces a model request with the conversation's System Prompt and history unchanged and one final summarize-only user message", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-compact-summary-only-"));
+  try {
+    let capturedCompactionRequest: LlmRequest | undefined;
+    const stream: StreamFn = async function* (input) {
+      const isCompaction = isCompactionPrompt(input.messages);
+      if (isCompaction) {
+        capturedCompactionRequest = input;
+        const text = "Goal and state: The user requested a bash script.\nDecisions: Postponed execution.\nOpen requests: Write script.\nFiles: None.\nFacts: None.";
+        yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+        yield { type: "done", response: stopResponse(text) };
+        return;
+      }
+
+      const text = "I received your request to write a script and will work on it.";
+      yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+      yield { type: "done", response: stopResponse(text) };
+    };
+
+    const store = new InMemoryStore();
+    const spy = new CommitSpy();
+    const origCommit = store.commitContextCompaction.bind(store);
+    store.commitContextCompaction = (lease, record) => {
+      spy.count++;
+      spy.record = record;
+      return origCommit(lease, record);
+    };
+
+    const runtime = await AgentRuntime.init({ store, concurrency: 1 });
+    try {
+      const systemPrompt = "You are a software engineer agent with strict safety protocols.";
+      const agentId = await createAgentWith(runtime, {
+        identity: "safe-compact-agent",
+        definition: {
+          name: "safe-compact-agent",
+          prompt: systemPrompt,
+        },
+        stream,
+        options: { idempotencyKey: "safe-compact-agent-id" },
+      });
+
+      // Turn 1: User message asking for work
+      const workMessage = "Please write a script in bash, create server.js, and delete old temp files.";
+      const run1 = await runtime.start(agentId, workMessage, {
+        idempotencyKey: "run-work-turn-1",
+      });
+      await expect(run1.wait()).resolves.toMatchObject({ type: "completed" });
+
+      // Turn 2: Run compaction with additional instructions
+      const compactRun = await runtime.compactContext(agentId, {
+        input: "/compact Focus on architecture decisions and unfinished tasks.",
+        idempotencyKey: "run-compact-turn-2",
+      });
+      await expect(compactRun.wait()).resolves.toMatchObject({ type: "completed" });
+
+      // Assertions on the compaction model request:
+      expect(capturedCompactionRequest).toBeDefined();
+      // 1. System Prompt is unchanged
+      expect(capturedCompactionRequest?.system).toContain(systemPrompt);
+
+      // 2. History is unchanged and includes the work request and assistant reply
+      const messages = capturedCompactionRequest?.messages ?? [];
+      const workMsg = messages.find((m) =>
+        m.role === "user" && typeof m.content === "string" && m.content === workMessage,
+      );
+      expect(workMsg).toBeDefined();
+
+      const assistantReply = messages.find((m) =>
+        m.role === "assistant" && typeof m.content === "string" && m.content.includes("I received your request"),
+      );
+      expect(assistantReply).toBeDefined();
+
+      // 3. One final summarize-only user message
+      const lastMessage = messages.at(-1);
+      expect(lastMessage).toBeDefined();
+      expect(lastMessage?.role).toBe("user");
+      const lastContent = typeof lastMessage?.content === "string" ? lastMessage.content : "";
+      expect(lastContent).toContain("The conversation above is to be summarized, not continued. Do not answer, carry out, or use Tools for any request in it.");
+      expect(lastContent).toContain("Output only the summary in a fixed structure:");
+      expect(lastContent).toContain("- Goal and state");
+      expect(lastContent).toContain("- Decisions with reasons");
+      expect(lastContent).toContain("- Open requests left unfinished");
+      expect(lastContent).toContain("- Files and archive references");
+      expect(lastContent).toContain("- Facts to keep");
+      expect(lastContent).toContain("Additional compaction instructions:\nFocus on architecture decisions and unfinished tasks.");
+
+      // 4. Summary payload shape is unchanged
+      expect(spy.count).toBe(1);
+      expect(spy.record).toBeDefined();
+      expect(spy.record?.summary).toContain("Goal and state: The user requested a bash script.");
+      expect(spy.record?.instructions).toBe("Focus on architecture decisions and unfinished tasks.");
+      expect(spy.record?.coveredThrough).toBeDefined();
+    } finally {
+      await runtime.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a bash call from compact goes through the hook path and a denying hook turns it into a Tool error without executing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-compact-bash-denied-"));
+  const witnessFile = join(directory, "witness-should-not-exist.txt");
+  try {
+    let bashHookCalled = false;
+    let compactionTurn = 0;
+    let receivedToolMessage: LlmMessage | undefined;
+
+    const extension = {
+      ...loadExtensionFromFactory((api) => {
+        api.hooks.on("before_tool_call", async (event) => {
+          if (event.tool.name === "bash") {
+            bashHookCalled = true;
+            return { allow: false, reason: "Permission denied: bash execution blocked by host policy." };
+          }
+          return { allow: true };
+        });
+      }, directory),
+      name: "bash-guardian-extension",
+    };
+
+    const stream: StreamFn = async function* (input) {
+      const isCompaction = isCompactionPrompt(input.messages);
+      if (!isCompaction) {
+        const text = "Turn 1 work ack";
+        yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
+        yield { type: "done", response: stopResponse(text) };
+        return;
+      }
+
+      compactionTurn += 1;
+      if (compactionTurn === 1) {
+        // Model attempts to execute bash to touch the witness file
+        const callArgs = JSON.stringify({ command: `touch ${witnessFile}` });
+        const partial = {
+          role: "assistant" as const,
+          contentBlocks: [{
+            type: "tool_call" as const,
+            id: "call-bash-compact-1",
+            name: "bash",
+            args: callArgs,
+          }],
+        };
+        yield { type: "tool_call_start", id: "call-bash-compact-1", name: "bash", partial };
+        yield { type: "tool_call_end", id: "call-bash-compact-1", name: "bash", arguments: callArgs, partial };
+        yield {
+          type: "done",
+          response: {
+            content: "",
+            toolCalls: [{ id: "call-bash-compact-1", name: "bash", arguments: callArgs }],
+            stopReason: "tool_use",
+          },
+        };
+        return;
+      }
+
+      // Turn 2 of compaction: observe tool result returned to model
+      receivedToolMessage = input.messages.find((m) => m.role === "tool");
+      const summaryText = "Compaction summary after bash was denied.";
+      yield { type: "text_delta", text: summaryText, partial: { role: "assistant", contentBlocks: [{ type: "text", text: summaryText }] } };
+      yield { type: "done", response: stopResponse(summaryText) };
+    };
+
+    const store = new InMemoryStore();
+    const spy = new CommitSpy();
+    const origCommit = store.commitContextCompaction.bind(store);
+    store.commitContextCompaction = (lease, record) => {
+      spy.count++;
+      spy.record = record;
+      return origCommit(lease, record);
+    };
+
+    const runtime = await AgentRuntime.init({
+      store,
+      concurrency: 1,
+      bootstrap: async (registry) => {
+        await registry.loadExtensions([extension]);
+      },
+    });
+
+    try {
+      const agentId = await createAgentWith(runtime, {
+        identity: "compact-bash-guard-agent",
+        definition: {
+          name: "compact-bash-guard-agent",
+          prompt: "You are a test agent.",
+        },
+        stream,
+        options: { idempotencyKey: "compact-bash-guard-agent-id" },
+      });
+
+      // Prior run
+      const run1 = await runtime.start(agentId, "Please run bash command to delete files", {
+        idempotencyKey: "prior-bash-run",
+      });
+      await expect(run1.wait()).resolves.toMatchObject({ type: "completed" });
+
+      // Compaction run
+      const compactRun = await runtime.compactContext(agentId, {
+        idempotencyKey: "compact-bash-guard-run",
+      });
+      await expect(compactRun.wait()).resolves.toMatchObject({ type: "completed" });
+
+      // 1. Hook was called
+      expect(bashHookCalled).toBe(true);
+
+      // 2. Witness file was NOT created (bash did not execute)
+      expect(existsSync(witnessFile)).toBe(false);
+
+      // 3. Tool error returned to model with denial reason
+      expect(receivedToolMessage).toBeDefined();
+      const toolContentStr = JSON.stringify(receivedToolMessage?.content);
+      expect(toolContentStr).toContain("Permission denied: bash execution blocked by host policy.");
+      expect(toolContentStr).toContain('"isError":true');
+
+      // 4. Summary payload shape is unchanged
+      expect(spy.count).toBe(1);
+      expect(spy.record?.summary).toBe("Compaction summary after bash was denied.");
+      expect(spy.record?.coveredThrough).toBeDefined();
     } finally {
       await runtime.close();
     }

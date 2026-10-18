@@ -184,14 +184,14 @@ test("AgentRuntime preserves manual Control Run input while keeping system compa
       role: "user",
       content: "/compact Keep the architecture decisions.",
     });
-    expect(requests[1]).toContain("Additional compaction instructions:\nKeep the architecture decisions.");
+    expect(requests[1].at(-1)).toContain("Additional compaction instructions:\nKeep the architecture decisions.");
     expect((await runtime.contextStatus(agentId)).coveredThrough?.messageId).toBe(after.at(-1)?.id);
     const compactSnapshot = await compact.snapshot();
     expect("output" in compactSnapshot ? compactSnapshot.output : undefined).toBeUndefined();
 
     const systemCompact = await runtime.compactContext(agentId);
     await expect(systemCompact.wait()).resolves.toMatchObject({ type: "completed" });
-    expect(requests[2]).not.toContain("Additional compaction instructions:");
+    expect(requests[2].at(-1)).not.toContain("Additional compaction instructions:");
     await expect(runtime.history(agentId)).resolves.toHaveLength(after.length);
   } finally {
     await runtime.close();
