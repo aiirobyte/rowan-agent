@@ -60,6 +60,7 @@ export function assembleRegisteredExtensions(
         answer: input.answer,
         scope: input.context.scope,
         turn: input.context.turn,
+        ...(input.context.phase === undefined ? {} : { phase: input.context.phase }),
       });
       if (decision.interaction !== undefined) {
         return { interaction: decision.interaction };
@@ -78,6 +79,7 @@ export function assembleRegisteredExtensions(
           metadata: input.context.runMetadata,
           scope: input.context.scope,
           turn: input.context.turn,
+          ...(input.context.phase === undefined ? {} : { phase: input.context.phase }),
         },
       );
       return fromLoopResult(result);

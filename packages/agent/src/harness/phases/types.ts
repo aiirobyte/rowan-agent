@@ -218,6 +218,7 @@ export interface PhaseConfig {
   input?: PhaseInput;
   disableAutoInvocation?: boolean;
   disableImplicitInvocation?: boolean;
+  metadata?: Readonly<Record<string, JsonValue>>;
 }
 
 /**
@@ -254,6 +255,7 @@ export interface Phase {
   disableAutoInvocation?: boolean;
   /** Do not expose this Phase to direct user invocation. */
   disableImplicitInvocation?: boolean;
+  metadata?: Readonly<Record<string, JsonValue>>;
   /** ExtensionAPI factory function used for registration or programmatic execution. */
   factory?: (api: ExtensionAPI) => Promise<void>;
   /** Direct run function */

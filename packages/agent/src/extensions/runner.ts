@@ -1,3 +1,4 @@
+import type { ToolCallPhase } from "../runtime/contracts";
 /**
  * Extension runner — manages extension loading and hook execution.
  *
@@ -722,6 +723,7 @@ export class ExtensionRunner {
       answer?: unknown;
       scope?: ScopeRef;
       turn?: JsonObject;
+      phase?: ToolCallPhase;
     },
   ): Promise<BeforeToolCallResult> {
     const scope = context?.scope ?? [];
@@ -738,6 +740,7 @@ export class ExtensionRunner {
       ...(context?.answer !== undefined ? { answer: context.answer } : {}),
       scope,
       turn,
+      ...(context?.phase !== undefined ? { phase: context.phase } : {}),
     });
     return result ?? { allow: true };
   }
@@ -752,6 +755,7 @@ export class ExtensionRunner {
       metadata?: Readonly<Record<string, unknown>>;
       scope?: ScopeRef;
       turn?: JsonObject;
+      phase?: ToolCallPhase;
     },
   ): Promise<ToolResult> {
     const scope = context?.scope ?? [];
@@ -766,6 +770,7 @@ export class ExtensionRunner {
       ...(context?.metadata !== undefined ? { metadata: context.metadata } : {}),
       scope,
       turn,
+      ...(context?.phase !== undefined ? { phase: context.phase } : {}),
     });
     return hookResult?.result ?? result;
   }

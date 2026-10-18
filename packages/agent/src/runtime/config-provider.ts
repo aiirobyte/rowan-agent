@@ -166,6 +166,7 @@ function snapshotPhase(phase: Phase): Phase {
     skills: Object.freeze((phase.skills ?? []).map((skill) => Object.freeze({ ...skill }))),
     ...(phase.input ? { input: Object.freeze({ ...phase.input }) as unknown as Phase["input"] } : {}),
     ...(phase.model ? { model: Object.freeze({ ...phase.model }) as unknown as Phase["model"] } : {}),
+    ...(phase.metadata ? { metadata: Object.freeze({ ...phase.metadata }) as unknown as Phase["metadata"] } : {}),
   }) as unknown as Phase;
 }
 

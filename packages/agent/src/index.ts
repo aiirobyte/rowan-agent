@@ -118,6 +118,7 @@ export type {
   ToolCallState,
   ToolExecutionResult,
   ToolCallContext,
+  ToolCallPhase,
   ToolInvocationContext,
   ToolCallPresentationInput,
   ToolCallPresentationOutput,
