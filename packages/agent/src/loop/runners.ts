@@ -15,6 +15,7 @@ import { DEFAULT_MAX_ATTEMPTS, validateMaxAttempts } from "./types";
 
 // Execution types (loop-level)
 import type {
+  InternalModelLoopOptions,
   PhaseMessageManager,
   PhaseToolExecutionManager,
   ModelInvokeOutput,
@@ -43,7 +44,7 @@ import { createOutcome } from "./outcomes";
 import { snapshotMessages } from "./state";
 import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
 import type { LlmContentPart } from "@rowan-agent/models";
-import { STOP_PHASE_ID } from "../harness/phases/core-phases";
+import { runInternalModelLoop, STOP_PHASE_ID } from "../harness/phases/core-phases";
 
 // ============================================================================
 // Phase State Utilities
@@ -1337,7 +1338,7 @@ function createPhaseExecution(
       return result;
     });
   };
-  return {
+  const execution: PhaseExecution = {
     interaction,
     messages: messageManager,
     snapshot(): PhaseContextSnapshot {
@@ -1470,6 +1471,13 @@ function createPhaseExecution(
       return result;
     },
 
+    async runInternalModelLoop(
+      phaseContext: PhaseContext,
+      options: InternalModelLoopOptions,
+    ): Promise<ModelInvokeOutput> {
+      return runInternalModelLoop(phaseContext, execution, phase.name, options);
+    },
+
     async reportStatus(status: PhaseStatus) {
       await config.onPhaseStatus?.(phase.name, status);
     },
@@ -1510,6 +1518,7 @@ function createPhaseExecution(
       });
     },
   };
+  return execution;
 }
 
 // ============================================================================

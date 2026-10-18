@@ -1,4 +1,7 @@
 import type { Phase, PhaseContext } from "./types";
+import type { InternalModelLoopOptions, ModelInvokeOutput, PhaseExecution } from "../../loop/execution";
+import { PhaseRouteTool } from "../tools/route-tool";
+import type { ToolCall, ToolResult } from "../../types";
 import { contentBlocksToMessageContent, createMessage } from "../../types";
 
 export const DEFAULT_PHASE_ID = "default";
@@ -43,6 +46,101 @@ export function createStopPhase(): Phase {
   };
 }
 
+export async function runInternalModelLoop(
+  context: PhaseContext,
+  execution: PhaseExecution,
+  phase: string,
+  options: InternalModelLoopOptions,
+): Promise<ModelInvokeOutput> {
+  const working: PhaseContext = { ...context, messages: [...context.messages] };
+  working.messages.push(createMessage("user", options.prompt, {
+    kind: "phase_input",
+    phase,
+  }));
+  let result = await execution.invokeModel(working, { output: "internal" });
+  const maxRounds = options.maxToolRounds ?? 8;
+
+  const isAllowedTool = (name: string): boolean => {
+    if (name === PhaseRouteTool) return false;
+    if (options.tools) {
+      return options.tools.includes(name);
+    }
+    return context.tools.some((tool) => tool.name === name);
+  };
+
+  for (let attempt = 0; attempt < maxRounds && result.toolCalls.length > 0; attempt += 1) {
+    // A round with no allowed call ends the loop, as compaction always did.
+    if (!result.toolCalls.some((call) => isAllowedTool(call.name))) break;
+    const normalizedCalls = result.toolCalls.map((call) => ({
+      ...call,
+      args: typeof call.args === "string"
+        ? (() => {
+            try { return JSON.parse(call.args); } catch { return call.args; }
+          })()
+        : call.args,
+    }));
+    const toolUseParts = normalizedCalls.map((call) => ({
+      type: "tool_use" as const,
+      id: call.id,
+      name: call.name,
+      input: call.args,
+    }));
+    const assistantContent = result.contentBlocks.length > 0
+      ? contentBlocksToMessageContent(result.contentBlocks)
+      : (result.text
+          ? [{ type: "text" as const, text: result.text }, ...toolUseParts]
+          : toolUseParts);
+    working.messages.push(createMessage("assistant", assistantContent, {
+      kind: "phase_tool",
+      phase,
+    }));
+
+    const allowedCalls = normalizedCalls.filter((call) => isAllowedTool(call.name));
+    const executedResults = allowedCalls.length > 0
+      ? await execution.executeTools(
+          working,
+          allowedCalls,
+          result.contentBlocks,
+          result.model ? { model: result.model, usage: result.usage } : undefined,
+        )
+      : [];
+    const executedByCallId = new Map(executedResults.map((r) => [r.toolCallId, r]));
+
+    const createErrorResult = (call: ToolCall): ToolResult => {
+      const message = `Tool ${call.name} is not available in Phase ${phase}`;
+      return {
+        toolCallId: call.id,
+        toolName: call.name,
+        ok: false,
+        error: message,
+        content: message,
+      };
+    };
+
+    const toolResults = normalizedCalls.map((call) => {
+      if (isAllowedTool(call.name)) {
+        const executed = executedByCallId.get(call.id);
+        if (executed) return executed;
+      }
+      return createErrorResult(call);
+    });
+
+    for (const toolResult of toolResults) {
+      working.messages.push(createMessage("tool", [{
+        type: "tool_result",
+        toolUseId: toolResult.toolCallId,
+        content: JSON.stringify(toolResult),
+        isError: !toolResult.ok,
+      }], {
+        kind: "phase_tool",
+        phase,
+      }));
+    }
+    result = await execution.invokeModel(working, { output: "internal" });
+  }
+  return result;
+}
+
 export function createCompactPhase(): Phase {
   return {
     name: COMPACT_PHASE_ID,
@@ -60,55 +158,11 @@ export function createCompactPhase(): Phase {
         kind: "compacting",
         message: "Compacting conversation context.",
       });
-      // Compaction is non-conversational, but the summarizer still needs to
-      // recover details from spilled Tool Results when a bounded preview is
-      // insufficient. Only read/bash are exposed and their calls stay
-      // ephemeral: they are not appended as Conversation Messages.
-      const tools = context.tools.filter((tool) => tool.name === "read" || tool.name === "bash");
-      const working = { ...context, tools, skills: [...context.skills], messages: [...context.messages] };
       const instructions = compactInstructions(context);
-      working.messages.push(createMessage("user", buildCompactionPrompt(instructions), {
-        kind: "phase_input",
-        phase: COMPACT_PHASE_ID,
-      }));
-      let result = await execution.invokeModel(working, { output: "internal" });
-      for (let attempt = 0; attempt < 8 && result.toolCalls.length > 0; attempt += 1) {
-        const calls = result.toolCalls.filter((call) => tools.some((tool) => tool.name === call.name));
-        if (calls.length === 0) break;
-        const normalizedCalls = calls.map((call) => ({
-          ...call,
-          args: typeof call.args === "string"
-            ? (() => {
-                try { return JSON.parse(call.args); } catch { return call.args; }
-              })()
-            : call.args,
-        }));
-        const assistantContent = result.contentBlocks.length > 0
-          ? contentBlocksToMessageContent(result.contentBlocks)
-          : normalizedCalls.map((call) => ({ type: "tool_use" as const, id: call.id, name: call.name, input: call.args }));
-        working.messages.push(createMessage("assistant", assistantContent, {
-          kind: "phase_tool",
-          phase: COMPACT_PHASE_ID,
-        }));
-        const toolResults = await execution.executeTools(
-          working,
-          normalizedCalls,
-          result.contentBlocks,
-          result.model ? { model: result.model, usage: result.usage } : undefined,
-        );
-        for (const toolResult of toolResults) {
-          working.messages.push(createMessage("tool", [{
-            type: "tool_result",
-            toolUseId: toolResult.toolCallId,
-            content: JSON.stringify(toolResult),
-            isError: !toolResult.ok,
-          }], {
-            kind: "phase_tool",
-            phase: COMPACT_PHASE_ID,
-          }));
-        }
-        result = await execution.invokeModel(working, { output: "internal" });
-      }
+      const result = await execution.runInternalModelLoop(context, {
+        prompt: buildCompactionPrompt(instructions),
+        tools: ["read", "bash"],
+      });
       return {
         route: "stop",
         phase: COMPACT_PHASE_ID,
