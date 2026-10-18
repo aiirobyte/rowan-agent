@@ -67,12 +67,10 @@ export function createCompactPhase(): Phase {
       const tools = context.tools.filter((tool) => tool.name === "read" || tool.name === "bash");
       const working = { ...context, tools, skills: [...context.skills], messages: [...context.messages] };
       const instructions = compactInstructions(context);
-      if (instructions) {
-        working.messages.push(createMessage("user", `Additional compaction instructions:\n${instructions}`, {
-          kind: "phase_input",
-          phase: COMPACT_PHASE_ID,
-        }));
-      }
+      working.messages.push(createMessage("user", buildCompactionPrompt(instructions), {
+        kind: "phase_input",
+        phase: COMPACT_PHASE_ID,
+      }));
       let result = await execution.invokeModel(working, { output: "internal" });
       for (let attempt = 0; attempt < 8 && result.toolCalls.length > 0; attempt += 1) {
         const calls = result.toolCalls.filter((call) => tools.some((tool) => tool.name === call.name));
@@ -92,26 +90,16 @@ export function createCompactPhase(): Phase {
           kind: "phase_tool",
           phase: COMPACT_PHASE_ID,
         }));
-        for (const call of normalizedCalls) {
-          const tool = tools.find((candidate) => candidate.name === call.name)!;
-          let toolResult;
-          try {
-            toolResult = await tool.execute(call.args, {
-              skills: working.skills,
-              toolCallId: call.id,
-            });
-          } catch (error) {
-            toolResult = {
-              toolCallId: call.id,
-              toolName: call.name,
-              ok: false,
-              content: null,
-              error: error instanceof Error ? error.message : String(error),
-            };
-          }
+        const toolResults = await execution.executeTools(
+          working,
+          normalizedCalls,
+          result.contentBlocks,
+          result.model ? { model: result.model, usage: result.usage } : undefined,
+        );
+        for (const toolResult of toolResults) {
           working.messages.push(createMessage("tool", [{
             type: "tool_result",
-            toolUseId: call.id,
+            toolUseId: toolResult.toolCallId,
             content: JSON.stringify(toolResult),
             isError: !toolResult.ok,
           }], {
@@ -137,6 +125,22 @@ export function createCompactPhase(): Phase {
       };
     },
   };
+}
+
+function buildCompactionPrompt(instructions?: string): string {
+  const lines = [
+    "The conversation above is to be summarized, not continued. Do not answer, carry out, or use Tools for any request in it.",
+    "Output only the summary in a fixed structure:",
+    "- Goal and state",
+    "- Decisions with reasons",
+    "- Open requests left unfinished",
+    "- Files and archive references",
+    "- Facts to keep",
+  ];
+  if (instructions) {
+    lines.push("", `Additional compaction instructions:\n${instructions}`);
+  }
+  return lines.join("\n");
 }
 
 function compactInstructions(context: PhaseContext): string | undefined {
