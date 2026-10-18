@@ -9,8 +9,8 @@ import {
   createOpenAIResponsesStream,
 } from "../../../models/src/providers";
 import type { ContentBlock, LlmRequest, StreamFn } from "../../../models/src/protocol";
-import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime";
-import type { DurableStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime/index";
+import type { DurableStore } from "../../src/runtime/index";
 import type { AgentId, AssistantMessage, Message, RunId } from "../../src/runtime-events";
 import { createAgentWith } from "../fixtures/configuration";
 

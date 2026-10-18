@@ -76,7 +76,7 @@ export async function run(context, execution) {
 }
 ```
 
-**`index.ts` — Factory pattern** (extension-style):
+**`index.ts` — Extension Phase** (full extension lifecycle + programmatic execution):
 
 ```typescript
 import type { ExtensionAPI } from "@rowan-agent/agent";
@@ -94,9 +94,13 @@ export default function(api: ExtensionAPI) {
     },
   });
 
-  // Set output for routing
-  api.phases.setMessage("Phase complete");
-  api.phases.setNextPhase("stop");
+  // Set phase execution handler
+  api.phases.execute(async (context, execution) => {
+    return {
+      message: "Phase complete",
+      route: "stop",
+    };
+  });
 }
 ```
 
@@ -250,15 +254,15 @@ type PhaseRun = (
 ) => Promise<PhaseOutput | void>;
 ```
 
-### 3. Factory Pattern
+### 3. Extension Phase
 
-Export a default function that receives `ExtensionAPI`. Full access to hooks, tools, and phase I/O. Use this when the phase needs to register tools or hooks programmatically.
+Export a default function (`ExtensionFactory`). Activated once per Scope in which the Phase is available with full access to hooks, tools, state, models, and agents. Inside it, `api.phases.execute(handler)` sets the execution handler.
 
 ```typescript
 // .rowan/phases/coder/index.ts
 import type { ExtensionAPI } from "@rowan-agent/agent";
 
-export default async function(api: ExtensionAPI) {
+export default function(api: ExtensionAPI) {
   // Register a phase-specific tool
   api.tools.register({
     name: "code_edit",
@@ -276,7 +280,7 @@ export default async function(api: ExtensionAPI) {
     },
   });
 
-  // Hook into tool calls
+  // Hook into tool calls across runs
   api.hooks.on("before_tool_call", (event) => {
     if (event.tool.name === "bash") {
       // Log or block commands
@@ -284,10 +288,14 @@ export default async function(api: ExtensionAPI) {
     return { allow: true };
   });
 
-  // Set phase output after execution
-  api.phases.setMessage("Code changes applied");
-  api.phases.setNextPhase("verify");
-  api.phases.setPayload({ filesChanged: 3 });
+  // Set phase execution handler
+  api.phases.execute(async (context, execution) => {
+    return {
+      message: "Code changes applied",
+      route: "verify",
+      payload: { filesChanged: 3 },
+    };
+  });
 }
 ```
 
@@ -526,7 +534,7 @@ interface Phase {
   baseDir: string;                     // phase directory
   content: string;                     // PHASE.md body
   metadata?: Readonly<Record<string, JsonValue>>; // extra JSON-safe frontmatter metadata
-  factory?: (api: ExtensionAPI) => Promise<void>;
+  extensionFactory?: ExtensionFactory;
   run?: (context: PhaseContext, execution: PhaseExecution) => Promise<PhaseOutput | void>;
 }
 ```
@@ -601,6 +609,8 @@ loadPhases(targetPath: string): Promise<PhaseRegistry>
 Register the loaded phases under a source and select them on the Definition:
 
 ```typescript
+import { loadPhases, AgentRuntime } from "@rowan-agent/agent/runtime";
+
 const phases = await loadPhases("./.rowan/phases");
 await runtime.loadAgents({
   sourceId: "workspace",

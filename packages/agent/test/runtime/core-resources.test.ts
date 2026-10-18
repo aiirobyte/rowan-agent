@@ -10,9 +10,9 @@ import {
   loadPhase,
   loadPhases,
   loadSkill,
-} from "../../src";
+} from "@rowan-agent/agent/runtime";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "@rowan-agent/agent/runtime";
 import type { AgentDefinition } from "../../src/harness/definitions";
 import { configuration, createAgentWith, seedResources } from "../fixtures/configuration";
 import type { Phase } from "../../src/harness/phases/types";

@@ -13,7 +13,8 @@ import {
 import {
   type WorkspacePaths,
 } from "../src/workspace";
-import { getModel, clearModels } from "@rowan-agent/models";
+import { getModel } from "@rowan-agent/models";
+import { clearModels } from "../../models/src/models";
 
 function ws(dir: string): WorkspacePaths {
   return { cwd: dir, rowanDir: join(dir, ".rowan") };

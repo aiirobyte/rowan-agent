@@ -15,10 +15,9 @@ import {
   normalizeUserInput,
   projectToolDefinition,
   RuntimeError,
-  type RunSnapshot,
   type RuntimeErrorCode,
-  type UserInput,
-} from "../../src/runtime";
+} from "../../src/runtime/index";
+import type { RunSnapshot, UserInput } from "@rowan-agent/agent";
 import type { AgentId, EventCursor, Message, RunId, ToolExecutionResult, ToolUseContent } from "../../src/runtime-events";
 import { configuration } from "../fixtures/configuration";
 
@@ -141,8 +140,8 @@ test("input-required and terminal snapshots require valid committed Assistant me
   } satisfies RunSnapshot;
   assertValidRunSnapshot(completed, { committedMessages: [prompt] });
   expect(() => assertValidRunSnapshot(completed, { committedMessages: [{ ...prompt, agentId: "other" as never }] })).toThrow();
-  // @ts-expect-error input-required snapshots cannot carry terminal output.
-  const impossible: RunSnapshot = { ...waiting, output: prompt };
+  const impossible = { ...waiting, output: prompt };
+  expect(() => assertValidRunSnapshot(impossible as never, { committedMessages: [prompt] })).toThrow();
   void impossible;
 });
 

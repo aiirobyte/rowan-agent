@@ -7,7 +7,7 @@ import {
   brandConfigToken,
   pageAgents,
   pageRuns,
-} from "../../src/runtime";
+} from "../../src/runtime/index";
 import type { AgentRecord, RunRecord } from "../../src/runtime/contracts";
 import type { AgentConfiguration } from "../../src/runtime/configuration-snapshot";
 import { EMPTY_VIEW, configuration } from "../fixtures/configuration";

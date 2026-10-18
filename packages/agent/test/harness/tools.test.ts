@@ -3,14 +3,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCoreTools, type ToolInvocationContext } from "../../src";
+import { createCoreTools } from "../../src/harness/tools";
+import type { ToolInvocationContext } from "../../src";
 
 const invocationContext = {
-  agentId: "agent-1",
-  runId: "run-1",
+  skills: [],
   toolCallId: "tool-1",
-  reportProgress: () => {},
-} as unknown as ToolInvocationContext;
+} as unknown as import("../../src/types").ToolContext;
 
 test("core tools use the process permissions outside the working root", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "rowan-core-tools-"));

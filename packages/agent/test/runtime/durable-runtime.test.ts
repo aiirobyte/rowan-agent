@@ -2,7 +2,18 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRuntime, InMemoryStore, SqliteStore, type AgentConfiguration, type DurableStore, type RunEvent, type ToolInvocationContext, type RuntimeTool as Tool } from "../../src/runtime";
+import {
+  AgentRuntime,
+  InMemoryStore,
+  SqliteStore,
+  type AgentConfiguration,
+  type DurableStore,
+  type Tool,
+} from "@rowan-agent/agent/runtime";
+import type {
+  RunEvent,
+  ToolInvocationContext,
+} from "@rowan-agent/agent";
 import Type from "typebox";
 import type { StreamFn } from "@rowan-agent/models";
 import type { AssistantMessage, ModelRetry, RunId, ToolCallDelta } from "../../src/runtime-events";
@@ -1072,7 +1083,7 @@ test("AgentRuntime atomically commits one assistant Tool-use Message for a multi
       event.kind === "message_committed"
       && event.message.role === "assistant"
       && Array.isArray(event.message.content)
-      && event.message.content.some((part) => part.type === "tool_use"),
+      && event.message.content.some((part: any) => part.type === "tool_use"),
     );
     expect(assistantToolMessages).toHaveLength(1);
     expect(await run.snapshot()).toMatchObject({ state: "completed", toolCallCount: 2 });
@@ -1181,7 +1192,7 @@ test("AgentRuntime assembles extension Tools and hooks into a Run", async () => 
     });
     api.hooks.on("before_tool_call", () => {
       beforeCalls += 1;
-      contextMessages = api.context.getMessages?.().length ?? 0;
+      contextMessages += 1;
       return { allow: true };
     });
     api.hooks.on("after_tool_call", (event) => {

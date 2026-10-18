@@ -3,7 +3,7 @@ import type { AgentDefinition } from "../../src/harness/definitions";
 import type { Phase } from "../../src/harness/phases/types";
 import type { ResourceView } from "../../src/runtime/resource-registry";
 import type { AgentConfiguration } from "../../src/runtime/configuration-snapshot";
-import type { AgentRuntime, LoadInput } from "../../src/runtime";
+import type { AgentRuntime, LoadInput } from "../../src/runtime/index";
 
 /** A view that reads no source. */
 export const EMPTY_VIEW: ResourceView = { agents: [], tools: [], skills: [], phases: [] };

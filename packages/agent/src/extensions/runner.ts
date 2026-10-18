@@ -51,6 +51,8 @@ import type {
 } from "./hooks";
 import {
   type ExtensionAPI,
+  type ExtensionAgentsRuntimeDelegate,
+  type PhaseRunHandler,
   createExtensionAPI,
 } from "./api";
 import type { ExtensionContext } from "./context";
@@ -59,6 +61,7 @@ import { createExtensionRuntime, createSourceInfo } from "./types";
 import { createEventBus, type EventBus } from "./context";
 import { loadPhase } from "../harness/phases/loader";
 import { loadSkill } from "../harness/skills";
+import type { PhaseExecution } from "../loop/execution";
 
 /** The Resource Source an Extension registration lands in: Global (`[]`) is `rowan.extensions`, any other Scope `rowan.extensions:<scopeToKey(scope)>`. */
 export function extensionSourceId(scope?: ScopeRef): string {
@@ -231,6 +234,8 @@ export class ExtensionRunner {
 
   // Resource change listeners (for Registry live sync)
   private readonly resourceChangeListeners = new Set<(kind: "tool" | "phase" | "skill") => Promise<void> | void>();
+  private runtimeAgents?: ExtensionAgentsRuntimeDelegate;
+  private readonly activeExtensionPhases = new Map<string, { extension: Extension; phase: Phase; scope?: ScopeRef; sourceId?: string; handler?: PhaseRunHandler }>();
 
   /** Current agent context — set by the agent before each phase */
   currentContext?: AgentContext;
@@ -250,6 +255,10 @@ export class ExtensionRunner {
         this.hostUnsubscribers.push(unsub);
       }
     }
+  }
+
+  setRuntime(runtime: ExtensionAgentsRuntimeDelegate): void {
+    this.runtimeAgents = runtime;
   }
 
   /** Whether the agent is currently idle (not streaming). */
@@ -385,6 +394,69 @@ export class ExtensionRunner {
     }
   }
 
+  async activatePhase(phase: Phase, scope?: ScopeRef, sourceId?: string): Promise<void> {
+    if (!phase.extensionFactory) return;
+    const phaseKey = `${scopeToKey(scope ?? [])}::${phase.name}`;
+    if (this.activeExtensionPhases.has(phaseKey)) return;
+
+    const extension: Extension = {
+      id: phase.name,
+      path: phase.filePath || phase.name,
+      tools: new Map(),
+      phases: new Set(),
+      skills: new Set(),
+      capabilities: new Map(),
+      cleanup: [],
+      runtime: createExtensionRuntime(),
+      hostApi: this.host.extendApi?.(phase.name),
+    };
+    let executeHandler: PhaseRunHandler | undefined;
+    const api = this.createExtensionAPI(extension, undefined, extension.hostApi?.namespaces, {
+      isExtensionPhase: true,
+      onExecute: (handler) => { executeHandler = handler; },
+    });
+
+    try {
+      const disposer = await phase.extensionFactory(api);
+      if (typeof disposer === "function") extension.disposer = disposer;
+      this.extensions.push(extension);
+      this.activeExtensionPhases.set(phaseKey, { extension, phase, scope, sourceId, handler: executeHandler });
+    } catch (error) {
+      await this.rollbackExtension(extension);
+      throw error;
+    }
+  }
+
+  getPhaseHandler(phaseName: string, scope?: ScopeRef): PhaseRunHandler | undefined {
+    const direct = this.activeExtensionPhases.get(`${scopeToKey(scope ?? [])}::${phaseName}`)?.handler;
+    if (direct) return direct;
+    if (scope && scope.length > 0) {
+      return this.activeExtensionPhases.get(`${scopeToKey([])}::${phaseName}`)?.handler;
+    }
+    return undefined;
+  }
+
+  async deactivatePhase(phaseName: string, scope?: ScopeRef): Promise<void> {
+    const phaseKey = `${scopeToKey(scope ?? [])}::${phaseName}`;
+    const active = this.activeExtensionPhases.get(phaseKey);
+    if (!active) return;
+    this.activeExtensionPhases.delete(phaseKey);
+    const index = this.extensions.indexOf(active.extension);
+    if (index !== -1) this.extensions.splice(index, 1);
+    await this.disposeExtension(active.extension, "Phase unloaded or reloaded.");
+  }
+
+  async deactivatePhasesForSource(sourceId: string): Promise<void> {
+    for (const [key, active] of [...this.activeExtensionPhases]) {
+      const activeSource = active.sourceId ?? extensionSourceId(active.scope);
+      if (activeSource !== sourceId) continue;
+      this.activeExtensionPhases.delete(key);
+      const index = this.extensions.indexOf(active.extension);
+      if (index !== -1) this.extensions.splice(index, 1);
+      await this.disposeExtension(active.extension, "Phase source unloaded.");
+    }
+  }
+
   /** Dispose all active Extensions in reverse activation order. */
   async close(): Promise<void> {
     this.abortController.abort();
@@ -398,6 +470,7 @@ export class ExtensionRunner {
       await this.disposeExtension(extension, "This Extension Runtime has been closed.");
     }
     this.extensions.length = 0;
+    this.activeExtensionPhases.clear();
     this.capabilityListeners.clear();
     this.resourceChangeListeners.clear();
     this.phases.clear();
@@ -788,31 +861,14 @@ export class ExtensionRunner {
     extension: Extension,
     manifest?: ExtensionManifest,
     namespaces?: Readonly<Record<string, unknown>>,
+    phaseOpts?: { isExtensionPhase?: boolean; onExecute?: (handler: PhaseRunHandler) => void },
   ): ExtensionAPI {
     const runner = this;
     const extContext: ExtensionContext = {
       get cwd() { return runner.cwd; },
       get signal() { return runner.abortController.signal; },
-      isIdle() { return runner._idle; },
-      abort() { runner.abortController.abort(); },
       exec(command, args, options) {
         return execCommand(command, args, runner.cwd, options);
-      },
-      manifest,
-      getSystemPrompt() { return runner.currentContext?.systemPrompt ?? ""; },
-      setSystemPrompt(prompt) { if (runner.currentContext) runner.currentContext.systemPrompt = prompt; },
-      getMessages() { return (runner.currentContext?.messages ?? []) as Array<{ role: string; content: string }>; },
-      addMessage(role, content) { runner.currentContext?.messages.push({ role, content } as any); },
-      getAvailableTools() { return (runner.currentContext?.tools ?? []).map(t => ({ name: t.name, description: t.description })); },
-      getAvailableSkills() { return (runner.currentContext?.skills ?? []).map(s => ({ name: s.name, description: s.description })); },
-      getSkillContent(skillName) {
-        const skill = runner.currentContext?.skills.find(s => s.name === skillName);
-        return skill?.content ?? "";
-      },
-      getAvailablePhases() { return [...(runner.currentContext?.phases?.phases.keys() ?? [])]; },
-      getPhaseContent(phaseId) {
-        const phase = runner.currentContext?.phases?.phases.get(phaseId);
-        return phase?.content || phase?.description || "";
       },
     };
 
@@ -832,8 +888,10 @@ export class ExtensionRunner {
       contributeCapability: (contribution) =>
         this.contributeCapability(extension, contribution),
       context: extContext,
-      manifest,
       namespaces,
+      runtimeAgents: this.runtimeAgents,
+      isExtensionPhase: phaseOpts?.isExtensionPhase,
+      onExecute: phaseOpts?.onExecute,
       trackCleanup: (cleanup) => extension.cleanup.push(cleanup),
       config: {
         get: async (scope) => {
@@ -972,7 +1030,8 @@ export class ExtensionRunner {
       return this.loadRegisteredPhase(extension, registration, scope);
     }
     if (typeof registration === "object" && registration !== null && "name" in registration) {
-      return this.registerPhaseDefinition(extension, registration as import("../harness/phases/types").Phase, scope);
+      const phase = registration as Phase;
+      return this.registerPhaseDefinition(extension, phase, scope);
     }
     throw new Error(`Phase registration requires a directory path or Phase object.`);
   }
@@ -982,6 +1041,7 @@ export class ExtensionRunner {
     phase: import("../harness/phases/types").Phase,
     scope?: ScopeRef,
   ): Promise<void> {
+    if (phase.extensionFactory) await this.activatePhase(phase, scope);
     const sourceId = extensionSourceId(scope);
     const name = phase.name;
     const regKey = `${sourceId}::${name}`;
@@ -1010,6 +1070,7 @@ export class ExtensionRunner {
       this.phases.delete(regKey);
       extension.phases.delete(regKey);
       this._phaseCache = null;
+      await this.deactivatePhase(phaseName, scope);
       await this.notifyResourceChange("phase");
     }
   }

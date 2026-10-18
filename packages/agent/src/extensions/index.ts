@@ -22,17 +22,21 @@
 // Unified API for extension
 export type {
   ExtensionAPI,
+  ExtensionAgentsAPI,
+  ExtensionAgentConsumerDisposer,
   ExtensionDisposer,
   ExtensionFactory,
   ExtensionFactoryResult,
+  PhaseRunHandler,
+  ExtensionAgentsRuntimeDelegate,
 } from "./api";
 export { createExtensionAPI } from "./api";
 export type {
   ExtensionContext,
   ExtensionManifest,
-  ExtensionUtils,
   LoadedExtension,
 } from "./context";
+export type { ExecOptions, ExecResult } from "./types";
 
 // Hook-based API
 export { HooksManager } from "./hooks";
@@ -73,8 +77,6 @@ export type { SourceInfo } from "./types";
 
 // Types
 export type {
-  ExecOptions,
-  ExecResult,
   ExtensionPackageManifest,
   ExtensionCapability,
   ExtensionCapabilityContribution,

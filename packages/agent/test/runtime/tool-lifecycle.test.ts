@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { InMemoryStore } from "../../src/runtime";
+import { InMemoryStore } from "../../src/runtime/index";
 import type { ExecutionId, MessageId, ToolCallId } from "../../src/runtime-events";
 
 test("DurableStore persists Tool pending → running → terminal lifecycle", async () => {

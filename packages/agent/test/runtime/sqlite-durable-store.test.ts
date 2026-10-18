@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "../../src/runtime";
+import { SqliteStore } from "../../src/runtime/index";
 import type { ConfigToken, ExecutionId, MessageId, OutcomeId, ToolCallId } from "../../src/runtime-events";
 
 async function tableCatalog(filename: string): Promise<string[]> {

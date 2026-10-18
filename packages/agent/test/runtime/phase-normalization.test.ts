@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryStore } from "../../src/runtime/index";
 import type { Phase, PhaseRegistry } from "../../src/harness/phases/types";
 import { createAgentWith } from "../fixtures/configuration";
 

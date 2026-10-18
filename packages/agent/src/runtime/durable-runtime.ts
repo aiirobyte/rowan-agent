@@ -326,6 +326,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     const extensions = new RuntimeExtensionLifetime({ host });
     const runtime = new AgentRuntime({ ...options, configs, concurrency, host }, owned, new RuntimeBootstrapRegistry(extensions));
     try {
+      runtime.resources.extensionRunner.setRuntime(runtime);
       await runtime.resources.ensureCoreResources();
       await options.bootstrap?.(runtime.resources);
       runtime.startHeartbeat();
@@ -390,6 +391,11 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async loadPhases(input: LoadInput<Phase>): Promise<LoadResult> {
     this.assertOpen();
+    if ("values" in input && input.values) {
+      for (const phase of input.values) {
+        await this.resources.extensionRunner.activatePhase(phase, undefined, input.sourceId);
+      }
+    }
     return this.resources.loadPhases(input);
   }
 
@@ -400,6 +406,9 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async unload(input: Readonly<{ kind: ResourceKind; sourceId: string }>): Promise<LoadResult> {
     this.assertOpen();
+    if (input.kind === "phase") {
+      await this.resources.extensionRunner.deactivatePhasesForSource(input.sourceId);
+    }
     return this.resources.unload(input);
   }
 
@@ -558,6 +567,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       const config = this.resolveConfig(resolution.config);
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(agentId),
+        scope: options.scope,
       });
       const entryPhaseId = normalizePhaseRegistry(assembly.context.phases).entryPhaseId!;
       const phase = assembly.context.phases?.phases.get(entryPhaseId);
@@ -959,6 +969,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       }
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(run.agentId),
+        scope: run.scope,
       });
       toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream

@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryConfigProvider, InMemoryStore, SqliteStore } from "../../src/runtime";
+import { AgentRuntime, InMemoryConfigProvider, InMemoryStore, SqliteStore } from "../../src/runtime/index";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import { createAgentWith } from "../fixtures/configuration";
 

@@ -24,7 +24,6 @@ import type {
 } from "./execution";
 import { invokeModel, type ModelInvokerInput } from "./stream-collector";
 import type { PhaseOutput, PhaseContext, PhaseStatus } from "../harness/phases/types";
-import { createExtensionAPI } from "../extensions/api";
 
 // Phase system types
 import type {
@@ -291,14 +290,14 @@ function createTerminalOutcome(
   output: PhaseOutput,
   transcript: AgentMessage[],
 ): Outcome {
-  const outcome = phase.run || phase.factory
+  const outcome = phase.run
     ? createOutcome.phase(output, transcript)
     : createOutcome.default(output, transcript);
   return isControlPhaseRun(config.execution.runMetadata) ? { ...outcome, display: false } : outcome;
 }
 
 function shouldRunStopPhase(phase: Phase, output: PhaseOutput): boolean {
-  if (phase.run || phase.factory) return false;
+  if (phase.run) return false;
   return typeof output.message !== "string" || output.message.trim().length === 0;
 }
 
@@ -914,7 +913,7 @@ async function runPhaseLoop(
         previousPhaseInputMsgId = undefined;
         return completeRun(config, state, extAfter.abort);
       }
-      if (extAfter.retry && (phase.run || phase.factory)) {
+      if (extAfter.retry && phase.run) {
         output = await executePhase(runtime);
         modelRouteDecision = resolveModelRouteDecision(output.toolCalls, registry, state);
         routeDecision = modelRouteDecision;
@@ -928,7 +927,7 @@ async function runPhaseLoop(
           // special programmatic continue sentinel remains handled below.
           routeDecision = resolveHookRouteDecision(output, registry, state);
           if (routeDecision) applyFirstDecision(routeDecision, output);
-        } else if (phase.run || phase.factory) {
+        } else if (phase.run) {
           // Programmatic Phase output omission retains its historical stop
           // fallback, including when an after hook replaces the output.
           output = { ...output, route: "stop" };
@@ -962,7 +961,7 @@ async function runPhaseLoop(
       return completeRun(config, state, createTerminalOutcome(config, phase, output, config.context.messages));
     }
 
-    if (phase.run || phase.factory) {
+    if (phase.run) {
       // Programmatic phases retain their existing implicit stop behavior.
       if (output.route === undefined && !routeDecision) output = { ...output, route: "stop" };
     } else if (!phase.target && output.route === undefined && !routeDecision) {
@@ -1170,7 +1169,7 @@ interface PhaseRuntime {
   completedPhases?: readonly string[];
 }
 
-/** Execute phase code — factory (ExtensionAPI) or run (PhaseContext) or LLM-driven. */
+/** Execute phase code — run (PhaseContext) or LLM-driven. */
 async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
   const { phase, config, execution, registry, context } = ctx;
 
@@ -1181,41 +1180,6 @@ async function executePhase(ctx: PhaseRuntime): Promise<PhaseOutput> {
       output.message = `${phase.name} phase completed.`;
     }
     return output;
-  }
-
-  if (phase.factory) {
-    const api = createExtensionAPI(undefined, {
-      registerPhase: async () => {},
-      unregisterPhase: () => {},
-      registerSkill: async () => {},
-      unregisterSkill: () => {},
-      registerProvider: () => {},
-      unregisterProvider: () => {},
-      registerTool: () => {},
-      context: {
-        cwd: process.cwd(),
-        signal: config.signal,
-        isIdle: () => false,
-        abort: () => config.signal?.dispatchEvent(new Event("abort")),
-        exec: async () => ({ exitCode: 1, stdout: "", stderr: "not available in phase context" }),
-        getSystemPrompt: () => config.context.systemPrompt,
-        setSystemPrompt: () => {},
-        getMessages: () => context.messages as Array<{ role: string; content: string }>,
-        addMessage: (role, content) => { config.context.messages.push(createMessage(role, content)); },
-        getAvailableTools: () => config.context.tools.map(t => ({ name: t.name, description: t.description })),
-        getAvailableSkills: () => context.skills.map(s => ({ name: s.name, description: s.description })),
-        getPhaseContent: (id) => registry.phases.get(id)?.content ?? "",
-        getAvailablePhases: () => Array.from(registry.phases.keys()),
-      },
-      phase: context,
-    });
-    await phase.factory(api);
-    return {
-      message: api.phases.getMessage() ?? `${phase.name} phase completed.`,
-      route: api.phases.getNextPhase() || "stop",
-      phase: phase.name,
-      payload: api.phases.getPayload(),
-    };
   }
 
   // LLM-driven fallback

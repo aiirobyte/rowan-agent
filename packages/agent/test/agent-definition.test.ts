@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseAgentDefinition } from "../src/index";
+import { parseAgentDefinition } from "../src/runtime";
 import { assertAgentDefinition } from "../src/harness/definitions";
 
 test("parseAgentDefinition parses the shared declarative fields", () => {

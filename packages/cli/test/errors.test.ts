@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { RuntimeError } from "../../agent/src";
+import { RuntimeError } from "@rowan-agent/agent/runtime";
 import { formatCliError } from "../src/errors";
 
 test("formatCliError gives an actionable incompatible database recovery", () => {

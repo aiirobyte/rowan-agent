@@ -4,13 +4,16 @@ import {
   AgentRuntime,
   InMemoryExtensionHost,
   InMemoryStore,
-  type ExtensionFactory,
   type ExtensionHost,
   type LoadedExtension,
-  type RunEndEvent,
-  type RunStartEvent,
-  type ScopeRef,
-} from "../../src";
+} from "@rowan-agent/agent/runtime";
+import type {
+  ExtensionAPI,
+  ExtensionFactory,
+  RunEndEvent,
+  RunStartEvent,
+  ScopeRef,
+} from "@rowan-agent/agent";
 import { createExtensionRunner } from "../../src/extensions";
 import { createAgentWith } from "../fixtures/configuration";
 import { stopResponse } from "./route-test-utils";

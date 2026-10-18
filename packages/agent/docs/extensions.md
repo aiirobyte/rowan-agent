@@ -66,19 +66,17 @@ export default extension;
   capability (such as a tool) to the host. Returns a disposer function to remove
   the contribution. Contributions are automatically removed when the extension is
   disposed.
-- `providers.register(config)` / `providers.unregister(id)`: Register or remove
+- `models.registerProvider(config)` / `models.unregisterProvider(id)`: Register or remove
   a model provider configuration. Registering with an existing ID replaces it.
-  Provider stream functions receive a `ProviderCallContext` with `signal`, `run` metadata,
-  `interact()`, and `tools`:
-  - `tools.list()`: Inspect registered tools and their MCP-standard `_meta`.
-  - `tools.call(name, args, options?)`: Invoke a registered tool. Accepts `options`:
-    - `signal?: AbortSignal`: Aborts that single tool call without cancelling the Run.
-    - `onUpdate?(toolCall: ToolCall, progress?: ToolProgress): void`: Receives the merged `ToolCall` on every state change (start, progress-driven `present` updates, final state). Passes the raw `progress` object when triggered by a progress report.
-  - `tools.report(update)`: Report external tool execution states and progress.
-- `phases.register(path | Phase, scope?)` / `phases.unregister(phaseName, scope?)`: Load and register a Phase directory Bundle or programmatic Phase object (Global or scoped). The
-  directory contains `PHASE.md` and may contain direct child Skill Bundles. Also provides
-  `getPayload`, `setPayload`, `setMessage`, `getCurrentPhase`, `setNextPhase`, `getNextPhase`, `getMessage`.
+- `phases.register(path | Phase, scope?)` / `phases.unregister(phaseName, scope?)` / `phases.execute(handler)`: Load and register a Phase directory Bundle or programmatic Phase object (Global or scoped). Inside an Extension Phase, `phases.execute(handler)` sets the execution handler.
 - `skills.register(path | Skill, scope?)` / `skills.unregister(skillName, scope?)`: Load and register a standalone Skill directory (containing `SKILL.md`) or a Skill object (Global or scoped). Registering an existing name replaces it. Unregistering removes it from the resource pool.
+- `agents`: Interact with the AgentRuntime:
+  - `agents.list()`: List agents managed by the runtime.
+  - `agents.history(agentId)`: Read committed transcript messages.
+  - `agents.contextStatus(agentId)`: Query context window token usage.
+  - `agents.runs(agentId, filter?)`: List runs for an agent.
+  - `agents.runPhase(agentId, options)`: Trigger a Control Run for a phase.
+  - `agents.consume(consumerId, onEvent)`: Durable, checkpointed event consumer that automatically stops on extension disposal.
 - `hooks.on()` / `hooks.off()`: Register lifecycle hooks (`run_start`, `run_end`) and
   execution hooks (`before_phase`, `after_phase`, `before_prompt`,
   `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
@@ -86,14 +84,14 @@ export default extension;
   Agent's `agentMetadata` beside the Run's `metadata`. Both hooks carry
   `phase?: ToolCallPhase` (`{ name, metadata? }`): the Phase that issued the
   call and its extra PHASE.md frontmatter.
-- `context`: Access the working directory, `AbortSignal`, command execution,
-  and the current resource summary.
+- `context`: Access the working directory (`cwd`), `signal` (`AbortSignal`), and command execution (`exec`).
 - `events`: Publish custom events between extensions.
 
 ## Loading
 
 ```ts
-import { loadExtensions, AgentRuntime } from "@rowan-agent/agent";
+import { loadExtensions, AgentRuntime } from "@rowan-agent/agent/runtime";
+import type { ExtensionFactory } from "@rowan-agent/agent";
 
 const { extensions, errors } = await loadExtensions(".rowan/extensions");
 const runtime = await AgentRuntime.init({ store, configs });
@@ -120,7 +118,7 @@ Hosts integrate with extensions by providing an `ExtensionHost` implementation t
 default in-memory host when `host` is omitted.
 
 ```ts
-import { AgentRuntime, InMemoryExtensionHost } from "@rowan-agent/agent";
+import { AgentRuntime, InMemoryExtensionHost } from "@rowan-agent/agent/runtime";
 
 const host = new InMemoryExtensionHost({
   configs: {
