@@ -78,6 +78,7 @@ export type {
   ExtensionPackageManifest,
   ExtensionHost,
   HostApiExtension,
+  HostApiKind,
   ExtensionStateStore,
   PhaseRegistration,
   PhaseRun,

@@ -355,7 +355,7 @@ export class ExtensionRunner {
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
       const extensionId = ext.id ?? ext.manifest?.id ?? ext.name;
-      const hostApi = this.host.extendApi?.(extensionId);
+      const hostApi = this.host.extendApi?.(extensionId, "extension");
       const extension: Extension = {
         id: extensionId,
         path: ext.path,
@@ -400,7 +400,7 @@ export class ExtensionRunner {
       skills: new Set(),
       cleanup: [],
       runtime: createExtensionRuntime(),
-      hostApi: this.host.extendApi?.(phase.name),
+      hostApi: this.host.extendApi?.(phase.name, "phase"),
     };
     let executeHandler: PhaseRunHandler | undefined;
     const api = this.createExtensionAPI(extension, undefined, extension.hostApi?.namespaces, {

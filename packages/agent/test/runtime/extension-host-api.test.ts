@@ -633,10 +633,10 @@ test("a before_tool_call handler that throws → the tool is not executed", asyn
 
 test("extendApi: namespaces appear on api", async () => {
   const host = new InMemoryExtensionHost({
-    extendApi: (extensionId) => ({
+    extendApi: (extensionId, kind) => ({
       namespaces: {
         ui: {
-          showDialog: () => `dialog-${extensionId}`,
+          showDialog: () => `${kind}-dialog-${extensionId}`,
         },
       },
     }),
@@ -655,7 +655,7 @@ test("extendApi: namespaces appear on api", async () => {
 
   await runner.loadExtensions([ext]);
   expect(capturedApi.ui).toBeDefined();
-  expect(capturedApi.ui.showDialog()).toBe("dialog-test-ext");
+  expect(capturedApi.ui.showDialog()).toBe("extension-dialog-test-ext");
   await runner.close();
 });
 
