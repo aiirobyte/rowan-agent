@@ -677,21 +677,6 @@ export class AgentRuntime implements AgentRuntimeContract {
     return { caughtUp: subscription.caughtUp.promise, done: subscription.done.promise, stop: () => controller.abort() };
   }
 
-  listCapabilities(): readonly import("../extensions").ExtensionCapability[] {
-    this.assertOpen();
-    return this.resources.extensionRunner.getCapabilities();
-  }
-
-  onCapabilitiesChanged(listener: (capabilities: readonly import("../extensions").ExtensionCapability[]) => void): () => void {
-    this.assertOpen();
-    return this.resources.extensionRunner.onCapabilitiesChanged(listener);
-  }
-
-  triggerUiAction(event: { contributionId: string; actionId: string; scope?: import("../extensions").ScopeRef }): void {
-    this.assertOpen();
-    this.resources.extensionRunner.triggerUiAction(event);
-  }
-
   private liveInteract(runId: RunId, request: RunInteractionRequest, signal: AbortSignal): Promise<JsonValue> {
     if (signal.aborted) {
       return Promise.reject(signal.reason ?? new Error("Run aborted"));

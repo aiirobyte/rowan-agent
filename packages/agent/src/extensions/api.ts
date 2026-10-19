@@ -5,7 +5,6 @@ import type {
   ExtensionRuntime,
   ScopeRef,
   ExtensionStateStore,
-  ExtensionCapabilityContribution,
 } from "./types";
 import type { EventBus } from "./event-bus";
 import type { HooksManager, HookEventType, HookHandler } from "./hooks";
@@ -101,18 +100,15 @@ export interface ExtensionAgentsRuntimeDelegate {
  * ```
  */
 export interface ExtensionAPI {
-  /** Hook events — subscribe or unsubscribe. */
+  /** Hook events — subscribe; Rowan removes subscriptions when the Extension is disposed. */
   hooks: {
     /**
-     * Subscribe to a hook event.
+     * Subscribe to a hook event. Returns an unsubscribe function.
      *
      * @param eventType - Hook type, e.g. "before_tool_call"
      * @param handler - Hook handler, can return result to modify behavior
      */
-    on<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
-
-    /** Unsubscribe from a hook event. */
-    off<K extends HookEventType>(eventType: K, handler: HookHandler<K>): void;
+    on<K extends HookEventType>(eventType: K, handler: HookHandler<K>): () => void;
   };
 
   /** Extension configuration — read own layered config or listen for changes. */
@@ -173,12 +169,6 @@ export interface ExtensionAPI {
   /** Shared event bus for inter-extension communication. */
   events: EventBus;
 
-  /** Capability contributions — advertise tools or features to the host. */
-  capabilities: {
-    /** Contribute a capability to the host. Returns a disposer to remove the contribution. */
-    contribute(contribution: ExtensionCapabilityContribution): () => void;
-  };
-
   /** Runtime context — cwd, signal, exec. */
   context: ExtensionContext;
 }
@@ -189,11 +179,12 @@ export interface ExtensionAPI {
 
 /**
  * Extension factory function.
- * Receives ExtensionAPI for registering hooks, phases, and providers.
+ * Receives ExtensionAPI for registering hooks, phases, and providers. Return a cleanup
+ * function only for resources the Extension owns itself; Rowan removes every registration.
  */
-export type ExtensionDisposer = () => void | Promise<void>;
-export type ExtensionFactoryResult = void | ExtensionDisposer;
-export type ExtensionFactory = (api: ExtensionAPI) => ExtensionFactoryResult | Promise<ExtensionFactoryResult>;
+export type ExtensionFactory = (
+  api: ExtensionAPI,
+) => void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
 
 // ---------------------------------------------------------------------------
 // createExtensionAPI
@@ -219,7 +210,6 @@ export interface CreateExtensionAPIOptions {
     agent: (agentId: string) => ExtensionStateStore;
     global: () => ExtensionStateStore;
   };
-  contributeCapability?: (contribution: ExtensionCapabilityContribution) => () => void;
   namespaces?: Readonly<Record<string, unknown>>;
   runtimeAgents?: ExtensionAgentsRuntimeDelegate;
   isExtensionPhase?: boolean;
@@ -253,11 +243,9 @@ export function createExtensionAPI(
       on: (eventType, handler) => {
         assertActive();
         hooks?.on(eventType, handler);
-        trackCleanup?.(() => hooks?.off(eventType, handler));
-      },
-      off: (eventType, handler) => {
-        assertActive();
-        hooks?.off(eventType, handler);
+        const unsubscribe = () => hooks?.off(eventType, handler);
+        trackCleanup?.(unsubscribe);
+        return unsubscribe;
       },
     },
     config: {
@@ -442,30 +430,9 @@ export function createExtensionAPI(
           trackCleanup?.(unsubscribe);
           return unsubscribe;
         },
-        off: (event) => eventBus.off(event),
         emit: (event, ...args) => eventBus.emit(event, ...args),
-        has: (event) => eventBus.has(event),
-        count: (event) => eventBus.count(event),
       }
-      : { on: () => () => {}, off: () => {}, emit: () => {}, has: () => false, count: () => 0 },
-    capabilities: {
-      contribute: (contribution) => {
-        assertActive();
-        if (!contribution || typeof contribution !== "object") {
-          throw new TypeError("Capability contribution must be an object.");
-        }
-        if (contribution.kind !== "tool") {
-          throw new TypeError(`Unsupported capability contribution kind: "${(contribution as any).kind}".`);
-        }
-        if (typeof contribution.name !== "string" || contribution.name.trim() === "") {
-          throw new TypeError("Capability contribution requires a non-empty name.");
-        }
-        if (typeof contribution.description !== "string") {
-          throw new TypeError("Capability contribution requires a description string.");
-        }
-        return options?.contributeCapability ? options.contributeCapability(contribution) : () => {};
-      },
-    },
+      : { on: () => () => {}, emit: () => {} },
     context: ctx,
   };
 

@@ -36,6 +36,11 @@ const extension: ExtensionFactory = async (api) => {
 export default extension;
 ```
 
+The factory may return a cleanup function (sync or async). Return one only for
+resources the Extension owns itself (processes, timers, sockets); registrations
+(tools, phases, skills, providers, hooks, events, consumers, config listeners)
+are removed by Rowan when the Extension is disposed.
+
 ## API
 
 - `config.get(scope?)` / `config.changed(handler)`: Read the extension's own
@@ -62,10 +67,6 @@ export default extension;
   ```
   Rowan calls `present` at call reservation (`pending`), start of execution (`in_progress`), on each progress report via `ctx.reportProgress(progress)` (`status: "in_progress", progress`), and on completion/failure (`status: "completed" | "failed", result`). Outputs are merged using `mergeToolCall`. When omitted or on error, Rowan falls back to default presentation without failing the tool call.
   During execution, tools report progress using `context.reportProgress(progress: ToolProgress)` (`{ progress: number; total?: number; message?: string; _meta?: JsonObject }` matching MCP standard). Shape is validated (finite numbers); invalid reports are dropped with a warning without failing the tool. Tool-private progress data goes under `_meta` keys. Continuous output must be reported cumulatively (e.g. a tail), because transient updates coalesce per `toolCallId`.
-- `capabilities.contribute({ kind: "tool", name, description })`: Contribute a
-  capability (such as a tool) to the host. Returns a disposer function to remove
-  the contribution. Contributions are automatically removed when the extension is
-  disposed.
 - `models.registerProvider(config)` / `models.unregisterProvider(id)`: Register or remove
   a model provider configuration. Registering with an existing ID replaces it.
 - `phases.register(path | Phase, scope?)` / `phases.unregister(phaseName, scope?)` / `phases.execute(handler)`: Load and register a Phase directory Bundle or programmatic Phase object (Global or scoped). Inside an Extension Phase, `phases.execute(handler)` sets the execution handler.
@@ -78,15 +79,16 @@ export default extension;
   - `agents.run(runId)`: One Run in full (`RunSnapshot`), including its outcome once it ended.
   - `agents.runPhase(agentId, options)`: Trigger a Control Run for a phase.
   - `agents.consume(consumerId, onEvent)`: Durable, checkpointed event consumer that automatically stops on extension disposal.
-- `hooks.on()` / `hooks.off()`: Register lifecycle hooks (`run_start`, `run_end`) and
+- `hooks.on(type, handler)`: Register lifecycle hooks (`run_start`, `run_end`) and
   execution hooks (`before_phase`, `after_phase`, `before_prompt`,
-  `before_tool_call`, and `after_tool_call`). Tool-call hooks receive execution
+  `before_tool_call`, and `after_tool_call`). Returns an unsubscribe function
+  (`const off = api.hooks.on(...)`). Tool-call hooks receive execution
   `scope` and per-turn input `turn`; `before_tool_call` also carries the invoking
   Agent's `agentMetadata` beside the Run's `metadata`. Both hooks carry
   `phase?: ToolCallPhase` (`{ name, metadata? }`): the Phase that issued the
   call and its extra PHASE.md frontmatter.
 - `context`: Access the working directory (`cwd`), `signal` (`AbortSignal`), and command execution (`exec`).
-- `events`: Publish custom events between extensions.
+- `events.on(event, listener)` / `events.emit(event, ...args)`: Publish custom events between extensions. `on` returns an unsubscribe function.
 
 ## Loading
 
@@ -139,7 +141,4 @@ The host interface defines:
 - `getGlobalState(extensionId, key)`, `setGlobalState(extensionId, key, value)`, `deleteGlobalState(extensionId, key)`: Manages extension-wide durable state.
 - `extendApi(extensionId)`: Injects host-defined API namespaces into that extension's `api` object during load, with an optional `dispose()` callback when the extension is unloaded, reloaded, or fails activation.
 
-Hosts can query and listen to capabilities directly on `AgentRuntime`:
-- `runtime.listCapabilities()`: Returns the active array of capabilities (`{ extensionId, kind: "tool", name, description }`), readable at any time outside a Run.
-- `runtime.onCapabilitiesChanged(listener: (capabilities) => void)`: Subscribes to capability changes and returns an unsubscribe function.
-- `runtime.triggerUiAction({ contributionId, actionId, scope })`: Dispatches a UI action event (`ui.action`) to the contributing extension.
+Hosts dispatch their own UI actions; Rowan has no UI action channel.

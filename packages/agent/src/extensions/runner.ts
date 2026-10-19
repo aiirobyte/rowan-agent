@@ -22,8 +22,6 @@ import type {
   ExecOptions,
   ExecResult,
   Extension,
-  ExtensionCapability,
-  ExtensionCapabilityContribution,
   ExtensionError,
   ExtensionErrorListener,
   ExtensionHost,
@@ -230,9 +228,6 @@ export class ExtensionRunner {
   // Error listeners
   private readonly errorListeners = new Set<ExtensionErrorListener>();
 
-  // Capability change listeners
-  private readonly capabilityListeners = new Set<(capabilities: readonly ExtensionCapability[]) => void>();
-
   // Resource change listeners (for Registry live sync)
   private readonly resourceChangeListeners = new Set<(kind: "tool" | "phase" | "skill") => Promise<void> | void>();
   private runtimeAgents?: ExtensionAgentsRuntimeDelegate;
@@ -366,7 +361,6 @@ export class ExtensionRunner {
         tools: new Map(),
         phases: new Set(),
         skills: new Set(),
-        capabilities: new Map(),
         cleanup: [],
         runtime: createExtensionRuntime(),
         hostApi,
@@ -378,9 +372,6 @@ export class ExtensionRunner {
 
         this.extensions.push(extension);
         this._phaseCache = null;
-        if (extension.capabilities.size > 0) {
-          this.notifyCapabilitiesChanged();
-        }
       } catch (error) {
         await this.rollbackExtension(extension);
         const message = error instanceof Error ? error.message : String(error);
@@ -406,7 +397,6 @@ export class ExtensionRunner {
       tools: new Map(),
       phases: new Set(),
       skills: new Set(),
-      capabilities: new Map(),
       cleanup: [],
       runtime: createExtensionRuntime(),
       hostApi: this.host.extendApi?.(phase.name),
@@ -472,7 +462,6 @@ export class ExtensionRunner {
     }
     this.extensions.length = 0;
     this.activeExtensionPhases.clear();
-    this.capabilityListeners.clear();
     this.resourceChangeListeners.clear();
     this.phases.clear();
     this._phaseCache = null;
@@ -559,35 +548,6 @@ export class ExtensionRunner {
     return undefined;
   }
 
-  // ---------------------------------------------------------------------------
-  // Capability management
-  // ---------------------------------------------------------------------------
-
-  /** Get all contributed capabilities across all extensions. */
-  getCapabilities(): readonly ExtensionCapability[] {
-    const result: ExtensionCapability[] = [];
-    for (const ext of this.extensions) {
-      for (const contrib of ext.capabilities.values()) {
-        result.push({
-          extensionId: ext.id,
-          kind: contrib.kind,
-          name: contrib.name,
-          description: contrib.description,
-        });
-      }
-    }
-    return Object.freeze(result);
-  }
-
-  /**
-   * Subscribe to capability changes (contributions added, removed, or extensions disposed).
-   * Returns an unsubscribe function.
-   */
-  onCapabilitiesChanged(listener: (capabilities: readonly ExtensionCapability[]) => void): () => void {
-    this.capabilityListeners.add(listener);
-    return () => this.capabilityListeners.delete(listener);
-  }
-
   /**
    * Subscribe to resource changes (tools, phases, skills registered, unregistered, or disposed).
    * Used by RuntimeBootstrapRegistry to re-commit implicit sources after activation.
@@ -602,10 +562,6 @@ export class ExtensionRunner {
     for (const listener of this.resourceChangeListeners) {
       await listener(kind);
     }
-  }
-
-  triggerUiAction(event: { contributionId: string; actionId: string; scope?: ScopeRef }): void {
-    this.events.emit("ui.action", event);
   }
 
   // ---------------------------------------------------------------------------
@@ -886,8 +842,6 @@ export class ExtensionRunner {
       unregisterProvider: (name) => this.unregisterProvider(name),
       registerTool: (tool, scope) => this.registerTool(extension, tool, scope),
       unregisterTool: (toolName, scope) => this.unregisterTool(extension, toolName, scope),
-      contributeCapability: (contribution) =>
-        this.contributeCapability(extension, contribution),
       context: extContext,
       namespaces,
       runtimeAgents: this.runtimeAgents,
@@ -971,52 +925,6 @@ export class ExtensionRunner {
     const regKey = `${sourceId}::${toolName}`;
     if (!extension.tools.delete(regKey)) return Promise.resolve();
     return this.notifyResourceChange("tool");
-  }
-
-  private contributeCapability(
-    extension: Extension,
-    contribution: ExtensionCapabilityContribution,
-  ): () => void {
-    const key = `${contribution.kind}:${contribution.name}`;
-    const entry: ExtensionCapabilityContribution = {
-      kind: contribution.kind,
-      name: contribution.name,
-      description: contribution.description,
-    };
-    extension.capabilities.set(key, entry);
-    if (this.extensions.includes(extension)) {
-      this.notifyCapabilitiesChanged();
-    }
-
-    let disposed = false;
-    const dispose = () => {
-      if (disposed) return;
-      disposed = true;
-      if (extension.capabilities.get(key) === entry) {
-        extension.capabilities.delete(key);
-        if (this.extensions.includes(extension)) {
-          this.notifyCapabilitiesChanged();
-        }
-      }
-    };
-    extension.cleanup.push(dispose);
-    return dispose;
-  }
-
-  private notifyCapabilitiesChanged(): void {
-    const capabilities = this.getCapabilities();
-    for (const listener of this.capabilityListeners) {
-      try {
-        listener(capabilities);
-      } catch (error) {
-        this.emitError({
-          extensionPath: "<runtime>",
-          event: "capabilities_changed",
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-      }
-    }
   }
 
   private async registerPhase(
@@ -1199,8 +1107,6 @@ export class ExtensionRunner {
     }
     extension.skills.clear();
 
-    const hadCapabilities = extension.capabilities.size > 0;
-    extension.capabilities.clear();
     for (const cleanup of [...extension.cleanup].reverse()) {
       await Promise.resolve().then(() => cleanup()).catch(() => undefined);
     }
@@ -1213,9 +1119,6 @@ export class ExtensionRunner {
       await Promise.resolve().then(() => hostDispose()).catch(() => undefined);
     }
     this._phaseCache = null;
-    if (hadCapabilities) {
-      this.notifyCapabilitiesChanged();
-    }
     if (this.bound) {
       if (hadTools) await this.notifyResourceChange("tool");
       if (hadPhases) await this.notifyResourceChange("phase");

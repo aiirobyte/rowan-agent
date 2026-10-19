@@ -580,40 +580,6 @@ test("providers.register with existing id replaces earlier provider configuratio
   }
 });
 
-test("runtime.triggerUiAction emits ui.action event to extension event bus", async () => {
-  let receivedUiAction: any;
-
-  const extension = loadExtensionFromFactory((api) => {
-    api.events.on("ui.action", (event) => {
-      receivedUiAction = event;
-    });
-  }, process.cwd(), "<test:ui-action-ext>");
-
-  const runtime = await AgentRuntime.init({
-    store: new InMemoryStore(),
-    concurrency: 1,
-    bootstrap: async (registry) => {
-      await registry.loadExtensions([extension]);
-    },
-  });
-
-  try {
-    runtime.triggerUiAction({
-      contributionId: "action-1",
-      actionId: "click",
-      scope: [],
-    });
-
-    expect(receivedUiAction).toEqual({
-      contributionId: "action-1",
-      actionId: "click",
-      scope: [],
-    });
-  } finally {
-    await runtime.close();
-  }
-});
-
 test("ctx.tools.call options.onUpdate receives start, progress update with raw ToolProgress, and final state", async () => {
   const capturedPresentProgress: (ToolProgress | undefined)[] = [];
   const tool = {
