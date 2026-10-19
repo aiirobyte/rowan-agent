@@ -179,6 +179,7 @@ export const runtimeTypeExports = [
   "FrontmatterResult",
   "HistorySeed",
   "HostApiExtension",
+  "HostApiKind",
   "InvocationCatalogEntry",
   "InvocationSource",
   "LoadExtensionsResult",
