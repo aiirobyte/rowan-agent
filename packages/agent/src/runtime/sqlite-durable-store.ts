@@ -377,10 +377,6 @@ export class SqliteStore implements DurableStore {
 
       const state = this.readState();
       const memory = InMemoryStore.fromState(state);
-      if (row.owner_id && row.owner_token && row.epoch > 0) {
-        memory.attachOwner(ownerLease(row));
-        memory.interruptOwner(row.epoch);
-      }
       const epoch = row.epoch + 1;
       const token = `${state.incarnation}:${epoch}:${input.ownerId}` as OwnerToken;
       const next: OwnerRow = {
@@ -402,6 +398,10 @@ export class SqliteStore implements DurableStore {
       const tracker = new ChangeTracker();
       memory.setChangeRecorder(tracker);
       try {
+        // Runs orphaned by any earlier owner (crashed, or released after a
+        // takeover) must be interrupted and persisted; the recorder has to be
+        // attached first or the interruption exists only in memory.
+        if (row.epoch > 0) memory.interruptOwner(row.epoch);
         memory.dropSettledClaimReceipts();
         memory.compactTerminalReceipts();
       } finally {

@@ -347,7 +347,8 @@ export class InMemoryStore implements DurableStore {
   interruptOwner(ownerEpoch: number, message = "The previous Runtime owner expired or closed."): void {
     this.ownerEpoch = Math.max(this.ownerEpoch, ownerEpoch);
     for (const run of this.runs.values()) {
-      if (run.state !== "running" || run.execution?.ownerEpoch !== ownerEpoch) continue;
+      // Any Run still running under an epoch at or below ownerEpoch has no live owner left to finish it.
+      if (run.state !== "running" || !run.execution || run.execution.ownerEpoch > ownerEpoch) continue;
       const activeToolCalls = [...this.toolCalls.values()]
         .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.status === "pending" || toolCall.status === "in_progress" || toolCall.state === "pending" || toolCall.state === "in_progress"));
       const indeterminateToolCallIds: ToolCallId[] = [];
