@@ -584,6 +584,8 @@ export interface AgentRuntime {
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[]; after?: RunListCursor; limit?: number }): Promise<Page<RunSummary, RunListCursor>>;
   consume(input: { consumerId: string; signal: AbortSignal; onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void> }): Promise<DurableConsumer>;
+  /** Called after an Extension registers, replaces or unregisters a Provider in the model registry. */
+  onProvidersChanged(listener: () => void): () => void;
   close(): Promise<void>;
 }
 export type ConsumerRegistration = Readonly<{ cursor?: EventCursor; waterline: EventCursor }>;

@@ -224,6 +224,7 @@ export class ExtensionRunner {
     | { kind: "unregister"; name: string }
   > = [];
   private bound = false;
+  private readonly providersChangedListeners = new Set<() => void>();
 
   // Error listeners
   private readonly errorListeners = new Set<ExtensionErrorListener>();
@@ -463,6 +464,7 @@ export class ExtensionRunner {
     this.extensions.length = 0;
     this.activeExtensionPhases.clear();
     this.resourceChangeListeners.clear();
+    this.providersChangedListeners.clear();
     this.phases.clear();
     this._phaseCache = null;
     this.skills.clear();
@@ -1050,9 +1052,26 @@ export class ExtensionRunner {
     await this.registerSkillDefinition(extension, skill, scope);
   }
 
+  /** Called after a Provider registration change has been applied to the model registry. */
+  onProvidersChanged(listener: () => void): () => void {
+    this.providersChangedListeners.add(listener);
+    return () => this.providersChangedListeners.delete(listener);
+  }
+
+  private notifyProvidersChanged(): void {
+    for (const listener of this.providersChangedListeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error("[extension-runner] Providers-changed listener failed:", err);
+      }
+    }
+  }
+
   private registerProvider(config: ProviderConfig): void {
     if (this.bound) {
       applyProviderRegistration(config);
+      this.notifyProvidersChanged();
     } else {
       this.pendingProviders.push({ kind: "register", config });
     }
@@ -1061,6 +1080,7 @@ export class ExtensionRunner {
   private unregisterProvider(name: string): void {
     if (this.bound) {
       applyProviderUnregistration(name);
+      this.notifyProvidersChanged();
     } else {
       this.pendingProviders.push({ kind: "unregister", name });
     }
@@ -1074,7 +1094,9 @@ export class ExtensionRunner {
         applyProviderUnregistration(action.name);
       }
     }
+    const applied = this.pendingProviders.length > 0;
     this.pendingProviders.length = 0;
+    if (applied) this.notifyProvidersChanged();
   }
 
   private getRegisteredPhase(name: string): RegisteredPhase | undefined {

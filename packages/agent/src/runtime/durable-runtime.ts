@@ -726,6 +726,10 @@ export class AgentRuntime implements AgentRuntimeContract {
     });
   }
 
+  onProvidersChanged(listener: () => void): () => void {
+    return this.resources.extensionRunner.onProvidersChanged(listener);
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
