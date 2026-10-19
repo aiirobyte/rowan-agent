@@ -4,7 +4,7 @@ import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteStore } from "../../src/runtime/index";
-import type { ConfigToken, ExecutionId, MessageId, OutcomeId, ToolCallId } from "../../src/runtime-events";
+import type { ConfigToken, ExecutionId, MessageId, OutcomeId, RunId, ToolCallId } from "../../src/runtime-events";
 
 async function tableCatalog(filename: string): Promise<string[]> {
   const database = new Database(filename, { create: true, readwrite: true, strict: true });
@@ -179,6 +179,67 @@ test("SQLite DurableStore persists domain state and fences expired executions", 
     }
   } finally {
     firstStore.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function claimRunningRun(filename: string, ownerId: string): Promise<{ runId: RunId; epoch: number }> {
+  const store = new SqliteStore(filename);
+  const owner = await store.openOwner({ ownerId, leaseMs: 20 });
+  const agent = await owner.reserveAgent({ idempotencyKey: "agent-1", metadata: { name: "crash" } });
+  await owner.activateAgent(agent.id);
+  const run = await owner.createRun({ agentId: agent.id, input: "hello", idempotencyKey: "run-1" });
+  const claim = await owner.claimRun({ runId: run.id, expectedRevision: run.revision, executionId: "exec-1" as ExecutionId });
+  expect(claim.run.state).toBe("running");
+  // Simulate SIGKILL: no seal or release, the handle simply disappears.
+  store.close();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  return { runId: run.id, epoch: owner.lease.epoch };
+}
+
+test("SQLite DurableStore interrupts a crashed owner's running Run on single takeover and persists it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "single-takeover.sqlite");
+  try {
+    const crashed = await claimRunningRun(filename, "owner-a");
+    const successor = new SqliteStore(filename);
+    const owner = await successor.openOwner({ ownerId: "owner-b", leaseMs: 10_000 });
+    await owner.sealAndReleaseOwner();
+    successor.close();
+
+    const reopened = new SqliteStore(filename);
+    try {
+      const next = await reopened.openOwner({ ownerId: "owner-c", leaseMs: 10_000 });
+      expect(await next.snapshotRun(crashed.runId)).toMatchObject({ state: "failed", failure: { code: "runtime_interrupted" } });
+      await next.sealAndReleaseOwner();
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite DurableStore interrupts a crashed owner's running Run after an intermediate open and release", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rowan-durable-sqlite-"));
+  const filename = join(directory, "intermediate-release.sqlite");
+  try {
+    const crashed = await claimRunningRun(filename, "owner-a");
+
+    const intermediate = new SqliteStore(filename);
+    const owner = await intermediate.openOwner({ ownerId: "owner-b", leaseMs: 10_000 });
+    await owner.sealAndReleaseOwner();
+    intermediate.close();
+
+    const reopened = new SqliteStore(filename);
+    try {
+      const next = await reopened.openOwner({ ownerId: "owner-c", leaseMs: 10_000 });
+      expect(await next.snapshotRun(crashed.runId)).toMatchObject({ state: "failed", failure: { code: "runtime_interrupted" } });
+      await next.sealAndReleaseOwner();
+    } finally {
+      reopened.close();
+    }
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
