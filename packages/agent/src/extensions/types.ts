@@ -93,9 +93,13 @@ export interface ExtensionHost {
    * Called once per extension load. The returned namespaces are merged into that extension's `api`
    * (a name already used by Rowan's own API is an error). `dispose` runs when the extension is
    * unloaded, reloaded or fails activation, so the host can drop everything that extension registered.
+   * `kind` says whether the caller is an Extension or an Extension Phase, whose ids are separate.
    */
-  extendApi?(extensionId: string): HostApiExtension | undefined;
+  extendApi?(extensionId: string, kind: HostApiKind): HostApiExtension | undefined;
 }
+
+/** What is asking for host namespaces: an Extension, or a Phase whose code is an Extension factory. */
+export type HostApiKind = "extension" | "phase";
 
 export interface HostApiExtension {
   readonly namespaces: Readonly<Record<string, unknown>>;

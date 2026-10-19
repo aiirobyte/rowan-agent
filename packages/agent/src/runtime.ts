@@ -77,6 +77,7 @@ export type {
 export type {
   ExtensionHost,
   HostApiExtension,
+  HostApiKind,
   LoadExtensionsResult,
   LoadedExtension,
 } from "./extensions";

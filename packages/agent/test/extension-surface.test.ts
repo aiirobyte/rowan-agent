@@ -10,6 +10,7 @@ import type {
 } from "../src/index";
 import {
   AgentRuntime,
+  InMemoryExtensionHost,
   InMemoryStore,
   loadExtensions,
   loadPhase,
@@ -417,6 +418,28 @@ test("Extension Phase with no execute handler runs as model Phase", async () => 
     const b = await run.wait();
     expect(b.type).toBe("completed");
     expect(modelCalled).toBe(true);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("an Extension Phase asks the host for namespaces as a phase", async () => {
+  const asked: string[] = [];
+  const phase: Phase = {
+    name: "kind-phase",
+    description: "Reports its host kind",
+    filePath: "<test:kind>",
+    baseDir: "<test:kind>",
+    content: "Please respond.",
+    extensionFactory: async () => {},
+  };
+  const runtime = await AgentRuntime.init({
+    store: new InMemoryStore(),
+    host: new InMemoryExtensionHost({ extendApi: (id, kind) => { asked.push(`${kind}:${id}`); return undefined; } }),
+  });
+  try {
+    await runtime.loadPhases({ sourceId: "kind-source", values: [phase] });
+    expect(asked).toEqual(["phase:kind-phase"]);
   } finally {
     await runtime.close();
   }
