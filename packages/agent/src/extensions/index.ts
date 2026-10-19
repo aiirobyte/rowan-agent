@@ -24,9 +24,7 @@ export type {
   ExtensionAPI,
   ExtensionAgentsAPI,
   ExtensionAgentConsumerDisposer,
-  ExtensionDisposer,
   ExtensionFactory,
-  ExtensionFactoryResult,
   PhaseRunHandler,
   ExtensionAgentsRuntimeDelegate,
 } from "./api";
@@ -78,9 +76,6 @@ export type { SourceInfo } from "./types";
 // Types
 export type {
   ExtensionPackageManifest,
-  ExtensionCapability,
-  ExtensionCapabilityContribution,
-  ExtensionToolContribution,
   ExtensionHost,
   HostApiExtension,
   ExtensionStateStore,

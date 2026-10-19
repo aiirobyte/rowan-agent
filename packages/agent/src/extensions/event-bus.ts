@@ -23,12 +23,6 @@ export interface EventBus {
   on(event: string, listener: Listener): () => void;
   /** Emit an event to all subscribers. */
   emit(event: string, ...args: unknown[]): void;
-  /** Remove all listeners for an event, or all listeners if no event specified. */
-  off(event?: string): void;
-  /** Check if there are listeners for an event. */
-  has(event: string): boolean;
-  /** Get listener count for an event. */
-  count(event: string): number;
 }
 
 export function createEventBus(): EventBus {
@@ -55,23 +49,6 @@ export function createEventBus(): EventBus {
           console.error(`[event-bus] Listener error for "${event}":`, err);
         }
       }
-    },
-
-    off(event?: string): void {
-      if (event) {
-        listeners.delete(event);
-      } else {
-        listeners.clear();
-      }
-    },
-
-    has(event: string): boolean {
-      const set = listeners.get(event);
-      return set !== undefined && set.size > 0;
-    },
-
-    count(event: string): number {
-      return listeners.get(event)?.size ?? 0;
     },
   };
 }

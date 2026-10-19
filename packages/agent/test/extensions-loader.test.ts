@@ -58,7 +58,7 @@ test("ExtensionAPI utils provide helper functions", async () => {
 
   expect(capturedCtx).not.toBeNull();
   expect(Object.keys(capturedCtx!).sort()).toEqual([
-    "agents", "capabilities", "config", "context", "events", "hooks", "models", "phases", "skills", "state", "tools",
+    "agents", "config", "context", "events", "hooks", "models", "phases", "skills", "state", "tools",
   ]);
 });
 
@@ -240,12 +240,10 @@ test("EventBus supports pub/sub communication", () => {
   bus.emit("test:event", "hello");
 
   expect(received).toEqual([{ value: 42 }, "hello"]);
-  expect(bus.has("test:event")).toBe(true);
-  expect(bus.count("test:event")).toBe(1);
 
   unsub();
-  expect(bus.has("test:event")).toBe(false);
-  expect(bus.count("test:event")).toBe(0);
+  bus.emit("test:event", "after");
+  expect(received).toEqual([{ value: 42 }, "hello"]);
 });
 
 test("EventBus is shared across extensions via api.events", async () => {
@@ -384,75 +382,18 @@ test("ExtensionAPI skills namespace registers and unregisters Skill objects and 
   expect(runner.getSkills().length).toBe(0);
 });
 
-test("ExtensionAPI capabilities namespace contributes, updates, unregisters, and disposes tool capabilities", async () => {
+test("api.hooks.on returns an unsubscribe function", async () => {
   const runner = createExtensionRunner();
-  let capturedApi: ExtensionAPI | null = null;
-  const notifications: Array<readonly any[]> = [];
-
-  runner.onCapabilitiesChanged((caps) => {
-    notifications.push(caps);
-  });
-
-  const ext: LoadedExtension = {
-    path: "<test:capabilities>",
-    name: "test-capabilities",
-    id: "cap-ext-1",
+  let off: (() => void) | undefined;
+  await runner.loadExtensions([{
+    path: "<test:hook-off>",
+    name: "hook-off",
     factory: (api) => {
-      capturedApi = api;
-      api.capabilities.contribute({
-        kind: "tool",
-        name: "remote_tool_1",
-        description: "First remote tool",
-      });
+      off = api.hooks.on("before_tool_call", () => ({ allow: false }));
     },
-  };
-
-  await runner.loadExtensions([ext]);
-
-  // Initial contribution during load
-  const caps = runner.getCapabilities();
-  expect(caps).toHaveLength(1);
-  expect(caps[0]).toEqual({
-    extensionId: "cap-ext-1",
-    kind: "tool",
-    name: "remote_tool_1",
-    description: "First remote tool",
-  });
-  expect(notifications.length).toBeGreaterThanOrEqual(1);
-
-  // Dynamic contribution after load
-  const removeSecond = capturedApi!.capabilities.contribute({
-    kind: "tool",
-    name: "remote_tool_2",
-    description: "Second remote tool",
-  });
-
-  expect(runner.getCapabilities()).toHaveLength(2);
-  expect(runner.getCapabilities().map((c) => c.name)).toEqual(["remote_tool_1", "remote_tool_2"]);
-
-  // Updating an existing capability by name
-  capturedApi!.capabilities.contribute({
-    kind: "tool",
-    name: "remote_tool_1",
-    description: "Updated first remote tool",
-  });
-
-  expect(runner.getCapabilities()).toHaveLength(2);
-  expect(runner.getCapabilities().find((c) => c.name === "remote_tool_1")?.description).toBe("Updated first remote tool");
-
-  // Remove via returned disposer
-  removeSecond();
-  expect(runner.getCapabilities()).toHaveLength(1);
-  expect(runner.getCapabilities()[0]!.name).toBe("remote_tool_1");
-
-  // Validation
-  expect(() => capturedApi!.capabilities.contribute({} as any)).toThrow(TypeError);
-  expect(() => capturedApi!.capabilities.contribute({ kind: "invalid" as any, name: "x", description: "y" })).toThrow(TypeError);
-  expect(() => capturedApi!.capabilities.contribute({ kind: "tool", name: "", description: "y" })).toThrow(TypeError);
-  expect(() => capturedApi!.capabilities.contribute({ kind: "tool", name: "x", description: 123 as any })).toThrow(TypeError);
-
-  // Close runner removes contributions
+  }]);
+  expect(typeof off).toBe("function");
+  off!();
   await runner.close();
-  expect(runner.getCapabilities()).toHaveLength(0);
 });
 

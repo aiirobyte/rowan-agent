@@ -584,9 +584,6 @@ export interface AgentRuntime {
   listAgents(input?: { after?: AgentListCursor; limit?: number }): Promise<Page<AgentSummary, AgentListCursor>>;
   listRuns(input?: { agentId?: AgentId; states?: readonly RunState[]; after?: RunListCursor; limit?: number }): Promise<Page<RunSummary, RunListCursor>>;
   consume(input: { consumerId: string; signal: AbortSignal; onEvent(event: DurableRunEvent, context: Readonly<{ signal: AbortSignal }>): void | Promise<void> }): Promise<DurableConsumer>;
-  listCapabilities(): readonly import("../extensions").ExtensionCapability[];
-  onCapabilitiesChanged(listener: (capabilities: readonly import("../extensions").ExtensionCapability[]) => void): () => void;
-  triggerUiAction(event: { contributionId: string; actionId: string; scope?: ScopeRef }): void;
   close(): Promise<void>;
 }
 export type ConsumerRegistration = Readonly<{ cursor?: EventCursor; waterline: EventCursor }>;

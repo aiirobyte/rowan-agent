@@ -5,7 +5,7 @@
 import type { Phase, PhaseContext, PhaseOutput } from "../harness/phases/types";
 import type { Skill } from "../protocol";
 import type { PhaseExecution } from "../loop/execution";
-import type { ExtensionDisposer, ExtensionFactory } from "./api";
+import type { ExtensionFactory } from "./api";
 import type { JsonObject, JsonValue } from "../runtime-events";
 import type { Tool } from "../runtime/contracts";
 import type {
@@ -101,25 +101,6 @@ export interface HostApiExtension {
   readonly namespaces: Readonly<Record<string, unknown>>;
   dispose?(): void;
 }
-
-// ---------------------------------------------------------------------------
-// Capability contributions
-// ---------------------------------------------------------------------------
-
-export type ExtensionToolContribution = {
-  kind: "tool";
-  name: string;
-  description: string;
-};
-
-export type ExtensionCapabilityContribution = ExtensionToolContribution;
-
-export type ExtensionCapability = {
-  extensionId: string;
-  kind: "tool";
-  name: string;
-  description: string;
-};
 
 // ---------------------------------------------------------------------------
 // Source info — tracks where an extension registration came from.
@@ -269,9 +250,8 @@ export interface Extension {
   tools: Map<string, RegisteredTool>;
   phases: Set<string>;
   skills: Set<string>;
-  capabilities: Map<string, ExtensionCapabilityContribution>;
   cleanup: Array<() => void | Promise<void>>;
-  disposer?: ExtensionDisposer;
+  disposer?: () => void | Promise<void>;
   runtime: ExtensionRuntime;
   hostApi?: HostApiExtension;
 }
