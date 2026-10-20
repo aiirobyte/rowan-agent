@@ -532,3 +532,37 @@ test("maxAttempts suspends an autonomous self-loop instead of implicitly stoppin
     await runtime.close();
   }
 });
+
+function lookupTool(): Tool {
+  return {
+    name: "lookup",
+    description: "Look a word up.",
+    parameters: Type.Object({ q: Type.String() }),
+    execute: async (args) => ({ ok: true, content: `found ${(args as { q: string }).q}` }),
+  };
+}
+
+const callLookup = (q: string) => ({
+  type: "done" as const,
+  response: { content: "", toolCalls: [{ id: `call_${q}`, name: "lookup", arguments: { q } }], stopReason: "tool_use" as const },
+});
+
+test("maxAttempts never stops a Run whose Phases keep running Tools", async () => {
+  let turn = 0;
+  const stream: StreamFn = async function* () {
+    turn += 1;
+    // Each execution runs a Tool, then routes back into the Phase; 20 executions, then stop.
+    if (turn % 2 === 1) yield callLookup(String(turn));
+    else yield { type: "done", response: turn < 40 ? routeResponse([{ phase: "work" }], "") : stopResponse("done") };
+  };
+  const phases = new Map([["work", workPhase()]]) as Map<string, Phase>;
+  const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1 });
+  try {
+    const agentId = await routeAgent(runtime, stream, { phases, entryPhaseId: "work" }, 2, [lookupTool()], { idempotencyKey: "route-progress-agent" });
+    const run = await runtime.start(agentId, "hello", { idempotencyKey: "route-progress-run" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    expect(turn).toBe(40);
+  } finally {
+    await runtime.close();
+  }
+});
