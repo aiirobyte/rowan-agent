@@ -133,7 +133,6 @@ export type InteractionRecord = MessageBase &
     kind: RunInteractionKind;
     phase: string;
     status: "answered" | "replied" | "cancelled";
-    payload?: JsonValue;
     answer?: JsonValue;
     reply?: string;
     answerMetadata?: JsonObject;

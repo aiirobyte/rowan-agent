@@ -4,12 +4,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, RunInteractionCancelledError, SqliteStore } from "../../src/runtime/index";
+import { AgentRuntime, InMemoryConfigProvider, InMemoryStore, RunInteractionCancelledError, SqliteStore } from "../../src/runtime/index";
 import type { DurableStore } from "../../src/runtime/index";
+import type { OwnedStore } from "../../src/runtime/contracts";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import type { Phase, PhaseExecution } from "../../src/index";
 import type { AgentId, Message, RunId } from "../../src/runtime-events";
-import { configuration, seedResources, testDefinition } from "../fixtures/configuration";
+import { configuration, seedResources, TEST_SOURCE, testDefinition } from "../fixtures/configuration";
 import { routeResponse, stopResponse } from "./route-test-utils";
 
 type Delegated = Awaited<ReturnType<PhaseExecution["agents"]["delegate"]>>;
@@ -48,8 +49,11 @@ async function setup(options: {
   extensions?: ReturnType<typeof loadExtensionFromFactory>[];
   script?: (execution: PhaseExecution, input: string, runtime: AgentRuntime) => Promise<unknown>;
 }) {
+  const store = options.store ?? new InMemoryStore();
+  const configs = new InMemoryConfigProvider();
   const runtime = await AgentRuntime.init({
-    store: options.store ?? new InMemoryStore(),
+    store,
+    configs,
     concurrency: 4,
     ...(options.extensions ? { bootstrap: async (registry) => { await registry.loadExtensions(options.extensions!); } } : {}),
   });
@@ -60,16 +64,17 @@ async function setup(options: {
     if (result === "model") return { route: "default" };
     return { message: "launched", route: "stop", payload: (result ?? null) as never };
   });
+  const definitions = [
+    testDefinition({ name: "parent", phases: { entryPhaseId: "launch", phaseIds: ["launch"] } }),
+    testDefinition({
+      name: "child",
+      ...(childPhases.length > 0
+        ? { phases: { entryPhaseId: childPhases[0]!.name, phaseIds: childPhases.map(({ name }) => name) } }
+        : {}),
+    }),
+  ];
   const view = await seedResources(runtime, {
-    agents: [
-      testDefinition({ name: "parent", phases: { entryPhaseId: "launch", phaseIds: ["launch"] } }),
-      testDefinition({
-        name: "child",
-        ...(childPhases.length > 0
-          ? { phases: { entryPhaseId: childPhases[0]!.name, phaseIds: childPhases.map(({ name }) => name) } }
-          : {}),
-      }),
-    ],
+    agents: definitions,
     phases: [launch, ...childPhases],
   });
   const childConfiguration = (identity: string) => configuration({
@@ -93,7 +98,17 @@ async function setup(options: {
     const boundary = await run.wait();
     return { run, boundary };
   };
-  return { runtime, parentId, childConfiguration, parentRun, view };
+  const restart = () => AgentRuntime.init({
+    store,
+    configs,
+    concurrency: 4,
+    bootstrap: async (registry) => {
+      if (options.extensions) await registry.loadExtensions(options.extensions);
+      await registry.loadAgents({ sourceId: TEST_SOURCE, values: definitions });
+      await registry.loadPhases({ sourceId: TEST_SOURCE, values: [launch, ...childPhases] });
+    },
+  });
+  return { runtime, store, parentId, childConfiguration, parentRun, view, restart };
 }
 
 async function userMessages(runtime: AgentRuntime, agentId: AgentId): Promise<Message[]> {
@@ -482,6 +497,83 @@ test("the parent receives the child's permission Interaction with the requested 
     });
   } finally {
     await fixture.runtime.close();
+  }
+});
+
+test("owner loss during a held child Tool Call reports the failure to its parent", async () => {
+  const fixture = await setup({});
+  let recovered: AgentRuntime | undefined;
+  try {
+    const owned = (fixture.runtime as unknown as { owned: OwnedStore }).owned;
+    const child = await owned.reserveAgent({ idempotencyKey: "held-child", parentAgentId: fixture.parentId });
+    await owned.activateAgent(child.id);
+    const childRun = await owned.createRun({ agentId: child.id, input: "write it", idempotencyKey: "held-child-run" });
+    const claimed = await owned.claimRun({ runId: childRun.id, expectedRevision: childRun.revision });
+    const reserved = await owned.reserveToolCall({
+      runId: childRun.id,
+      execution: claimed.execution,
+      expectedRevision: claimed.run.revision,
+      requestMessageId: "held-child-request" as never,
+      toolCallId: "held-child-tool" as never,
+      name: "file_writer",
+      args: { path: "secrets.txt" },
+    });
+    const started = await owned.startToolCall({
+      runId: childRun.id,
+      execution: claimed.execution,
+      expectedRevision: reserved.run.revision,
+      toolCallId: reserved.toolCall.id,
+    });
+    await owned.raiseInteraction({
+      runId: childRun.id,
+      execution: claimed.execution,
+      expectedRevision: started.run.revision,
+      interaction: {
+        id: "held-child-approval",
+        phase: "work",
+        kind: "permission",
+        prompt: "Allow writing to secrets.txt?",
+        toolCallId: reserved.toolCall.id,
+        createdAt: new Date().toISOString(),
+        status: "pending",
+      },
+    });
+    expect(await owned.snapshotRun(childRun.id)).toMatchObject({
+      state: "input_required",
+      interactions: [{ id: "held-child-approval" }],
+    });
+
+    await fixture.runtime.close();
+    recovered = await fixture.restart();
+    const failure = {
+      code: "tool_indeterminate",
+      message: "The Runtime owner was sealed.",
+      toolCallIds: [reserved.toolCall.id],
+    } as const;
+    await expect(recovered.run(childRun.id).wait()).resolves.toEqual({ type: "failed", failure });
+    expect(await recovered.snapshot(childRun.id)).toMatchObject({ state: "failed", failure });
+
+    const report = await eventually(async () => {
+      const reports = reportsOf(await userMessages(recovered!, fixture.parentId), "rowan.child-outcome");
+      return reports.find(({ metadata }) => metadata.childRunId === childRun.id);
+    });
+    expect(report.metadata).toMatchObject({
+      childAgentId: child.id,
+      childRunId: childRun.id,
+      state: "failed",
+    });
+    expect(report.content).toMatchObject({ code: "tool_indeterminate", error: failure.message });
+    expect((await recovered.history(child.id)).find((message) =>
+      message.role === "interaction" && message.interactionId === "held-child-approval"
+    )).toMatchObject({ status: "cancelled" });
+    expect((fixture.store as InMemoryStore).exportState().toolCalls.filter((toolCall) =>
+      toolCall.runId === childRun.id
+      && (toolCall.status === "pending" || toolCall.status === "in_progress"
+        || toolCall.state === "pending" || toolCall.state === "in_progress")
+    )).toEqual([]);
+  } finally {
+    await recovered?.close();
+    await fixture.runtime.close().catch(() => undefined);
   }
 });
 
