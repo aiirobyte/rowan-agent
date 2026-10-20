@@ -98,12 +98,10 @@ export function createRunInteractionDriver(
     payload?: JsonValue;
     toolCallId?: string;
   }>): RunInteraction | undefined => {
-    const fingerprint = interactionFingerprint(input);
     return [...requests.values()].find((request) =>
       !usedRequestIds.has(request.id)
       && (answers.has(request.id) || request.status === "pending")
-      && request.toolCallId === input.toolCallId
-      && interactionFingerprint(request) === fingerprint);
+      && sameRunInteraction(request, input));
   };
 
   return {
@@ -203,7 +201,14 @@ const RUN_INTERACTION_KINDS: readonly RunInteractionKind[] = [
   "confirmation",
 ];
 
-function interactionFingerprint(value: Readonly<{
+export function sameRunInteraction(
+  left: Readonly<{ kind: RunInteractionKind; prompt: string; payload?: JsonValue; toolCallId?: string }>,
+  right: Readonly<{ kind: RunInteractionKind; prompt: string; payload?: JsonValue; toolCallId?: string }>,
+): boolean {
+  return left.toolCallId === right.toolCallId && interactionFingerprint(left) === interactionFingerprint(right);
+}
+
+export function interactionFingerprint(value: Readonly<{
   kind: RunInteractionKind;
   prompt: string;
   payload?: JsonValue;

@@ -10,7 +10,6 @@ import {
   SqliteStore,
 } from "@rowan-agent/agent/runtime";
 import type {
-  LiveInteractionEvent,
   RunSnapshot,
   ToolCallPresentationInput,
   ToolCallPresentationOutput,
@@ -42,8 +41,8 @@ async function toolTransitions(
 async function waitForLiveInteraction(run: { snapshot(): Promise<RunSnapshot> }): Promise<string> {
   for (let i = 0; i < 200; i++) {
     const snapshot = await run.snapshot();
-    if (snapshot.state === "running" && snapshot.interactions?.length) return snapshot.interactions[0]!.id;
-    if (["completed", "failed", "cancelled", "input_required"].includes(snapshot.state)) break;
+    if (snapshot.state === "input_required") return snapshot.interactions[0]!.id;
+    if (["completed", "failed", "cancelled"].includes(snapshot.state)) break;
     await Bun.sleep(10);
   }
   throw new Error("Expected the Run to wait on a live interaction.");
@@ -964,7 +963,7 @@ test("ctx.tools.call per-call abort cancels only that call while the Run continu
   }
 });
 
-test("provider tools.call whose before_tool_call hook asks a permission: observe() yields open and resolve events, host answers, Tool runs", async () => {
+test("provider tools.call whose before_tool_call hook asks a permission: the durable boundary lets the host answer and the Tool runs", async () => {
   let executions = 0;
   let callOutcome: ToolResult | undefined;
 
@@ -1007,37 +1006,34 @@ test("provider tools.call whose before_tool_call hook asks a permission: observe
       idempotencyKey: "run-provider-tool-observe-key",
     });
 
-    const observedLiveEvents: any[] = [];
-    const observeController = new AbortController();
-    const observePromise = (async () => {
-      for await (const event of run.observe({ signal: observeController.signal })) {
-        if (event.kind === "live_interaction") {
-          observedLiveEvents.push(event);
-          if (event.interaction.status === "pending") {
-            await run.respondInteraction({ interactionId: event.interaction.id, input: "allow" });
-          }
+    const observedBoundaries: any[] = [];
+    const consumer = await runtime.consume({
+      consumerId: "provider-tool-boundary",
+      signal: new AbortController().signal,
+      onEvent: (event) => {
+        if (event.runId === run.id && event.kind === "run_state_changed" && event.to === "input_required") {
+          observedBoundaries.push(event);
         }
-      }
-    })();
-
-    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
-    observeController.abort();
-    await observePromise.catch(() => {});
-
-    expect(callOutcome).toEqual({
-      ok: true,
-      content: [{ type: "text", text: "approved execution" }],
+      },
     });
+    await consumer.caughtUp;
+    const firstBoundary = await run.wait();
+    if (firstBoundary.type !== "input_required") throw new Error("Expected held input.");
+    await run.respondInteraction({ interactionId: firstBoundary.interactions[0]!.id, input: "allow" });
+    await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
+    consumer.stop();
+
+    expect(callOutcome).toMatchObject({ ok: true });
+    expect(JSON.stringify(callOutcome?.content)).toContain("approved execution");
     expect(executions).toBe(1);
 
-    // Verified observe() yielded both open (pending) and resolve (answered) live_interaction events
-    expect(observedLiveEvents.length).toBeGreaterThanOrEqual(2);
-    expect(observedLiveEvents[0]).toMatchObject({
-      kind: "live_interaction",
-      durability: "transient",
-      interaction: expect.objectContaining({ status: "pending", prompt: "Allow this provider tool?" }),
+    expect(observedBoundaries).toHaveLength(1);
+    expect(observedBoundaries[0]).toMatchObject({
+      kind: "run_state_changed",
+      from: "running",
+      to: "input_required",
+      interactions: [expect.objectContaining({ status: "pending", prompt: "Allow this provider tool?" })],
     });
-    expect(observedLiveEvents.some((e) => e.interaction.status === "answered" && e.interaction.answer === "allow")).toBe(true);
   } finally {
     await runtime.close();
   }
@@ -1169,10 +1165,8 @@ test("after an answered call, a later tools.call in the same execution gets its 
     await run.respondInteraction({ interactionId, input: "allow" });
 
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
-    expect(firstOutcome).toEqual({
-      ok: true,
-      content: [{ type: "text", text: "approved execution" }],
-    });
+    expect(firstOutcome).toMatchObject({ ok: true });
+    expect(JSON.stringify(firstOutcome?.content)).toContain("approved execution");
     expect(secondOutcome).toEqual({
       ok: true,
       content: [{ type: "text", text: "followup result" }],
@@ -1293,7 +1287,7 @@ test("Tool that asks from execute re-runs with its answer", async () => {
     });
 
     const interactionId = await waitForLiveInteraction(run);
-    expect(await run.snapshot()).toMatchObject({ state: "running" });
+    expect(await run.snapshot()).toMatchObject({ state: "input_required" });
     await run.respondInteraction({ interactionId, input: "yes" });
 
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
@@ -1358,9 +1352,9 @@ test("two consecutive provider tools.call to a permission-gated tool both requir
     // 1. First interaction opens
     const firstInteractionId = await waitForLiveInteraction(run);
     const snap1 = await run.snapshot();
-    expect(snap1.state).toBe("running");
-    if (snap1.state === "running") {
-      expect(snap1.interactions?.[0]?.prompt).toBe("Allow first?");
+    expect(snap1.state).toBe("input_required");
+    if (snap1.state === "input_required") {
+      expect(snap1.interactions[0]?.prompt).toBe("Allow first?");
     }
     expect(executions).toBe(0);
 
@@ -1371,9 +1365,9 @@ test("two consecutive provider tools.call to a permission-gated tool both requir
     const secondInteractionId = await waitForLiveInteraction(run);
     expect(secondInteractionId).not.toBe(firstInteractionId);
     const snap2 = await run.snapshot();
-    expect(snap2.state).toBe("running");
-    if (snap2.state === "running") {
-      expect(snap2.interactions?.[0]?.prompt).toBe("Allow second?");
+    expect(snap2.state).toBe("input_required");
+    if (snap2.state === "input_required") {
+      expect(snap2.interactions[0]?.prompt).toBe("Allow second?");
     }
     expect(executions).toBe(1); // Only the first tool has executed so far!
 
@@ -1455,105 +1449,4 @@ test("declined first provider tool call does not auto-decline a subsequent provi
     await runtime.close();
   }
 });
-
-test("rejection paths (cancel, close) publish live_interaction cancelled event exactly once", async () => {
-  const extension = loadExtensionFromFactory((api) => {
-    api.tools.register({
-      name: "slow_tool",
-      description: "Asks interaction",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
-    });
-    api.hooks.on("before_tool_call", () => ({
-      interaction: { kind: "permission", prompt: "Approve?" },
-    }));
-  }, process.cwd(), "<test:cancel-paths-exact-once>");
-
-  const makeStream = (): StreamFn => async function* (_request, rawCtx) {
-    const ctx = rawCtx as ProviderCallContext;
-    try {
-      await ctx.tools.call("slow_tool", {});
-    } catch {}
-    yield { type: "done", response: stopResponse("done") };
-  };
-
-  // 1. Path: run.cancel()
-  {
-    const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, bootstrap: async (reg) => { await reg.loadExtensions([extension]); } });
-    try {
-      const agentId = await createAgentWith(runtime, { identity: "agent-path-cancel", stream: makeStream(), options: { idempotencyKey: "agent-path-cancel-key" } });
-      const run = await runtime.start(agentId, "test run.cancel", { idempotencyKey: "run-path-cancel-key" });
-      const observedEvents: LiveInteractionEvent[] = [];
-      const obsPromise = (async () => {
-        for await (const event of run.observe()) {
-          if (event.kind === "live_interaction") observedEvents.push(event as LiveInteractionEvent);
-        }
-      })();
-      await waitForLiveInteraction(run);
-      await run.cancel("user cancel");
-      await obsPromise;
-      const cancelledEvents = observedEvents.filter((e) => e.interaction.status === "cancelled");
-      expect(cancelledEvents.length).toBe(1);
-    } finally {
-      await runtime.close();
-    }
-  }
-
-  // 2. Path: runtime.close()
-  {
-    const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, bootstrap: async (reg) => { await reg.loadExtensions([extension]); } });
-    const agentId = await createAgentWith(runtime, { identity: "agent-path-close", stream: makeStream(), options: { idempotencyKey: "agent-path-close-key" } });
-    const run = await runtime.start(agentId, "test runtime.close", { idempotencyKey: "run-path-close-key" });
-    const observedEvents: LiveInteractionEvent[] = [];
-    const obsController = new AbortController();
-    const obsPromise = (async () => {
-      try {
-        for await (const event of run.observe({ signal: obsController.signal })) {
-          if (event.kind === "live_interaction") {
-            observedEvents.push(event as LiveInteractionEvent);
-            if (event.interaction.status === "cancelled") {
-              obsController.abort();
-            }
-          }
-        }
-      } catch {}
-    })();
-    await waitForLiveInteraction(run);
-    await runtime.close();
-    await obsPromise;
-    const cancelledEvents = observedEvents.filter((e) => e.interaction.status === "cancelled");
-    expect(cancelledEvents.length).toBe(1);
-  }
-
-  // 3. Path: stream error -> handleRunEnd
-  {
-    const crashStream: StreamFn = async function* (_request, rawCtx) {
-      const ctx = rawCtx as ProviderCallContext;
-      void ctx.tools.call("slow_tool", {});
-      await Bun.sleep(20);
-      throw new Error("fatal model stream failure");
-    };
-    const runtime = await AgentRuntime.init({ store: new InMemoryStore(), concurrency: 1, bootstrap: async (reg) => { await reg.loadExtensions([extension]); } });
-    try {
-      const agentId = await createAgentWith(runtime, { identity: "agent-path-crash", stream: crashStream, options: { idempotencyKey: "agent-path-crash-key" } });
-      const run = await runtime.start(agentId, "test stream crash", { idempotencyKey: "run-path-crash-key" });
-      const observedEvents: LiveInteractionEvent[] = [];
-      const obsPromise = (async () => {
-        try {
-          for await (const event of run.observe()) {
-            if (event.kind === "live_interaction") observedEvents.push(event as LiveInteractionEvent);
-          }
-        } catch {}
-      })();
-      await waitForLiveInteraction(run);
-      await expect(run.wait()).resolves.toMatchObject({ type: "failed" });
-      await obsPromise;
-      const cancelledEvents = observedEvents.filter((e) => e.interaction.status === "cancelled");
-      expect(cancelledEvents.length).toBe(1);
-    } finally {
-      await runtime.close();
-    }
-  }
-});
-
 

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@rowan-agent/models";
-import { AgentRuntime, InMemoryStore, SqliteStore } from "../../src/runtime/index";
+import { AgentRuntime, InMemoryStore, RunInteractionCancelledError, SqliteStore } from "../../src/runtime/index";
 import type { DurableStore } from "../../src/runtime/index";
 import { loadExtensionFromFactory } from "../../src/extensions/loader";
 import type { Phase, PhaseExecution } from "../../src/index";
@@ -540,10 +540,93 @@ test("a live Interaction raised while the child's tool runs reaches the parent, 
       interactionKind: "permission",
     });
     expect(report!.content).toMatchObject({ prompt: "Allow writing to secrets.txt?", payload: { path: "secrets.txt" } });
-    await expect(fixture.runtime.snapshot(child!.runId)).resolves.toMatchObject({ state: "running", interactions: [{ id: report!.content.interactionId, phase: "work" }] });
+    await expect(fixture.runtime.snapshot(child!.runId)).resolves.toMatchObject({ state: "input_required", interactions: [{ id: report!.content.interactionId, phase: "work" }] });
     await fixture.runtime.respondInteraction(child!.runId, { interactionId: report!.content.interactionId, input: "allow" });
     await expect(fixture.runtime.run(child!.runId).wait()).resolves.toMatchObject({ type: "completed" });
     expect(toolOutcome).toMatchObject({ ok: true });
+  } finally {
+    await fixture.runtime.close();
+  }
+});
+
+test("a second held child Interaction reaches the parent, and each durable report is delivered exactly once", async () => {
+  let child: Delegated | undefined;
+  const answers: unknown[] = [];
+  const childStream: StreamFn = async function* (_request, rawCtx) {
+    const ctx = rawCtx as any;
+    answers.push(...await Promise.all([
+      ctx.interact({ id: "first", kind: "permission", prompt: "Allow first?", payload: { target: "one" } }),
+      ctx.interact({ id: "second", kind: "permission", prompt: "Allow second?", payload: { target: "two" } }),
+    ]));
+    yield { type: "done", response: stopResponse("child done") };
+  };
+  const fixture = await setup({
+    childStream,
+    childPhases: [{ name: "work", description: "work", filePath: "<test>", baseDir: "<test>", content: "work", isolated: false }],
+    script: async (execution, input) => {
+      if (input === "go") child = await execution.agents.delegate({ create: () => fixture.childConfiguration("child-v1"), input: "ask twice" });
+      return null;
+    },
+  });
+  try {
+    await fixture.parentRun("go");
+    const reports = await eventually(async () => {
+      const found = reportsOf(await userMessages(fixture.runtime, fixture.parentId), "rowan.child-interaction");
+      return found.length >= 2 ? found : undefined;
+    });
+    await settle();
+    const settledReports = reportsOf(await userMessages(fixture.runtime, fixture.parentId), "rowan.child-interaction");
+    expect(settledReports).toHaveLength(2);
+    expect(new Set(settledReports.map((report) => report.metadata.interactionId)).size).toBe(2);
+    expect(settledReports.map((report) => report.content.prompt).sort()).toEqual(["Allow first?", "Allow second?"]);
+    expect(reports.map((report) => report.content.interactionId).sort()).toEqual(
+      settledReports.map((report) => report.metadata.interactionId).sort(),
+    );
+
+    const boundary = await fixture.runtime.run(child!.runId).wait();
+    if (boundary.type !== "input_required") throw new Error("Expected two held child Interactions.");
+    expect(boundary.interactions).toHaveLength(2);
+    for (const interaction of boundary.interactions) {
+      await fixture.runtime.respondInteraction(child!.runId, { interactionId: interaction.id, input: "allow" });
+    }
+    await expect(fixture.runtime.run(child!.runId).wait()).resolves.toMatchObject({ type: "completed" });
+    expect(answers).toEqual(["allow", "allow"]);
+  } finally {
+    await fixture.runtime.close();
+  }
+});
+
+test("delegate({ agentId }) replies to a held child wait with the not-granted reply text", async () => {
+  let child: Delegated | undefined;
+  let childError: unknown;
+  const childStream: StreamFn = async function* (_request, rawCtx) {
+    try {
+      await (rawCtx as any).interact({ id: "approval", kind: "permission", prompt: "Allow?" });
+    } catch (error) {
+      childError = error;
+    }
+    yield { type: "done", response: stopResponse("child continued") };
+  };
+  const fixture = await setup({
+    childStream,
+    childPhases: [{ name: "work", description: "work", filePath: "<test>", baseDir: "<test>", content: "work", isolated: false }],
+    script: async (execution, input) => {
+      if (input === "go") {
+        child = await execution.agents.delegate({ create: () => fixture.childConfiguration("child-v1"), input: "start" });
+      } else if (input === "reply") {
+        await execution.agents.delegate({ agentId: child!.agentId, create: () => { throw new Error("unused"); }, input: "changed course" });
+      }
+      return null;
+    },
+  });
+  try {
+    await fixture.parentRun("go");
+    await expect(fixture.runtime.run(child!.runId).wait()).resolves.toMatchObject({ type: "input_required" });
+    await fixture.parentRun("reply");
+    await eventually(() => childError);
+    expect(childError).toBeInstanceOf(RunInteractionCancelledError);
+    expect((childError as Error).message).toBe("The user replied instead: changed course");
+    await expect(fixture.runtime.run(child!.runId).wait()).resolves.toMatchObject({ type: "completed" });
   } finally {
     await fixture.runtime.close();
   }

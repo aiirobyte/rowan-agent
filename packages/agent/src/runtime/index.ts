@@ -59,7 +59,6 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
-  LiveInteractionEvent,
   OpaqueId,
   Outcome,
   TextBlock,

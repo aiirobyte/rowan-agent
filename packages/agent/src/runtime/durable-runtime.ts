@@ -60,7 +60,7 @@ import type {
   ToolProgress,
   ToolResult,
 } from "@rowan-agent/models";
-import type { AgentId, AssistantMessage, ExecutionId, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
+import type { AgentId, AssistantMessage, ExecutionId, InteractionRecord, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
 import { pageAgents, pageRuns } from "./read-models";
@@ -74,7 +74,7 @@ import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES 
 import { preparePhasePayload } from "../harness/phases/input";
 import { isSchemaParseError, toolErrorMessage } from "../harness/tools";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
+import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, sameRunInteraction, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import { defaultToolCallContent, isControlMetadata, isControlRun } from "./durable-store";
 import { assertJsonValue, isJsonValue } from "./json";
@@ -128,10 +128,21 @@ type ConsumerSubscription = {
 type ActiveExecution = Readonly<{
   controller: AbortController;
   executionId: ExecutionId;
+  onRevision(revision: number): void;
+  usedReplayAnswers: Set<string>;
   reservedToolCalls: Set<ToolCallId>;
   startedToolCalls: Set<ToolCallId>;
   providerToolCalls: Map<string, ToolCallId>;
 }>;
+
+type LiveInteractionWaiter = {
+  interaction: RunInteraction;
+  ready: Promise<void>;
+  markReady(): void;
+  failReady(error: unknown): void;
+  resolve(value: JsonValue): void;
+  reject(error: unknown): void;
+};
 
 type ExecutionToolConfig = Readonly<{
   tools: readonly DurableTool[];
@@ -293,14 +304,7 @@ export class AgentRuntime implements AgentRuntimeContract {
   private readonly startedRuns = new Set<string>();
   private readonly liveInteractions = new Map<
     RunId,
-    Map<
-      string,
-      {
-        interaction: RunInteraction;
-        resolve: (val: JsonValue) => void;
-        reject: (err: unknown) => void;
-      }
-    >
+    Map<string, LiveInteractionWaiter>
   >();
   private heartbeat?: ReturnType<typeof setInterval>;
   private pumping = false;
@@ -349,23 +353,34 @@ export class AgentRuntime implements AgentRuntimeContract {
     }
   }
 
-  private publishLiveInteraction(runId: RunId, interaction: RunInteraction): void {
-    this.transientEvents.publish({
-      kind: "live_interaction",
-      durability: "transient",
-      runId,
-      executionId: this.executions.get(runId)?.executionId,
-      interaction,
-    });
-  }
-
   private cancelLiveInteractions(runId: RunId, reason: string): void {
     const runLive = this.liveInteractions.get(runId);
     if (!runLive) return;
     this.liveInteractions.delete(runId);
     for (const live of runLive.values()) {
-      this.publishLiveInteraction(runId, { ...live.interaction, status: "cancelled" });
       live.reject(new RunInteractionCancelledError(reason));
+    }
+  }
+
+  private resolveRepliedLiveInteractions(run: RunRecord): void {
+    const runLive = this.liveInteractions.get(run.id);
+    if (!runLive) return;
+    for (const [interactionId, live] of [...runLive]) {
+      const answer = run.interactionAnswers?.[interactionId];
+      if (
+        !answer
+        || typeof answer !== "object"
+        || Array.isArray(answer)
+        || (answer as JsonObject).status !== "replied"
+        || typeof (answer as JsonObject).reply !== "string"
+      ) continue;
+      live.reject(new RunInteractionCancelledError(renderInteractionText({
+        kind: live.interaction.kind,
+        status: "replied",
+        prompt: live.interaction.prompt,
+        reply: (answer as JsonObject).reply as string,
+        result: live.interaction.result,
+      })));
     }
   }
 
@@ -494,10 +509,10 @@ export class AgentRuntime implements AgentRuntimeContract {
       .filter((run) => ["queued", "running", "input_required"].includes(run.state));
     const existing = active.find((run) => controlRunPhase(run) === options.phase);
     if (existing) return new DurableRun(this, existing.id);
-    // An input-required Run is paused and does not consume the execution
-    // slot; manual control runs are explicitly allowed while it waits for
-    // the next user input. Only queued/running work blocks a Control Run.
-    const blocking = active.find((run) => (run.state === "queued" || run.state === "running") && !isControlRun(run));
+    // A suspended input-required Run does not occupy the execution slot. A
+    // held input-required Run still does, because its execution is alive.
+    const blocking = active.find((run) => !isControlRun(run)
+      && (run.state === "queued" || run.state === "running" || (run.state === "input_required" && run.execution !== undefined)));
     if (blocking) throw new RuntimeError("context_busy", { agentId, runId: blocking.id, actual: blocking.state });
     const metadata: JsonObject = {
       rowan: {
@@ -596,6 +611,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       ...(pinnedConfigToken === agent.currentConfigToken ? {} : { pinnedConfigToken }),
       idempotencyKey: options.idempotencyKey,
     });
+    this.executions.get(run.id)?.onRevision(run.revision);
+    this.resolveRepliedLiveInteractions(run);
     void this.pump();
     return new DurableRun(this, run.id);
   }
@@ -755,14 +772,40 @@ export class AgentRuntime implements AgentRuntimeContract {
     return { caughtUp: subscription.caughtUp.promise, done: subscription.done.promise, stop: () => controller.abort() };
   }
 
-  private async liveInteract(runId: RunId, request: RunInteractionRequest, signal: AbortSignal): Promise<JsonValue> {
+  private async liveInteract(
+    runId: RunId,
+    request: RunInteractionRequest,
+    signal: AbortSignal,
+    execution: import("./contracts").ExecutionToken,
+    expectedRevision: number,
+    onRevision: (revision: number) => void,
+    replay: Readonly<{ history: readonly import("../runtime-events").Message[]; answers: Readonly<Record<string, JsonValue>> }>,
+  ): Promise<JsonValue> {
     if (signal.aborted) throw signal.reason ?? new Error("Run aborted");
-    const run = await this.owned.snapshotRun(runId).catch(() => undefined);
-    if (signal.aborted) throw signal.reason ?? new Error("Run aborted");
+    const active = this.executions.get(runId);
+    if (!active || active.executionId !== execution.executionId) {
+      throw new RuntimeError("runtime_ownership_lost", {
+        reason: "epoch_advanced",
+        expectedEpoch: execution.ownerEpoch,
+        actualEpoch: execution.ownerEpoch,
+      });
+    }
+
+    const answered = replay.history.find((message): message is InteractionRecord =>
+      message.role === "interaction"
+      && message.status === "answered"
+      && replay.answers[message.interactionId] !== undefined
+      && !active.usedReplayAnswers.has(message.interactionId)
+      && sameRunInteraction(message, request));
+    if (answered) {
+      active.usedReplayAnswers.add(answered.interactionId);
+      return structuredClone(replay.answers[answered.interactionId]!);
+    }
+
     const interactionId = request.id ?? (createId("interaction") as string);
-    const interaction: RunInteraction = {
+    let interaction: RunInteraction = {
       id: interactionId,
-      phase: run?.currentPhaseId ?? "default",
+      phase: "default",
       kind: request.kind,
       prompt: request.prompt,
       payload: request.payload,
@@ -771,48 +814,68 @@ export class AgentRuntime implements AgentRuntimeContract {
       status: "pending",
       result: request.result,
     };
-
     let runLive = this.liveInteractions.get(runId);
     if (!runLive) {
       runLive = new Map();
       this.liveInteractions.set(runId, runLive);
     }
 
-    this.publishLiveInteraction(runId, interaction);
-
-    const answered = new Promise<JsonValue>((resolve, reject) => {
-      const onAbort = () => {
-        runLive?.delete(interactionId);
-        if (runLive && runLive.size === 0) this.liveInteractions.delete(runId);
-        signal.removeEventListener("abort", onAbort);
-        this.publishLiveInteraction(runId, { ...interaction, status: "cancelled" });
-        reject(signal.reason ?? new Error("Run aborted"));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-
-      runLive!.set(interactionId, {
-        interaction,
-        resolve: (val) => {
-          signal.removeEventListener("abort", onAbort);
-          resolve(val);
-        },
-        reject: (err) => {
-          signal.removeEventListener("abort", onAbort);
-          reject(err);
-        },
-      });
+    const ready = deferred();
+    const answer = deferred<JsonValue>();
+    let settled = false;
+    const remove = () => {
+      runLive?.delete(interactionId);
+      if (runLive && runLive.size === 0) this.liveInteractions.delete(runId);
+    };
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      remove();
+      fn();
+    };
+    const onAbort = () => {
+      ready.reject(signal.reason ?? new Error("Run aborted"));
+      settle(() => answer.reject(signal.reason ?? new Error("Run aborted")));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    runLive.set(interactionId, {
+      get interaction() {
+        return interaction;
+      },
+      ready: ready.promise,
+      markReady: () => ready.resolve(),
+      failReady: (error) => ready.reject(error),
+      resolve: (value) => settle(() => answer.resolve(value)),
+      reject: (error) => settle(() => answer.reject(error)),
     });
-    // A live Interaction is not durable, so the child-reports consumer never sees it: tell the parent now, best effort.
-    if (run) {
-      const { agentId } = run;
-      void this.owned.listAgents()
-        .then((agents) => {
-          const parentAgentId = agents.find(({ id }) => id === agentId)?.parentAgentId;
-          return parentAgentId === undefined ? undefined : this.reportChildInteractions(parentAgentId, { agentId, runId }, [interaction]);
-        })
-        .catch(() => undefined);
+
+    try {
+      let revision = expectedRevision;
+      let raised: import("./contracts").InteractionRaise | undefined;
+      for (;;) {
+        try {
+          raised = await this.owned.raiseInteraction({
+            runId,
+            execution,
+            expectedRevision: revision,
+            interaction,
+          });
+          break;
+        } catch (error) {
+          if (!(error instanceof RuntimeError) || error.code !== "run_state_conflict") throw error;
+          revision = (await this.owned.snapshotRun(runId)).revision;
+        }
+      }
+      interaction = raised.interaction;
+      onRevision(raised.run.revision);
+      ready.resolve();
+    } catch (error) {
+      ready.reject(error);
+      settle(() => answer.reject(error));
+      throw error;
     }
-    return answered;
+    return answer.promise;
   }
 
   onProvidersChanged(listener: () => void): () => void {
@@ -836,15 +899,7 @@ export class AgentRuntime implements AgentRuntimeContract {
 
   async snapshot(runId: RunId): Promise<RunSnapshot> {
     this.assertOpen();
-    const snap = await this.owned.snapshotRun(runId);
-    const runLive = this.liveInteractions.get(runId);
-    if (runLive && runLive.size > 0 && snap.state === "running") {
-      return {
-        ...snap,
-        interactions: [...runLive.values()].map((l) => l.interaction),
-      };
-    }
-    return snap;
+    return this.owned.snapshotRun(runId);
   }
 
   async history(agentId: AgentId): Promise<readonly import("../runtime-events").Message[]> {
@@ -855,30 +910,32 @@ export class AgentRuntime implements AgentRuntimeContract {
   async respondInteraction(runId: RunId, input: { interactionId: string; input?: JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<void> {
     this.assertOpen();
     if (input.metadata !== undefined) assertMetadata(input.metadata, "input.metadata");
-    const answerMetadata = input.metadata === undefined ? {} : { answerMetadata: input.metadata };
     const runLive = this.liveInteractions.get(runId);
     const live = runLive?.get(input.interactionId);
-    if (live) {
-      runLive!.delete(input.interactionId);
-      if (runLive!.size === 0) this.liveInteractions.delete(runId);
-      if (input.cancel) {
-        this.publishLiveInteraction(runId, { ...live.interaction, status: "cancelled", ...answerMetadata });
-        live.reject(new RunInteractionCancelledError("Run interaction cancelled."));
-      } else if (input.input !== undefined) {
-        this.publishLiveInteraction(runId, { ...live.interaction, status: "answered", answer: input.input, ...answerMetadata });
-        live.resolve(input.input);
-      } else {
-        live.reject(new TypeError("respondInteraction requires input or cancel: true"));
-      }
-      return;
+    if (live) await live.ready;
+    if (!input.cancel && input.input === undefined) {
+      const error = new TypeError("respondInteraction requires input or cancel: true");
+      live?.reject(error);
+      throw error;
     }
-
     const snapshot = await this.owned.snapshotRun(runId);
     if (snapshot.state !== "input_required" || !snapshot.interactions.some((interaction) => interaction.id === input.interactionId)) {
       throw new RuntimeError("input_request_conflict", { runId, interactionId: input.interactionId, reason: "not_found" });
     }
-    await this.owned.answerInteraction({ runId, interactionId: input.interactionId, expectedRevision: snapshot.revision, input: input.input, cancel: input.cancel, metadata: input.metadata });
-    void this.pump();
+    const answered = await this.owned.answerInteraction({
+      runId,
+      interactionId: input.interactionId,
+      expectedRevision: snapshot.revision,
+      input: input.input,
+      cancel: input.cancel,
+      metadata: input.metadata,
+    });
+    this.executions.get(runId)?.onRevision(answered.revision);
+    if (live) {
+      if (input.cancel) live.reject(new RunInteractionCancelledError("Run interaction cancelled."));
+      else live.resolve(input.input!);
+    }
+    if (answered.state === "queued") void this.pump();
   }
 
   async cancel(runId: RunId, reason?: string): Promise<RunBoundary> {
@@ -1026,6 +1083,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       this.executions.set(run.id, {
         controller,
         executionId,
+        onRevision: (revision) => { if (revision > executionRevision) executionRevision = revision; },
+        usedReplayAnswers: new Set(),
         reservedToolCalls: new Set(),
         startedToolCalls: new Set(),
         providerToolCalls: new Map(),
@@ -1330,7 +1389,15 @@ export class AgentRuntime implements AgentRuntimeContract {
         retryDelayMs: this.retryDelayMs,
         onContext: assembly.setContext,
         runtime: {
-          interact: (request) => this.liveInteract(run.id, request, controller.signal),
+          interact: (request) => this.liveInteract(
+            run.id,
+            request,
+            controller.signal,
+            claim!.execution,
+            executionRevision,
+            (revision) => { if (revision > executionRevision) executionRevision = revision; },
+            { history: claim!.history, answers: claim!.run.interactionAnswers ?? {} },
+          ),
           delegate: (options) => this.delegate(run.agentId, options),
           tools: ({ toolCall, contentBlocks, driver, options, providerInitiated, model: callModel, usage: callUsage, phase: callPhase }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
@@ -1384,7 +1451,15 @@ export class AgentRuntime implements AgentRuntimeContract {
                       try {
                         for (const interaction of error.interactions) {
                           interactionIds.push(interaction.id);
-                          const answer = await this.liveInteract(run.id, interaction, controller.signal);
+                          const answer = await this.liveInteract(
+                            run.id,
+                            interaction,
+                            controller.signal,
+                            claim!.execution,
+                            executionRevision,
+                            (revision) => { if (revision > executionRevision) executionRevision = revision; },
+                            { history: claim!.history, answers: claim!.run.interactionAnswers ?? {} },
+                          );
                           driver?.answer?.(interaction.id, answer);
                         }
                         driver?.clearCheckpoint();

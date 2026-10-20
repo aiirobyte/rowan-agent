@@ -30,6 +30,7 @@ import type {
   ExecutionId,
   ExecutionToken,
   EventCursor,
+  InteractionRaise,
   Message,
   MessageId,
   Outcome,
@@ -509,6 +510,10 @@ export class SqliteStore implements DurableStore {
     pendingToolCallIds?: readonly ToolCallId[];
   }): Promise<RunRecord> {
     return this.invoke(lease, (store, current) => store.commitInputRequired(current, input));
+  }
+
+  async raiseInteraction(lease: OwnerLease, input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; interaction: RunInteraction }): Promise<InteractionRaise> {
+    return this.invoke(lease, (store, current) => store.raiseInteraction(current, input));
   }
 
   async answerInteraction(lease: OwnerLease, input: { runId: RunId; interactionId: string; expectedRevision: number; input?: JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<RunRecord> {
@@ -1374,6 +1379,7 @@ class SqliteOwnedStore implements OwnedStore {
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
   commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> { return this.store.commitPhaseOutput(this.lease, input); }
   commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
+  raiseInteraction(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; interaction: RunInteraction }): Promise<InteractionRaise> { return this.store.raiseInteraction(this.lease, input); }
   answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject; model?: import("@rowan-agent/models").ModelRef; usage?: import("@rowan-agent/models").LlmTokenUsage }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }

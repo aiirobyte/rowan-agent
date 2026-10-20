@@ -105,23 +105,16 @@ test("a live Interaction publishes the answer metadata and invalid metadata is r
   try {
     const agentId = await createAgentWith(runtime, { identity: "live-v1", stream, options: { idempotencyKey: "live-agent" } });
     const run = await runtime.start(agentId, "go", { idempotencyKey: "live-run" });
-    const answered: any[] = [];
-    const controller = new AbortController();
-    const observing = (async () => {
-      for await (const event of run.observe({ signal: controller.signal })) {
-        if (event.kind !== "live_interaction") continue;
-        if (event.interaction.status === "answered") answered.push(event.interaction);
-        if (event.interaction.status === "pending") {
-          await expect(run.respondInteraction({ interactionId: event.interaction.id, input: "allow", metadata: [] as never }))
-            .rejects.toThrow("metadata");
-          await run.respondInteraction({ interactionId: event.interaction.id, input: "allow", metadata: { answeredBy: "alice" } });
-        }
-      }
-    })();
+    const boundary = await run.wait();
+    if (boundary.type !== "input_required") throw new Error("Expected held input.");
+    const interactionId = boundary.interactions[0]!.id;
+    await expect(run.respondInteraction({ interactionId, input: "allow", metadata: [] as never }))
+      .rejects.toThrow("metadata");
+    await run.respondInteraction({ interactionId, input: "allow", metadata: { answeredBy: "alice" } });
     await expect(run.wait()).resolves.toMatchObject({ type: "completed" });
-    controller.abort();
-    await observing.catch(() => {});
-    expect(answered).toMatchObject([{ answer: "allow", answerMetadata: { answeredBy: "alice" } }]);
+    expect(interactionsOf(await runtime.history(agentId))).toMatchObject([
+      { answer: "allow", answerMetadata: { answeredBy: "alice" } },
+    ]);
   } finally {
     await runtime.close();
   }

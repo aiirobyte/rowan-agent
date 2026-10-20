@@ -35,7 +35,6 @@ import type {
   ExecutionId,
   JsonObject,
   JsonValue,
-  LiveInteractionEvent,
   Message,
   MessageDelta,
   MessageId,
@@ -89,7 +88,6 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
-  LiveInteractionEvent,
   Message,
   MessageDelta,
   ThinkingDelta,
@@ -303,6 +301,7 @@ export type ToolCallReservation = Readonly<{
 }>;
 export type ToolCommit = Readonly<{ run: RunRecord; toolCall: ToolCallSnapshot }>;
 export type ToolBatchCommit = Readonly<{ run: RunRecord; toolCalls: readonly ToolCallSnapshot[] }>;
+export type InteractionRaise = Readonly<{ run: RunRecord; interaction: RunInteraction }>;
 export type EntryPhaseSpec = Readonly<{ phase: string; payload?: JsonValue }>;
 export type RunRecord = Readonly<{
   id: RunId;
@@ -432,6 +431,12 @@ export interface OwnedStore {
     interactionAnswers?: Readonly<Record<string, JsonValue>>;
     pendingToolCallIds?: readonly ToolCallId[];
   }): Promise<RunRecord>;
+  raiseInteraction(input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    interaction: RunInteraction;
+  }): Promise<InteractionRaise>;
   answerInteraction(input: {
     runId: RunId;
     interactionId: string;

@@ -88,7 +88,6 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
-  LiveInteractionEvent,
   Message,
   MessageBase,
   MessageCommitted,
