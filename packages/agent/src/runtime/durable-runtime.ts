@@ -663,31 +663,6 @@ export class AgentRuntime implements AgentRuntimeContract {
     }
   }
 
-  /** The `respond_interaction` Core Tool: answers a pending Interaction of one of `parentAgentId`'s children. */
-  private async respondChildInteraction(
-    parentAgentId: AgentId,
-    input: Readonly<{ agentId: AgentId; interactionId: string; answer: JsonValue }>,
-  ): Promise<ToolResult> {
-    const refuse = (message: string): ToolResult => ({ ok: false, content: message, error: message });
-    const child = (await this.owned.listAgents()).find(({ id }) => id === input.agentId);
-    if (child?.parentAgentId !== parentAgentId) return refuse(`Agent ${input.agentId} is not a child of this Agent.`);
-    for (const run of await this.owned.listRuns({ agentId: child.id, states: ["running", "input_required"] })) {
-      const snapshot = await this.snapshot(run.id);
-      const interactions = snapshot.state === "running" || snapshot.state === "input_required" ? snapshot.interactions : undefined;
-      if (!interactions?.some(({ id, status }) => id === input.interactionId && status === "pending")) continue;
-      try {
-        await this.respondInteraction(run.id, { interactionId: input.interactionId, input: input.answer });
-      } catch (error) {
-        // Someone answered between the check and the answer; the first answer wins.
-        if (error instanceof RuntimeError && (error.code === "input_request_conflict" || error.code === "run_state_conflict")) break;
-        throw error;
-      }
-      const message = `Answered Interaction ${input.interactionId} of Agent ${input.agentId}.`;
-      return { ok: true, content: message };
-    }
-    return refuse(`Interaction ${input.interactionId} of Agent ${input.agentId} is not pending; it was already answered or has ended.`);
-  }
-
   run(runId: RunId): AgentRun {
     return new DurableRun(this, runId);
   }
@@ -1054,10 +1029,6 @@ export class AgentRuntime implements AgentRuntimeContract {
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(run.agentId),
         scope: run.scope,
-        // Only an Agent with children has anyone to answer for.
-        ...((await this.owned.listAgents()).some(({ parentAgentId }) => parentAgentId === run.agentId)
-          ? { respondChildInteraction: (parent, input) => this.respondChildInteraction(parent, input) }
-          : {}),
       });
       toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream

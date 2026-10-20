@@ -485,67 +485,6 @@ test("the parent receives the child's permission Interaction with the requested 
   }
 });
 
-test("respond_interaction answers a child's permission Interaction and refuses a non-child or a settled one", async () => {
-  let child: Delegated | undefined;
-  let stranger: AgentId | undefined;
-  const results: string[] = [];
-  let answered: { agentId: string; interactionId: string } | undefined;
-  const parentStream: StreamFn = async function* (request) {
-    const last = request.messages.at(-1)!;
-    const text = typeof last.content === "string" ? last.content : JSON.stringify(last.content);
-    const call = (args: unknown) => ({
-      type: "done" as const,
-      response: { content: "", toolCalls: [{ id: `r${results.length}`, name: "respond_interaction", arguments: args }], stopReason: "tool_use" as const },
-    });
-    if (last.role === "tool") {
-      results.push(text);
-      yield { type: "done", response: stopResponse("handled") };
-    } else if (text.includes("rowan.child-interaction")) {
-      const report = JSON.parse(text) as { childAgentId: string; interactionId: string };
-      answered = { agentId: report.childAgentId, interactionId: report.interactionId };
-      yield call({ ...answered, answer: "allow" });
-    } else if (text === "refuse") {
-      yield call({ agentId: stranger, interactionId: "nope", answer: "allow" });
-    } else if (text === "again") {
-      yield call({ ...answered!, answer: "allow" });
-    } else {
-      yield { type: "done", response: stopResponse("ok") };
-    }
-  };
-  const fixture = await setup({
-    childStream: writingChild(),
-    parentStream,
-    extensions: [permissionExtension()],
-    script: async (execution, input) => {
-      if (input !== "go") return "model";
-      child = await execution.agents.delegate({ create: () => fixture.childConfiguration("child-v1"), input: "write it" });
-      return null;
-    },
-  });
-  try {
-    stranger = await fixture.runtime.createAgent(fixture.childConfiguration("stranger-v1"), { idempotencyKey: "stranger" });
-    await fixture.parentRun("go");
-    // The parent's model answers the child's request through the Core Tool.
-    await expect(fixture.runtime.run(child!.runId).wait()).resolves.toMatchObject({ type: "input_required" });
-    const completed = await eventually(async () => {
-      const snapshot = await fixture.runtime.run(child!.runId).snapshot();
-      return snapshot.state === "completed" ? snapshot : undefined;
-    });
-    expect(completed).toMatchObject({ state: "completed", outcome: { message: "written" } });
-    const history = await fixture.runtime.history(child!.agentId);
-    expect(history.some((m) => m.role === "interaction" && m.status === "answered" && m.answer === "allow")).toBe(true);
-
-    // The Interaction is settled now, and the stranger is not a child.
-    await fixture.parentRun("again");
-    await fixture.parentRun("refuse");
-    await eventually(() => results.length >= 3 ? true : undefined);
-    expect(results.join("\n")).toContain("not pending");
-    expect(results.join("\n")).toContain("not a child");
-  } finally {
-    await fixture.runtime.close();
-  }
-});
-
 test("a child's parentAgentId persists in both durable stores", async () => {
   const directory = await mkdtemp(join(tmpdir(), "rowan-child-agents-store-"));
   try {
