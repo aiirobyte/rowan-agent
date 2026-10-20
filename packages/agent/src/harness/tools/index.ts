@@ -173,6 +173,21 @@ function toolResult(input: {
     : { ok: false, content: input.content, error: input.error ?? "Tool execution failed" };
 }
 
+/** A typebox ParseError: not an Error, it carries the failed schema checks in `errors`. */
+export function isSchemaParseError(error: unknown): error is { errors: Array<{ instancePath?: string; message?: string }> } {
+  return !(error instanceof Error) && Array.isArray((error as { errors?: unknown } | null)?.errors);
+}
+
+/** A thrown value as a message, with a schema ParseError spelled out. */
+export function toolErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (isSchemaParseError(error) && error.errors.length > 0) {
+    const { errors } = error;
+    return `Invalid arguments: ${errors.map((item) => `${item.instancePath || "/"} ${item.message ?? "is invalid"}`).join("; ")}`;
+  }
+  return String(error);
+}
+
 export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): Promise<ToolResult> {
   const tool = input.tools.find((candidate) => candidate.name === input.toolCall.name);
   if (!tool) {
@@ -187,13 +202,17 @@ export async function executeRuntimeToolCall(input: RuntimeToolExecutionInput): 
 
   let args: unknown;
   try {
-    const rawArgs = input.toolCall.arguments;
+    let rawArgs: unknown = input.toolCall.arguments;
+    // Some models JSON-encode the arguments object a second time.
+    if (typeof rawArgs === "string") {
+      try { rawArgs = JSON.parse(rawArgs); } catch { /* validation reports it */ }
+    }
     args = validatorFor(tool.parameters).Parse(rawArgs);
   } catch (error) {
     const result = toolResult({
       ok: false,
       content: null,
-      error: error instanceof Error ? error.message : String(error),
+      error: toolErrorMessage(error),
     });
     await input.observe?.({ type: "tool_end", toolName: tool.name, result });
     return result;
@@ -390,7 +409,7 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool {
         return toolResult({
           ok: false,
           content: null,
-          error: error instanceof Error ? error.message : String(error),
+          error: toolErrorMessage(error),
         });
       }
 
@@ -409,7 +428,7 @@ export function createReadTool(context: NormalizedCoreToolContext): Tool {
         return toolResult({
           ok: false,
           content: null,
-          error: error instanceof Error ? error.message : String(error),
+          error: toolErrorMessage(error),
         });
       }
       const source = new TextDecoder().decode(bytes);
@@ -541,7 +560,7 @@ export function createEditTool(context: NormalizedCoreToolContext): Tool {
         return toolResult({
           ok: false,
           content: null,
-          error: error instanceof Error ? error.message : String(error),
+          error: toolErrorMessage(error),
         });
       }
       await writeFile(resolved.absolutePath, next, "utf8");

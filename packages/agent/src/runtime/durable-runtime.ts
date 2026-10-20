@@ -69,6 +69,7 @@ import { InMemoryConfigProvider } from "./config-provider";
 import { startSessionFilesConsumer } from "./session-files";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
+import { isSchemaParseError, toolErrorMessage } from "../harness/tools";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
@@ -1703,12 +1704,12 @@ export class AgentRuntime implements AgentRuntimeContract {
               expectedRevision: revision,
               toolCallId,
               state: "failed",
-              result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+              result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available. Available tools: ${input.toolConfig.tools.map(({ name }) => name).join(", ")}.` },
               title: toolCall.name,
               kind: "other",
             });
             setRevision(failed.run.revision);
-            results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
+            results.push(protocolFailure(`Tool ${toolCall.name} is not available. Available tools: ${input.toolConfig.tools.map(({ name }) => name).join(", ")}.`));
             continue;
           }
 
@@ -1842,12 +1843,12 @@ export class AgentRuntime implements AgentRuntimeContract {
           expectedRevision: revision,
           toolCallId,
           state: "failed",
-          result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available.` },
+          result: { ok: false, content: null, error: `Tool ${toolCall.name} is not available. Available tools: ${input.toolConfig.tools.map(({ name }) => name).join(", ")}.` },
           title: toolCall.name,
           kind: "other",
         });
         setRevision(failed.run.revision);
-        results.push(protocolFailure(`Tool ${toolCall.name} is not available.`));
+        results.push(protocolFailure(`Tool ${toolCall.name} is not available. Available tools: ${input.toolConfig.tools.map(({ name }) => name).join(", ")}.`));
         continue;
       }
 
@@ -2278,7 +2279,11 @@ export class AgentRuntime implements AgentRuntimeContract {
         throw error;
       }
       let result = await withAbort(
-        input.durableTool.execute(toolCallArgs(input.toolCall), context, effectiveSignal),
+        // Invalid arguments are the model's to fix: a result it can read, not an indeterminate outcome.
+        Promise.resolve(input.durableTool.execute(toolCallArgs(input.toolCall), context, effectiveSignal)).catch((error: unknown) => {
+          if (isSchemaParseError(error)) return { ok: false as const, content: null, error: toolErrorMessage(error) };
+          throw error;
+        }),
         input.options?.signal,
       );
       if (!("ok" in result)) {
@@ -2763,6 +2768,10 @@ function toJsonValue(value: unknown): JsonValue {
   return value;
 }
 function toolCallArgs(toolCall: LlmToolCall): JsonValue {
+  // Some models JSON-encode the arguments object a second time.
+  if (typeof toolCall.arguments === "string") {
+    try { return toJsonValue(JSON.parse(toolCall.arguments)); } catch { /* keep the raw string */ }
+  }
   return toJsonValue(toolCall.arguments);
 }
 function createMergedToolCall(
