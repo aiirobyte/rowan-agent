@@ -1,5 +1,5 @@
 import { createId, createTimestamp } from "../../utils";
-import type { JsonValue } from "../../runtime-events";
+import type { JsonObject, JsonValue } from "../../runtime-events";
 import type { ExecutionState } from "../../loop/types";
 import { assertJsonValue, canonicalJson } from "../../runtime/json";
 import type { RunInteractionKind, RunInteractionRequest } from "@rowan-agent/models";
@@ -15,6 +15,8 @@ export type RunInteraction = RunInteractionRequest & Readonly<{
   status: RunInteractionStatus;
   answer?: JsonValue;
   reply?: string;
+  /** Opaque host metadata about how the Interaction ended; Rowan stores it and never interprets it. */
+  answerMetadata?: JsonObject;
   /** The Run is only waiting for the next user message, not asking a question. */
   turnBoundary?: true;
 }>;

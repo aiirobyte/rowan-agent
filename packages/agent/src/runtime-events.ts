@@ -135,6 +135,7 @@ export type InteractionRecord = MessageBase &
     status: "answered" | "replied" | "cancelled";
     answer?: JsonValue;
     reply?: string;
+    answerMetadata?: JsonObject;
     toolCallId?: ToolCallId;
   }> &
   Pick<RunInteractionRequest, "prompt" | "result">;
