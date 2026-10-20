@@ -18,6 +18,8 @@ export const authorTypeExports = [
   "ContextCandidate",
   "ContextCompactionRecord",
   "ContextStatus",
+  "DelegateOptions",
+  "DelegateResult",
   "DurableConsumer",
   "DurableRunEvent",
   "EventBus",

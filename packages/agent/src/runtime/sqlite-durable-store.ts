@@ -63,9 +63,10 @@ import type { ToolCallId, ToolResult as ToolResultEvent, JsonValue } from "../ru
 import type { RunInteraction } from "../harness/phases/interactions";
 
 const SCHEMA_ID = "rowan.agent.runtime";
-// Message revisions and history seeds are a clean durable-store cutover. Old
-// Rowan databases are rejected and must be removed/recreated by Doctor Repair.
-const SCHEMA_VERSION = "2";
+// Message revisions, history seeds and parent Agents are clean durable-store
+// cutovers. Old Rowan databases are rejected and must be removed/recreated by
+// Doctor Repair.
+const SCHEMA_VERSION = "3";
 const SCHEMA_VALUE = `${SCHEMA_ID}:${SCHEMA_VERSION}`;
 const RETENTION_FLOOR_KEY = "retention_floor";
 const STATE_ROW = 1;
@@ -109,6 +110,7 @@ const CURRENT_SCHEMA_SQL = `
     id TEXT PRIMARY KEY NOT NULL,
     agent_sequence INTEGER,
     metadata_json TEXT,
+    parent_agent_id TEXT,
     config_token TEXT,
     config_identity TEXT,
     created_at TEXT NOT NULL,
@@ -436,7 +438,7 @@ export class SqliteStore implements DurableStore {
     return join(this.archiveRoot, String(agentId));
   }
 
-  async reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> {
+  async reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: JsonObject; parentAgentId?: AgentId; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> {
     return this.invoke(lease, (store, current) => store.reserveAgent(current, input));
   }
 
@@ -786,10 +788,11 @@ export class SqliteStore implements DurableStore {
 
   private loadTableBackedState(metadata: any): InMemoryStoreState {
     const agentRows = this.database.query(
-      "SELECT id, metadata_json, config_token, config_identity, created_at, activated_at, updated_at FROM agents ORDER BY created_at"
+      "SELECT id, metadata_json, parent_agent_id, config_token, config_identity, created_at, activated_at, updated_at FROM agents ORDER BY created_at"
     ).all() as Array<{
       id: string;
       metadata_json: string | null;
+      parent_agent_id: string | null;
       config_token: string | null;
       config_identity: string | null;
       created_at: string;
@@ -799,6 +802,7 @@ export class SqliteStore implements DurableStore {
     const agents: AgentRecord[] = agentRows.map((row) => ({
       id: row.id as AgentId,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) } : {}),
+      ...(row.parent_agent_id ? { parentAgentId: row.parent_agent_id as AgentId } : {}),
       ...(row.config_token ? { currentConfigToken: row.config_token as ConfigToken } : {}),
       ...(row.config_identity ? { currentConfigIdentity: row.config_identity } : {}),
       createdAt: row.created_at,
@@ -867,10 +871,11 @@ export class SqliteStore implements DurableStore {
 
   private getStmtUpsertAgent(): Statement {
     return (this.stmtUpsertAgent ??= this.database.prepare(
-      `INSERT INTO agents (id, metadata_json, config_token, config_identity, created_at, activated_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO agents (id, metadata_json, parent_agent_id, config_token, config_identity, created_at, activated_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          metadata_json = excluded.metadata_json,
+         parent_agent_id = excluded.parent_agent_id,
          config_token = excluded.config_token,
          config_identity = excluded.config_identity,
          activated_at = excluded.activated_at,
@@ -975,6 +980,7 @@ export class SqliteStore implements DurableStore {
       this.getStmtUpsertAgent().run(
         agent.id,
         agent.metadata === undefined ? null : JSON.stringify(agent.metadata),
+        agent.parentAgentId ?? null,
         agent.currentConfigToken ?? null,
         agent.currentConfigIdentity ?? null,
         agent.createdAt,
@@ -1094,6 +1100,7 @@ export class SqliteStore implements DurableStore {
       this.getStmtUpsertAgent().run(
         agent.id,
         agent.metadata === undefined ? null : JSON.stringify(agent.metadata),
+        agent.parentAgentId ?? null,
         agent.currentConfigToken ?? null,
         agent.currentConfigIdentity ?? null,
         agent.createdAt,
@@ -1345,7 +1352,7 @@ class SqliteOwnedStore implements OwnedStore {
 
   contextArchiveDir(agentId: AgentId): string { return this.store.contextArchiveDir(agentId); }
 
-  reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
+  reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; parentAgentId?: AgentId; configIdentity?: string; historySeed?: import("./contracts").HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
   deleteAgent(input: AgentDeletionRequest): Promise<void> { return this.store.deleteAgent(this.lease, input); }

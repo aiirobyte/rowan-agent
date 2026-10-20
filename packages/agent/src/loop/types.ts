@@ -14,6 +14,7 @@ import type { RunInteractionDriver, RunInteractionState } from "../harness/phase
 import type { ModelTranscript } from "../protocol/turn";
 import type { BeforePhaseResult, AfterPhaseResult } from "../extensions/hooks";
 import type { JsonValue, Outcome, ToolResultRecord } from "../runtime-events";
+import type { DelegateOptions, DelegateResult } from "./execution";
 
 export const DEFAULT_MAX_ATTEMPTS = 16;
 
@@ -188,4 +189,6 @@ export type AgentRuntimePort = {
   tools?: ToolRunner;
   toolsBatch?: ToolBatchRunner;
   interact?: (request: import("@rowan-agent/models").RunInteractionRequest) => Promise<import("../runtime-events").JsonValue>;
+  /** Create or continue a child Agent of the Agent running the Phase; the key is always set. */
+  delegate?: (options: DelegateOptions & { idempotencyKey: string }) => Promise<DelegateResult>;
 };

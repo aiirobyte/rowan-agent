@@ -6,7 +6,7 @@ import type { ConfigurationSnapshot } from "./configuration-snapshot";
 import type { JsonValue } from "../runtime-events";
 import type { BeforePhaseHook, AfterPhaseHook, BeforePromptHook, AgentContext } from "../loop/types";
 import type { ToolResult } from "@rowan-agent/models";
-import { createRuntimeCoreTools } from "./core-tools";
+import { createRuntimeCoreTools, type RespondChildInteraction } from "./core-tools";
 
 export type ExtensionAssembly = Readonly<{
   context: ResolvedAgentContext;
@@ -24,7 +24,7 @@ export type ExtensionAssembly = Readonly<{
 export function assembleRegisteredExtensions(
   snapshot: ConfigurationSnapshot,
   runner: import("../extensions").ExtensionRunner,
-  options: Readonly<{ toolArchiveDir?: string; scope?: import("@rowan-agent/models").ScopeRef }> = {},
+  options: Readonly<{ toolArchiveDir?: string; scope?: import("@rowan-agent/models").ScopeRef; respondChildInteraction?: RespondChildInteraction }> = {},
 ): ExtensionAssembly {
   // Extension contributions reach this assembly the way every other resource
   // does: through the Resource View's implicit Extension source. The assembly
@@ -32,7 +32,7 @@ export function assembleRegisteredExtensions(
   const coreTools = createRuntimeCoreTools({
     root: snapshot.cwd,
     ...(options.toolArchiveDir ? { archiveDir: options.toolArchiveDir } : {}),
-  });
+  }, options.respondChildInteraction);
   const replacingNames = new Set(
     snapshot.resources.tools
       .filter((tool) => tool.core)

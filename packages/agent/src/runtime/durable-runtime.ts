@@ -67,6 +67,8 @@ import { PARALLEL_PHASE_METADATA_KEY, projectAssistantMessage, projectModelConte
 import { assembleRegisteredExtensions } from "./extensions";
 import { InMemoryConfigProvider } from "./config-provider";
 import { startSessionFilesConsumer } from "./session-files";
+import { CHILD_REPORTS_CONSUMER_ID, childInteractionInput, childOutcomeInput, isSettledChildRun, toolCallOf } from "./child-reports";
+import type { DelegateOptions, DelegateResult } from "../loop/execution";
 import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
 import { isSchemaParseError, toolErrorMessage } from "../harness/tools";
@@ -336,6 +338,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       if (options.sessionFiles) {
         await startSessionFilesConsumer(runtime, options.sessionFiles);
       }
+      // Children created before a restart still report to their parents.
+      if ((await owned.listAgents()).some((agent) => agent.parentAgentId !== undefined)) runtime.reportChildRuns();
       return runtime;
     } catch (error) {
       await runtime.resources.closeExtensions().catch(() => undefined);
@@ -593,6 +597,95 @@ export class AgentRuntime implements AgentRuntimeContract {
     });
     void this.pump();
     return new DurableRun(this, run.id);
+  }
+
+  /**
+   * Creates a child of `parentAgentId` and starts its Run, or continues one of
+   * its children. Continuing is a plain `start`: the store resumes a Run that
+   * waits for input, orders a new Run behind a running one, and starts a fresh
+   * Run on a settled child, which keeps its history.
+   */
+  private async delegate(parentAgentId: AgentId, options: DelegateOptions & { idempotencyKey: string }): Promise<DelegateResult> {
+    const metadata = options.metadata === undefined ? {} : { metadata: options.metadata };
+    const start = (agentId: AgentId) =>
+      this.start(agentId, options.input, { idempotencyKey: `delegate:${options.idempotencyKey}`, ...metadata });
+    if (options.agentId !== undefined) {
+      const child = await this.requireAgent(options.agentId);
+      if (child.parentAgentId !== parentAgentId) throw new RuntimeError("not_child_agent", { agentId: child.id, parentAgentId });
+      return { agentId: child.id, runId: (await start(child.id)).id, created: false };
+    }
+    this.assertOpen();
+    const agentId = await this.commands.createAgent({
+      config: await options.create(),
+      ...metadata,
+      parentAgentId,
+      idempotencyKey: `delegate:${parentAgentId}:${options.idempotencyKey}`,
+    });
+    this.reportChildRuns();
+    return { agentId, runId: (await start(agentId)).id, created: true };
+  }
+
+  /** Starts the durable consumer that tells a parent what its children's Runs did. */
+  private reportChildRuns(): void {
+    if (this.consumers.has(CHILD_REPORTS_CONSUMER_ID)) return;
+    void this.consume({
+      consumerId: CHILD_REPORTS_CONSUMER_ID,
+      signal: new AbortController().signal,
+      onEvent: (event) => this.reportChildEvent(event),
+    }).then((consumer) => consumer.caughtUp.catch(() => undefined), () => undefined);
+  }
+
+  /**
+   * Each report is a Run on the parent, keyed by the event (or the Interaction)
+   * it reports, so a redelivered event finds the Run it already started.
+   */
+  private async reportChildEvent(event: DurableRunEvent): Promise<void> {
+    if (event.kind !== "run_state_changed" || isControlMetadata(event.metadata)) return;
+    if (!isSettledChildRun(event) && event.to !== "input_required") return;
+    const parentAgentId = (await this.owned.listAgents()).find(({ id }) => id === event.agentId)?.parentAgentId;
+    if (parentAgentId === undefined) return;
+    try {
+      if (isSettledChildRun(event)) {
+        await this.start(parentAgentId, childOutcomeInput(event), { idempotencyKey: `child-outcome:${event.id}` });
+        return;
+      }
+      if (event.to !== "input_required") return;
+      const pending = event.interactions.filter(({ status }) => status === "pending");
+      const history = pending.some(({ toolCallId }) => toolCallId !== undefined) ? await this.owned.history(event.agentId) : [];
+      for (const interaction of pending) {
+        await this.start(parentAgentId, childInteractionInput(event, interaction, toolCallOf(history, interaction)), {
+          idempotencyKey: `child-interaction:${event.runId}:${interaction.id}`,
+        });
+      }
+    } catch (error) {
+      // A deleted parent has nobody left to tell.
+      if (!(error instanceof RuntimeError && error.code === "agent_not_found")) throw error;
+    }
+  }
+
+  /** The `respond_interaction` Core Tool: answers a pending Interaction of one of `parentAgentId`'s children. */
+  private async respondChildInteraction(
+    parentAgentId: AgentId,
+    input: Readonly<{ agentId: AgentId; interactionId: string; answer: JsonValue }>,
+  ): Promise<ToolResult> {
+    const refuse = (message: string): ToolResult => ({ ok: false, content: message, error: message });
+    const child = (await this.owned.listAgents()).find(({ id }) => id === input.agentId);
+    if (child?.parentAgentId !== parentAgentId) return refuse(`Agent ${input.agentId} is not a child of this Agent.`);
+    for (const run of await this.owned.listRuns({ agentId: child.id, states: ["running", "input_required"] })) {
+      const snapshot = await this.snapshot(run.id);
+      const interactions = snapshot.state === "running" || snapshot.state === "input_required" ? snapshot.interactions : undefined;
+      if (!interactions?.some(({ id, status }) => id === input.interactionId && status === "pending")) continue;
+      try {
+        await this.respondInteraction(run.id, { interactionId: input.interactionId, input: input.answer });
+      } catch (error) {
+        // Someone answered between the check and the answer; the first answer wins.
+        if (error instanceof RuntimeError && (error.code === "input_request_conflict" || error.code === "run_state_conflict")) break;
+        throw error;
+      }
+      const message = `Answered Interaction ${input.interactionId} of Agent ${input.agentId}.`;
+      return { ok: true, content: message };
+    }
+    return refuse(`Interaction ${input.interactionId} of Agent ${input.agentId} is not pending; it was already answered or has ended.`);
   }
 
   run(runId: RunId): AgentRun {
@@ -961,6 +1054,10 @@ export class AgentRuntime implements AgentRuntimeContract {
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(run.agentId),
         scope: run.scope,
+        // Only an Agent with children has anyone to answer for.
+        ...((await this.owned.listAgents()).some(({ parentAgentId }) => parentAgentId === run.agentId)
+          ? { respondChildInteraction: (parent, input) => this.respondChildInteraction(parent, input) }
+          : {}),
       });
       toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream
@@ -1241,6 +1338,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         onContext: assembly.setContext,
         runtime: {
           interact: (request) => this.liveInteract(run.id, request, controller.signal),
+          delegate: (options) => this.delegate(run.agentId, options),
           tools: ({ toolCall, contentBlocks, driver, options, providerInitiated, model: callModel, usage: callUsage, phase: callPhase }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
               if (!providerInitiated) {
