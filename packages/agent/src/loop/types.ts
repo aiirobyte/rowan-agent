@@ -122,6 +122,7 @@ export type AgentConfig = {
   context: AgentContext;
   /** Durable Run identity passed to generated Phase callbacks. */
   execution: PhaseExecutionIdentity;
+  /** Consecutive Phase executions that run no Tool before the Run waits for input. */
   maxAttempts?: number;
   runtime?: AgentRuntimePort;
   signal?: AbortSignal;

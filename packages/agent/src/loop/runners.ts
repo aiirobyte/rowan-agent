@@ -533,6 +533,7 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       });
       await ctx.messageManager.end(messageId);
     }
+    ctx.progressed = true;
   }
 }
 
@@ -579,6 +580,8 @@ async function runPhaseLoop(
   if (resumingSuspendedRun) {
     state.status = "running";
     delete state.entryPhases;
+    // Resuming means a person answered (a permission, a question): a fresh window.
+    state.attempt = 0;
   }
   let previousPayload: unknown = resumingSuspendedRun
     ? (state.continuation && Object.hasOwn(state.continuation, "previousPayload")
@@ -892,6 +895,9 @@ async function runPhaseLoop(
     // Execute phase
     const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext, completedPhases };
     let output = await executePhase(runtime);
+    // maxAttempts bounds consecutive executions that ran no Tool (routing in circles),
+    // never a Run that keeps doing work.
+    if (runtime.progressed) state.attempt = 0;
     delete state.initialPhasePayload;
     delete state.entryPhases;
 
@@ -1166,6 +1172,8 @@ interface PhaseRuntime {
   context: PhaseContext;
   /** Phases that have completed execution in this Run, used for route tool context. */
   completedPhases?: readonly string[];
+  /** Set once this execution runs a Tool: a Phase doing work is not a stuck one. */
+  progressed?: boolean;
 }
 
 /** Execute phase code — run (PhaseContext) or LLM-driven. */
