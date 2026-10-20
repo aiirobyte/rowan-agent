@@ -348,34 +348,30 @@ export class InMemoryStore implements DurableStore {
     this.ownerEpoch = Math.max(this.ownerEpoch, ownerEpoch);
     for (const run of this.runs.values()) {
       if (!run.execution || run.execution.ownerEpoch > ownerEpoch) continue;
-      if (run.state === "input_required") {
-        // Keep the Interaction and its answer path, but forget the dead Execution Attempt.
-        this.dropClaimReceipt(run.execution);
-        delete run.execution;
-        run.revision += 1;
-        run.updatedAt = createTimestamp();
-        this.touchRun(run);
-        continue;
-      }
-      // Any Run still running under an epoch at or below ownerEpoch has no live owner left to finish it.
-      if (run.state !== "running") continue;
+      // A live execution is lost the same way whether its Run is running or
+      // held by an Interaction. A suspended input_required Run has no execution
+      // and intentionally survives this sweep.
+      if (run.state !== "running" && run.state !== "input_required") continue;
+      const from = run.state;
+      const execution = run.execution;
       const activeToolCalls = [...this.toolCalls.values()]
-        .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.status === "pending" || toolCall.status === "in_progress" || toolCall.state === "pending" || toolCall.state === "in_progress"));
+        .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === execution.executionId && (toolCall.status === "pending" || toolCall.status === "in_progress" || toolCall.state === "pending" || toolCall.state === "in_progress"));
       const indeterminateToolCallIds: ToolCallId[] = [];
       for (const toolCall of activeToolCalls) {
         if (toolCall.status === "in_progress" || toolCall.state === "in_progress") indeterminateToolCallIds.push(toolCall.id);
         this.interruptToolCall(run, toolCall, message);
       }
+      this.cancelOpenInteractions(run);
       const failure: RunFailure = indeterminateToolCallIds.length > 0
         ? { code: "tool_indeterminate", message, toolCallIds: indeterminateToolCallIds as [ToolCallId, ...ToolCallId[]] }
         : { code: "runtime_interrupted", message, ownerEpoch };
       run.state = "failed";
       run.failure = failure;
-      this.dropClaimReceipt(run.execution);
+      this.dropClaimReceipt(execution);
       delete run.execution;
       run.revision += 1;
       run.updatedAt = createTimestamp();
-      this.appendTransition(run, "running", "failed", { failure });
+      this.appendTransition(run, from, "failed", { failure });
       this.dropRunOperationReceipts(run.id);
     }
   }
@@ -750,7 +746,6 @@ export class InMemoryStore implements DurableStore {
       prompt: interaction.prompt,
       phase: interaction.phase,
       status,
-      ...(interaction.payload !== undefined ? { payload: clone(interaction.payload) } : {}),
       ...(answer !== undefined ? { answer: clone(answer) } : {}),
       ...(reply !== undefined ? { reply } : {}),
       ...(answerMetadata !== undefined ? { answerMetadata: clone(answerMetadata) } : {}),
@@ -762,6 +757,25 @@ export class InMemoryStore implements DurableStore {
     this.storeMessage(record);
     this.appendMessage(run, record);
     return record;
+  }
+
+  private cancelOpenInteractions(run: StoredRun): void {
+    const openInteractions = run.openInteractions ?? [];
+    if (openInteractions.length === 0) return;
+    for (const interaction of openInteractions) {
+      this.commitInteractionRecord(run, interaction, "cancelled");
+    }
+    if (run.checkpoint?.data && typeof run.checkpoint.data === "object") {
+      const stored = (run.checkpoint.data as any).runInteractions ?? (run.checkpoint.data as any).phaseInteractions;
+      if (stored?.requests && Array.isArray(stored.requests)) {
+        const cancelled = new Set(openInteractions.map(({ id }) => id));
+        for (const request of stored.requests) {
+          if (cancelled.has(request.id)) request.status = "cancelled";
+        }
+      }
+    }
+    delete run.openInteractions;
+    delete run.interactionAnswers;
   }
 
   createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
@@ -1557,11 +1571,7 @@ export class InMemoryStore implements DurableStore {
       this.storeMessage(output);
       this.appendMessage(run, output);
     }
-    if (run.openInteractions && run.openInteractions.length > 0) {
-      for (const interaction of run.openInteractions) {
-        this.commitInteractionRecord(run, interaction, "cancelled");
-      }
-    }
+    this.cancelOpenInteractions(run);
     if (indeterminateToolCallIds.length > 0) {
       const failure: RunFailure = {
         code: "tool_indeterminate",
@@ -1573,8 +1583,6 @@ export class InMemoryStore implements DurableStore {
       delete run.cancellationReason;
       this.dropClaimReceipt(run.execution);
       delete run.execution;
-      delete run.openInteractions;
-      delete run.interactionAnswers;
       run.revision += 1;
       run.updatedAt = createTimestamp();
       this.touchRun(run);
@@ -1587,8 +1595,6 @@ export class InMemoryStore implements DurableStore {
     run.cancellationReason = input.reason;
     this.dropClaimReceipt(run.execution);
     delete run.execution;
-    delete run.openInteractions;
-    delete run.interactionAnswers;
     run.revision += 1;
     run.updatedAt = createTimestamp();
     this.touchRun(run);

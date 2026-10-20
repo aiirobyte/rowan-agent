@@ -5,10 +5,8 @@ import { join } from "node:path";
 import type { StreamFn } from "@rowan-agent/models";
 import {
   AgentRuntime,
-  InMemoryConfigProvider,
   InMemoryStore,
   SqliteStore,
-  type DurableStore,
   type ExecutionToken,
 } from "../../src/runtime/index";
 import type { OwnedStore } from "../../src/runtime/contracts";
@@ -21,13 +19,13 @@ import { stopResponse } from "./route-test-utils";
 type StoreCase = Readonly<{
   name: string;
   open(): Promise<Readonly<{
-    store: DurableStore;
+    store: InMemoryStore | SqliteStore;
     owner: OwnedStore;
     dispose(): Promise<void>;
   }>>;
 }>;
 
-async function withStores(run: (name: string, owner: OwnedStore) => Promise<void>): Promise<void> {
+async function withStores(run: (name: string, owner: OwnedStore, store: InMemoryStore | SqliteStore) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "rowan-held-input-"));
   const cases: StoreCase[] = [
     {
@@ -35,7 +33,7 @@ async function withStores(run: (name: string, owner: OwnedStore) => Promise<void
       open: async () => {
         const store = new InMemoryStore();
         const owner = await store.openOwner({ ownerId: "owner-memory", leaseMs: 10_000 });
-        return { store, owner, dispose: () => owner.sealAndReleaseOwner() };
+        return { store, owner, dispose: () => owner.sealAndReleaseOwner().catch(() => undefined) };
       },
     },
     {
@@ -58,7 +56,7 @@ async function withStores(run: (name: string, owner: OwnedStore) => Promise<void
     for (const entry of cases) {
       const opened = await entry.open();
       try {
-        await run(entry.name, opened.owner);
+        await run(entry.name, opened.owner, opened.store);
       } finally {
         await opened.dispose();
       }
@@ -295,67 +293,108 @@ test("a Control Run cannot claim while an input_required Run still owns an execu
   });
 });
 
-test("owner recovery keeps held Interactions, drops the dead execution, and answering queues the Run", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "rowan-held-recovery-"));
-  try {
-    const memory = new InMemoryStore();
-    const firstMemory = await memory.openOwner({ ownerId: "memory-before", leaseMs: 10_000 });
-    const memoryHeld = await running(firstMemory, "memory-recovery", { phase: "work" });
-    await firstMemory.raiseInteraction({
-      runId: memoryHeld.runId,
-      execution: memoryHeld.execution,
-      expectedRevision: memoryHeld.revision,
-      interaction: interaction("approval", "Continue?", { target: "prod" }),
+test("owner loss during a held Tool Call fails the Run, cancels the Interaction, and closes the Tool Call", async () => {
+  await withStores(async (name, owner, store) => {
+    const held = await running(owner, `${name}-owner-loss`, { phase: "work" });
+    const reserved = await owner.reserveToolCall({
+      runId: held.runId,
+      execution: held.execution,
+      expectedRevision: held.revision,
+      requestMessageId: `request-${name}` as never,
+      toolCallId: `tool-${name}` as never,
+      name: "write_file",
+      args: { path: "secrets.txt" },
     });
-    await firstMemory.sealAndReleaseOwner();
-    const secondMemory = await memory.openOwner({ ownerId: "memory-after", leaseMs: 10_000 });
-    expect((await secondMemory.listRuns()).find(({ id }) => id === memoryHeld.runId)).toMatchObject({
+    const started = await owner.startToolCall({
+      runId: held.runId,
+      execution: held.execution,
+      expectedRevision: reserved.run.revision,
+      toolCallId: reserved.toolCall.id,
+    });
+    await owner.raiseInteraction({
+      runId: held.runId,
+      execution: held.execution,
+      expectedRevision: started.run.revision,
+      interaction: {
+        ...interaction("approval", "Allow writing secrets.txt?"),
+        toolCallId: started.toolCall.id,
+      },
+    });
+
+    await owner.sealAndReleaseOwner();
+    const recovered = await store.openOwner({ ownerId: `${name}-after`, leaseMs: 10_000 });
+    const snapshot = await recovered.snapshotRun(held.runId);
+    expect(snapshot).toMatchObject({
+      state: "failed",
+      failure: {
+        code: "tool_indeterminate",
+        message: "The Runtime owner was sealed.",
+        toolCallIds: [reserved.toolCall.id],
+      },
+    });
+    expect((await recovered.history(held.agentId)).find((message) =>
+      message.role === "interaction" && message.interactionId === "approval"
+    )).toMatchObject({
+      status: "cancelled",
+      toolCallId: reserved.toolCall.id,
+    });
+    const toolCall = store.exportState().toolCalls.find(({ id }) => id === reserved.toolCall.id);
+    expect(toolCall).toMatchObject({ status: "failed", state: "failed" });
+    expect(store.exportState().toolCalls.filter((candidate) =>
+      candidate.runId === held.runId
+      && (candidate.status === "pending" || candidate.status === "in_progress"
+        || candidate.state === "pending" || candidate.state === "in_progress")
+    )).toEqual([]);
+    expect((await recovered.listEvents()).filter((event) =>
+      event.runId === held.runId
+      && event.kind === "run_state_changed"
+      && event.from === "input_required"
+      && event.to === "failed"
+    )).toHaveLength(1);
+    await recovered.sealAndReleaseOwner();
+  });
+});
+
+test("a suspended input_required Run survives owner loss and answering it queues the Run", async () => {
+  await withStores(async (name, owner, store) => {
+    const claimed = await running(owner, `${name}-suspended`, { phase: "work" });
+    const waiting = await owner.commitInputRequired({
+      runId: claimed.runId,
+      execution: claimed.execution,
+      expectedRevision: claimed.revision,
+      phase: "work",
+      prompt: {
+        id: `prompt-${name}` as never,
+        agentId: claimed.agentId,
+        runId: claimed.runId,
+        role: "assistant",
+        content: "Continue?",
+        sequenceWithinRun: 1,
+        createdAt: new Date().toISOString(),
+      },
+      checkpoint: { codec: "rowan.agent.execution", version: 1, data: { phase: "work" } },
+      interactions: [interaction("approval", "Continue?")],
+    });
+    expect(waiting.state).toBe("input_required");
+    expect(waiting.execution).toBeUndefined();
+
+    await owner.sealAndReleaseOwner();
+    const recovered = await store.openOwner({ ownerId: `${name}-after`, leaseMs: 10_000 });
+    expect((await recovered.listRuns()).find(({ id }) => id === claimed.runId)).toMatchObject({
       state: "input_required",
-      openInteractions: [{ id: "approval", payload: { target: "prod" } }],
+      openInteractions: [{ id: "approval", status: "pending" }],
     });
-    expect((await secondMemory.listRuns()).find(({ id }) => id === memoryHeld.runId)?.execution).toBeUndefined();
-    expect(await secondMemory.answerInteraction({
-      runId: memoryHeld.runId,
+    expect((await recovered.listRuns()).find(({ id }) => id === claimed.runId)?.execution).toBeUndefined();
+    const answered = await recovered.answerInteraction({
+      runId: claimed.runId,
       interactionId: "approval",
-      expectedRevision: (await secondMemory.snapshotRun(memoryHeld.runId)).revision,
+      expectedRevision: (await recovered.snapshotRun(claimed.runId)).revision,
       input: "yes",
-    })).toMatchObject({ state: "queued" });
-    await secondMemory.sealAndReleaseOwner();
-
-    const filename = join(directory, "runtime.sqlite");
-    const firstStore = new SqliteStore(filename);
-    const firstSqlite = await firstStore.openOwner({ ownerId: "sqlite-before", leaseMs: 10_000 });
-    const sqliteHeld = await running(firstSqlite, "sqlite-recovery", { phase: "work" });
-    await firstSqlite.raiseInteraction({
-      runId: sqliteHeld.runId,
-      execution: sqliteHeld.execution,
-      expectedRevision: sqliteHeld.revision,
-      interaction: interaction("approval", "Continue?", { target: "prod" }),
     });
-    await firstSqlite.sealAndReleaseOwner();
-    firstStore.close();
-
-    const secondStore = new SqliteStore(filename);
-    try {
-      const secondSqlite = await secondStore.openOwner({ ownerId: "sqlite-after", leaseMs: 10_000 });
-      expect((await secondSqlite.listRuns()).find(({ id }) => id === sqliteHeld.runId)).toMatchObject({
-        state: "input_required",
-        openInteractions: [{ id: "approval", payload: { target: "prod" } }],
-      });
-      expect((await secondSqlite.listRuns()).find(({ id }) => id === sqliteHeld.runId)?.execution).toBeUndefined();
-      expect(await secondSqlite.answerInteraction({
-        runId: sqliteHeld.runId,
-        interactionId: "approval",
-        expectedRevision: (await secondSqlite.snapshotRun(sqliteHeld.runId)).revision,
-        input: "yes",
-      })).toMatchObject({ state: "queued" });
-      await secondSqlite.sealAndReleaseOwner();
-    } finally {
-      secondStore.close();
-    }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+    expect(answered.state).toBe("queued");
+    expect(answered.execution).toBeUndefined();
+    await recovered.sealAndReleaseOwner();
+  });
 });
 
 const waitingStream = (seen: string[]): StreamFn => async function* (_request, rawCtx) {
@@ -469,50 +508,3 @@ test("cancelling a held Run aborts its execution, rejects the waiter, and clears
     await runtime.close();
   }
 });
-
-test("a lost held execution replays and auto-answers a matching Interaction fingerprint", async () => {
-  const store = new InMemoryStore();
-  const configs = new InMemoryConfigProvider();
-  const answers: string[] = [];
-  const stream = waitingStream(answers);
-  const first = await AgentRuntime.init({ store, configs, concurrency: 1 });
-  let runId: RunId | undefined;
-  let agentId: AgentId | undefined;
-  let second: AgentRuntime | undefined;
-  try {
-    agentId = await createAgentWith(first, {
-      identity: "held-replay-v1",
-      stream,
-      options: { idempotencyKey: "held-replay-agent" },
-    });
-    const run = await first.start(agentId, "go", { idempotencyKey: "held-replay-run" });
-    runId = run.id;
-    const boundary = await run.wait();
-    if (boundary.type !== "input_required") throw new Error("Expected held input.");
-
-    const inspectable = first as unknown as {
-      heartbeat?: ReturnType<typeof setInterval>;
-      executions: Map<RunId, { controller: AbortController }>;
-      owned: { renewOwner(leaseMs: number): Promise<unknown> };
-    };
-    if (inspectable.heartbeat) clearInterval(inspectable.heartbeat);
-    await inspectable.owned.renewOwner(20);
-    await Bun.sleep(40);
-
-    second = await AgentRuntime.init({ store, configs, concurrency: 1 });
-    expect(await second.snapshot(runId)).toMatchObject({ state: "input_required", interactions: [{ id: "approval" }] });
-    inspectable.executions.get(runId)?.controller.abort(new Error("simulated crashed owner"));
-
-    await second.respondInteraction(runId, {
-      interactionId: boundary.interactions[0]!.id,
-      input: "allow",
-    });
-    await expect(second.run(runId).wait()).resolves.toMatchObject({ type: "completed" });
-    expect(answers).toEqual(["allow"]);
-    const events = (await (second as any).owned.listEvents()) as Array<{ runId: RunId; kind: string; to?: string }>;
-    expect(events.filter((event) => event.runId === runId && event.kind === "run_state_changed" && event.to === "input_required")).toHaveLength(1);
-  } finally {
-    await second?.close();
-  }
-});
-

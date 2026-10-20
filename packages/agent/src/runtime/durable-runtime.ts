@@ -60,7 +60,7 @@ import type {
   ToolProgress,
   ToolResult,
 } from "@rowan-agent/models";
-import type { AgentId, AssistantMessage, ExecutionId, InteractionRecord, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
+import type { AgentId, AssistantMessage, ExecutionId, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
 import { pageAgents, pageRuns } from "./read-models";
@@ -74,7 +74,7 @@ import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES 
 import { preparePhasePayload } from "../harness/phases/input";
 import { isSchemaParseError, toolErrorMessage } from "../harness/tools";
 import type { PhaseRegistry } from "../harness/phases/types";
-import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, sameRunInteraction, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
+import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
 import { defaultToolCallContent, isControlMetadata, isControlRun } from "./durable-store";
 import { assertJsonValue, isJsonValue } from "./json";
@@ -129,7 +129,6 @@ type ActiveExecution = Readonly<{
   controller: AbortController;
   executionId: ExecutionId;
   onRevision(revision: number): void;
-  usedReplayAnswers: Set<string>;
   reservedToolCalls: Set<ToolCallId>;
   startedToolCalls: Set<ToolCallId>;
   providerToolCalls: Map<string, ToolCallId>;
@@ -779,7 +778,6 @@ export class AgentRuntime implements AgentRuntimeContract {
     execution: import("./contracts").ExecutionToken,
     expectedRevision: number,
     onRevision: (revision: number) => void,
-    replay: Readonly<{ history: readonly import("../runtime-events").Message[]; answers: Readonly<Record<string, JsonValue>> }>,
   ): Promise<JsonValue> {
     if (signal.aborted) throw signal.reason ?? new Error("Run aborted");
     const active = this.executions.get(runId);
@@ -789,17 +787,6 @@ export class AgentRuntime implements AgentRuntimeContract {
         expectedEpoch: execution.ownerEpoch,
         actualEpoch: execution.ownerEpoch,
       });
-    }
-
-    const answered = replay.history.find((message): message is InteractionRecord =>
-      message.role === "interaction"
-      && message.status === "answered"
-      && replay.answers[message.interactionId] !== undefined
-      && !active.usedReplayAnswers.has(message.interactionId)
-      && sameRunInteraction(message, request));
-    if (answered) {
-      active.usedReplayAnswers.add(answered.interactionId);
-      return structuredClone(replay.answers[answered.interactionId]!);
     }
 
     const interactionId = request.id ?? (createId("interaction") as string);
@@ -1084,7 +1071,6 @@ export class AgentRuntime implements AgentRuntimeContract {
         controller,
         executionId,
         onRevision: (revision) => { if (revision > executionRevision) executionRevision = revision; },
-        usedReplayAnswers: new Set(),
         reservedToolCalls: new Set(),
         startedToolCalls: new Set(),
         providerToolCalls: new Map(),
@@ -1396,7 +1382,6 @@ export class AgentRuntime implements AgentRuntimeContract {
             claim!.execution,
             executionRevision,
             (revision) => { if (revision > executionRevision) executionRevision = revision; },
-            { history: claim!.history, answers: claim!.run.interactionAnswers ?? {} },
           ),
           delegate: (options) => this.delegate(run.agentId, options),
           tools: ({ toolCall, contentBlocks, driver, options, providerInitiated, model: callModel, usage: callUsage, phase: callPhase }: ToolRunnerInput) => {
@@ -1458,7 +1443,6 @@ export class AgentRuntime implements AgentRuntimeContract {
                             claim!.execution,
                             executionRevision,
                             (revision) => { if (revision > executionRevision) executionRevision = revision; },
-                            { history: claim!.history, answers: claim!.run.interactionAnswers ?? {} },
                           );
                           driver?.answer?.(interaction.id, answer);
                         }
