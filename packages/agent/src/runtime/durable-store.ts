@@ -423,21 +423,24 @@ export class InMemoryStore implements DurableStore {
     this.owner = undefined;
   }
 
-  reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: HistorySeed }): AgentRecord {
+  reserveAgent(lease: OwnerLease, input: { idempotencyKey: string; metadata?: JsonObject; parentAgentId?: AgentId; configIdentity?: string; historySeed?: HistorySeed }): AgentRecord {
     this.assertOwner(lease);
     const scope = createIdempotencyScope("create_agent", input.idempotencyKey);
     const payload = canonicalJson({
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      ...(input.parentAgentId === undefined ? {} : { parentAgentId: input.parentAgentId }),
       ...(input.configIdentity === undefined ? {} : { configIdentity: input.configIdentity }),
       ...(input.historySeed === undefined ? {} : { historySeed: input.historySeed }),
     } as never);
     const replay = this.replay(scope, payload);
     if (replay) return clone(replay as AgentRecord);
 
+    if (input.parentAgentId !== undefined) this.requireAgent(input.parentAgentId);
     const timestamp = createTimestamp();
     const agent: StoredAgent = {
       id: createId("agt") as AgentId,
       ...(input.metadata ? { metadata: clone(input.metadata) } : {}),
+      ...(input.parentAgentId === undefined ? {} : { parentAgentId: input.parentAgentId }),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -2170,7 +2173,7 @@ export class InMemoryStore implements DurableStore {
 class MemoryOwnedStore implements OwnedStore {
   constructor(private readonly store: InMemoryStore, public lease: OwnerLease) {}
 
-  async reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
+  async reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; parentAgentId?: AgentId; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord> { return this.store.reserveAgent(this.lease, input); }
   async activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord> { return this.store.activateAgent(this.lease, agentId, configToken, configIdentity); }
   async updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord> { return this.store.updateAgentConfigToken(this.lease, input); }
   async deleteAgent(input: AgentDeletionRequest): Promise<void> { this.store.deleteAgent(this.lease, input); }

@@ -1339,8 +1339,21 @@ function createPhaseExecution(
       return result;
     });
   };
+  // A Phase visit is a stretch of routing without a transition, so a Phase
+  // re-executed after a resume derives the same keys, while a later visit and a
+  // second call in the same execution each get their own.
+  const visit = state.metrics.phaseTransitions.length;
+  let delegations = 0;
   const execution: PhaseExecution = {
     interaction,
+    agents: {
+      delegate(options) {
+        if (!config.runtime?.delegate) throw new Error("Child Agents are not supported in this runtime.");
+        const idempotencyKey = options.idempotencyKey
+          ?? `delegate:${config.execution.runId}:${visit}:${phase.name}:${delegations++}`;
+        return config.runtime.delegate({ ...options, idempotencyKey });
+      },
+    },
     messages: messageManager,
     async invokeModel(phaseContext: PhaseContext, options: { output?: "reply" | "internal" } = {}): Promise<ModelInvokeOutput> {
       // Allow extensions to transform PhaseContext before building request

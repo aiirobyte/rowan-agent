@@ -16,12 +16,13 @@ export class ConfigCommandService {
     private readonly storeIncarnation: string,
   ) {}
 
-  async createAgent(input: { config: AgentConfiguration; metadata?: JsonObject; historySeed?: HistorySeed; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
+  async createAgent(input: { config: AgentConfiguration; metadata?: JsonObject; parentAgentId?: AgentId; historySeed?: HistorySeed; idempotencyKey: string; signal?: AbortSignal }): Promise<AgentId> {
     assertAgentConfiguration(input.config);
     assertIdentity(input.config.identity);
     const reserved = await this.store.reserveAgent({
       idempotencyKey: input.idempotencyKey,
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      ...(input.parentAgentId === undefined ? {} : { parentAgentId: input.parentAgentId }),
       ...(input.historySeed === undefined ? {} : { historySeed: input.historySeed }),
       configIdentity: input.config.identity,
     });

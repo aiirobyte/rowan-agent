@@ -6,6 +6,7 @@ export type RuntimeErrorCode =
   | "runtime_already_owned"
   | "runtime_ownership_lost"
   | "agent_not_found"
+  | "not_child_agent"
   | "run_not_found"
   | "run_state_conflict"
   | "context_busy"
@@ -32,6 +33,7 @@ export type RuntimeErrorDetails = {
     expiresAt?: string;
   }>;
   agent_not_found: Readonly<{ agentId: AgentId }>;
+  not_child_agent: Readonly<{ agentId: AgentId; parentAgentId: AgentId }>;
   run_not_found: Readonly<{ runId: RunId }>;
   run_state_conflict: Readonly<{ runId: RunId; expected: readonly RunState[]; actual: RunState }>;
   context_busy: Readonly<{ agentId: AgentId; runId?: RunId; actual: RunState }>;

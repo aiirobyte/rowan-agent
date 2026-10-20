@@ -273,6 +273,8 @@ export type ResolvedAgentContext = Readonly<{
 export type AgentRecord = Readonly<{
   id: AgentId;
   metadata?: JsonObject;
+  /** The Agent that delegated this one; set only by `PhaseExecution.agents.delegate`. */
+  parentAgentId?: AgentId;
   currentConfigToken?: ConfigToken;
   currentConfigIdentity?: string;
   createdAt: string;
@@ -343,7 +345,7 @@ export type RetentionResult = Readonly<{
   retentionFloor: EventCursor;
   skipped?: "active_consumers" | "no_eligible_events";
 }>;
-export type AgentSummary = Readonly<{ id: AgentId; metadata?: JsonObject; currentConfigIdentity?: string; createdAt: string; activatedAt: string; updatedAt: string }>;
+export type AgentSummary = Readonly<{ id: AgentId; metadata?: JsonObject; parentAgentId?: AgentId; currentConfigIdentity?: string; createdAt: string; activatedAt: string; updatedAt: string }>;
 export type RunSummary = Readonly<{ id: RunId; agentId: AgentId; agentSequence: number; state: RunState; metadata?: JsonObject; createdAt: string; updatedAt: string }>;
 export type Page<T, Cursor> = Readonly<{ items: readonly T[]; next?: Cursor }>;
 export type RunSnapshotBase = Readonly<{
@@ -398,7 +400,7 @@ export interface ConfigProvider {
 }
 export interface OwnedStore {
   readonly lease: OwnerLease;
-  reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord>;
+  reserveAgent(input: { idempotencyKey: string; metadata?: JsonObject; parentAgentId?: AgentId; configIdentity?: string; historySeed?: HistorySeed }): Promise<AgentRecord>;
   activateAgent(agentId: AgentId, configToken?: ConfigToken, configIdentity?: string): Promise<AgentRecord>;
   updateAgentConfigToken(input: { agentId: AgentId; token: ConfigToken; configIdentity?: string; idempotencyKey: string }): Promise<AgentRecord>;
   deleteAgent(input: AgentDeletionRequest): Promise<void>;

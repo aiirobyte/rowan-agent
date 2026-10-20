@@ -33,6 +33,7 @@ export function pageAgents(
   const summaries: AgentSummary[] = items.map((record) => ({
     id: record.id,
     ...(record.metadata === undefined ? {} : { metadata: record.metadata }),
+    ...(record.parentAgentId === undefined ? {} : { parentAgentId: record.parentAgentId }),
     ...(record.currentConfigIdentity === undefined ? {} : { currentConfigIdentity: record.currentConfigIdentity }),
     createdAt: record.createdAt,
     activatedAt: record.activatedAt,

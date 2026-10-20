@@ -50,6 +50,8 @@ export type {
 } from "./harness/phases/types";
 
 export type {
+  DelegateOptions,
+  DelegateResult,
   InternalModelLoopOptions,
   ModelInvokeOutput,
   PhaseExecution,
