@@ -438,6 +438,7 @@ export interface OwnedStore {
     expectedRevision: number;
     input?: JsonValue;
     cancel?: boolean;
+    metadata?: JsonObject;
   }): Promise<RunRecord>;
   commitOutcome(input: {
     runId: RunId;
@@ -542,7 +543,7 @@ export interface AgentRun {
   snapshot(): Promise<RunSnapshot>;
   observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<RunEvent>;
   wait(options?: { signal?: AbortSignal }): Promise<RunBoundary>;
-  respondInteraction(input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void>;
+  respondInteraction(input: { interactionId: string; input?: JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<void>;
   cancel(reason?: string): Promise<RunBoundary>;
 }
 export interface AgentRuntime {
@@ -611,7 +612,7 @@ function isMetadata(value: unknown): value is JsonObject {
     return false;
   }
 }
-function assertMetadata(value: unknown, argument: string): asserts value is JsonObject {
+export function assertMetadata(value: unknown, argument: string): asserts value is JsonObject {
   if (!isMetadata(value)) throw new TypeError(`${argument} must be a JSON-safe metadata object`);
 }
 export function assertEntryPhases(value: unknown, argument = "entryPhases"): asserts value is readonly EntryPhaseSpec[] {

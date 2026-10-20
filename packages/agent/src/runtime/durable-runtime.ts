@@ -39,6 +39,7 @@ import type {
 } from "./contracts";
 import {
   assertEntryPhases,
+  assertMetadata,
   assertToolExecutionResult,
   providerOptionsFromUserInput,
   thinkingLevelFromUserInput,
@@ -832,18 +833,20 @@ export class AgentRuntime implements AgentRuntimeContract {
     return this.owned.history(agentId);
   }
 
-  async respondInteraction(runId: RunId, input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void> {
+  async respondInteraction(runId: RunId, input: { interactionId: string; input?: JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<void> {
     this.assertOpen();
+    if (input.metadata !== undefined) assertMetadata(input.metadata, "input.metadata");
+    const answerMetadata = input.metadata === undefined ? {} : { answerMetadata: input.metadata };
     const runLive = this.liveInteractions.get(runId);
     const live = runLive?.get(input.interactionId);
     if (live) {
       runLive!.delete(input.interactionId);
       if (runLive!.size === 0) this.liveInteractions.delete(runId);
       if (input.cancel) {
-        this.publishLiveInteraction(runId, { ...live.interaction, status: "cancelled" });
+        this.publishLiveInteraction(runId, { ...live.interaction, status: "cancelled", ...answerMetadata });
         live.reject(new RunInteractionCancelledError("Run interaction cancelled."));
       } else if (input.input !== undefined) {
-        this.publishLiveInteraction(runId, { ...live.interaction, status: "answered", answer: input.input });
+        this.publishLiveInteraction(runId, { ...live.interaction, status: "answered", answer: input.input, ...answerMetadata });
         live.resolve(input.input);
       } else {
         live.reject(new TypeError("respondInteraction requires input or cancel: true"));
@@ -855,7 +858,7 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (snapshot.state !== "input_required" || !snapshot.interactions.some((interaction) => interaction.id === input.interactionId)) {
       throw new RuntimeError("input_request_conflict", { runId, interactionId: input.interactionId, reason: "not_found" });
     }
-    await this.owned.answerInteraction({ runId, interactionId: input.interactionId, expectedRevision: snapshot.revision, input: input.input, cancel: input.cancel });
+    await this.owned.answerInteraction({ runId, interactionId: input.interactionId, expectedRevision: snapshot.revision, input: input.input, cancel: input.cancel, metadata: input.metadata });
     void this.pump();
   }
 
@@ -2692,7 +2695,7 @@ class DurableRun implements AgentRun {
   snapshot(): Promise<RunSnapshot> { return this.runtime.snapshot(this.id); }
   observe(options?: { after?: EventCursor; signal?: AbortSignal }): AsyncIterable<RunEvent> { return this.runtime.observe(this.id, options); }
   wait(options?: { signal?: AbortSignal }): Promise<RunBoundary> { return this.runtime.wait(this.id, options); }
-  respondInteraction(input: { interactionId: string; input?: JsonValue; cancel?: boolean }): Promise<void> { return this.runtime.respondInteraction(this.id, input); }
+  respondInteraction(input: { interactionId: string; input?: JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<void> { return this.runtime.respondInteraction(this.id, input); }
   cancel(reason?: string): Promise<RunBoundary> { return this.runtime.cancel(this.id, reason); }
 }
 

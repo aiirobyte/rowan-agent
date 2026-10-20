@@ -727,6 +727,7 @@ export class InMemoryStore implements DurableStore {
     status: "answered" | "replied" | "cancelled",
     answer?: import("../runtime-events").JsonValue,
     reply?: string,
+    answerMetadata?: JsonObject,
   ): InteractionRecord {
     const now = createTimestamp();
     const record: InteractionRecord = {
@@ -741,6 +742,7 @@ export class InMemoryStore implements DurableStore {
       status,
       ...(answer !== undefined ? { answer: clone(answer) } : {}),
       ...(reply !== undefined ? { reply } : {}),
+      ...(answerMetadata !== undefined ? { answerMetadata: clone(answerMetadata) } : {}),
       ...(interaction.toolCallId !== undefined ? { toolCallId: interaction.toolCallId as ToolCallId } : {}),
       ...(interaction.result !== undefined ? { result: clone(interaction.result) } : {}),
       sequenceWithinRun: this.nextMessageSequence(run.id),
@@ -775,8 +777,9 @@ export class InMemoryStore implements DurableStore {
           ? normalizedInput.content
           : normalizedInput.content.map((c) => c.type === "text" ? c.text : "").join(" "));
       const openInteractions = waitingRun.openInteractions ?? [];
+      const replyMetadata = userInputMetadata(normalizedInput);
       for (const interaction of openInteractions) {
-        this.commitInteractionRecord(waitingRun, interaction, "replied", undefined, replyText);
+        this.commitInteractionRecord(waitingRun, interaction, "replied", undefined, replyText, replyMetadata);
       }
       delete waitingRun.openInteractions;
       waitingRun.interactionAnswers = {
@@ -790,6 +793,7 @@ export class InMemoryStore implements DurableStore {
           for (const req of stored.requests) {
             req.status = "replied";
             req.reply = replyText;
+            if (replyMetadata) req.answerMetadata = clone(replyMetadata);
           }
         }
       }
@@ -1037,12 +1041,13 @@ export class InMemoryStore implements DurableStore {
     expectedRevision: number;
     input?: import("../runtime-events").JsonValue;
     cancel?: boolean;
+    metadata?: JsonObject;
   }): RunRecord {
     this.assertOwner(lease);
     if (input.interactionId.trim().length === 0) throw new TypeError("interactionId must be non-empty");
     if (!input.cancel && input.input === undefined) throw new TypeError("respondInteraction requires input or cancel: true");
     const operationKey = `interaction_answer:${input.runId}:${input.interactionId}`;
-    const operationPayload = canonicalJson([input.input ?? null, input.cancel ?? false] as never);
+    const operationPayload = canonicalJson([input.input ?? null, input.cancel ?? false, input.metadata ?? null] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
     if (replay) return clone(replay as RunRecord);
     const run = this.requireRun(input.runId);
@@ -1057,7 +1062,7 @@ export class InMemoryStore implements DurableStore {
     const status = isCancel ? "cancelled" : "answered";
     const now = createTimestamp();
 
-    this.commitInteractionRecord(run, targetInteraction, status, isCancel ? undefined : input.input);
+    this.commitInteractionRecord(run, targetInteraction, status, isCancel ? undefined : input.input, undefined, input.metadata);
 
     if (run.checkpoint?.data && typeof run.checkpoint.data === "object") {
       const stored = (run.checkpoint.data as any).runInteractions ?? (run.checkpoint.data as any).phaseInteractions;
@@ -1065,6 +1070,7 @@ export class InMemoryStore implements DurableStore {
         const req = stored.requests.find((r: any) => r.id === input.interactionId);
         if (req) {
           req.status = status;
+          if (input.metadata) req.answerMetadata = clone(input.metadata);
           if (!isCancel && input.input !== undefined) req.answer = clone(input.input);
         }
       }
@@ -2203,7 +2209,7 @@ class MemoryOwnedStore implements OwnedStore {
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
   async commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> { return this.store.commitPhaseOutput(this.lease, input); }
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
-  async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
+  async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject; model?: ModelRef; usage?: LlmTokenUsage }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
   async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly import("./contracts").ToolCallReservation[]; contentBlocks?: readonly StreamBlock[]; model?: ModelRef; usage?: LlmTokenUsage }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }

@@ -396,7 +396,8 @@ function isRunInteractionState(value: unknown): value is RunInteractionState {
     && (request.payload === undefined || isJsonValue(request.payload))
     && (request.result === undefined || isRecord(request.result))
     && (request.answer === undefined || isJsonValue(request.answer))
-    && (request.reply === undefined || typeof request.reply === "string"));
+    && (request.reply === undefined || typeof request.reply === "string")
+    && (request.answerMetadata === undefined || isRecord(request.answerMetadata)));
 }
 
 function isMetrics(value: unknown): value is CheckpointMetrics {
