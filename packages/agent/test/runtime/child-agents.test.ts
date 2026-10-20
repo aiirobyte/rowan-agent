@@ -519,6 +519,7 @@ test("a live Interaction raised while the child's tool runs reaches the parent, 
   };
   const fixture = await setup({
     childStream,
+    childPhases: [{ name: "work", description: "work", filePath: "<test>", baseDir: "<test>", content: "work", isolated: false }],
     extensions: [permissionExtension()],
     script: async (execution, input) => {
       if (input === "go") child = await execution.agents.delegate({ create: () => fixture.childConfiguration("child-v1"), input: "write it" });
@@ -539,7 +540,7 @@ test("a live Interaction raised while the child's tool runs reaches the parent, 
       interactionKind: "permission",
     });
     expect(report!.content).toMatchObject({ prompt: "Allow writing to secrets.txt?", payload: { path: "secrets.txt" } });
-    await expect(fixture.runtime.snapshot(child!.runId)).resolves.toMatchObject({ state: "running" });
+    await expect(fixture.runtime.snapshot(child!.runId)).resolves.toMatchObject({ state: "running", interactions: [{ id: report!.content.interactionId, phase: "work" }] });
     await fixture.runtime.respondInteraction(child!.runId, { interactionId: report!.content.interactionId, input: "allow" });
     await expect(fixture.runtime.run(child!.runId).wait()).resolves.toMatchObject({ type: "completed" });
     expect(toolOutcome).toMatchObject({ ok: true });

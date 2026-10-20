@@ -755,14 +755,14 @@ export class AgentRuntime implements AgentRuntimeContract {
     return { caughtUp: subscription.caughtUp.promise, done: subscription.done.promise, stop: () => controller.abort() };
   }
 
-  private liveInteract(agentId: AgentId, runId: RunId, request: RunInteractionRequest, signal: AbortSignal): Promise<JsonValue> {
-    if (signal.aborted) {
-      return Promise.reject(signal.reason ?? new Error("Run aborted"));
-    }
+  private async liveInteract(runId: RunId, request: RunInteractionRequest, signal: AbortSignal): Promise<JsonValue> {
+    if (signal.aborted) throw signal.reason ?? new Error("Run aborted");
+    const run = await this.owned.snapshotRun(runId).catch(() => undefined);
+    if (signal.aborted) throw signal.reason ?? new Error("Run aborted");
     const interactionId = request.id ?? (createId("interaction") as string);
     const interaction: RunInteraction = {
       id: interactionId,
-      phase: "default",
+      phase: run?.currentPhaseId ?? "default",
       kind: request.kind,
       prompt: request.prompt,
       payload: request.payload,
@@ -803,12 +803,15 @@ export class AgentRuntime implements AgentRuntimeContract {
       });
     });
     // A live Interaction is not durable, so the child-reports consumer never sees it: tell the parent now, best effort.
-    void this.owned.listAgents()
-      .then((agents) => {
-        const parentAgentId = agents.find(({ id }) => id === agentId)?.parentAgentId;
-        return parentAgentId === undefined ? undefined : this.reportChildInteractions(parentAgentId, { agentId, runId }, [interaction]);
-      })
-      .catch(() => undefined);
+    if (run) {
+      const { agentId } = run;
+      void this.owned.listAgents()
+        .then((agents) => {
+          const parentAgentId = agents.find(({ id }) => id === agentId)?.parentAgentId;
+          return parentAgentId === undefined ? undefined : this.reportChildInteractions(parentAgentId, { agentId, runId }, [interaction]);
+        })
+        .catch(() => undefined);
+    }
     return answered;
   }
 
@@ -1327,7 +1330,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         retryDelayMs: this.retryDelayMs,
         onContext: assembly.setContext,
         runtime: {
-          interact: (request) => this.liveInteract(run.agentId, run.id, request, controller.signal),
+          interact: (request) => this.liveInteract(run.id, request, controller.signal),
           delegate: (options) => this.delegate(run.agentId, options),
           tools: ({ toolCall, contentBlocks, driver, options, providerInitiated, model: callModel, usage: callUsage, phase: callPhase }: ToolRunnerInput) => {
             const task = toolQueue.then(async () => {
@@ -1381,7 +1384,7 @@ export class AgentRuntime implements AgentRuntimeContract {
                       try {
                         for (const interaction of error.interactions) {
                           interactionIds.push(interaction.id);
-                          const answer = await this.liveInteract(run.agentId, run.id, interaction, controller.signal);
+                          const answer = await this.liveInteract(run.id, interaction, controller.signal);
                           driver?.answer?.(interaction.id, answer);
                         }
                         driver?.clearCheckpoint();
