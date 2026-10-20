@@ -322,7 +322,6 @@ test("resume after suspension mid-run does not re-dispatch completed parallel en
     filePath: "<test>",
     baseDir: "<test>",
     content: "Join Phase",
-    tools: ["ask_user"],
   };
 
   const directory = await mkdtemp(join(tmpdir(), "rowan-entry-fanout-resume-"));
@@ -337,20 +336,10 @@ test("resume after suspension mid-run does not re-dispatch completed parallel en
       const agentId = await agentWithPhases(
         runtime1,
         async function* () {
-          // Model initiates an interaction in the join phase
+          // The join phase replies without routing, so the Run waits for the person.
           yield {
             type: "done",
-            response: {
-              content: "Please approve",
-              toolCalls: [
-                {
-                  id: "call_ask",
-                  name: "ask_user",
-                  arguments: JSON.stringify({ prompt: "Please approve." }),
-                },
-              ],
-              stopReason: "tool_use",
-            },
+            response: { content: "Please approve", stopReason: "stop" },
           };
         },
         {

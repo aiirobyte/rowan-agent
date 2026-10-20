@@ -440,11 +440,6 @@ function createRouteToolResultContent(
 }
 
 async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
-  const executableToolNames = new Set(
-    ctx.context.tools
-      .filter((tool) => tool.name !== PhaseRouteTool)
-      .map((tool) => tool.name),
-  );
   let output: PhaseOutput = {
     message: "",
     phase: ctx.phase.name,
@@ -471,7 +466,8 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
         completedResults: readonly ToolResultRecord[];
       };
       executableToolCalls = toolSuspension.toolCalls.filter((toolCall: LlmToolCall) =>
-        executableToolNames.has(toolCall.name),
+        // An unknown name still runs, so the model gets "not available" back instead of a silent end of turn.
+        toolCall.name !== PhaseRouteTool,
       );
       output = {
         message: "",
@@ -515,7 +511,8 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
       }
 
       executableToolCalls = collected.toolCalls.filter((toolCall) =>
-        executableToolNames.has(toolCall.name),
+        // An unknown name still runs, so the model gets "not available" back instead of a silent end of turn.
+        toolCall.name !== PhaseRouteTool,
       );
       roundContentBlocks = collected.contentBlocks;
       if (executableToolCalls.length === 0) {
