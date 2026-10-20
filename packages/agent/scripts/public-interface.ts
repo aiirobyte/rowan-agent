@@ -42,7 +42,6 @@ export const authorTypeExports = [
   "JsonObject",
   "JsonPrimitive",
   "JsonValue",
-  "LiveInteractionEvent",
   "Message",
   "MessageBase",
   "MessageCommitted",

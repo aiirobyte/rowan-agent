@@ -205,7 +205,7 @@ export class InMemoryStore implements DurableStore {
   inferRunIdForReceipt(key: string, payload: string): RunId | undefined {
     const parts = key.split(":");
     const prefix = parts[0];
-    if (["queued_failure", "phase_entered", "input_required", "interaction_answer", "outcome", "cancel"].includes(prefix!) && parts[1]) {
+    if (["queued_failure", "phase_entered", "input_required", "interaction_raise", "interaction_answer", "outcome", "cancel"].includes(prefix!) && parts[1]) {
       return parts[1] as RunId;
     }
     const match = payload.match(/^\[\s*"([^"]+)"/);
@@ -347,8 +347,18 @@ export class InMemoryStore implements DurableStore {
   interruptOwner(ownerEpoch: number, message = "The previous Runtime owner expired or closed."): void {
     this.ownerEpoch = Math.max(this.ownerEpoch, ownerEpoch);
     for (const run of this.runs.values()) {
+      if (!run.execution || run.execution.ownerEpoch > ownerEpoch) continue;
+      if (run.state === "input_required") {
+        // Keep the Interaction and its answer path, but forget the dead Execution Attempt.
+        this.dropClaimReceipt(run.execution);
+        delete run.execution;
+        run.revision += 1;
+        run.updatedAt = createTimestamp();
+        this.touchRun(run);
+        continue;
+      }
       // Any Run still running under an epoch at or below ownerEpoch has no live owner left to finish it.
-      if (run.state !== "running" || !run.execution || run.execution.ownerEpoch > ownerEpoch) continue;
+      if (run.state !== "running") continue;
       const activeToolCalls = [...this.toolCalls.values()]
         .filter((toolCall) => toolCall.runId === run.id && toolCall.executionId === run.execution?.executionId && (toolCall.status === "pending" || toolCall.status === "in_progress" || toolCall.state === "pending" || toolCall.state === "in_progress"));
       const indeterminateToolCallIds: ToolCallId[] = [];
@@ -740,6 +750,7 @@ export class InMemoryStore implements DurableStore {
       prompt: interaction.prompt,
       phase: interaction.phase,
       status,
+      ...(interaction.payload !== undefined ? { payload: clone(interaction.payload) } : {}),
       ...(answer !== undefined ? { answer: clone(answer) } : {}),
       ...(reply !== undefined ? { reply } : {}),
       ...(answerMetadata !== undefined ? { answerMetadata: clone(answerMetadata) } : {}),
@@ -812,12 +823,13 @@ export class InMemoryStore implements DurableStore {
       this.storeMessage(message);
       this.appendMessage(waitingRun, message);
 
-      waitingRun.readySequence = this.nextReady(waitingRun.agentId);
-      waitingRun.state = "queued";
+      const held = waitingRun.execution !== undefined;
+      if (!held) waitingRun.readySequence = this.nextReady(waitingRun.agentId);
+      waitingRun.state = held ? "running" : "queued";
       waitingRun.revision += 1;
       waitingRun.updatedAt = now;
       this.touchRun(waitingRun);
-      this.appendTransition(waitingRun, "input_required", "queued");
+      this.appendTransition(waitingRun, "input_required", waitingRun.state);
       this.writeReceipt(scope, payload, waitingRun);
       return clone(waitingRun);
     }
@@ -868,7 +880,9 @@ export class InMemoryStore implements DurableStore {
     }
     if ([...this.runs.values()].some((candidate) => candidate.agentId === run.agentId
       && candidate.id !== run.id
-      && (candidate.state === "running" || (!isControlRun(run) && candidate.state === "input_required")))) {
+      && (candidate.state === "running"
+        || (candidate.state === "input_required"
+          && (candidate.execution !== undefined || !isControlRun(run)))))) {
       throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["queued"], actual: run.state });
     }
 
@@ -941,7 +955,7 @@ export class InMemoryStore implements DurableStore {
     if (replay) return clone(replay as RunRecord);
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
-    this.assertState(run, ["running"]);
+    this.assertState(run, ["running", "input_required"]);
     run.currentPhaseId = input.phaseId;
     run.revision += 1;
     run.updatedAt = createTimestamp();
@@ -962,7 +976,7 @@ export class InMemoryStore implements DurableStore {
     if (replay) return clone(replay as RunRecord);
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
-    this.assertState(run, ["running"]);
+    this.assertState(run, ["running", "input_required"]);
     if (this.messages.has(input.message.id)) throw new RuntimeError("run_state_conflict", { runId: run.id, expected: ["running"], actual: run.state });
     const message: AssistantMessage = {
       ...clone(input.message),
@@ -1035,6 +1049,56 @@ export class InMemoryStore implements DurableStore {
     return result;
   }
 
+  raiseInteraction(lease: OwnerLease, input: {
+    runId: RunId;
+    execution: ExecutionToken;
+    expectedRevision: number;
+    interaction: RunInteraction;
+  }): import("./contracts").InteractionRaise {
+    this.assertOwner(lease);
+    if (input.interaction.id.trim().length === 0) throw new TypeError("interaction id must be non-empty");
+    if (input.interaction.prompt.trim().length === 0) throw new TypeError("interaction prompt must be non-empty");
+    const operationKey = `interaction_raise:${input.runId}:${input.execution.executionId}:${input.interaction.id}`;
+    const operationPayload = canonicalJson([
+      input.interaction.id,
+      input.interaction.kind,
+      input.interaction.prompt,
+      input.interaction.payload ?? null,
+      input.interaction.toolCallId ?? null,
+      input.interaction.createdAt,
+      input.interaction.status,
+      input.interaction.result ?? null,
+    ] as never);
+    const replay = this.replayOperation(operationKey, operationPayload);
+    if (replay) return clone(replay as import("./contracts").InteractionRaise);
+    const run = this.requireRun(input.runId);
+    this.assertExecution(run, input.execution, input.expectedRevision);
+    this.assertState(run, ["running", "input_required"]);
+    const existing = run.openInteractions?.find(({ id }) => id === input.interaction.id);
+    if (existing) {
+      return { run: clone(run), interaction: clone(existing) };
+    }
+    const interaction: RunInteraction = {
+      ...clone(input.interaction),
+      phase: run.currentPhaseId ?? "default",
+      status: "pending",
+    };
+    const from = run.state;
+    const openInteractions = [...(run.openInteractions ?? []), interaction];
+    run.openInteractions = openInteractions;
+    run.state = "input_required";
+    run.revision += 1;
+    run.updatedAt = createTimestamp();
+    this.touchRun(run);
+    this.appendTransition(run, from, "input_required", {
+      interactions: openInteractions,
+      answers: run.interactionAnswers ?? {},
+    });
+    const result = { run: clone(run), interaction: clone(interaction) };
+    this.writeOperationReceipt(operationKey, operationPayload, result, run.id);
+    return result;
+  }
+
   answerInteraction(lease: OwnerLease, input: {
     runId: RunId;
     interactionId: string;
@@ -1087,9 +1151,13 @@ export class InMemoryStore implements DurableStore {
     run.updatedAt = now;
     if (run.openInteractions.length === 0) {
       delete run.openInteractions;
-      run.readySequence = this.nextReady(run.agentId);
-      run.state = "queued";
-      this.appendTransition(run, "input_required", "queued");
+      if (run.execution) {
+        run.state = "running";
+      } else {
+        run.readySequence = this.nextReady(run.agentId);
+        run.state = "queued";
+      }
+      this.appendTransition(run, "input_required", run.state);
     }
     this.touchRun(run);
     const result = clone(run);
@@ -1381,6 +1449,7 @@ export class InMemoryStore implements DurableStore {
         message: input.reason!,
         toolCallIds: indeterminateToolCallIds as [ToolCallId, ...ToolCallId[]],
       };
+      const from = run.state;
       run.state = "failed";
       run.failure = failure;
       this.dropClaimReceipt(run.execution);
@@ -1388,7 +1457,7 @@ export class InMemoryStore implements DurableStore {
       run.revision += 1;
       run.updatedAt = createTimestamp();
       this.touchRun(run);
-      this.appendTransition(run, "running", "failed", { failure });
+      this.appendTransition(run, from, "failed", { failure });
       this.dropRunOperationReceipts(run.id);
     }
     const result: ToolCommit = { run: clone(run), toolCall: clone(toolCall) as unknown as ToolCallSnapshot };
@@ -1411,7 +1480,7 @@ export class InMemoryStore implements DurableStore {
     if (replay) return clone(replay as RunRecord);
     const run = this.requireRun(input.runId);
     this.assertExecution(run, input.execution, input.expectedRevision);
-    this.assertState(run, ["running"]);
+    this.assertState(run, ["running", "input_required"]);
     this.assertNoOpenTools(run);
     const nextState: Extract<RunState, "completed" | "failed"> = input.failure ? "failed" : "completed";
     if (nextState === "completed" && !input.outcome) throw new TypeError("completed Run requires an outcome");
@@ -1423,6 +1492,7 @@ export class InMemoryStore implements DurableStore {
       this.storeMessage(output);
       this.appendMessage(run, output);
     }
+    const from = run.state;
     run.state = nextState;
     if (input.outcome) run.outcome = clone(input.outcome);
     let failure = input.failure ? clone(input.failure) : undefined;
@@ -1437,7 +1507,7 @@ export class InMemoryStore implements DurableStore {
     run.revision += 1;
     run.updatedAt = createTimestamp();
     this.touchRun(run);
-    this.appendTransition(run, "running", nextState, { outcome: input.outcome, failure, output });
+    this.appendTransition(run, from, nextState, { outcome: input.outcome, failure, output });
     this.dropRunOperationReceipts(run.id);
     const result = clone(run);
     return result;
@@ -1542,7 +1612,7 @@ export class InMemoryStore implements DurableStore {
     const run = this.requireRun(input.runId);
     if (input.execution) {
       if (
-        run.state !== "running"
+        (run.state !== "running" && run.state !== "input_required")
         || !run.execution
         || run.execution.executionId !== input.execution.executionId
         || run.execution.ownerEpoch !== input.execution.ownerEpoch
@@ -1722,7 +1792,7 @@ export class InMemoryStore implements DurableStore {
       : this.eventSequence;
     const blockedRunIds = new Set<RunId>();
     for (const run of this.runs.values()) {
-      if (run.state === "running") blockedRunIds.add(run.id);
+      if (run.state === "running" || (run.state === "input_required" && run.execution)) blockedRunIds.add(run.id);
     }
     for (const tool of this.toolCalls.values()) {
       if (tool.status === "pending" || tool.status === "in_progress" || tool.state === "pending" || tool.state === "in_progress") {
@@ -1870,7 +1940,9 @@ export class InMemoryStore implements DurableStore {
   dropSettledClaimReceipts(): void {
     const liveExecutions = new Set<string>();
     for (const run of this.runs.values()) {
-      if (run.state === "running" && run.execution) liveExecutions.add(String(run.execution.executionId));
+      if ((run.state === "running" || run.state === "input_required") && run.execution) {
+        liveExecutions.add(String(run.execution.executionId));
+      }
     }
     for (const key of [...this.operationReceipts.keys()]) {
       if (key.startsWith("claim:") && !liveExecutions.has(key.slice("claim:".length))) {
@@ -1945,7 +2017,10 @@ export class InMemoryStore implements DurableStore {
 
   private assertExecution(run: StoredRun, execution: ExecutionToken, expectedRevision: number): void {
     this.assertRevision(run, expectedRevision);
-    if (run.state !== "running" || !run.execution || run.execution.executionId !== execution.executionId || run.execution.ownerEpoch !== execution.ownerEpoch) {
+    if ((run.state !== "running" && run.state !== "input_required")
+      || !run.execution
+      || run.execution.executionId !== execution.executionId
+      || run.execution.ownerEpoch !== execution.ownerEpoch) {
       throw new RuntimeError("runtime_ownership_lost", { reason: "epoch_advanced", expectedEpoch: execution.ownerEpoch, actualEpoch: this.ownerEpoch });
     }
   }
@@ -2209,6 +2284,7 @@ class MemoryOwnedStore implements OwnedStore {
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
   async commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> { return this.store.commitPhaseOutput(this.lease, input); }
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
+  async raiseInteraction(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; interaction: RunInteraction }): Promise<import("./contracts").InteractionRaise> { return this.store.raiseInteraction(this.lease, input); }
   async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject; model?: ModelRef; usage?: LlmTokenUsage }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }

@@ -133,6 +133,7 @@ export type InteractionRecord = MessageBase &
     kind: RunInteractionKind;
     phase: string;
     status: "answered" | "replied" | "cancelled";
+    payload?: JsonValue;
     answer?: JsonValue;
     reply?: string;
     answerMetadata?: JsonObject;
@@ -243,6 +244,14 @@ export type MessageRevised = DurableEventBase & Readonly<{
 export type RunStateChanged = DurableEventBase & (
   | Readonly<{ kind: "run_state_changed"; from: null; to: "queued" }>
   | Readonly<{ kind: "run_state_changed"; from: "input_required"; to: "queued" }>
+  | Readonly<{ kind: "run_state_changed"; from: "input_required"; to: "running" }>
+  | Readonly<{
+      kind: "run_state_changed";
+      from: "input_required";
+      to: "input_required";
+      interactions: readonly RunInteraction[];
+      answers: Readonly<Record<string, JsonValue>>;
+    }>
   | Readonly<{ kind: "run_state_changed"; from: "queued"; to: "running" }>
   | Readonly<{
       kind: "run_state_changed";
@@ -258,8 +267,16 @@ export type RunStateChanged = DurableEventBase & (
       outcome: Outcome;
       output?: AssistantMessage;
     }>
+  | Readonly<{
+      kind: "run_state_changed";
+      from: "input_required";
+      to: "completed";
+      outcome: Outcome;
+      output?: AssistantMessage;
+    }>
   | Readonly<{ kind: "run_state_changed"; from: "queued"; to: "failed"; failure: QueuedRunFailure; withdrawnInput?: WithdrawnUserInput }>
   | Readonly<{ kind: "run_state_changed"; from: "running"; to: "failed"; failure: RunningRunFailure; withdrawnInput?: WithdrawnUserInput }>
+  | Readonly<{ kind: "run_state_changed"; from: "input_required"; to: "failed"; failure: RunningRunFailure; withdrawnInput?: WithdrawnUserInput }>
   | Readonly<{
       kind: "run_state_changed";
       from: "queued" | "running" | "input_required";
@@ -348,14 +365,6 @@ export type ModelRetry = Readonly<{
   error: string;
 }>;
 
-export type LiveInteractionEvent = Readonly<{
-  kind: "live_interaction";
-  durability: "transient";
-  runId: RunId;
-  executionId?: ExecutionId;
-  interaction: RunInteraction;
-}>;
-
 export type RunEvent =
   | DurableRunEvent
   | MessageDelta
@@ -363,7 +372,6 @@ export type RunEvent =
   | ToolCallDelta
   | PhaseStatusEvent
   | ModelRetry
-  | LiveInteractionEvent
   | Extract<ToolStateChanged, { durability: "transient" }>;
 
 
