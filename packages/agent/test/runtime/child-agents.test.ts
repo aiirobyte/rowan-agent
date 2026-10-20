@@ -509,3 +509,41 @@ test("a child's parentAgentId persists in both durable stores", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a live Interaction raised while the child's tool runs reaches the parent, and its answer resolves the tool", async () => {
+  let child: Delegated | undefined;
+  let toolOutcome: unknown;
+  const childStream: StreamFn = async function* (_request, ctx) {
+    toolOutcome = await (ctx as any).tools.call("file_writer", { path: "secrets.txt" });
+    yield { type: "done", response: stopResponse("written") };
+  };
+  const fixture = await setup({
+    childStream,
+    extensions: [permissionExtension()],
+    script: async (execution, input) => {
+      if (input === "go") child = await execution.agents.delegate({ create: () => fixture.childConfiguration("child-v1"), input: "write it" });
+      return null;
+    },
+  });
+  try {
+    await fixture.parentRun("go");
+    const [report] = await eventually(async () => {
+      const found = reportsOf(await userMessages(fixture.runtime, fixture.parentId), "rowan.child-interaction");
+      return found.length > 0 ? found : undefined;
+    });
+    expect(report!.metadata).toEqual({
+      kind: "rowan.child-interaction",
+      childAgentId: child!.agentId,
+      childRunId: child!.runId,
+      interactionId: report!.content.interactionId,
+      interactionKind: "permission",
+    });
+    expect(report!.content).toMatchObject({ prompt: "Allow writing to secrets.txt?", payload: { path: "secrets.txt" } });
+    await expect(fixture.runtime.snapshot(child!.runId)).resolves.toMatchObject({ state: "running" });
+    await fixture.runtime.respondInteraction(child!.runId, { interactionId: report!.content.interactionId, input: "allow" });
+    await expect(fixture.runtime.run(child!.runId).wait()).resolves.toMatchObject({ type: "completed" });
+    expect(toolOutcome).toMatchObject({ ok: true });
+  } finally {
+    await fixture.runtime.close();
+  }
+});

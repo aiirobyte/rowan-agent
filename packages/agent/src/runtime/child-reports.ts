@@ -35,14 +35,14 @@ export function childOutcomeInput(event: SettledChildRun): UserInput {
 
 /** One Interaction a child Run is waiting on; `toolCall` is the call it would permit, when there is one. */
 export function childInteractionInput(
-  event: WaitingChildRun,
+  child: Pick<WaitingChildRun, "agentId" | "runId">,
   interaction: RunInteraction,
   toolCall?: Readonly<{ name: string; args: JsonValue }>,
 ): UserInput {
   const metadata = {
     kind: CHILD_INTERACTION_KIND,
-    childAgentId: event.agentId,
-    childRunId: event.runId,
+    childAgentId: child.agentId,
+    childRunId: child.runId,
     interactionId: interaction.id,
     interactionKind: interaction.kind,
   };
