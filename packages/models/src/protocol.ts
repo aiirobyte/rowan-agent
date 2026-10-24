@@ -489,6 +489,13 @@ export type ToolCallOptions = {
 export type ProviderCallContext = {
   signal: AbortSignal;
   run: { id: string; agentId: string; scope: ScopeRef; cwd: string };
+  /**
+   * This call works on a copy of the conversation (an internal model loop);
+   * its messages are not written to the history, so a provider that keeps
+   * conversation state between calls must not advance it. Absent means a
+   * normal conversation call.
+   */
+  internal?: boolean;
   /** Ask the user through the Run Interaction system and await the answer while the Run stays live. Rejects on abort/cancel. */
   interact(request: RunInteractionRequest): Promise<JsonValue>;
   /** The tools this Run would give the model, and ways to call or report tool execution. */

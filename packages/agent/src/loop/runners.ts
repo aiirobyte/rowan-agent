@@ -1404,6 +1404,7 @@ function createPhaseExecution(
           scope,
           cwd,
         },
+        ...(options.output === "internal" ? { internal: true } : {}),
         interact: async (interactionReq: RunInteractionRequest) => {
           const handler = config.runtime?.interact ?? config.interact;
           if (!handler) {
