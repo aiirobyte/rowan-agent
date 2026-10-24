@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { LlmRequest, LlmToolCall, StreamFn } from "@rowan-agent/models";
+import type { LlmRequest, LlmToolCall, ProviderCallContext, StreamFn } from "@rowan-agent/models";
 import type { Tool } from "../../src/runtime/contracts";
 import type { ToolResultRecord } from "../../src/runtime-events";
 import type { AgentMessage } from "../../src/protocol/agent";
@@ -165,10 +165,12 @@ test("respects maxToolRounds", async () => {
   expect(result.text).toBe("Round 4");
 });
 
-test("compaction's request starts with the conversation's own System Prompt, Tools, and history", async () => {
+test("compaction keeps the conversation context while marking its provider call internal", async () => {
   const requests: LlmRequest[] = [];
-  const stream: StreamFn = async function* (input) {
+  const contexts: Array<ProviderCallContext | Partial<ProviderCallContext> | undefined> = [];
+  const stream: StreamFn = async function* (input, ctx) {
     requests.push(structuredClone(input));
+    contexts.push(ctx);
     const text = `reply ${requests.length}`;
     yield { type: "text_delta", text, partial: { role: "assistant", contentBlocks: [{ type: "text", text }] } };
     yield { type: "done", response: stopResponse(text) };
@@ -184,10 +186,14 @@ test("compaction's request starts with the conversation's own System Prompt, Too
     await (await runtime.start(agentId, "First request", { idempotencyKey: "turn-1" })).wait();
     const history = await runtime.history(agentId);
     await (await runtime.start(agentId, "Second request", { idempotencyKey: "turn-2" })).wait();
+    const ordinaryContext = contexts.at(-1)!;
     const conversation = requests.at(-1)!;
     await (await runtime.compactContext(agentId, { idempotencyKey: "compact" })).wait();
+    const internalContext = contexts.at(-1)!;
     const internal = requests.at(-1)!;
 
+    expect(Object.hasOwn(ordinaryContext, "internal")).toBe(false);
+    expect(internalContext).toHaveProperty("internal", true);
     expect(internal).not.toBe(conversation);
     expect(internal.system).toBe(conversation.system);
     expect(internal.tools).toEqual(conversation.tools);

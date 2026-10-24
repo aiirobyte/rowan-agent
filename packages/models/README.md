@@ -65,6 +65,7 @@ type StreamFn = (
 Stream functions receive a `ProviderCallContext` with:
 - `signal: AbortSignal` — the run-level cancellation signal.
 - `run: { id, agentId, scope, cwd }` — active execution metadata.
+- `internal?: boolean` — `true` when the call works on a copy of the conversation (an internal model loop). Its messages are not written to history, so a provider that keeps conversation state between calls must not advance it. Absent means a normal conversation call.
 - `interact(request): Promise<JsonValue>` — request live interaction from the user.
 - `tools.list(): readonly LlmToolDefinition[]` — registered tool definitions with metadata.
 - `tools.call(name, args, options?): Promise<ToolResult>` — invoke a registered tool.
