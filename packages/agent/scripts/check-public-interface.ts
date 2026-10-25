@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { assertBrowserSafeEntry } from "./browser-safe-entry";
 import {
   authorTypeExports,
   authorValueExports,
@@ -30,7 +32,8 @@ const runtimeExports = await declarationsFor("../dist/runtime.d.ts");
 assertExact("authoring declaration exports", authorExports, [...authorValueExports, ...authorTypeExports]);
 assertExact("runtime declaration exports", runtimeExports, [...runtimeValueExports, ...runtimeTypeExports]);
 assertExact("duplicate entry-point exports", authorExports.filter((name) => runtimeExports.includes(name)), []);
+await assertBrowserSafeEntry(fileURLToPath(new URL("../dist/index.js", import.meta.url)));
 
 console.log(
-  `Public interfaces verified: authoring ${authorValueExports.length} values / ${authorTypeExports.length} types, runtime ${runtimeValueExports.length} values / ${runtimeTypeExports.length} types. Zero overlap.`,
+  `Public interfaces verified: authoring ${authorValueExports.length} values / ${authorTypeExports.length} types (browser-safe), runtime ${runtimeValueExports.length} values / ${runtimeTypeExports.length} types. Zero overlap.`,
 );

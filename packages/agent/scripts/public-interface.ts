@@ -1,4 +1,5 @@
 export const authorValueExports = [
+  "normalizeDefinitionMetadata",
   "RunInteractionBoundary",
   "RunInteractionCancelledError",
   "models",
@@ -18,6 +19,9 @@ export const authorTypeExports = [
   "ContextCandidate",
   "ContextCompactionRecord",
   "ContextStatus",
+  "DefinitionMetadataKind",
+  "DefinitionMetadataProblem",
+  "DefinitionMetadataResult",
   "DelegateOptions",
   "DelegateResult",
   "DurableConsumer",

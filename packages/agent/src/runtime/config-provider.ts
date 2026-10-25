@@ -116,6 +116,7 @@ function snapshotConfigurationSnapshot(snapshot: ConfigurationSnapshot): Configu
       }),
     } : {}),
     ...(snapshot.definition.contexts ? { contexts: Object.freeze([...snapshot.definition.contexts]) } : {}),
+    ...(snapshot.definition.metadata ? { metadata: snapshotJsonValue(snapshot.definition.metadata) } : {}),
   });
   const resources = Object.freeze({
     ...snapshot.resources,
@@ -213,8 +214,8 @@ function snapshotConfiguration(config: AgentConfiguration): AgentConfiguration {
   });
 }
 
-function snapshotJsonValue(value: JsonValue): JsonValue {
-  return deepFreeze(JSON.parse(canonicalJson(value)) as JsonValue);
+function snapshotJsonValue<T extends JsonValue>(value: T): T {
+  return deepFreeze(JSON.parse(canonicalJson(value)) as T);
 }
 
 function deepFreeze<T extends JsonValue>(value: T): T {

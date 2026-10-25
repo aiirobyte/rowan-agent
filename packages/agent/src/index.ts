@@ -5,6 +5,14 @@ export {
   RunInteractionCancelledError,
 } from "./harness/phases/interactions";
 
+export { normalizeDefinitionMetadata } from "./harness/definition-metadata";
+
+export type {
+  DefinitionMetadataKind,
+  DefinitionMetadataProblem,
+  DefinitionMetadataResult,
+} from "./harness/definition-metadata";
+
 export type {
   ExtensionAPI,
   ExtensionAgentsAPI,
