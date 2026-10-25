@@ -27,8 +27,6 @@ export type AgentDefinition = Readonly<{
 
 export function assertAgentDefinition(value: unknown): asserts value is AgentDefinition {
   if (!isRecord(value)) throw new TypeError("config.definition is invalid");
-  if ("content" in value) throw new TypeError("definition.content is not supported; use definition.prompt");
-  if ("context" in value) throw new TypeError("definition.context is not supported; use definition.contexts");
   requiredString(value.name, "definition.name");
   requiredString(value.description, "definition.description");
   requiredString(value.prompt, "definition.prompt");
@@ -40,8 +38,6 @@ export function assertAgentDefinition(value: unknown): asserts value is AgentDef
   if (value.metadata !== undefined && (!isRecord(value.metadata) || !isJsonValue(value.metadata))) {
     throw new TypeError("definition.metadata must be a JSON object");
   }
-  if ("extensions" in value) throw new TypeError("definition.extensions is not supported; Extensions are Runtime-global");
-  if ("entryPhase" in value) throw new TypeError("definition.entryPhase is not supported; use definition.phases.entryPhaseId");
   if (value.model !== undefined) {
     if (!isRecord(value.model)
       || typeof value.model.provider !== "string"
@@ -64,14 +60,6 @@ export function normalizeAgentDefinition(
   prompt: string,
   options: Readonly<{ fallbackName?: string }> = {},
 ): AgentDefinition {
-  if (frontmatter.content !== undefined) throw new TypeError("content is not supported; use prompt and the document body");
-  if (frontmatter.context !== undefined) throw new TypeError("context is not supported; use contexts");
-  if (frontmatter.extensions !== undefined) {
-    throw new TypeError("extensions is not supported; Extensions are Runtime-global");
-  }
-  if (frontmatter.entryPhase !== undefined) {
-    throw new TypeError("entryPhase is not supported; use phases.entryPhaseId");
-  }
   const normalizedMetadata = normalizeDefinitionMetadata("agent-definition", frontmatter);
   const metadataProblem = normalizedMetadata.problems.find((problem) => problem.code !== "non_json_value");
   if (metadataProblem) throw new TypeError(metadataProblem.message);

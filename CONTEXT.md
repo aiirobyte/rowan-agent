@@ -47,7 +47,9 @@ Flat, JSON-safe host values from unrecognized Agent Definition or Phase
 frontmatter keys. An explicit `metadata:` mapping is flattened into the same
 mapping; Rowan-known fields remain separate. Metadata cannot repeat a
 top-level key or name a Rowan-known field, and the `metadata` container never
-appears in the result.
+appears in the result. Names such as `content`, `context`, `extensions`, and
+`entryPhase` are not Agent Definition fields and receive no special validation;
+Markdown treats them like any other metadata.
 _Avoid_: Frontmatter Bag, unknown fields, Agent Configuration
 
 **Resource Source**:
@@ -85,7 +87,8 @@ A Phase may declare `prompt-guidelines` in frontmatter; while the Phase is in
 the current auto route catalog, its guidelines join the System Prompt
 Guidelines de-duplicated with Tool prompt guidelines.
 Unrecognized Phase frontmatter follows Definition Metadata: values such as
-`phases` and `contexts` remain host metadata because they are not Phase fields.
+`phases`, `contexts`, and `skills` remain host metadata because they are not
+Phase fields. A Phase's Skills come only from its direct child Skill Bundles.
 _Avoid_: Nested Resource Registry, Workflow Bundle, Phase Dependency Graph
 
 **Definition Layer**:

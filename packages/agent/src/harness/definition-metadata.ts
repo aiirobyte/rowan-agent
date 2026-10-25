@@ -39,7 +39,6 @@ const PHASE_KEYS = new Set([
   "isolated",
   "disable-auto-invocation",
   "disable-implicit-invocation",
-  "skills",
 ]);
 
 /**

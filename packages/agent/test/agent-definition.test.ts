@@ -16,13 +16,13 @@ contexts: [project_context]
 model: openai/gpt-5
 ---
 Review the change and report concrete findings.
-`)).toThrow(/extensions.*Runtime-global/i);
+`));
   expect(() => assertAgentDefinition({
-    name: "programmatic-legacy",
-    description: "Legacy selector.",
-    prompt: "Rejected.",
+    name: "programmatic-unknown-key",
+    description: "Unknown keys are outside the Agent Definition type.",
+    prompt: "Loaded.",
     extensions: ["quality"],
-  } as never)).toThrow(/extensions.*Runtime-global/i);
+  })).not.toThrow();
 
   const definition = parseAgentDefinition(`---
 name: reviewer
@@ -85,20 +85,6 @@ Use no candidates.
 
 test("parseAgentDefinition rejects malformed common fields", () => {
   expect(() => parseAgentDefinition(`---
-name: legacy-content
-description: Legacy prompt field.
-content: Legacy
----
-Prompt.
-`)).toThrow(/content.*prompt/i);
-  expect(() => parseAgentDefinition(`---
-name: legacy-context
-description: Legacy context field.
-context: [workspace]
----
-Prompt.
-`)).toThrow(/context.*contexts/i);
-  expect(() => parseAgentDefinition(`---
 name: invalid-list
 description: Invalid list.
 tools: read
@@ -112,13 +98,6 @@ model: /
 ---
 Content.
 `)).toThrow(/valid model reference/i);
-  expect(() => parseAgentDefinition(`---
-name: legacy-entry
-description: Legacy entry fields are rejected.
-entryPhase: verify
----
-Content.
-`)).toThrow(/entryPhase/i);
   expect(() => parseAgentDefinition(`---
 name: legacy-phases
 description: Legacy phase lists are rejected.

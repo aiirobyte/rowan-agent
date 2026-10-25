@@ -172,6 +172,65 @@ Definition body.
   expect("metadata" in (explicit.metadata ?? {})).toBe(false);
 });
 
+test("old key names are ordinary metadata in Agent and Phase definitions", async () => {
+  const definition = parseAgentDefinition(`---
+name: legacy-looking-definition
+description: Legacy-looking metadata.
+content: Old body.
+context: [workspace]
+extensions: [quality]
+entryPhase: verify
+---
+Current body.
+`);
+  expect(definition.prompt).toBe("Current body.");
+  expect(definition.metadata).toEqual({
+    content: "Old body.",
+    context: ["workspace"],
+    extensions: ["quality"],
+    entryPhase: "verify",
+  });
+
+  const phase = await createPhase(`---
+name: legacy-looking-phase
+description: Legacy-looking metadata.
+content: Old body.
+context: [workspace]
+extensions: [quality]
+entryPhase: verify
+skills: [legacy-selected]
+---
+Current body.
+`, "legacy-looking-phase");
+  try {
+    const loaded = await loadPhase(phase.path);
+    expect(loaded.content).toBe("Current body.");
+    expect(loaded.skills).toEqual([]);
+    expect(loaded.metadata).toEqual({
+      content: "Old body.",
+      context: ["workspace"],
+      extensions: ["quality"],
+      entryPhase: "verify",
+      skills: ["legacy-selected"],
+    });
+  } finally {
+    await rm(phase.root, { recursive: true, force: true });
+  }
+});
+
+test("programmatic Definition validation does not special-case old key names", () => {
+  const definition: unknown = {
+    name: "legacy-looking-programmatic-definition",
+    description: "Legacy-looking metadata.",
+    prompt: "Current body.",
+    content: "Old body.",
+    context: ["workspace"],
+    extensions: ["quality"],
+    entryPhase: "verify",
+  };
+  expect(() => assertAgentDefinition(definition)).not.toThrow();
+});
+
 test("parseAgentDefinition rejects invalid explicit Agent Definition metadata", () => {
   const cases = [
     {

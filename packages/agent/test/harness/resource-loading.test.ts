@@ -119,7 +119,7 @@ test("Phase loading reuses declarative list and model normalization", async () =
 name: review-phase
 description: Review the current change.
 tools: [read, read, bash]
-skills: this legacy selector is ignored
+skills: ordinary metadata
 model: openai/gpt-5
 ---
 Review the change.
@@ -128,6 +128,7 @@ Review the change.
     const phase = await loadPhase(phasePath);
     expect(phase.tools).toEqual(["read", "bash"]);
     expect(phase.skills).toEqual([]);
+    expect(phase.metadata).toEqual({ skills: "ordinary metadata" });
     expect(phase.model).toEqual({ provider: "openai", id: "gpt-5" });
   } finally {
     await rm(root, { recursive: true, force: true });
