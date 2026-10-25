@@ -213,12 +213,6 @@ parse the same frontmatter in a browser-safe context. See
 [PHASE.md Format](./docs/phases.md#frontmatter) for the Phase field set and
 metadata errors.
 
-`content`, `context`, `extensions`, and `entryPhase` are not Agent Definition
-fields. In Markdown they are ordinary metadata; programmatic values receive no
-runtime guard, and TypeScript does not expose them on `AgentDefinition`. A
-Phase frontmatter `skills` key is likewise ordinary metadata: a Phase's Skills
-come only from direct child Skill Bundles.
-
 ### Registration, Definition, and View
 
 Registration, selection, and visibility have different jobs:

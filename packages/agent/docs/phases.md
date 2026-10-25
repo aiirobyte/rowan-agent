@@ -191,10 +191,6 @@ and cannot contain a Rowan-known Phase field. The wrapper itself never appears
 inside `phase.metadata`. For example, `metadata: { owner: docs }` and a
 top-level `owner: docs` both produce `metadata: { owner: "docs" }`.
 
-`skills` is not a Phase frontmatter selector. If present, it follows the custom
-key rule and stays in `phase.metadata`; the Phase's Skills are discovered only
-from direct child `SKILL.md` Bundles.
-
 ### Body Content
 
 The markdown body below the frontmatter becomes the phase's system prompt content. It's injected as a user message when the phase executes. Use it to give the LLM detailed instructions, output format requirements, and routing guidance.
