@@ -94,8 +94,14 @@ export interface ExtensionHost {
    * (a name already used by Rowan's own API is an error). `dispose` runs when the extension is
    * unloaded, reloaded or fails activation, so the host can drop everything that extension registered.
    * `kind` says whether the caller is an Extension or an Extension Phase, whose ids are separate.
+   * `source.path` is the loaded Extension's path, or the Phase's PHASE.md path. A programmatically
+   * registered Phase without a file path receives the path of the Extension that registered it.
    */
-  extendApi?(extensionId: string, kind: HostApiKind): HostApiExtension | undefined;
+  extendApi?(
+    extensionId: string,
+    kind: HostApiKind,
+    source: Readonly<{ path: string }>,
+  ): HostApiExtension | undefined;
 }
 
 /** What is asking for host namespaces: an Extension, or a Phase whose code is an Extension factory. */

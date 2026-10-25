@@ -355,7 +355,7 @@ export class ExtensionRunner {
   async loadExtensions(extensions: LoadedExtension[]): Promise<void> {
     for (const ext of extensions) {
       const extensionId = ext.id ?? ext.manifest?.id ?? ext.name;
-      const hostApi = this.host.extendApi?.(extensionId, "extension");
+      const hostApi = this.host.extendApi?.(extensionId, "extension", { path: ext.path });
       const extension: Extension = {
         id: extensionId,
         path: ext.path,
@@ -387,20 +387,25 @@ export class ExtensionRunner {
     }
   }
 
-  async activatePhase(phase: Phase, scope?: ScopeRef, sourceId?: string): Promise<void> {
+  async activatePhase(
+    phase: Phase,
+    scope?: ScopeRef,
+    sourceId?: string,
+    source: Readonly<{ path: string }> = { path: phase.filePath },
+  ): Promise<void> {
     if (!phase.extensionFactory) return;
     const phaseKey = `${scopeToKey(scope ?? [])}::${phase.name}`;
     if (this.activeExtensionPhases.has(phaseKey)) return;
 
     const extension: Extension = {
       id: phase.name,
-      path: phase.filePath || phase.name,
+      path: source.path || phase.name,
       tools: new Map(),
       phases: new Set(),
       skills: new Set(),
       cleanup: [],
       runtime: createExtensionRuntime(),
-      hostApi: this.host.extendApi?.(phase.name, "phase"),
+      hostApi: this.host.extendApi?.(phase.name, "phase", source),
     };
     let executeHandler: PhaseRunHandler | undefined;
     const api = this.createExtensionAPI(extension, undefined, extension.hostApi?.namespaces, {
@@ -952,7 +957,11 @@ export class ExtensionRunner {
     phase: import("../harness/phases/types").Phase,
     scope?: ScopeRef,
   ): Promise<void> {
-    if (phase.extensionFactory) await this.activatePhase(phase, scope);
+    if (phase.extensionFactory) {
+      await this.activatePhase(phase, scope, undefined, {
+        path: phase.filePath || extension.path,
+      });
+    }
     const sourceId = extensionSourceId(scope);
     const name = phase.name;
     const regKey = `${sourceId}::${name}`;
