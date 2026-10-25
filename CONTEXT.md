@@ -183,7 +183,7 @@ The execution-scoped Rowan capability through which a Phase or Tool requests int
 _Avoid_: Phase Interaction Driver, ACP Client, Provider Adapter, Tool Registry
 
 **Host API Extension Hook**:
-A mechanism (`ExtensionHost.extendApi`) through which the host merges its own API namespaces into an extension's `api` object during load. Rowan merges the namespaces without inspecting their contents and invokes `dispose()` on unload, reload, or activation failure.
+A mechanism (`ExtensionHost.extendApi`) through which the host merges its own API namespaces into an extension's `api` object during load. Rowan also supplies the code's source path: the loaded Extension's path, a file Phase's `PHASE.md` path, or the registering Extension's path for a programmatically registered Phase without one. Rowan merges the namespaces without inspecting their contents and invokes `dispose()` on unload, reload, or activation failure.
 _Avoid_: Host Contribution, api.host, host UI interpretation in Rowan
 
 **Interaction Record**:

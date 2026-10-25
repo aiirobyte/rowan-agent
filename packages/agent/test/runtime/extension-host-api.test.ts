@@ -1,15 +1,20 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { StreamFn } from "@rowan-agent/models";
 import {
   AgentRuntime,
   InMemoryExtensionHost,
   InMemoryStore,
+  loadPhase,
   type ExtensionHost,
   type LoadedExtension,
 } from "@rowan-agent/agent/runtime";
 import type {
   ExtensionAPI,
   ExtensionFactory,
+  Phase,
   RunEndEvent,
   RunStartEvent,
   ScopeRef,
@@ -657,6 +662,104 @@ test("extendApi: namespaces appear on api", async () => {
   expect(capturedApi.ui).toBeDefined();
   expect(capturedApi.ui.showDialog()).toBe("extension-dialog-test-ext");
   await runner.close();
+});
+
+test("extendApi: Extension receives its loaded path", async () => {
+  const calls: Array<{ extensionId: string; kind: string; path: string }> = [];
+  const host = new InMemoryExtensionHost({
+    extendApi: (extensionId, kind, source) => {
+      calls.push({ extensionId, kind, path: source.path });
+      return undefined;
+    },
+  });
+  const runner = createExtensionRunner({ host });
+  const ext: LoadedExtension = {
+    path: "/extensions/alpha/index.ts",
+    id: "alpha",
+    name: "alpha",
+    factory: () => {},
+  };
+
+  await runner.loadExtensions([ext]);
+  expect(calls).toEqual([
+    { extensionId: "alpha", kind: "extension", path: ext.path },
+  ]);
+  await runner.close();
+});
+
+test("extendApi: file Phase receives its PHASE.md path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rowan-host-api-phase-"));
+  const phaseDir = join(root, "file-phase");
+  await mkdir(phaseDir, { recursive: true });
+  await writeFile(join(phaseDir, "PHASE.md"), `---
+name: file-phase
+description: A file Phase with Extension code.
+---
+Run the Extension factory.
+`);
+  await writeFile(join(phaseDir, "index.ts"), `
+export default function() {}
+`);
+
+  const calls: Array<{ extensionId: string; kind: string; path: string }> = [];
+  const host = new InMemoryExtensionHost({
+    extendApi: (extensionId, kind, source) => {
+      calls.push({ extensionId, kind, path: source.path });
+      return undefined;
+    },
+  });
+  const runner = createExtensionRunner({ host });
+
+  try {
+    const phase = await loadPhase(phaseDir);
+    await runner.activatePhase(phase);
+    expect(calls).toEqual([
+      { extensionId: "file-phase", kind: "phase", path: phase.filePath },
+    ]);
+  } finally {
+    await runner.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("extendApi: programmatic Phase receives its registering Extension path", async () => {
+  const calls: Array<{ extensionId: string; kind: string; path: string }> = [];
+  const host = new InMemoryExtensionHost({
+    extendApi: (extensionId, kind, source) => {
+      calls.push({ extensionId, kind, path: source.path });
+      return undefined;
+    },
+  });
+  const runner = createExtensionRunner({ host });
+  const programmaticPhase: Phase = {
+    name: "programmatic-phase",
+    description: "Programmatic Extension Phase.",
+    filePath: "",
+    baseDir: "",
+    content: "Run programmatically.",
+    extensionFactory: () => {},
+  };
+  const ext: LoadedExtension = {
+    path: "/extensions/registrar/index.ts",
+    id: "registrar",
+    name: "registrar",
+    factory: async (api) => {
+      await api.phases.register(programmaticPhase);
+    },
+  };
+
+  try {
+    await runner.loadExtensions([ext]);
+    expect(calls.filter(({ kind }) => kind === "phase")).toEqual([
+      {
+        extensionId: "programmatic-phase",
+        kind: "phase",
+        path: ext.path,
+      },
+    ]);
+  } finally {
+    await runner.close();
+  }
 });
 
 test("extendApi: collision with a built-in key throws", async () => {

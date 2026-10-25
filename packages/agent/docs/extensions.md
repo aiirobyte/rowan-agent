@@ -139,6 +139,6 @@ The host interface defines:
 - `onConfigChanged(listener: (extensionId, scope) => void)`: Registers a listener to receive configuration change notifications for extensions.
 - `getAgentState(extensionId, agentId, key)`, `setAgentState(extensionId, agentId, key, value)`, `deleteAgentState(extensionId, agentId, key)`: Manages durable agent-level state.
 - `getGlobalState(extensionId, key)`, `setGlobalState(extensionId, key, value)`, `deleteGlobalState(extensionId, key)`: Manages extension-wide durable state.
-- `extendApi(extensionId, kind)`: Injects host-defined API namespaces into that extension's `api` object during load; `kind` is `"extension"` or `"phase"` (an Extension Phase), whose ids are separate, with an optional `dispose()` callback when the extension is unloaded, reloaded, or fails activation.
+- `extendApi(extensionId, kind, source)`: Injects host-defined API namespaces into that extension's `api` object during load; `kind` is `"extension"` or `"phase"` (an Extension Phase), whose ids are separate. `source.path` is the loaded Extension's path, a file Phase's `PHASE.md` path, or the registering Extension's path for a programmatic Phase without one. The return value may include a `dispose()` callback when the extension is unloaded, reloaded, or fails activation.
 
 Hosts dispatch their own UI actions; Rowan has no UI action channel.

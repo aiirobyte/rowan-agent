@@ -7,13 +7,21 @@ export class InMemoryExtensionHost implements ExtensionHost {
   private readonly agentState = new Map<string, Map<string, Map<string, JsonValue>>>();
   private readonly globalState = new Map<string, Map<string, JsonValue>>();
   private readonly listeners = new Set<(extensionId: string, scope: ScopeRef) => void>();
-  extendApi?(extensionId: string, kind: HostApiKind): HostApiExtension | undefined;
+  extendApi?(
+    extensionId: string,
+    kind: HostApiKind,
+    source: Readonly<{ path: string }>,
+  ): HostApiExtension | undefined;
 
   constructor(options: {
     configs?: Record<string, Record<string, JsonObject>>;
     agentState?: Record<string, Record<string, Record<string, JsonValue>>>;
     globalState?: Record<string, Record<string, JsonValue>>;
-    extendApi?: (extensionId: string, kind: HostApiKind) => HostApiExtension | undefined;
+    extendApi?: (
+      extensionId: string,
+      kind: HostApiKind,
+      source: Readonly<{ path: string }>,
+    ) => HostApiExtension | undefined;
   } = {}) {
     if (options.extendApi) {
       this.extendApi = options.extendApi;
