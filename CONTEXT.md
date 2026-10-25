@@ -42,6 +42,14 @@ selection and replace same-name Scope values. It contains no host business
 scope, lifecycle operation, or executable resource closure.
 _Avoid_: Agent Context, Capability Allowlist, Agent Configuration
 
+**Definition Metadata**:
+Flat, JSON-safe host values from unrecognized Agent Definition or Phase
+frontmatter keys. An explicit `metadata:` mapping is flattened into the same
+mapping; Rowan-known fields remain separate. Metadata cannot repeat a
+top-level key or name a Rowan-known field, and the `metadata` container never
+appears in the result.
+_Avoid_: Frontmatter Bag, unknown fields, Agent Configuration
+
 **Resource Source**:
 One host-registered, atomically replaceable set of same-kind Agent Definitions,
 Tools, Skills, or Phases identified by an opaque Source ID. Registration does
@@ -76,6 +84,8 @@ that owns the directory.
 A Phase may declare `prompt-guidelines` in frontmatter; while the Phase is in
 the current auto route catalog, its guidelines join the System Prompt
 Guidelines de-duplicated with Tool prompt guidelines.
+Unrecognized Phase frontmatter follows Definition Metadata: values such as
+`phases` and `contexts` remain host metadata because they are not Phase fields.
 _Avoid_: Nested Resource Registry, Workflow Bundle, Phase Dependency Graph
 
 **Definition Layer**:
@@ -144,6 +154,9 @@ _Avoid_: Job, Workflow Run, Turn Promise
 
 **Control Phase Run**:
 A Run the host starts directly into one Phase with `runPhase`. Its outcome is hidden (`display: false`); an empty input adds no user message; and `yieldToInput` cancels it when an ordinary Run is created for the same Agent. Compaction is one.
+The host may merge JSON-safe metadata beside Rowan's reserved `rowan` key.
+Reusing an already-active Control Phase Run for the same Phase returns that Run
+without changing its metadata.
 _Avoid_: Control Run, System Run, Background Job
 
 **Execution Attempt**:
@@ -236,7 +249,7 @@ A lossy live observation such as a Message delta or transient Tool state update 
 _Avoid_: Durable Run Event, Canonical Message
 
 **Run Metadata**:
-Opaque immutable host correlation data stored with one Agent Run and echoed on its Durable Run Events.
+Opaque immutable host correlation data stored with one Agent Run and echoed on its Durable Run Events and Tool Call contexts. Only host-started Control Phase Runs accept additional top-level metadata; their reserved `rowan` key records Rowan control state. Extensions cannot set Run metadata.
 _Avoid_: Agent Metadata, business state, Outcome payload
 
 **Event Consumer**:

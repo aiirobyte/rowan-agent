@@ -205,6 +205,14 @@ Definition name lists narrow the selected Tools, Skills, and Phases: omission
 inherits all candidates, `[]` selects none, and missing names are skipped. The
 same rule applies to `definition.contexts`.
 
+Markdown Agent Definitions and `PHASE.md` files share one metadata rule:
+Rowan-known keys stay fields, while every other JSON-safe key becomes flat
+`metadata`. An explicit `metadata:` mapping is flattened too. The authoring
+entry exports `normalizeDefinitionMetadata(kind, frontmatter)` for hosts that
+parse the same frontmatter in a browser-safe context. See
+[PHASE.md Format](./docs/phases.md#frontmatter) for the Phase field set and
+metadata errors.
+
 ### Registration, Definition, and View
 
 Registration, selection, and visibility have different jobs:

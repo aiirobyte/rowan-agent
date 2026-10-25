@@ -586,6 +586,8 @@ export interface AgentRuntime {
     input?: UserInput;
     yieldToInput?: boolean;
     idempotencyKey?: string;
+    /** Host correlation data merged beside Rowan's reserved `rowan` Control Run metadata. */
+    metadata?: JsonObject;
   }): Promise<AgentRun>;
   listInvocations(agentId: AgentId, options: { source: InvocationSource }): Promise<readonly InvocationCatalogEntry[]>;
   history(agentId: AgentId): Promise<readonly Message[]>;

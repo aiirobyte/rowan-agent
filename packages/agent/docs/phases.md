@@ -168,6 +168,8 @@ input:                       # JSON-safe structural defaults shown in route tool
   context: "Additional context"
 isolated: true               # Fresh context when executed in parallel
 owner: docs-team             # Any other key: host metadata, kept on Phase.metadata
+metadata:                    # Optional explicit host metadata; flattened
+  tier: stable
 ---
 ```
 
@@ -180,7 +182,14 @@ owner: docs-team             # Any other key: host metadata, kept on Phase.metad
 | `target` | string | No | Forced next phase name. Overrides route tool |
 | `input` | JSON-safe mapping | No | Structural payload shape and defaults; omitted fields use these defaults |
 | `isolated` | boolean | No | Fresh message context in parallel execution |
-| (custom keys) | JSON-safe value | No | Host-defined extra metadata passed to `phase.metadata`; non-JSON-safe values are dropped with a warning |
+| (custom keys) | JSON-safe value | No | Host-defined metadata passed to flat `phase.metadata`; non-JSON-safe values are dropped with a warning |
+| `metadata` | JSON-safe mapping | No | Explicit host metadata; its entries are flattened into `phase.metadata` |
+
+The explicit `metadata` mapping and top-level custom keys use the same rule.
+`metadata` must be a mapping, cannot repeat a key declared at the top level,
+and cannot contain a Rowan-known Phase field. The wrapper itself never appears
+inside `phase.metadata`. For example, `metadata: { owner: docs }` and a
+top-level `owner: docs` both produce `metadata: { owner: "docs" }`.
 
 ### Body Content
 

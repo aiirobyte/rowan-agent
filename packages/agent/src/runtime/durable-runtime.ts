@@ -499,14 +499,23 @@ export class AgentRuntime implements AgentRuntimeContract {
       input?: UserInput;
       yieldToInput?: boolean;
       idempotencyKey?: string;
+      metadata?: JsonObject;
     },
   ): Promise<AgentRun> {
     this.assertOpen();
+    if (options.metadata !== undefined) {
+      assertMetadata(options.metadata, "metadata");
+      if (Object.prototype.hasOwnProperty.call(options.metadata, "rowan")) {
+        throw new TypeError("metadata.rowan is reserved for Rowan Control Run metadata");
+      }
+    }
     const agent = await this.requireAgent(agentId);
     if (!agent.activatedAt || !agent.currentConfigToken) throw new RuntimeError("agent_not_found", { agentId });
     const active = (await this.owned.listRuns({ agentId }))
       .filter((run) => ["queued", "running", "input_required"].includes(run.state));
     const existing = active.find((run) => controlRunPhase(run) === options.phase);
+    // Reuse preserves the original Run's metadata; a later request does not
+    // rewrite the identity or host correlation data of the active Control Run.
     if (existing) return new DurableRun(this, existing.id);
     // A suspended input-required Run does not occupy the execution slot. A
     // held input-required Run still does, because its execution is alive.
@@ -514,6 +523,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       && (run.state === "queued" || run.state === "running" || (run.state === "input_required" && run.execution !== undefined)));
     if (blocking) throw new RuntimeError("context_busy", { agentId, runId: blocking.id, actual: blocking.state });
     const metadata: JsonObject = {
+      ...(options.metadata ?? {}),
       rowan: {
         kind: "phase",
         phase: options.phase,

@@ -7,8 +7,6 @@ import type {
   PhaseInput,
   PhaseRegistry,
 } from "./types";
-import type { JsonValue } from "../../runtime-events";
-import { isJsonValue } from "../../runtime/json";
 import { parsePhaseInput } from "./input";
 import type { PhaseOutput } from "./types";
 import type { PhaseContext } from "./types";
@@ -21,6 +19,7 @@ import {
   inferResourceName,
 } from "../loader";
 import { normalizeAgentDefinition, optionalStringList } from "../definitions";
+import { normalizeDefinitionMetadata } from "../definition-metadata";
 import { formatResourceOutput } from "../context/resource-formatter";
 import {
   ResourceMetadataError,
@@ -35,19 +34,6 @@ import { loadSkill } from "../skills";
 const PHASE_MARKER = "PHASE.md";
 const SKILL_MARKER = "SKILL.md";
 const RESOURCE_MARKERS = new Set([PHASE_MARKER, SKILL_MARKER]);
-const KNOWN_PHASE_KEYS = new Set([
-  "name",
-  "description",
-  "target",
-  "input",
-  "prompt-guidelines",
-  "tools",
-  "model",
-  "isolated",
-  "disable-auto-invocation",
-  "disable-implicit-invocation",
-  "skills",
-]);
 
 function resolvePhasePath(input: string): string {
   const resolved = resolve(input);
@@ -76,13 +62,22 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   const { frontmatter, body } = loaded;
   const metadata = frontmatter as Record<string, unknown>;
   const frontmatterName = typeof metadata.name === "string" ? metadata.name : undefined;
+  const metadataResolution = normalizeDefinitionMetadata("phase", metadata);
+  const invalidMetadata = metadataResolution.problems.find((problem) => problem.code !== "non_json_value");
+  if (invalidMetadata) {
+    warnResourceDiagnostics("phase", resolved, [invalidMetadata.message]);
+    throw new ResourceMetadataError("invalid_metadata", invalidMetadata.message);
+  }
+  const diagnostics = metadataResolution.problems
+    .filter((problem) => problem.code === "non_json_value")
+    .map((problem) => problem.message);
   let definition;
   let promptGuidelines: readonly string[] | undefined;
   try {
     // A Phase's Skill set is defined by its directory Bundle. Ignore the old
     // frontmatter selector before shared Definition parsing so malformed legacy
     // values remain a silent no-op.
-    const phaseMetadata = { ...metadata };
+    const phaseMetadata = { ...metadataResolution.fields };
     delete phaseMetadata.skills;
     delete phaseMetadata["prompt-guidelines"];
     definition = normalizeAgentDefinition(phaseMetadata, body, { fallbackName: directoryName });
@@ -94,21 +89,12 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   }
   const name = definition.name;
   const description = validateDescription(definition.description);
-  const diagnostics = validateResourceId(directoryName);
+  diagnostics.push(...validateResourceId(directoryName));
   if (frontmatterName && frontmatterName !== directoryName) {
     diagnostics.push(...validateResourceName(frontmatterName, directoryName));
   }
   diagnostics.push(...description.warnings);
   diagnostics.push(...validatePhaseTarget(metadata.target));
-  const extraMetadata: Record<string, JsonValue> = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (KNOWN_PHASE_KEYS.has(key)) continue;
-    if (isJsonValue(value)) {
-      extraMetadata[key] = value;
-    } else {
-      diagnostics.push(`metadata key "${key}" must be a JSON-safe value`);
-    }
-  }
   warnResourceDiagnostics("phase", resolved, diagnostics);
 
   const baseDir = dirname(resolved);
@@ -136,7 +122,7 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
     model: definition.model,
     disableAutoInvocation: metadata["disable-auto-invocation"] === true,
     disableImplicitInvocation: metadata["disable-implicit-invocation"] === true,
-    ...(Object.keys(extraMetadata).length > 0 ? { metadata: Object.freeze(extraMetadata) } : {}),
+    ...(metadataResolution.metadata ? { metadata: metadataResolution.metadata } : {}),
   };
 
   // Try to load execution code

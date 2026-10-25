@@ -1,6 +1,9 @@
 import { parseModelRef, type ModelRef } from "@rowan-agent/models";
 import { parseFrontmatter } from "./loader";
 import type { Skill } from "../protocol";
+import type { JsonValue } from "../runtime-events";
+import { isJsonValue } from "../runtime/json";
+import { normalizeDefinitionMetadata } from "./definition-metadata";
 
 export type PhaseRegistrySelection = Readonly<{
   entryPhaseId: string | null;
@@ -18,6 +21,8 @@ export type AgentDefinition = Readonly<{
   phases?: PhaseRegistrySelection;
   contexts?: readonly string[];
   model?: ModelRef;
+  /** Host-defined values from unrecognized definition frontmatter. */
+  metadata?: Readonly<Record<string, JsonValue>>;
 }>;
 
 export function assertAgentDefinition(value: unknown): asserts value is AgentDefinition {
@@ -32,6 +37,9 @@ export function assertAgentDefinition(value: unknown): asserts value is AgentDef
   optionalBundledSkills(value.bundledSkills, "definition.bundledSkills");
   optionalPhaseRegistrySelection(value.phases, "definition.phases");
   optionalStringList(value.contexts, "definition.contexts");
+  if (value.metadata !== undefined && (!isRecord(value.metadata) || !isJsonValue(value.metadata))) {
+    throw new TypeError("definition.metadata must be a JSON object");
+  }
   if ("extensions" in value) throw new TypeError("definition.extensions is not supported; Extensions are Runtime-global");
   if ("entryPhase" in value) throw new TypeError("definition.entryPhase is not supported; use definition.phases.entryPhaseId");
   if (value.model !== undefined) {
@@ -58,22 +66,26 @@ export function normalizeAgentDefinition(
 ): AgentDefinition {
   if (frontmatter.content !== undefined) throw new TypeError("content is not supported; use prompt and the document body");
   if (frontmatter.context !== undefined) throw new TypeError("context is not supported; use contexts");
-  const name = frontmatter.name === undefined && options.fallbackName
-    ? options.fallbackName
-    : requiredString(frontmatter.name, "name");
-  const description = requiredString(frontmatter.description, "description");
-  const normalizedPrompt = requiredString(prompt, "prompt");
-  const tools = optionalStringList(frontmatter.tools, "tools");
-  const skills = optionalStringList(frontmatter.skills, "skills");
-  const phases = optionalPhaseRegistrySelection(frontmatter.phases, "phases");
   if (frontmatter.extensions !== undefined) {
     throw new TypeError("extensions is not supported; Extensions are Runtime-global");
   }
-  const contexts = optionalStringList(frontmatter.contexts, "contexts");
   if (frontmatter.entryPhase !== undefined) {
     throw new TypeError("entryPhase is not supported; use phases.entryPhaseId");
   }
-  const model = optionalModel(frontmatter.model);
+  const normalizedMetadata = normalizeDefinitionMetadata("agent-definition", frontmatter);
+  const metadataProblem = normalizedMetadata.problems.find((problem) => problem.code !== "non_json_value");
+  if (metadataProblem) throw new TypeError(metadataProblem.message);
+  const fields = normalizedMetadata.fields;
+  const name = fields.name === undefined && options.fallbackName
+    ? options.fallbackName
+    : requiredString(fields.name, "name");
+  const description = requiredString(fields.description, "description");
+  const normalizedPrompt = requiredString(prompt, "prompt");
+  const tools = optionalStringList(fields.tools, "tools");
+  const skills = optionalStringList(fields.skills, "skills");
+  const phases = optionalPhaseRegistrySelection(fields.phases, "phases");
+  const contexts = optionalStringList(fields.contexts, "contexts");
+  const model = optionalModel(fields.model);
 
   return {
     name,
@@ -84,6 +96,7 @@ export function normalizeAgentDefinition(
     ...(phases ? { phases } : {}),
     ...(contexts ? { contexts } : {}),
     ...(model ? { model } : {}),
+    ...(normalizedMetadata.metadata ? { metadata: normalizedMetadata.metadata } : {}),
   };
 }
 
