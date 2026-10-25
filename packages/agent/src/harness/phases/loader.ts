@@ -74,13 +74,7 @@ export async function loadPhase(targetPath: string): Promise<Phase> {
   let definition;
   let promptGuidelines: readonly string[] | undefined;
   try {
-    // A Phase's Skill set is defined by its directory Bundle. Ignore the old
-    // frontmatter selector before shared Definition parsing so malformed legacy
-    // values remain a silent no-op.
-    const phaseMetadata = { ...metadataResolution.fields };
-    delete phaseMetadata.skills;
-    delete phaseMetadata["prompt-guidelines"];
-    definition = normalizeAgentDefinition(phaseMetadata, body, { fallbackName: directoryName });
+    definition = normalizeAgentDefinition(metadataResolution.fields, body, { fallbackName: directoryName });
     promptGuidelines = optionalStringList(metadata["prompt-guidelines"], "prompt-guidelines");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

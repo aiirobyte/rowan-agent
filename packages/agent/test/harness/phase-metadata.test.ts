@@ -26,7 +26,6 @@ model: openai/gpt-5
 isolated: true
 disable-auto-invocation: true
 disable-implicit-invocation: true
-skills: legacy-ignored
 permission:
   mode: strict
   allowedPaths:
@@ -63,7 +62,6 @@ Review the code.
       "isolated",
       "disable-auto-invocation",
       "disable-implicit-invocation",
-      "skills",
     ]) {
       expect(known in (loaded.metadata ?? {})).toBe(false);
     }

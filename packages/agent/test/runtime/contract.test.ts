@@ -15,6 +15,7 @@ import {
   normalizeUserInput,
   projectToolDefinition,
   RuntimeError,
+  type AgentConfiguration,
   type RuntimeErrorCode,
 } from "../../src/runtime/index";
 import type { RunSnapshot, UserInput } from "@rowan-agent/agent";
@@ -76,6 +77,17 @@ test("JSON values are strict, canonical, and bounded", () => {
   Object.defineProperty(accessor, "value", { get: () => 1 });
   expect(isJsonValue(accessor)).toBe(false);
   expect(() => assertJsonValue(undefined, "input")).toThrow("input");
+});
+
+test("agent configuration does not special-case Definition Layer content", () => {
+  const layer = { content: "Old body.", prompt: "Current body." };
+  const config: AgentConfiguration = {
+    identity: "legacy-looking-layer",
+    definition: { name: "definition", layer },
+    resourceView: { agents: [], tools: [], skills: [], phases: [] },
+    model: { provider: "test", id: "model" },
+  };
+  expect(() => assertAgentConfiguration(config)).not.toThrow();
 });
 
 test("RuntimeError narrows the code/details discriminant", () => {

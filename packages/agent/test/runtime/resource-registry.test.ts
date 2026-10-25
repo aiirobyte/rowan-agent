@@ -7,6 +7,7 @@ import {
   type ResourceView,
 } from "../../src/runtime/resource-registry";
 import type { Phase } from "../../src/harness/phases/types";
+import { assertAgentDefinition } from "../../src/harness/definitions";
 
 const emptyView = (tools: readonly string[] = []): ResourceView => ({
   agents: [],
@@ -51,24 +52,32 @@ test("Phase resource name previous is reserved for routing", async () => {
   })).rejects.toMatchObject({ code: "resource_collision" });
 });
 
-test("Agent source transactions reject legacy Definition fields before replacement", async () => {
+test("Agent source transactions treat old key names as ordinary data", async () => {
   const registry = new ResourceRegistry();
   await registry.loadAgents({
     sourceId: "project-a",
     values: [{ name: "keep", description: "Keep", prompt: "Keep" }],
   });
 
-  await expect(registry.loadAgents({
+  const definition: unknown = {
+    name: "ordinary",
+    description: "Ordinary",
+    prompt: "Current",
+    content: "Old",
+    context: [],
+    extensions: ["quality"],
+    entryPhase: "verify",
+  };
+  assertAgentDefinition(definition);
+  await registry.loadAgents({
     sourceId: "project-a",
-    values: [{ name: "legacy", description: "Legacy", content: "Old" } as never],
-  })).rejects.toThrow(/content.*prompt/i);
-  await expect(registry.loadAgents({
-    sourceId: "project-a",
-    values: [{ name: "legacy", description: "Legacy", prompt: "Old", context: [] } as never],
-  })).rejects.toThrow(/context.*contexts/i);
+    values: [definition],
+  });
 
-  expect(registry.resolveView({ agents: ["project-a"], tools: [], skills: [], phases: [] }).agents)
-    .toEqual([{ name: "keep", description: "Keep", prompt: "Keep" }]);
+  expect(
+    registry.resolveView({ agents: ["project-a"], tools: [], skills: [], phases: [] })
+      .agents.map(({ name }) => name),
+  ).toEqual(["ordinary"]);
 });
 
 test("replacing one source atomically removes stale resources", async () => {
