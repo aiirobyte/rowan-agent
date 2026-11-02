@@ -118,6 +118,40 @@ _Avoid_: Resource Candidate, Agent Extension, Scoped Extension
 State storage exposed to an Extension through `api.state`: run-scoped in-memory state (`run(runId)`), agent-scoped durable state (`agent(agentId)`), and extension-scoped durable state (`global()`) that survives process restarts and is isolated per Extension ID.
 _Avoid_: Static module state, global process variables, Agent Configuration mutation
 
+**Provider Auth Mode**:
+The serializable `auth` value on a model or provider connection. Its absence
+selects a static API key and preserves that key's required-field error;
+`"none"` sends no provider credential for a keyless local server; a named OAuth
+flow selects subscription authentication. It never contains tokens, secrets,
+or executable callbacks.
+_Avoid_: OAuth Config, Token Config, Provider Credential
+
+**OAuth Flow**:
+A named subscription login and refresh procedure owned by the models package,
+selected by a Provider Auth Mode. Browser flows expose an authorization URL;
+device flows expose a user code and verification URL.
+_Avoid_: Auth Provider, Login Method, credential implementation
+
+**Subscription Credential**:
+A refreshable set of access and refresh tokens, expiry, flow identity, and
+flow-specific metadata persisted by the host. It is separate from Provider
+configuration and keyed by provider id; a rotated credential is saved before
+use.
+_Avoid_: API Key, OAuth Config, Session
+
+**Credential Store**:
+The host-supplied `OAuthCredentialStore` seam that loads and saves Subscription
+Credentials by provider id. It is passed to a model stream at execution time
+and is never serialized into model or provider configuration.
+_Avoid_: Secret Store, Token Config, Credential Cache
+
+**Sign-in Required**:
+A typed provider failure (`OAuthSignInRequiredError`, code
+`sign_in_required`) raised when an OAuth Flow has no credential or cannot
+refresh it. The host responds by starting that flow; Rowan does not retry with
+a stale credential.
+_Avoid_: Unauthorized, Auth Error, 401
+
 ## Conversation
 
 **Agent Input**:
