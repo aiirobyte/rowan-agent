@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { registerModel } from "@rowan-agent/models";
-import type { ModelRef, Model, ModelCost, Protocol, ThinkingLevel } from "@rowan-agent/models";
+import { parseAuthMode, registerModel } from "@rowan-agent/models";
+import type { AuthMode, ModelRef, Model, ModelCost, Protocol, ThinkingLevel } from "@rowan-agent/models";
 import type { WorkspacePaths } from "./workspace";
 
 export { parseModelRef } from "@rowan-agent/models";
@@ -29,7 +29,8 @@ export type ProviderConfigFromFile = {
   id: string;
   name?: string;
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
+  auth?: AuthMode;
   protocol: Protocol;
   timeoutMs?: number;
   maxRetries?: number;
@@ -135,7 +136,15 @@ function validateConfigFile(parsed: unknown, configFilename: string): AgentConfi
     if (typeof provider.baseUrl !== "string" || !provider.baseUrl) {
       throw new Error(`providers[${i}].baseUrl is required and must be a non-empty string.`);
     }
-    if (typeof provider.apiKey !== "string" || !provider.apiKey) {
+    let auth: AuthMode | undefined;
+    try {
+      auth = parseAuthMode(provider.auth);
+    } catch (error) {
+      throw new Error(
+        `providers[${i}].auth is invalid: ${error instanceof Error ? error.message : "unknown value."}`,
+      );
+    }
+    if (auth === undefined && (typeof provider.apiKey !== "string" || !provider.apiKey)) {
       throw new Error(`providers[${i}].apiKey is required and must be a non-empty string.`);
     }
     if (typeof provider.protocol !== "string" || !provider.protocol) {
@@ -145,7 +154,9 @@ function validateConfigFile(parsed: unknown, configFilename: string): AgentConfi
       throw new Error(`providers[${i}].models must be a non-empty array.`);
     }
 
-    const interpolatedApiKey = interpolateEnvVars(provider.apiKey);
+    const interpolatedApiKey = typeof provider.apiKey === "string"
+      ? interpolateEnvVars(provider.apiKey)
+      : undefined;
 
     const validatedModels: ModelConfigFromFile[] = provider.models.map((m, j) => {
       if (typeof m !== "object" || m === null) {
@@ -174,7 +185,8 @@ function validateConfigFile(parsed: unknown, configFilename: string): AgentConfi
     return {
       id: provider.id,
       baseUrl: provider.baseUrl,
-      apiKey: interpolatedApiKey,
+      ...(interpolatedApiKey ? { apiKey: interpolatedApiKey } : {}),
+      ...(auth ? { auth } : {}),
       protocol: provider.protocol as Protocol,
       ...(typeof provider.name === "string" ? { name: provider.name } : {}),
       ...(typeof provider.timeoutMs === "number" ? { timeoutMs: provider.timeoutMs } : {}),
@@ -255,6 +267,7 @@ export function registerConfigModels(config: AgentConfigFile): void {
         contextWindow: fileModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
         maxTokens: fileModel.maxTokens ?? DEFAULT_MAX_TOKENS,
         apiKey: provider.apiKey,
+        ...(provider.auth ? { auth: provider.auth } : {}),
         timeoutMs: provider.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         ...(provider.maxRetries !== undefined ? { maxRetries: provider.maxRetries } : {}),
         ...(provider.retryDelayMs !== undefined ? { retryDelayMs: provider.retryDelayMs } : {}),

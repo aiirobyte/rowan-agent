@@ -221,6 +221,68 @@ providers:
   }
 });
 
+test("loadConfigFile accepts keyless and OAuth providers without apiKey", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "rowan-config-auth-"));
+  try {
+    const rowanDir = join(dir, ".rowan");
+    await mkdir(rowanDir, { recursive: true });
+    await writeFile(join(rowanDir, "config.yaml"), `
+providers:
+  - id: local
+    baseUrl: http://127.0.0.1:11434/v1
+    auth: none
+    protocol: openai-completions
+    models:
+      - id: llama
+  - id: xai-oauth
+    baseUrl: https://cli-chat-proxy.grok.com/v1
+    auth: xai
+    protocol: openai-responses
+    models:
+      - id: grok-4.5
+`);
+
+    const result = await loadConfigFile(ws(dir));
+    expect(result!.providers.map((provider) => ({
+      apiKey: provider.apiKey,
+      auth: provider.auth,
+    }))).toEqual([
+      { apiKey: undefined, auth: "none" },
+      { apiKey: undefined, auth: "xai" },
+    ]);
+
+    clearModels();
+    registerConfigModels(result!);
+    expect(getModel("local", "llama")).toMatchObject({ auth: "none", apiKey: undefined });
+    expect(getModel("xai-oauth", "grok-4.5")).toMatchObject({ auth: "xai", apiKey: undefined });
+  } finally {
+    clearModels();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfigFile rejects an unknown auth mode", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "rowan-config-bad-auth-"));
+  try {
+    const rowanDir = join(dir, ".rowan");
+    await mkdir(rowanDir, { recursive: true });
+    await writeFile(join(rowanDir, "config.yaml"), `
+providers:
+  - id: openai
+    baseUrl: https://api.openai.com/v1
+    apiKey: test-key
+    auth: api-key
+    protocol: openai-completions
+    models:
+      - id: gpt-4.1
+`);
+
+    await expect(loadConfigFile(ws(dir))).rejects.toThrow("auth is invalid");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfigFile throws on missing providers array", async () => {
   const dir = await mkdtemp(join(tmpdir(), "rowan-config-no-providers-"));
   try {

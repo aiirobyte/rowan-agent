@@ -14,8 +14,13 @@ import { createProviderCallContext, ZERO_COST } from "./protocol";
 import { getModel, resolveModel } from "./models";
 import { MODELS } from "./models.generated";
 import { streamOpenAICompletions } from "./providers/openai-completions";
-import { streamOpenAIResponses } from "./providers/openai-responses";
+import {
+  streamOpenAICodexResponses,
+  streamOpenAIResponses,
+} from "./providers/openai-responses";
 import { streamAnthropic } from "./providers/anthropic";
+import type { OAuthCredentialStore } from "./auth";
+import { parseAuthMode } from "./auth";
 
 // ---------------------------------------------------------------------------
 // API Provider Registry (dispatches by model.protocol, not model.provider)
@@ -86,6 +91,7 @@ export function unregisterApiProvider(protocol: Protocol): boolean {
 export function registerBuiltInApiProviders(): void {
   registerApiProvider({ protocol: "openai-completions", stream: streamOpenAICompletions });
   registerApiProvider({ protocol: "openai-responses", stream: streamOpenAIResponses });
+  registerApiProvider({ protocol: "openai-codex-responses", stream: streamOpenAICodexResponses });
   registerApiProvider({ protocol: "anthropic-messages", stream: streamAnthropic });
 }
 
@@ -182,6 +188,7 @@ export function resolveConfigCost(
 }
 
 function modelFromConfig(config: ModelConfig): Model {
+  const auth = parseAuthMode(config.auth);
   return {
     id: config.id,
     name: config.name,
@@ -189,6 +196,7 @@ function modelFromConfig(config: ModelConfig): Model {
     provider: config.provider,
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
+    ...(auth ? { auth } : {}),
     reasoning: config.reasoning ?? false,
     ...(config.thinkingLevel !== undefined ? { thinkingLevel: config.thinkingLevel } : {}),
     ...(config.thinkingLevels !== undefined ? { thinkingLevels: config.thinkingLevels } : {}),
@@ -203,7 +211,12 @@ function modelFromConfig(config: ModelConfig): Model {
   };
 }
 
-export function createModelStream(config?: ModelConfig): StreamFn {
+export type ModelStreamOptions = {
+  /** Host-owned OAuth credential persistence. Never serialized with configuration. */
+  oauthCredentialStore?: OAuthCredentialStore;
+};
+
+export function createModelStream(config?: ModelConfig, options?: ModelStreamOptions): StreamFn {
   if (config || apiProviderRegistry.size === 0) registerBuiltInApiProviders();
   const configuredModel = config ? modelFromConfig(config) : undefined;
 
@@ -223,7 +236,13 @@ export function createModelStream(config?: ModelConfig): StreamFn {
       ?? resolveModel(request.model.id);
 
     if (model) {
-      yield* stream(model, request, ctx);
+      const context = options?.oauthCredentialStore
+        ? {
+            ...ctx,
+            oauthCredentialStore: ctx?.oauthCredentialStore ?? options.oauthCredentialStore,
+          }
+        : ctx;
+      yield* stream(model, request, context);
       return;
     }
 

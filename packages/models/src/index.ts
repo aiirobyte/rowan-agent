@@ -22,12 +22,16 @@ export {
   streamByRef,
   createModelStream,
 } from "./registry";
-export { ProviderError } from "./providers/shared";
+export { OAuthSignInRequiredError, ProviderError } from "./providers/shared";
+export { parseAuthMode } from "./auth";
+export { OAuthLoginError } from "./oauth/errors";
+export { refreshOAuthCredential, startOAuthLogin } from "./oauth/session";
 // Used by the agent runtime to validate provider tool progress.
 export { isValidToolProgress } from "./protocol";
 
 export type {
   ApiProvider,
+  ModelStreamOptions,
 } from "./registry";
 
 export type {
@@ -87,3 +91,15 @@ export type {
   ToolProgress,
   ToolResult,
 } from "./protocol";
+export type {
+  AuthMode,
+  OAuthCredential,
+  OAuthCredentialStore,
+  OAuthFlow,
+} from "./auth";
+export type { OAuthLoginErrorCode } from "./oauth/errors";
+export type {
+  OAuthLoginOptions,
+  OAuthLoginSession,
+  OAuthRefreshOptions,
+} from "./oauth/session";

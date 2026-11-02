@@ -18,7 +18,10 @@ import { createProviderCallContext, ZERO_COST } from "../protocol";
 import { calculateCost } from "../models";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
+import { bearerRequestAuth } from "./request-auth";
+import type { OAuthRequestAuth } from "../oauth/credential";
 import {
+  ProviderError,
   payloadError,
   type BaseProviderConfig,
   normalizeBaseUrl,
@@ -28,6 +31,8 @@ import {
   resolveBaseProviderConfig,
   sanitizeToolInput,
 } from "./shared";
+
+const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -39,11 +44,22 @@ export type OpenAIResponsesConfig = BaseProviderConfig & {
 
 export type ResolveOpenAIResponsesConfigInput = Partial<OpenAIResponsesConfig>;
 
+type ResponsesVariant = "standard" | "codex";
+
 export function resolveOpenAIResponsesConfig(
   input: ResolveOpenAIResponsesConfigInput = {},
 ): OpenAIResponsesConfig {
   return {
     ...resolveBaseProviderConfig(input, "https://api.openai.com/v1"),
+    ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
+  };
+}
+
+export function resolveOpenAICodexResponsesConfig(
+  input: ResolveOpenAIResponsesConfigInput = {},
+): OpenAIResponsesConfig {
+  return {
+    ...resolveBaseProviderConfig(input, DEFAULT_CODEX_BASE_URL),
     ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
   };
 }
@@ -178,8 +194,39 @@ function convertTools(tools: LlmToolDefinition[]): Array<{
 function buildRequestBody(
   config: OpenAIResponsesConfig,
   request: LlmRequest,
+  variant: ResponsesVariant,
 ): Record<string, unknown> {
   const input = convertMessages(request.messages);
+
+  if (variant === "codex") {
+    const body: Record<string, unknown> = {
+      model: config.model,
+      input,
+      stream: true,
+      store: false,
+      instructions: request.system ?? "You are a helpful assistant.",
+      text: { verbosity: "low" },
+      include: ["reasoning.encrypted_content"],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    };
+    if (request.sessionId) {
+      body.prompt_cache_key = Array.from(request.sessionId).slice(0, 64).join("");
+    }
+    const temperature = request.temperature ?? config.temperature;
+    if (temperature !== undefined) body.temperature = temperature;
+    if (request.tools && request.tools.length > 0) {
+      body.tools = convertTools(request.tools);
+    }
+    const requestedThinkingLevel = request.thinkingLevel ?? config.thinkingLevel;
+    const reasoningEffort = requestedThinkingLevel === "off"
+      ? undefined
+      : requestedThinkingLevel ?? config.reasoningEffort;
+    if (reasoningEffort) {
+      body.reasoning = { effort: openAIReasoningEffort(reasoningEffort), summary: "auto" };
+    }
+    return body;
+  }
 
   const body: Record<string, unknown> = {
     model: config.model,
@@ -212,6 +259,13 @@ function buildRequestBody(
   }
 
   return body;
+}
+
+function codexEndpoint(baseUrl: string): string {
+  const normalized = normalizeBaseUrl(baseUrl || DEFAULT_CODEX_BASE_URL);
+  if (normalized.endsWith("/codex/responses")) return normalized;
+  if (normalized.endsWith("/codex")) return `${normalized}/responses`;
+  return `${normalized}/codex/responses`;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +302,7 @@ type ResponsesStreamEvent =
   | { type: "response.function_call_arguments.delta"; output_index: number; item_id: string; call_id?: string; delta: string }
   | { type: "response.function_call_arguments.done"; output_index: number; item_id: string; call_id?: string; name?: string; arguments: string }
   | { type: "response.output_item.done"; output_index: number; item: { type: string; id?: string; call_id?: string; name?: string; arguments?: string; encrypted_content?: string; summary?: Array<{ type: string; text?: string }>; content?: Array<{ type: string; text?: string }> } }
+  | { type: "response.done"; response: { usage?: RawUsage } }
   | { type: "response.completed"; response: { usage?: RawUsage } }
   | { type: "response.incomplete"; response: { usage?: RawUsage; incomplete_details?: { reason: string } } }
   | { type: "error"; error: { message: string; type?: string } };
@@ -261,13 +316,26 @@ async function* streamResponses(
   request: LlmRequest,
   ctx?: ProviderCallContext,
   model?: Model,
+  variant: ResponsesVariant = "standard",
 ): AsyncGenerator<LlmStreamEvent> {
-  const body = buildRequestBody(config, request);
-  const endpoint = `${normalizeBaseUrl(config.baseUrl)}/responses`;
+  if (variant === "codex" && config.auth !== "openai-codex") {
+    throw new ProviderError({
+      code: "invalid_config",
+      message: 'The openai-codex-responses protocol requires auth: "openai-codex".',
+      details: { field: "auth" },
+    });
+  }
+  const body = buildRequestBody(config, request, variant);
+  let baseUrl = config.baseUrl;
+  const endpoint = () => variant === "codex"
+    ? codexEndpoint(baseUrl)
+    : `${normalizeBaseUrl(baseUrl)}/responses`;
+  const providerId = config.providerId ?? model?.provider ?? "unknown";
+  let requestAuth: OAuthRequestAuth | undefined;
   const concreteModel: Model = model ?? {
     id: config.model,
     provider: (config as any).provider ?? "openai",
-    protocol: "openai-responses",
+    protocol: variant === "codex" ? "openai-codex-responses" : "openai-responses",
     baseUrl: config.baseUrl,
     reasoning: false,
     input: ["text", "image"],
@@ -281,11 +349,22 @@ async function* streamResponses(
     endpoint,
     llmRequest: request,
     signal: ctx?.signal,
+    prepare: async () => {
+      requestAuth = await bearerRequestAuth(
+        config,
+        providerId,
+        config.model,
+        ctx?.oauthCredentialStore,
+        ctx?.signal,
+        request.sessionId,
+      );
+      baseUrl = requestAuth.baseUrl ?? config.baseUrl;
+    },
     request: () => ({
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${config.apiKey}`,
+        ...(requestAuth?.headers ?? {}),
       },
       body: JSON.stringify(body),
     }),
@@ -514,6 +593,7 @@ async function* streamResponses(
             break;
           }
 
+          case "response.done":
           case "response.completed":
             usage = normalizeUsage(event.response.usage) ?? usage;
             stopReason = "completed";
@@ -557,6 +637,16 @@ export function createOpenAIResponsesStream(config: OpenAIResponsesConfig): Stre
   };
 }
 
+export function createOpenAICodexResponsesStream(config: OpenAIResponsesConfig): StreamFn {
+  const normalizedConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) };
+  return async function* openAICodexResponsesStream(request, ctx) {
+    const fullCtx: ProviderCallContext = ctx && "signal" in ctx && "run" in ctx && "interact" in ctx && "tools" in ctx
+      ? ctx as ProviderCallContext
+      : createProviderCallContext(ctx);
+    yield* streamResponses(normalizedConfig, request, fullCtx, undefined, "codex");
+  };
+}
+
 /**
  * ProviderStreamFn-compatible stream function for OpenAI Responses API.
  * Resolves config from the Model descriptor and environment.
@@ -566,6 +656,8 @@ export const streamOpenAIResponses: ProviderStreamFn = (model, request, ctx) => 
     baseUrl: model.baseUrl,
     model: model.id,
     apiKey: model.apiKey,
+    auth: model.auth,
+    providerId: model.provider,
     thinkingLevel: model.thinkingLevel,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
@@ -574,4 +666,21 @@ export const streamOpenAIResponses: ProviderStreamFn = (model, request, ctx) => 
     cost: model.cost,
   });
   return streamResponses(config, request, ctx, model);
+};
+
+export const streamOpenAICodexResponses: ProviderStreamFn = (model, request, ctx) => {
+  const config = resolveOpenAICodexResponsesConfig({
+    baseUrl: model.baseUrl,
+    model: model.id,
+    apiKey: model.apiKey,
+    auth: model.auth,
+    providerId: model.provider,
+    thinkingLevel: model.thinkingLevel,
+    timeoutMs: model.timeoutMs,
+    maxRetries: model.maxRetries,
+    retryDelayMs: model.retryDelayMs,
+    headers: model.headers,
+    cost: model.cost,
+  });
+  return streamResponses(config, request, ctx, model, "codex");
 };

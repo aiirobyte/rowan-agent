@@ -1,4 +1,6 @@
 import type { LlmRequest, LlmModelUsage, LlmTokenUsage, ThinkingLevel, ModelCost } from "../protocol";
+import type { AuthMode, OAuthFlow } from "../auth";
+import { parseAuthMode } from "../auth";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -23,6 +25,17 @@ export class ProviderError extends Error {
     this.status = input.status;
     this.retryable = input.retryable ?? false;
     this.details = input.details;
+  }
+}
+
+export class OAuthSignInRequiredError extends ProviderError {
+  constructor(providerId: string, flow: OAuthFlow) {
+    super({
+      code: "sign_in_required",
+      message: `Sign in is required for provider "${providerId}" (${flow}).`,
+      details: { providerId, flow },
+    });
+    this.name = "OAuthSignInRequiredError";
   }
 }
 
@@ -197,7 +210,9 @@ export type ProviderFetch = (
 
 export type BaseProviderConfig = {
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
+  auth?: AuthMode;
+  providerId?: string;
   model: string;
   cost?: ModelCost;
   temperature?: number;
@@ -218,13 +233,28 @@ export function resolveBaseProviderConfig(
   input: BaseProviderConfigInput,
   defaultBaseUrl: string,
 ): BaseProviderConfig {
+  let auth: AuthMode | undefined;
+  try {
+    auth = parseAuthMode(input.auth);
+  } catch (error) {
+    throw new ProviderError({
+      code: "invalid_config",
+      message: error instanceof Error ? error.message : "Invalid auth mode.",
+      details: { field: "auth" },
+    });
+  }
+  const apiKey = auth === undefined
+    ? requireValue(
+        "API key",
+        input.apiKey,
+        "model.apiKey is required (set apiKey in config.yaml or pass --api-key)",
+      )
+    : nonEmpty(input.apiKey);
   return {
     baseUrl: normalizeBaseUrl(nonEmpty(input.baseUrl) ?? defaultBaseUrl),
-    apiKey: requireValue(
-      "API key",
-      input.apiKey,
-      "model.apiKey is required (set apiKey in config.yaml or pass --api-key)",
-    ),
+    ...(apiKey ? { apiKey } : {}),
+    ...(auth ? { auth } : {}),
+    ...(nonEmpty(input.providerId) ? { providerId: nonEmpty(input.providerId) } : {}),
     model: requireValue("model", input.model, "model.id is required"),
     ...(input.cost !== undefined ? { cost: input.cost } : {}),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
