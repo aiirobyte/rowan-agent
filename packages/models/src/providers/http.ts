@@ -6,6 +6,7 @@ import {
 } from "../sse";
 import type { BaseProviderConfig, ProviderFetch } from "./shared";
 import {
+  OAuthSignInRequiredError,
   ProviderError,
   asTrimmedString,
   isRecord,
@@ -27,10 +28,12 @@ export type ProviderTransportConfig = Pick<
 export interface ProviderRequestSpec {
   /** Transport policy and the production/test fetch adapter. */
   config: ProviderTransportConfig;
-  /** Fully resolved URL. Included in every structured failure. */
-  endpoint: string;
+  /** Fully resolved URL, or a getter refreshed after `prepare`. */
+  endpoint: string | (() => string);
   /** Rebuilt for every attempt so one-shot bodies can be recreated safely. */
   request: () => Omit<RequestInit, "signal">;
+  /** Resolves credentials or other attempt-scoped request state before `request`. */
+  prepare?: () => Promise<void>;
   /** User-facing subject in HTTP errors. Defaults to "Request". */
   requestName?: string;
   signal?: AbortSignal;
@@ -97,11 +100,16 @@ function normalizeRequestError(
   });
 }
 
+function resolveEndpoint(spec: ProviderRequestSpec): string {
+  return typeof spec.endpoint === "function" ? spec.endpoint() : spec.endpoint;
+}
+
 function withRequestContext(
   error: ProviderError,
   spec: ProviderRequestSpec,
   input: { retryable?: boolean; partialOutput?: boolean } = {},
 ): ProviderError {
+  if (error instanceof OAuthSignInRequiredError) return error;
   const contextual = new ProviderError({
     code: error.code,
     message: error.message,
@@ -109,7 +117,7 @@ function withRequestContext(
     ...(error.status !== undefined ? { status: error.status } : {}),
     details: {
       ...error.details,
-      endpoint: spec.endpoint,
+      endpoint: resolveEndpoint(spec),
       model: spec.config.model,
       ...(input.partialOutput !== undefined ? { partialOutput: input.partialOutput } : {}),
     },
@@ -369,7 +377,7 @@ async function normalizeHttpError(
     status: response.status,
     retryable: response.status === 408 || response.status === 409 || response.status === 429 || response.status >= 500,
     details: {
-      endpoint: spec.endpoint,
+      endpoint: resolveEndpoint(spec),
       model: spec.config.model,
       status: response.status,
       ...(providerError ? { providerError } : {}),
@@ -466,6 +474,7 @@ async function openResponse(
   const fetchImpl: ProviderFetch = spec.config.fetch ?? fetch;
   let response: Response;
   try {
+    await spec.prepare?.();
     const init = spec.request();
     const headers: Record<string, string> = {};
     new Headers(init.headers).forEach((value, name) => { headers[name] = value; });
@@ -475,7 +484,7 @@ async function openResponse(
     }
     new Headers(spec.config.headers).forEach((value, name) => { headers[name] = value; });
     response = await raceWithAbort(
-      fetchImpl(spec.endpoint, { ...init, headers, signal: activity.signal }),
+      fetchImpl(resolveEndpoint(spec), { ...init, headers, signal: activity.signal }),
       activity.signal,
     );
   } catch (error) {

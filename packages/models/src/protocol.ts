@@ -1,3 +1,5 @@
+import type { AuthMode, OAuthCredentialStore } from "./auth";
+
 // ---------------------------------------------------------------------------
 // API protocol identifiers
 // ---------------------------------------------------------------------------
@@ -5,6 +7,7 @@
 export type KnownProtocol =
   | "openai-completions"
   | "openai-responses"
+  | "openai-codex-responses"
   | "anthropic-messages";
 
 export type Protocol = KnownProtocol | (string & {});
@@ -73,6 +76,8 @@ export interface Model {
   maxTokens: number;
   headers?: Record<string, string>;
   apiKey?: string;
+  /** Absent = API key; `"none"` = keyless; otherwise the named OAuth flow. */
+  auth?: AuthMode;
   /** Maximum inactivity from request start or between response body chunks. */
   timeoutMs?: number;
   /** Number of retries after the initial request. */
@@ -86,7 +91,9 @@ export type ModelConfig = {
   provider: Provider;
   protocol: Protocol;
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
+  /** Absent = API key; `"none"` = keyless; otherwise the named OAuth flow. */
+  auth?: AuthMode;
   name?: string;
   reasoning?: boolean;
   thinkingLevel?: ThinkingLevel;
@@ -126,7 +133,9 @@ export type ProviderConfig = {
   displayName?: string;
   icon?: string;
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
+  /** Absent = API key; `"none"` = keyless; otherwise the named OAuth flow. */
+  auth?: AuthMode;
   protocol: Protocol;
   stream?: ProviderStreamFn;
   headers?: Record<string, string>;
@@ -137,11 +146,6 @@ export type ProviderConfig = {
   retryDelayMs?: number;
   authHeader?: string;
   models: ProviderModelConfig[];
-  oauth?: {
-    clientId: string;
-    scopes?: string[];
-    tokenEndpoint?: string;
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -505,6 +509,8 @@ export type ProviderCallContext = {
     /** Report execution of an external tool call or an update to one. */
     report(update: ToolCall | ToolCallUpdate): void;
   };
+  /** Host-owned persistence for OAuth credentials. Never serialized into configuration. */
+  oauthCredentialStore?: OAuthCredentialStore;
 };
 
 export type ProviderStreamFn = (
@@ -535,5 +541,6 @@ export function createProviderCallContext(
       call: async (name, args, options) => overrides?.tools?.call?.(name, args, options) ?? { ok: true, content: null },
       report: (update) => overrides?.tools?.report?.(update),
     },
+    ...(overrides?.oauthCredentialStore ? { oauthCredentialStore: overrides.oauthCredentialStore } : {}),
   };
 }

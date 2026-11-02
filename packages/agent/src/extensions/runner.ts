@@ -14,6 +14,7 @@ import { execFile } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import type { ProviderConfig } from "@rowan-agent/models";
 import {
+  parseAuthMode,
   registerModel,
   unregisterProviderModels,
   registerApiProvider,
@@ -119,6 +120,7 @@ async function execCommand(
 
 function applyProviderRegistration(config: ProviderConfig): void {
   unregisterProviderModels(config.id);
+  const auth = parseAuthMode(config.auth);
   if (config.stream) {
     registerApiProvider({ protocol: config.protocol, stream: config.stream });
   }
@@ -130,6 +132,7 @@ function applyProviderRegistration(config: ProviderConfig): void {
       provider: config.id,
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
+      ...(auth ? { auth } : {}),
       reasoning: modelConfig.reasoning ?? false,
       ...(modelConfig.thinkingLevel !== undefined ? { thinkingLevel: modelConfig.thinkingLevel } : {}),
       ...(modelConfig.thinkingLevels !== undefined ? { thinkingLevels: modelConfig.thinkingLevels } : {}),

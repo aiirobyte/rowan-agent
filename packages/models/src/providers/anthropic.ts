@@ -18,6 +18,8 @@ import { createProviderCallContext, ZERO_COST } from "../protocol";
 import { calculateCost } from "../models";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { streamProviderRequest } from "./http";
+import { anthropicRequestAuth } from "./request-auth";
+import type { OAuthRequestAuth } from "../oauth/credential";
 import {
   type BaseProviderConfig,
   normalizeBaseUrl,
@@ -280,6 +282,8 @@ async function* streamAnthropicMessages(
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request);
   const endpoint = `${normalizeBaseUrl(config.baseUrl)}/v1/messages`;
+  const providerId = config.providerId ?? model?.provider ?? "unknown";
+  let requestAuth: OAuthRequestAuth | undefined;
   const concreteModel: Model = model ?? {
     id: config.model,
     provider: "anthropic",
@@ -298,12 +302,20 @@ async function* streamAnthropicMessages(
     llmRequest: request,
     requestName: "Anthropic request",
     signal: ctx?.signal,
+    prepare: async () => {
+      requestAuth = await anthropicRequestAuth(
+        config,
+        providerId,
+        config.model,
+        ctx?.oauthCredentialStore,
+        ctx?.signal,
+      );
+    },
     request: () => ({
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-api-key": config.apiKey,
-        "anthropic-version": "2023-06-01",
+        ...(requestAuth?.headers ?? {}),
       },
       body: JSON.stringify(body),
     }),
@@ -447,6 +459,8 @@ export const streamAnthropic: ProviderStreamFn = (model, request, ctx) => {
     baseUrl: model.baseUrl,
     model: model.id,
     apiKey: model.apiKey,
+    auth: model.auth,
+    providerId: model.provider,
     thinkingLevel: model.thinkingLevel,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,

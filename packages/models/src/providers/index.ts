@@ -18,8 +18,11 @@ export {
 export type { OpenAICompletionsConfig, ResolveOpenAICompletionsConfigInput } from "./openai-completions";
 
 export {
+  resolveOpenAICodexResponsesConfig,
   resolveOpenAIResponsesConfig,
+  createOpenAICodexResponsesStream,
   createOpenAIResponsesStream,
+  streamOpenAICodexResponses,
   streamOpenAIResponses,
 } from "./openai-responses";
 export type { OpenAIResponsesConfig, ResolveOpenAIResponsesConfigInput } from "./openai-responses";

@@ -15,6 +15,8 @@ import { createProviderCallContext, ZERO_COST } from "../protocol";
 import { calculateCost } from "../models";
 import { ContentBlockAccumulator, contentBlocksResponse } from "../content-blocks";
 import { executeProviderRequest, streamProviderRequest } from "./http";
+import { bearerRequestAuth } from "./request-auth";
+import type { OAuthRequestAuth } from "../oauth/credential";
 import {
   type BaseProviderConfig,
   type RawUsage,
@@ -248,7 +250,10 @@ async function* streamChatCompletions(
   model?: Model,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request, true);
-  const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
+  let baseUrl = config.baseUrl;
+  const endpoint = () => `${normalizeBaseUrl(baseUrl)}/chat/completions`;
+  const providerId = config.providerId ?? model?.provider ?? "unknown";
+  let requestAuth: OAuthRequestAuth | undefined;
   const concreteModel: Model = model ?? {
     id: config.model,
     provider: (config as any).provider ?? "openai",
@@ -266,11 +271,22 @@ async function* streamChatCompletions(
     endpoint,
     llmRequest: request,
     signal: ctx?.signal,
+    prepare: async () => {
+      requestAuth = await bearerRequestAuth(
+        config,
+        providerId,
+        config.model,
+        ctx?.oauthCredentialStore,
+        ctx?.signal,
+        request.sessionId,
+      );
+      baseUrl = requestAuth.baseUrl ?? config.baseUrl;
+    },
     request: () => ({
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${config.apiKey}`,
+        ...(requestAuth?.headers ?? {}),
       },
       body: JSON.stringify(body),
     }),
@@ -448,6 +464,8 @@ export const streamOpenAICompletions: ProviderStreamFn = (model, request, ctx) =
     baseUrl: model.baseUrl,
     model: model.id,
     apiKey: model.apiKey,
+    auth: model.auth,
+    providerId: model.provider,
     thinkingLevel: model.thinkingLevel,
     timeoutMs: model.timeoutMs,
     maxRetries: model.maxRetries,
@@ -464,7 +482,15 @@ export async function callOpenAICompletions(
   options: { signal?: AbortSignal } = {},
 ): Promise<{ content: string; thinking?: string; usage?: LlmTokenUsage }> {
   const body = buildRequestBody(config, request, false);
-  const endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
+  const requestAuth = await bearerRequestAuth(
+    config,
+    config.providerId ?? "unknown",
+    config.model,
+    undefined,
+    options.signal,
+    request.sessionId,
+  );
+  const endpoint = `${normalizeBaseUrl(requestAuth.baseUrl ?? config.baseUrl)}/chat/completions`;
 
   return executeProviderRequest({
     config,
@@ -474,7 +500,7 @@ export async function callOpenAICompletions(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${config.apiKey}`,
+        ...requestAuth.headers,
       },
       body: JSON.stringify(body),
     }),
