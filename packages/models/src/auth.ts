@@ -2,19 +2,15 @@ export const OAUTH_FLOWS = ["xai", "github-copilot", "openai-codex"] as const;
 
 export type OAuthFlow = (typeof OAUTH_FLOWS)[number];
 
-export type AuthMode = "none" | OAuthFlow;
+export type AuthMode = "none" | "oauth";
 
 export function parseAuthMode(value: unknown): AuthMode | undefined {
   if (value === undefined) return undefined;
   if (value === "none") return "none";
-  if (value === "xai" || value === "github-copilot" || value === "openai-codex") return value;
+  if (value === "oauth") return "oauth";
   throw new TypeError(
-    `Invalid auth mode. Expected one of: "none", ${OAUTH_FLOWS.map((flow) => `"${flow}"`).join(", ")}.`,
+    'Invalid auth mode. Expected one of: "none", "oauth".',
   );
-}
-
-export function isOAuthFlow(value: AuthMode | undefined): value is OAuthFlow {
-  return value !== undefined && value !== "none";
 }
 
 export type OAuthCredential = {

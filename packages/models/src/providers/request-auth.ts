@@ -1,7 +1,7 @@
 import type { AuthMode, OAuthCredentialStore } from "../auth";
 import { resolveOAuthRequestAuth, type OAuthRequestAuth } from "../oauth/credential";
 import type { ProviderFetch } from "./shared";
-import { requireValue } from "./shared";
+import { ProviderError, requireValue } from "./shared";
 
 type AuthConfig = {
   auth?: AuthMode;
@@ -33,7 +33,6 @@ async function requestAuth(
   if (auth === undefined) return { headers: headers.required() };
   if (auth === "none") return { headers: headers.none };
   return resolveOAuthRequestAuth({
-    flow: auth,
     providerId,
     model,
     ...(store ? { store } : {}),
@@ -55,6 +54,22 @@ export async function bearerRequestAuth(
     required: () => ({ authorization: `Bearer ${apiKey(config)}` }),
     none: {},
   }, providerId, model, store, signal, sessionId);
+}
+
+export function googleRequestAuth(
+  config: AuthConfig,
+  providerId: string,
+): OAuthRequestAuth {
+  const auth = config.auth;
+  if (auth === undefined) {
+    return { headers: { "x-goog-api-key": apiKey(config) } };
+  }
+  if (auth === "none") return { headers: {} };
+  throw new ProviderError({
+    code: "invalid_config",
+    message: `The gemini-compatible protocol does not support OAuth credentials for provider "${providerId}".`,
+    details: { field: "auth", providerId },
+  });
 }
 
 export async function anthropicRequestAuth(

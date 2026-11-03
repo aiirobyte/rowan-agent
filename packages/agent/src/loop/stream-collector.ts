@@ -300,7 +300,12 @@ async function collectStreamResult(input: {
     .map((b) => {
       let parsedArgs: unknown = b.args;
       try { parsedArgs = JSON.parse(b.args); } catch { /* keep raw */ }
-      return { id: b.id, name: b.name, arguments: parsedArgs };
+      return {
+        id: b.id,
+        name: b.name,
+        arguments: parsedArgs,
+        ...(b.signature ? { signature: b.signature } : {}),
+      };
     });
 
   return { text, contentBlocks, toolCalls, stopReason };

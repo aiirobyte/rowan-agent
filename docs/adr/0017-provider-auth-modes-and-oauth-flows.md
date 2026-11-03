@@ -1,16 +1,16 @@
 ---
 status: accepted
-date: 2026-11-02
+date: 2026-11-03
 ---
 
 # Provider auth modes and OAuth flows
 
 Model providers need three authentication shapes without making the serializable
-configuration carry credentials or executable values:
+configuration carry credentials, flow names, or executable values:
 
 - absent: the static API key used today;
 - `"none"`: no auth header, for local servers;
-- a named OAuth flow.
+- `"oauth"`: the subscription credential stored for the provider id.
 
 The OAuth credential file, login UI, and processes stay with the host. Rowan
 owns the flow, refresh, and request mapping.
@@ -24,19 +24,21 @@ one optional `auth` field:
 
 ```ts
 type OAuthFlow = "xai" | "github-copilot" | "openai-codex";
-type AuthMode = "none" | OAuthFlow;
+type AuthMode = "none" | "oauth";
 ```
 
 - An absent `auth` keeps today's API-key behavior. Missing `apiKey` raises the
   existing error.
-- `"none"` omits both `Authorization` and `x-api-key` on the three
-  general-purpose protocols. An API key is optional.
-- An OAuth flow carries only its name. The provider id already supplied by
-  `ModelConfig.provider`, `Model.provider`, or `ProviderConfig.id` keys the
-  credential.
+- `"none"` omits both `Authorization` and `x-api-key` on the general-purpose
+  protocols. An API key is optional.
+- `"oauth"` selects the credential keyed by the provider id already supplied
+  by `ModelConfig.provider`, `Model.provider`, or `ProviderConfig.id`. The
+  credential's own `flow` selects headers, base URL, refresh, and protocol
+  validation; configuration never names the flow.
 
 Unknown values are rejected at configuration boundaries. The field contains
-no tokens, refresh tokens, functions, or credential-store reference.
+no tokens, refresh tokens, flow names, functions, or credential-store
+reference.
 
 ### Credential store is a stream option
 
@@ -53,11 +55,12 @@ It is passed to `createModelStream(config, { oauthCredentialStore })` or on
 `ProviderCallContext`. It is never part of a model/provider configuration or a
 Configuration Snapshot.
 
-Before each HTTP attempt, an OAuth stream loads the provider's credential. A
-credential inside the 60-second expiry skew is refreshed, saved, and only then
-used. Refresh is single-flight per store and provider id. A failed load,
-refresh, or save fails the request; a stale token is never used. A missing
-credential raises `OAuthSignInRequiredError` (`code: "sign_in_required"`).
+Before each HTTP attempt, an `auth: "oauth"` stream loads the provider's
+credential and reads its `flow`. A credential inside the 60-second expiry skew
+is refreshed, saved, and only then used. Refresh is single-flight per store and
+provider id. A failed load, refresh, or save fails the request; a stale token
+is never used. A missing credential raises `OAuthSignInRequiredError`
+(`code: "sign_in_required"`) without inventing a flow.
 
 ### Login session API
 
@@ -82,6 +85,35 @@ the same refresh path used by request auth.
 
 The same shape serves all three flows.
 
+### OAuth model listing
+
+`listOAuthModels(providerId, store, options?)` returns the models the signed-in
+account can use:
+
+```ts
+type OAuthModel = {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+};
+```
+
+It loads the credential, refreshes and saves it through the same path as a
+request, then dispatches on `credential.flow`:
+
+- `openai-codex`: `GET /codex/models?client_version=<Codex CLI version>` on the
+  ChatGPT backend. Only models whose catalog `visibility` is `list` are
+  returned.
+- `xai`: `GET https://cli-chat-proxy.grok.com/v1/models` with the Grok CLI
+  headers. `x-userid` and `x-email` come from the stored ID token when present
+  and are omitted otherwise.
+- `github-copilot`: `GET <token-derived Copilot base URL>/models` with the
+  Copilot editor headers. The result keeps picker-enabled chat models whose
+  policy is not disabled.
+
+Callers supply the same optional `fetch` and `signal` seams as provider
+requests. Listing performs no live call unless the host invokes it.
+
 ### OpenAI Codex flow
 
 - Login uses PKCE S256 and `state`, the OpenAI Codex client id, scopes, redirect
@@ -97,11 +129,12 @@ The same shape serves all three flows.
   `https://api.openai.com/auth` claim.
 - `openai-codex-responses` is a variant of the Responses stream. It posts to
   `<baseUrl>/codex/responses` (default
-  `https://chatgpt.com/backend-api`), requires
-  `auth: "openai-codex"`, and sends the Codex account, beta, originator,
-  session, streaming, stateless `store: false`, instructions, encrypted
-  reasoning, verbosity, parallel tool, and prompt-cache contract. It omits
-  the standard Responses output-token limit.
+  `https://chatgpt.com/backend-api`), requires `auth: "oauth"` plus a stored
+  credential whose flow is `openai-codex`, and sends the Codex account, beta,
+  originator, session, streaming, stateless `store: false`, instructions,
+  encrypted reasoning, verbosity, parallel tool, and prompt-cache contract. It
+  omits the standard Responses output-token limit and rejects any other stored
+  flow with `invalid_config`.
 
 ### GitHub Copilot flow
 

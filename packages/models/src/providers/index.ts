@@ -33,3 +33,13 @@ export {
   streamAnthropic,
 } from "./anthropic";
 export type { AnthropicConfig, ResolveAnthropicConfigInput } from "./anthropic";
+
+export {
+  resolveGeminiCompatibleConfig,
+  createGeminiCompatibleStream,
+  streamGeminiCompatible,
+} from "./gemini-compatible";
+export type {
+  GeminiCompatibleConfig,
+  ResolveGeminiCompatibleConfigInput,
+} from "./gemini-compatible";

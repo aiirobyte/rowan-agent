@@ -643,7 +643,11 @@ function isAssistantContent(value: unknown): value is AssistantContent {
     if (isText(part)) return true;
     if (!isRecord(part)) return false;
     if (part.type === "thinking") return typeof part.thinking === "string" && (part.signature === undefined || typeof part.signature === "string");
-    return part.type === "tool_use" && typeof part.toolCallId === "string" && typeof part.name === "string" && isJsonValue(part.input);
+    return part.type === "tool_use"
+      && typeof part.toolCallId === "string"
+      && typeof part.name === "string"
+      && isJsonValue(part.input)
+      && (part.signature === undefined || typeof part.signature === "string");
   }));
 }
 export function normalizeUserInput(input: UserInput): UserInput {

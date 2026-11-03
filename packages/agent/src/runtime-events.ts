@@ -85,6 +85,8 @@ export type ToolUseBlock = Readonly<{
   providerToolCallId?: string;
   name: string;
   input: JsonValue;
+  /** Opaque provider token that lets the same provider verify a replayed call. */
+  signature?: string;
 }>;
 
 export type ToolResultBlock = Readonly<{

@@ -236,7 +236,7 @@ providers:
       - id: llama
   - id: xai-oauth
     baseUrl: https://cli-chat-proxy.grok.com/v1
-    auth: xai
+    auth: oauth
     protocol: openai-responses
     models:
       - id: grok-4.5
@@ -248,13 +248,13 @@ providers:
       auth: provider.auth,
     }))).toEqual([
       { apiKey: undefined, auth: "none" },
-      { apiKey: undefined, auth: "xai" },
+      { apiKey: undefined, auth: "oauth" },
     ]);
 
     clearModels();
     registerConfigModels(result!);
     expect(getModel("local", "llama")).toMatchObject({ auth: "none", apiKey: undefined });
-    expect(getModel("xai-oauth", "grok-4.5")).toMatchObject({ auth: "xai", apiKey: undefined });
+    expect(getModel("xai-oauth", "grok-4.5")).toMatchObject({ auth: "oauth", apiKey: undefined });
   } finally {
     clearModels();
     await rm(dir, { recursive: true, force: true });

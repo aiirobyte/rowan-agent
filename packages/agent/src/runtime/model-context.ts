@@ -208,7 +208,13 @@ function durableAssistantContent(content: AgentMessage["content"]): AssistantCon
     if (part.type === "text") projected.push({ type: "text", text: part.text });
     else if (part.type === "thinking") projected.push({ type: "thinking", thinking: part.thinking, ...(part.signature ? { signature: part.signature } : {}) });
     if (part.type === "tool_use") {
-      projected.push({ type: "tool_use", toolCallId: part.id as never, name: part.name, input: isJsonValue(part.input) ? part.input : null });
+      projected.push({
+        type: "tool_use",
+        toolCallId: part.id as never,
+        name: part.name,
+        input: isJsonValue(part.input) ? part.input : null,
+        ...(part.signature ? { signature: part.signature } : {}),
+      });
     }
   }
   return projected;
@@ -224,7 +230,13 @@ function projectAssistantContent(content: AssistantContent): string | LlmContent
   return content.map((part) => {
     if (part.type === "text") return { ...part };
     if (part.type === "thinking") return { ...part };
-    return { type: "tool_use", id: part.providerToolCallId ?? part.toolCallId, name: part.name, input: part.input };
+    return {
+      type: "tool_use",
+      id: part.providerToolCallId ?? part.toolCallId,
+      name: part.name,
+      input: part.input,
+      ...(part.signature ? { signature: part.signature } : {}),
+    };
   });
 }
 

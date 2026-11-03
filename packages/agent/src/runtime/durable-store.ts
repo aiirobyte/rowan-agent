@@ -2470,14 +2470,15 @@ function requestMessageContent(
   toolCalls: readonly StoredToolCall[],
   contentBlocks: readonly StreamBlock[] | undefined,
 ): Exclude<AssistantContent, string>[number][] {
-  const toolUse = (toolCall: StoredToolCall) => ({
+  const toolUse = (toolCall: StoredToolCall, signature?: string) => ({
     type: "tool_use" as const,
     toolCallId: toolCall.id,
     ...(toolCall.providerToolCallId !== undefined ? { providerToolCallId: toolCall.providerToolCallId } : {}),
     name: toolCall.name ?? toolCall.title ?? "tool",
     input: clone(toolCall.args !== undefined ? toolCall.args : (toolCall.rawInput !== undefined ? toolCall.rawInput : {})),
+    ...(signature ? { signature } : {}),
   });
-  if (!contentBlocks) return toolCalls.map(toolUse);
+  if (!contentBlocks) return toolCalls.map((toolCall) => toolUse(toolCall));
   const reserved = new Map(toolCalls.map((toolCall) => [toolCall.providerToolCallId ?? toolCall.id, toolCall]));
   const parts: Exclude<AssistantContent, string>[number][] = [];
   for (const block of contentBlocks) {
@@ -2489,7 +2490,7 @@ function requestMessageContent(
       const toolCall = reserved.get(block.id);
       if (!toolCall) continue;
       reserved.delete(block.id);
-      parts.push(toolUse(toolCall));
+      parts.push(toolUse(toolCall, block.signature));
     }
   }
   // A provider whose stream carried no block for a reserved call still owes the

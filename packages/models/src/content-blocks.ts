@@ -2,7 +2,7 @@ import type { LlmToolCall, StreamBlock, ToolCallBlock } from "./protocol";
 
 type MutableTextBlock = { type: "text"; text: string };
 type MutableThinkingBlock = { type: "thinking"; thinking: string; signature?: string };
-type MutableToolCallBlock = { type: "tool_call"; id: string; name: string; args: string };
+type MutableToolCallBlock = { type: "tool_call"; id: string; name: string; args: string; signature?: string };
 type MutableStreamBlock = MutableTextBlock | MutableThinkingBlock | MutableToolCallBlock;
 
 type ToolCallBlockUpdate = Partial<Pick<ToolCallBlock, "id" | "name" | "args">>;
@@ -25,7 +25,12 @@ export function contentBlocksResponse(blocks: readonly StreamBlock[]): {
     else if (block.type === "tool_call") {
       let args: unknown = block.args;
       try { args = JSON.parse(block.args); } catch { /* keep raw */ }
-      toolCalls.push({ id: block.id, name: block.name, arguments: args });
+      toolCalls.push({
+        id: block.id,
+        name: block.name,
+        arguments: args,
+        ...(block.signature ? { signature: block.signature } : {}),
+      });
     }
   }
   const thinkingText = thinking.join("");
@@ -107,6 +112,14 @@ export class ContentBlockAccumulator {
 
   setToolCallArguments(key: string, args: string): void {
     this.updateToolCall(key, { args });
+  }
+
+  setToolCallSignatureFor(key: string, signature: string): void {
+    const index = this.keyedIndexes.get(key);
+    if (index === undefined) throw new TypeError(`Content block ${key} does not exist.`);
+    const block = this.blocks[index];
+    if (block?.type !== "tool_call") throw new TypeError(`Content block ${key} is not a tool call.`);
+    block.signature = signature;
   }
 
   /** A copy of the block a key opened, so providers read without mutating. */

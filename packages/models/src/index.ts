@@ -26,6 +26,7 @@ export { OAuthSignInRequiredError, ProviderError } from "./providers/shared";
 export { parseAuthMode } from "./auth";
 export { OAuthLoginError } from "./oauth/errors";
 export { refreshOAuthCredential, startOAuthLogin } from "./oauth/session";
+export { listOAuthModels } from "./oauth/models";
 // Used by the agent runtime to validate provider tool progress.
 export { isValidToolProgress } from "./protocol";
 
@@ -103,3 +104,7 @@ export type {
   OAuthLoginSession,
   OAuthRefreshOptions,
 } from "./oauth/session";
+export type {
+  ListOAuthModelsOptions,
+  OAuthModel,
+} from "./oauth/models";

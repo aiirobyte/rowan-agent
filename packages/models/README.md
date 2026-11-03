@@ -44,8 +44,9 @@ registerApiProvider({ protocol: "my-api", stream: myStream });
 ```
 
 Built-in protocols are `openai-completions`, `openai-responses`,
-`openai-codex-responses`, and `anthropic-messages`. Provider transport handles
-headers, timeouts, aborts, structured errors, and retries consistently.
+`openai-codex-responses`, `anthropic-messages`, and `gemini-compatible`.
+Provider transport handles headers, timeouts, aborts, structured errors, and
+retries consistently.
 
 ## Provider authentication
 
@@ -60,12 +61,14 @@ mode. Its absence keeps the existing static `apiKey` behavior:
 { provider: "ollama", baseUrl: "http://127.0.0.1:11434/v1", auth: "none" }
 
 // Subscription login. The provider id keys the stored credential.
-{ provider: "xai", baseUrl: "https://cli-chat-proxy.grok.com/v1", auth: "xai" }
+{ provider: "xai", baseUrl: "https://cli-chat-proxy.grok.com/v1", auth: "oauth" }
 ```
 
-Named flows are `"xai"`, `"github-copilot"`, and `"openai-codex"`. They never
-put tokens in configuration. The host supplies an owner-controlled credential
-store to the stream:
+`"oauth"` never puts tokens or a flow name in configuration. The stored
+credential's `flow` is one of `"xai"`, `"github-copilot"`, or
+`"openai-codex"` and selects request headers, base URL, refresh, and protocol
+validation. The host supplies an owner-controlled credential store to the
+stream:
 
 ```ts
 const streamModel = createModelStream(config, {
@@ -100,6 +103,45 @@ await store.save("xai", credential);
 
 `refreshOAuthCredential(flow, credential, options?)` is the same refresh path
 used by request authentication.
+
+`openai-codex-responses` requires both `auth: "oauth"` and a credential whose
+flow is `"openai-codex"`; another flow raises `invalid_config`.
+
+### OAuth model listing
+
+List the models the signed-in account can use with one provider id and its
+credential store:
+
+```ts
+import { listOAuthModels } from "@rowan-agent/models";
+
+const models = await listOAuthModels("xai", store, { signal });
+// [{ id: "grok-4.7", name: "Grok 4.7", contextWindow: 256000 }]
+```
+
+The helper loads, refreshes, and saves the credential through the request path,
+then calls the flow's catalog endpoint with the same headers:
+
+- Codex filters `visibility: "list"` and sends the mirrored Codex CLI
+  `client_version`.
+- xAI sends the Grok CLI headers and derives `x-userid`/`x-email` from the
+  credential's ID token when available.
+- Copilot uses the token-derived account base URL and keeps picker-enabled,
+  non-disabled chat models.
+
+## Gemini-compatible protocol
+
+`gemini-compatible` sends `POST
+{baseUrl}/models/{model}:streamGenerateContent?alt=sse` with
+`x-goog-api-key`; the default base URL is
+`https://generativelanguage.googleapis.com/v1beta`. It maps system
+instructions, text/image input, `parametersJsonSchema` tools, function calls
+and responses, thinking levels/parts, cached and thought-token usage, stop
+reasons, and shared HTTP retries/errors.
+
+Gemini thought signatures round-trip in thinking blocks and tool-call blocks;
+the agent preserves tool-call signatures through its durable content projection
+so Gemini 3 can verify replayed calls.
 
 ## Protocol types
 

@@ -2,6 +2,7 @@ import type { OAuthCredential } from "../auth";
 import { OAuthLoginError } from "./errors";
 import {
   abortError,
+  decodeJwtPayload,
   formRequest,
   isRecord,
   positiveSeconds,
@@ -28,19 +29,6 @@ export type CodexLoginStart = {
   expiresAt: number;
   credential: Promise<OAuthCredential>;
 };
-
-function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
-  const parts = token.split(".");
-  if (parts.length !== 3 || !parts[1]) return undefined;
-  try {
-    const encoded = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=");
-    const payload: unknown = JSON.parse(atob(padded));
-    return isRecord(payload) ? payload : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function accountIdFromAccessToken(accessToken: string): string {
   const claims = decodeJwtPayload(accessToken)?.[JWT_CLAIM_PATH];
@@ -274,6 +262,7 @@ export function codexRequestAuth(credential: OAuthCredential, sessionId?: string
     throw new OAuthLoginError("invalid_response", "OpenAI Codex credential is missing its account id.");
   }
   return {
+    flow: "openai-codex",
     headers: {
       authorization: `Bearer ${credential.access}`,
       "chatgpt-account-id": credential.accountId,

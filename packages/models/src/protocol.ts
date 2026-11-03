@@ -8,7 +8,8 @@ export type KnownProtocol =
   | "openai-completions"
   | "openai-responses"
   | "openai-codex-responses"
-  | "anthropic-messages";
+  | "anthropic-messages"
+  | "gemini-compatible";
 
 export type Protocol = KnownProtocol | (string & {});
 
@@ -76,7 +77,7 @@ export interface Model {
   maxTokens: number;
   headers?: Record<string, string>;
   apiKey?: string;
-  /** Absent = API key; `"none"` = keyless; otherwise the named OAuth flow. */
+  /** Absent = API key; `"none"` = keyless; `"oauth"` = stored credential. */
   auth?: AuthMode;
   /** Maximum inactivity from request start or between response body chunks. */
   timeoutMs?: number;
@@ -92,7 +93,7 @@ export type ModelConfig = {
   protocol: Protocol;
   baseUrl: string;
   apiKey?: string;
-  /** Absent = API key; `"none"` = keyless; otherwise the named OAuth flow. */
+  /** Absent = API key; `"none"` = keyless; `"oauth"` = stored credential. */
   auth?: AuthMode;
   name?: string;
   reasoning?: boolean;
@@ -134,7 +135,7 @@ export type ProviderConfig = {
   icon?: string;
   baseUrl: string;
   apiKey?: string;
-  /** Absent = API key; `"none"` = keyless; otherwise the named OAuth flow. */
+  /** Absent = API key; `"none"` = keyless; `"oauth"` = stored credential. */
   auth?: AuthMode;
   protocol: Protocol;
   stream?: ProviderStreamFn;
@@ -207,6 +208,8 @@ export type LlmToolUseBlock = {
   id: string;
   name: string;
   input: unknown;
+  /** Opaque provider token that lets the same provider verify a replayed call. */
+  signature?: string;
 };
 
 export type LlmToolResultBlock = {
@@ -247,6 +250,8 @@ export type LlmToolCall = {
   id: string;
   name: string;
   arguments: unknown;
+  /** Opaque provider token that lets the same provider verify a replayed call. */
+  signature?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -331,6 +336,8 @@ export type ToolCallBlock = {
   id: string;
   name: string;
   args: string;  // Raw JSON string (may be incomplete during streaming)
+  /** Opaque provider token that lets the same provider verify a replayed call. */
+  signature?: string;
 };
 
 export type ContentBlock =
