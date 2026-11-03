@@ -121,15 +121,19 @@ _Avoid_: Static module state, global process variables, Agent Configuration muta
 **Provider Auth Mode**:
 The serializable `auth` value on a model or provider connection. Its absence
 selects a static API key and preserves that key's required-field error;
-`"none"` sends no provider credential for a keyless local server; a named OAuth
-flow selects subscription authentication. It never contains tokens, secrets,
-or executable callbacks.
+`"none"` sends no provider credential for a keyless local server; `"oauth"`
+loads the subscription credential stored under the provider id. The
+credential's own flow decides headers, base URL, refresh, and protocol
+validation. It never contains tokens, secrets, flow names, or executable
+callbacks.
 _Avoid_: OAuth Config, Token Config, Provider Credential
 
 **OAuth Flow**:
 A named subscription login and refresh procedure owned by the models package,
-selected by a Provider Auth Mode. Browser flows expose an authorization URL;
-device flows expose a user code and verification URL.
+recorded on each Subscription Credential. Login calls `startOAuthLogin(flow)`
+by name, but request and listing behavior comes from the credential's flow.
+Browser flows expose an authorization URL; device flows expose a user code and
+verification URL.
 _Avoid_: Auth Provider, Login Method, credential implementation
 
 **Subscription Credential**:
@@ -147,10 +151,17 @@ _Avoid_: Secret Store, Token Config, Credential Cache
 
 **Sign-in Required**:
 A typed provider failure (`OAuthSignInRequiredError`, code
-`sign_in_required`) raised when an OAuth Flow has no credential or cannot
-refresh it. The host responds by starting that flow; Rowan does not retry with
-a stale credential.
+`sign_in_required`) raised when an OAuth Provider Auth Mode has no credential
+or cannot refresh it. The error names the flow when it is known. The host
+responds by starting that flow; Rowan does not retry with a stale credential.
 _Avoid_: Unauthorized, Auth Error, 401
+
+**OAuth Model Listing**:
+The `listOAuthModels(providerId, store, options?)` result describing the models
+the signed-in account can use. The credential's flow selects the endpoint,
+headers, refresh path, and picker visibility rule; the returned entries contain
+only `id`, optional `name`, and optional `contextWindow`.
+_Avoid_: Static Catalog, Provider Model Registry, Token Inspection
 
 ## Conversation
 
