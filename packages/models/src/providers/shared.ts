@@ -29,11 +29,13 @@ export class ProviderError extends Error {
 }
 
 export class OAuthSignInRequiredError extends ProviderError {
-  constructor(providerId: string, flow: OAuthFlow) {
+  constructor(providerId: string, flow?: OAuthFlow) {
     super({
       code: "sign_in_required",
-      message: `Sign in is required for provider "${providerId}" (${flow}).`,
-      details: { providerId, flow },
+      message: flow
+        ? `Sign in is required for provider "${providerId}" (${flow}).`
+        : `Sign in is required for provider "${providerId}".`,
+      details: { providerId, ...(flow ? { flow } : {}) },
     });
     this.name = "OAuthSignInRequiredError";
   }

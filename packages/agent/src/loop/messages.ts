@@ -51,7 +51,13 @@ export function contentBlocksToMessageContent(blocks: readonly StreamBlock[]): L
       } catch {
         // Keep raw arguments when the provider streamed incomplete or non-JSON input.
       }
-      return { type: "tool_use", id: block.id, name: block.name, input };
+      return {
+        type: "tool_use",
+        id: block.id,
+        name: block.name,
+        input,
+        ...(block.signature ? { signature: block.signature } : {}),
+      };
     }
     return { type: "text", text: JSON.stringify(block) };
   });

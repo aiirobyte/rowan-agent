@@ -78,7 +78,7 @@ test("openai-codex-responses is registered", () => {
 test("openai-codex-responses uses its default base URL", () => {
   const config = resolveOpenAICodexResponsesConfig({
     model: "gpt-5.5",
-    auth: "openai-codex",
+    auth: "oauth",
   });
   expect(config.baseUrl).toBe("https://chatgpt.com/backend-api");
 });
@@ -103,7 +103,7 @@ test("openai-codex-responses sends the Codex URL, headers, and body contract", a
   };
   const stream = createOpenAICodexResponsesStream({
     baseUrl: "https://chatgpt.com/backend-api",
-    auth: "openai-codex",
+    auth: "oauth",
     providerId: "openai-codex-oauth",
     model: "gpt-5.5",
     fetch: fetchMock,
@@ -164,7 +164,7 @@ test("openai-codex-responses refreshes before the model request", async () => {
   };
   const stream = createOpenAICodexResponsesStream({
     baseUrl: "https://chatgpt.com/backend-api",
-    auth: "openai-codex",
+    auth: "oauth",
     providerId: "openai-codex-oauth",
     model: "gpt-5.5",
     fetch: fetchMock,
@@ -183,10 +183,10 @@ test("openai-codex-responses refreshes before the model request", async () => {
   expect(modelHeaders.get("chatgpt-account-id")).toBe("acct-new");
 });
 
-test("openai-codex-responses rejects other auth modes", async () => {
+test("openai-codex-responses rejects a non-OAuth auth mode", async () => {
   const stream = createOpenAICodexResponsesStream({
     baseUrl: "https://chatgpt.com/backend-api",
-    auth: "xai",
+    auth: "none",
     providerId: "openai-codex-oauth",
     model: "gpt-5.5",
     fetch: async () => completedResponses(),
@@ -196,4 +196,37 @@ test("openai-codex-responses rejects other auth modes", async () => {
     code: "invalid_config",
   });
   await expect(collect(stream(request(), {}))).rejects.toBeInstanceOf(ProviderError);
+});
+
+test("openai-codex-responses rejects an OAuth credential from another flow", async () => {
+  const store = new MemoryCredentialStore({
+    flow: "xai",
+    access: "xai-access",
+    refresh: "xai-refresh",
+    expires: Date.now() + 60 * 60 * 1000,
+    tokenEndpoint: "https://auth.x.ai/oauth/token",
+  });
+  let modelCalls = 0;
+  const stream = createOpenAICodexResponsesStream({
+    baseUrl: "https://chatgpt.com/backend-api",
+    auth: "oauth",
+    providerId: "openai-codex-oauth",
+    model: "gpt-5.5",
+    fetch: async () => {
+      modelCalls += 1;
+      return completedResponses();
+    },
+  });
+
+  const events = await collect(stream(request(), { oauthCredentialStore: store }));
+  const error = events.find((event) => event.type === "error");
+
+  expect(modelCalls).toBe(0);
+  expect(error).toMatchObject({
+    type: "error",
+    error: {
+      code: "invalid_config",
+      details: { providerId: "openai-codex-oauth", flow: "xai" },
+    },
+  });
 });

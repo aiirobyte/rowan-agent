@@ -318,10 +318,10 @@ async function* streamResponses(
   model?: Model,
   variant: ResponsesVariant = "standard",
 ): AsyncGenerator<LlmStreamEvent> {
-  if (variant === "codex" && config.auth !== "openai-codex") {
+  if (variant === "codex" && config.auth !== "oauth") {
     throw new ProviderError({
       code: "invalid_config",
-      message: 'The openai-codex-responses protocol requires auth: "openai-codex".',
+      message: 'The openai-codex-responses protocol requires auth: "oauth" with a stored openai-codex credential.',
       details: { field: "auth" },
     });
   }
@@ -358,6 +358,13 @@ async function* streamResponses(
         ctx?.signal,
         request.sessionId,
       );
+      if (variant === "codex" && requestAuth.flow !== "openai-codex") {
+        throw new ProviderError({
+          code: "invalid_config",
+          message: `The openai-codex-responses protocol requires an openai-codex credential for provider "${providerId}".`,
+          details: { field: "auth", providerId, flow: requestAuth.flow },
+        });
+      }
       baseUrl = requestAuth.baseUrl ?? config.baseUrl;
     },
     request: () => ({

@@ -1,8 +1,8 @@
 import type { OAuthCredential } from "../auth";
 import { OAuthLoginError } from "./errors";
 import {
+  decodeJwtPayload,
   formRequest,
-  isRecord,
   pollDeviceToken,
   positiveSeconds,
   readObject,
@@ -71,17 +71,8 @@ function trustedVerificationUri(value: unknown): string {
 }
 
 function jwtExpiry(accessToken: string): number | null {
-  const parts = accessToken.split(".");
-  if (parts.length < 2 || !parts[1]) return null;
-  try {
-    const encoded = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=");
-    const payload: unknown = JSON.parse(atob(padded));
-    if (!isRecord(payload) || typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) return null;
-    return payload.exp * 1000;
-  } catch {
-    return null;
-  }
+  const exp = decodeJwtPayload(accessToken)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : null;
 }
 
 function tokenExpiry(payload: TokenPayload, accessToken: string, now: () => number): number {
@@ -293,6 +284,7 @@ export async function refreshXaiCredential(
 export function xaiRequestAuth(credential: OAuthCredential, modelId: string): FlowRequestAuth {
   const normalizedModel = modelId.trim().toLowerCase().split("/").pop() ?? "";
   return {
+    flow: "xai",
     baseUrl: XAI_OAUTH_RESOURCE_URL,
     headers: {
       authorization: `Bearer ${credential.access}`,

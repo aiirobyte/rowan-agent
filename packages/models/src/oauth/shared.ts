@@ -1,10 +1,23 @@
-import type { OAuthCredential } from "../auth";
+import type { OAuthCredential, OAuthFlow } from "../auth";
 import { isRecord } from "../providers/shared";
 import { OAuthLoginError } from "./errors";
 
 export { isRecord } from "../providers/shared";
 
 export const MAX_TIMER_MILLISECONDS = 2_147_483_647;
+
+export function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
+  const parts = token.split(".");
+  if (parts.length !== 3 || !parts[1]) return undefined;
+  try {
+    const encoded = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+    const payload: unknown = JSON.parse(atob(padded));
+    return isRecord(payload) ? payload : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type FetchLike = (
   input: Parameters<typeof fetch>[0],
@@ -31,6 +44,7 @@ export type DeviceLoginStart = {
 };
 
 export type FlowRequestAuth = {
+  flow?: OAuthFlow;
   headers: Record<string, string>;
   baseUrl?: string;
 };

@@ -106,7 +106,7 @@ function convertAssistantContent(
   parts: Array<
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
-    | { type: "toolCall"; id: string; name: string; arguments: unknown }
+    | { type: "toolCall"; id: string; name: string; arguments: unknown; thoughtSignature?: string }
   >;
   hasToolCall: boolean;
 } {
@@ -120,7 +120,7 @@ function convertAssistantContent(
   const parts: Array<
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
-    | { type: "toolCall"; id: string; name: string; arguments: unknown }
+    | { type: "toolCall"; id: string; name: string; arguments: unknown; thoughtSignature?: string }
   > = [];
 
   for (const part of content) {
@@ -141,6 +141,7 @@ function convertAssistantContent(
         id: callId,
         name: part.name,
         arguments: part.input,
+        ...(part.signature ? { thoughtSignature: part.signature } : {}),
       });
     }
   }

@@ -24,11 +24,11 @@ function isExpiring(credential: OAuthCredential, now: number): boolean {
   return !Number.isFinite(credential.expires) || credential.expires <= now + EXPIRY_SKEW_MS;
 }
 
-function storeError(providerId: string, flow: OAuthFlow): ProviderError {
+function storeError(providerId: string, flow?: OAuthFlow): ProviderError {
   return new ProviderError({
     code: "oauth_credential_store_failed",
     message: `OAuth credentials could not be read or saved for provider "${providerId}".`,
-    details: { providerId, flow },
+    details: { providerId, ...(flow ? { flow } : {}) },
   });
 }
 
@@ -47,7 +47,6 @@ async function saveCredential(
 
 async function loadOrRefreshCredential(
   providerId: string,
-  flow: OAuthFlow,
   store: OAuthCredentialStore,
   fetchImpl: ProviderFetch,
   now: () => number,
@@ -57,11 +56,12 @@ async function loadOrRefreshCredential(
   try {
     credential = await store.load(providerId);
   } catch {
-    throw storeError(providerId, flow);
+    throw storeError(providerId);
   }
-  if (!credential || credential.flow !== flow || !credential.access) {
-    throw new OAuthSignInRequiredError(providerId, flow);
+  if (!credential || !credential.access) {
+    throw new OAuthSignInRequiredError(providerId);
   }
+  const flow = credential.flow;
   if (!isExpiring(credential, now())) return credential;
   if (!credential.refresh) {
     throw new OAuthSignInRequiredError(providerId, flow);
@@ -97,7 +97,6 @@ async function loadOrRefreshCredential(
 
 async function currentCredential(
   providerId: string,
-  flow: OAuthFlow,
   store: OAuthCredentialStore,
   fetchImpl: ProviderFetch,
   now: () => number,
@@ -111,7 +110,7 @@ async function currentCredential(
   const pending = operations.get(providerId);
   if (pending) return pending;
 
-  const operation = loadOrRefreshCredential(providerId, flow, store, fetchImpl, now, signal);
+  const operation = loadOrRefreshCredential(providerId, store, fetchImpl, now, signal);
   operations.set(providerId, operation);
   const clear = () => {
     if (operations?.get(providerId) === operation) operations.delete(providerId);
@@ -120,8 +119,29 @@ async function currentCredential(
   return operation;
 }
 
+export type ResolveOAuthCredentialInput = {
+  providerId: string;
+  store?: OAuthCredentialStore;
+  fetchImpl: ProviderFetch;
+  now?: () => number;
+  signal?: AbortSignal;
+};
+
+/** Load the provider credential, refresh it through the request path, and save rotations. */
+export async function resolveOAuthCredential(
+  input: ResolveOAuthCredentialInput,
+): Promise<OAuthCredential> {
+  if (!input.store) throw new OAuthSignInRequiredError(input.providerId);
+  return currentCredential(
+    input.providerId,
+    input.store,
+    input.fetchImpl,
+    input.now ?? Date.now,
+    input.signal,
+  );
+}
+
 export async function resolveOAuthRequestAuth(input: {
-  flow: OAuthFlow;
   providerId: string;
   model: string;
   sessionId?: string;
@@ -130,19 +150,11 @@ export async function resolveOAuthRequestAuth(input: {
   now?: () => number;
   signal?: AbortSignal;
 }): Promise<OAuthRequestAuth> {
-  if (!input.store) throw new OAuthSignInRequiredError(input.providerId, input.flow);
-  const credential = await currentCredential(
-    input.providerId,
-    input.flow,
-    input.store,
-    input.fetchImpl,
-    input.now ?? Date.now,
-    input.signal,
-  );
-  if (input.flow === "xai") return xaiRequestAuth(credential, input.model);
-  if (input.flow === "github-copilot") return copilotRequestAuth(credential);
+  const credential = await resolveOAuthCredential(input);
+  if (credential.flow === "xai") return xaiRequestAuth(credential, input.model);
+  if (credential.flow === "github-copilot") return copilotRequestAuth(credential);
   if (!credential.accountId) {
-    throw new OAuthSignInRequiredError(input.providerId, input.flow);
+    throw new OAuthSignInRequiredError(input.providerId, credential.flow);
   }
   return codexRequestAuth(credential, input.sessionId);
 }

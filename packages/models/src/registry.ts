@@ -19,6 +19,7 @@ import {
   streamOpenAIResponses,
 } from "./providers/openai-responses";
 import { streamAnthropic } from "./providers/anthropic";
+import { streamGeminiCompatible } from "./providers/gemini-compatible";
 import type { OAuthCredentialStore } from "./auth";
 import { parseAuthMode } from "./auth";
 
@@ -93,6 +94,7 @@ export function registerBuiltInApiProviders(): void {
   registerApiProvider({ protocol: "openai-responses", stream: streamOpenAIResponses });
   registerApiProvider({ protocol: "openai-codex-responses", stream: streamOpenAICodexResponses });
   registerApiProvider({ protocol: "anthropic-messages", stream: streamAnthropic });
+  registerApiProvider({ protocol: "gemini-compatible", stream: streamGeminiCompatible });
 }
 
 // ---------------------------------------------------------------------------

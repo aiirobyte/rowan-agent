@@ -158,14 +158,14 @@ test("Copilot-derived base URL is used by Completions and Responses", async () =
   const ctx = { oauthCredentialStore: store };
   const completions = createOpenAICompletionsStream({
     baseUrl: "https://api.individual.githubcopilot.com",
-    auth: "github-copilot",
+    auth: "oauth",
     providerId: "github-copilot",
     model: "gpt-4.1",
     fetch: fetchMock,
   });
   const responses = createOpenAIResponsesStream({
     baseUrl: "https://api.individual.githubcopilot.com",
-    auth: "github-copilot",
+    auth: "oauth",
     providerId: "github-copilot",
     model: "gpt-4.1",
     fetch: fetchMock,
@@ -236,7 +236,7 @@ test("a revoked GitHub token makes Copilot request auth require sign-in", async 
   };
   const stream = createOpenAICompletionsStream({
     baseUrl: "https://api.individual.githubcopilot.com",
-    auth: "github-copilot",
+    auth: "oauth",
     providerId: "github-copilot",
     model: "gpt-4.1",
     fetch: fetchMock,

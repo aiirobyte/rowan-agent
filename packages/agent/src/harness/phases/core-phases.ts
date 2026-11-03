@@ -88,6 +88,7 @@ export async function runInternalModelLoop(
       id: call.id,
       name: call.name,
       input: call.arguments,
+      ...(call.signature ? { signature: call.signature } : {}),
     }));
     const assistantContent = result.contentBlocks.length > 0
       ? contentBlocksToMessageContent(result.contentBlocks)

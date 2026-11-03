@@ -231,6 +231,7 @@ export async function refreshCopilotCredential(
 
 export function copilotRequestAuth(credential: OAuthCredential): FlowRequestAuth {
   return {
+    flow: "github-copilot",
     baseUrl: copilotBaseUrl(credential.access),
     headers: {
       authorization: `Bearer ${credential.access}`,

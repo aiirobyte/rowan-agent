@@ -70,12 +70,11 @@ function errorEvent(events: LlmStreamEvent[]): Error | undefined {
   return event?.type === "error" ? event.error : undefined;
 }
 
-test("auth modes parse absent, keyless, and named OAuth flows", () => {
+test("auth modes parse absent, keyless, and OAuth", () => {
   expect(parseAuthMode(undefined)).toBeUndefined();
   expect(parseAuthMode("none")).toBe("none");
-  expect(parseAuthMode("xai")).toBe("xai");
-  expect(parseAuthMode("github-copilot")).toBe("github-copilot");
-  expect(parseAuthMode("openai-codex")).toBe("openai-codex");
+  expect(parseAuthMode("oauth")).toBe("oauth");
+  expect(() => parseAuthMode("xai")).toThrow("Invalid auth mode");
   expect(() => parseAuthMode("api-key")).toThrow("Invalid auth mode");
   expect(() => parseAuthMode(null)).toThrow("Invalid auth mode");
 });
@@ -104,7 +103,7 @@ test("createModelStream passes the credential store as a stream option", async (
       id: "test-model",
       protocol,
       baseUrl: "https://provider.example/v1",
-      auth: "xai",
+      auth: "oauth",
     }, { oauthCredentialStore: store });
 
     await collect(stream(request("oauth-provider", "test-model"), {}));
@@ -173,7 +172,7 @@ test("keyless Anthropic carries no auth header", async () => {
   expect(headers?.get("anthropic-version")).toBe("2023-06-01");
 });
 
-test("xAI request auth uses the proxy base URL and CLI headers", async () => {
+test("OAuth auth resolves xAI flow and request decoration from the credential", async () => {
   const store = new MemoryCredentialStore({
     flow: "xai",
     access: "test-access",
@@ -190,7 +189,7 @@ test("xAI request auth uses the proxy base URL and CLI headers", async () => {
   };
   const stream = createOpenAIResponsesStream({
     baseUrl: "https://ignored.example/v1",
-    auth: "xai",
+    auth: "oauth",
     providerId: "xai-oauth",
     model: "grok-4.5",
     fetch: fetchMock,
@@ -235,7 +234,7 @@ test("an expiring OAuth credential refreshes, saves, then authorizes the request
   };
   const stream = createOpenAIResponsesStream({
     baseUrl: "https://ignored.example/v1",
-    auth: "xai",
+    auth: "oauth",
     providerId: "xai-oauth",
     model: "grok-4.5",
     fetch: fetchMock,
@@ -282,7 +281,7 @@ test("concurrent requests share one refresh per provider id", async () => {
   };
   const stream = createOpenAIResponsesStream({
     baseUrl: "https://ignored.example/v1",
-    auth: "xai",
+    auth: "oauth",
     providerId: "xai-oauth",
     model: "grok-4.5",
     fetch: fetchMock,
@@ -318,7 +317,7 @@ test("a failed refresh fails the request without using the stale token", async (
   };
   const stream = createOpenAIResponsesStream({
     baseUrl: "https://ignored.example/v1",
-    auth: "xai",
+    auth: "oauth",
     providerId: "xai-oauth",
     model: "grok-4.5",
     fetch: fetchMock,
@@ -340,7 +339,7 @@ test("a missing credential raises the typed sign-in-required error", async () =>
   const store = new MemoryCredentialStore();
   const stream = createOpenAIResponsesStream({
     baseUrl: "https://ignored.example/v1",
-    auth: "xai",
+    auth: "oauth",
     providerId: "xai-oauth",
     model: "grok-4.5",
     fetch: async () => completedResponses(),
@@ -355,7 +354,7 @@ test("a missing credential raises the typed sign-in-required error", async () =>
   expect(error).toBeInstanceOf(OAuthSignInRequiredError);
   expect(error).toMatchObject({
     code: "sign_in_required",
-    details: { providerId: "xai-oauth", flow: "xai" },
+    details: { providerId: "xai-oauth" },
   });
 });
 
