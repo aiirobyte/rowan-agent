@@ -281,7 +281,8 @@ async function* streamAnthropicMessages(
   model?: Model,
 ): AsyncGenerator<LlmStreamEvent> {
   const body = buildRequestBody(config, request);
-  const endpoint = `${normalizeBaseUrl(config.baseUrl)}/v1/messages`;
+  let baseUrl = config.baseUrl;
+  const endpoint = () => `${normalizeBaseUrl(baseUrl)}/v1/messages`;
   const providerId = config.providerId ?? model?.provider ?? "unknown";
   let requestAuth: OAuthRequestAuth | undefined;
   const concreteModel: Model = model ?? {
@@ -310,6 +311,7 @@ async function* streamAnthropicMessages(
         ctx?.oauthCredentialStore,
         ctx?.signal,
       );
+      baseUrl = requestAuth.baseUrl ?? config.baseUrl;
     },
     request: () => ({
       method: "POST",

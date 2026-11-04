@@ -6,6 +6,7 @@ import {
   type OAuthCredential,
   type OAuthCredentialStore,
 } from "../src";
+import { createAnthropicStream } from "../src/providers/anthropic";
 import { createOpenAICompletionsStream } from "../src/providers/openai-completions";
 import { createOpenAIResponsesStream } from "../src/providers/openai-responses";
 import type { ProviderFetch } from "../src/providers/shared";
@@ -42,6 +43,24 @@ function request(provider = "github-copilot", model = "gpt-4.1"): LlmRequest {
 function errorEvent(events: LlmStreamEvent[]): Error | undefined {
   const event = events.find((candidate) => candidate.type === "error");
   return event?.type === "error" ? event.error : undefined;
+}
+
+function anthropicSseResponse(): Response {
+  return new Response([
+    `event: message_start\ndata: ${JSON.stringify({
+      type: "message_start",
+      message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+    })}`,
+    `event: message_delta\ndata: ${JSON.stringify({
+      type: "message_delta",
+      delta: { stop_reason: "end_turn" },
+      usage: { output_tokens: 0 },
+    })}`,
+    `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}`,
+  ].map((event) => `${event}\n\n`).join(""), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
 }
 
 test("GitHub Copilot device login polls, exchanges, and returns a Copilot credential", async () => {
@@ -184,6 +203,45 @@ test("Copilot-derived base URL is used by Completions and Responses", async () =
     expect(requestHeaders.get("editor-plugin-version")).toBe("copilot-chat/0.35.0");
     expect(requestHeaders.get("copilot-integration-id")).toBe("vscode-chat");
   }
+});
+
+test("Copilot-derived base URL and headers are used by Anthropic Messages", async () => {
+  const credential: OAuthCredential = {
+    flow: "github-copilot",
+    access: "tid=test;proxy-ep=proxy.business.githubcopilot.com;exp=2000",
+    refresh: "github-token",
+    expires: Date.now() + 60 * 60 * 1000,
+  };
+  const store = new MemoryCredentialStore(credential);
+  let requestUrl = "";
+  let requestHeaders = new Headers();
+  const fetchMock: ProviderFetch = async (input, init) => {
+    requestUrl = String(input);
+    requestHeaders = new Headers(init?.headers);
+    return anthropicSseResponse();
+  };
+  const anthropic = createAnthropicStream({
+    baseUrl: "https://api.individual.githubcopilot.com",
+    auth: "oauth",
+    providerId: "github-copilot",
+    model: "claude-fable-5",
+    fetch: fetchMock,
+  });
+
+  const events = await collect(anthropic(
+    request("github-copilot", "claude-fable-5"),
+    { oauthCredentialStore: store },
+  ));
+
+  expect(errorEvent(events)).toBeUndefined();
+  expect(requestUrl).toBe("https://api.business.githubcopilot.com/v1/messages");
+  expect(requestHeaders.get("authorization")).toBe(`Bearer ${credential.access}`);
+  expect(requestHeaders.get("user-agent")).toBe("GitHubCopilotChat/0.35.0");
+  expect(requestHeaders.get("editor-version")).toBe("vscode/1.107.0");
+  expect(requestHeaders.get("editor-plugin-version")).toBe("copilot-chat/0.35.0");
+  expect(requestHeaders.get("copilot-integration-id")).toBe("vscode-chat");
+  expect(requestHeaders.get("anthropic-version")).toBe("2023-06-01");
+  expect(requestHeaders.has("x-api-key")).toBe(false);
 });
 
 test("GitHub Copilot refresh re-exchanges the GitHub token", async () => {
