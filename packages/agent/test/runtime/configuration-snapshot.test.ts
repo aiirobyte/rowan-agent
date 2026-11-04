@@ -235,7 +235,7 @@ test("host-declared Core Tools and Phases survive empty selections and Definitio
   }
 });
 
-test("the built-in default entry is valid with an empty authored Phase selection", async () => {
+test("a default entry is absent when the core Phase source resolved no Phase", async () => {
   const warnings = spyOn(console, "warn").mockImplementation(() => undefined);
   try {
     const registry = new ResourceRegistry();
@@ -256,8 +256,9 @@ test("the built-in default entry is valid with an empty authored Phase selection
       model: { provider: "test", id: "model" },
     });
 
-    expect(snapshot.resources.phases).toEqual({ phases: new Map(), entryPhaseId: "default" });
-    expect(warnings).not.toHaveBeenCalled();
+    expect(snapshot.resources.phases).toEqual({ phases: new Map(), entryPhaseId: null });
+    expect(warnings.mock.calls.some(([message]) =>
+      String(message).includes('Phase entry "default"'))).toBe(true);
   } finally {
     warnings.mockRestore();
   }

@@ -121,6 +121,9 @@ function snapshotConfigurationSnapshot(snapshot: ConfigurationSnapshot): Configu
   const resources = Object.freeze({
     ...snapshot.resources,
     tools: Object.freeze([...snapshot.resources.tools]),
+    ...(snapshot.resources.coreToolNames
+      ? { coreToolNames: Object.freeze([...snapshot.resources.coreToolNames]) }
+      : {}),
     skills: Object.freeze([...snapshot.resources.skills]),
     ...(snapshot.resources.phases ? { phases: snapshotPhaseRegistry(snapshot.resources.phases) } : {}),
     revisions: Object.freeze(Object.fromEntries(

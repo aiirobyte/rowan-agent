@@ -8,7 +8,14 @@ import { contentBlocksToMessageContent, createMessage } from "../../loop/message
 export const DEFAULT_PHASE_ID = "default";
 export const STOP_PHASE_ID = "stop";
 export const COMPACT_PHASE_ID = "compact";
-export const CORE_PHASE_NAMES = new Set([DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID]);
+export const CORE_PHASE_ORDER = [DEFAULT_PHASE_ID, STOP_PHASE_ID, COMPACT_PHASE_ID] as const;
+export const CORE_PHASE_NAMES = new Set<string>(CORE_PHASE_ORDER);
+
+export function isAutoInvocablePhase(
+  phase: Pick<Phase, "disableAutoInvocation">,
+): boolean {
+  return phase.disableAutoInvocation !== true;
+}
 
 export function createDefaultPhase(): Phase {
   return {

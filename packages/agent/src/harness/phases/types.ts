@@ -273,6 +273,6 @@ export interface Phase {
 export interface PhaseRegistry {
   /** Map of phase name to Phase object */
   phases: Map<string, Phase>;
-  /** Entry phase name (null until Agent applies its default phase) */
+  /** Resolved entry Phase name, or null when no Phase machine is entered. */
   entryPhaseId: string | null;
 }

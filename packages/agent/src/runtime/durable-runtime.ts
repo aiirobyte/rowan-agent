@@ -70,7 +70,7 @@ import { InMemoryConfigProvider } from "./config-provider";
 import { startSessionFilesConsumer } from "./session-files";
 import { CHILD_REPORTS_CONSUMER_ID, childInteractionInput, childOutcomeInput, isSettledChildRun, toolCallOf } from "./child-reports";
 import type { DelegateOptions, DelegateResult } from "../loop/execution";
-import { createCorePhases, COMPACT_PHASE_ID, DEFAULT_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
+import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
 import { preparePhasePayload } from "../harness/phases/input";
 import { isSchemaParseError, toolErrorMessage } from "../harness/tools";
 import type { PhaseRegistry } from "../harness/phases/types";
@@ -600,8 +600,8 @@ export class AgentRuntime implements AgentRuntimeContract {
         toolArchiveDir: this.archiveDirFor(agentId),
         scope: options.scope,
       });
-      const entryPhaseId = normalizePhaseRegistry(assembly.context.phases).entryPhaseId!;
-      const phase = assembly.context.phases?.phases.get(entryPhaseId);
+      const entryPhaseId = normalizePhaseRegistry(assembly.context.phases).entryPhaseId;
+      const phase = entryPhaseId ? assembly.context.phases?.phases.get(entryPhaseId) : undefined;
       phasePayload = preparePhasePayload(phase?.input, options.phasePayload);
       pinnedConfigToken = await this.commands.storeSnapshot({
         agent,
@@ -1041,7 +1041,9 @@ export class AgentRuntime implements AgentRuntimeContract {
       const config = this.resolveConfig(resolvedConfig);
       const controlPhase = controlRunPhase(run);
       const controlPayload = controlRunPayload(run);
-      if (!controlPhase && !this.autoCompactionRuns.has(run.id)) {
+      if (!controlPhase
+        && config.resources.phases?.phases.has(COMPACT_PHASE_ID)
+        && !this.autoCompactionRuns.has(run.id)) {
         const contextWindow = await resolveContextWindowForConfig(config);
         const status = await this.owned.contextStatus(run.agentId, contextWindow);
         const inputTokens = estimateRunInputTokens(run.input);
@@ -1556,7 +1558,10 @@ export class AgentRuntime implements AgentRuntimeContract {
         } satisfies AgentRuntimePort,
       });
       let result = await executeModel(executionContext);
-      if (!controlPhase && result.type === "failed" && isContextOverflowError(result.error)) {
+      if (!controlPhase
+        && config.resources.phases?.phases.has(COMPACT_PHASE_ID)
+        && result.type === "failed"
+        && isContextOverflowError(result.error)) {
         const compactContext = buildExecutionContext(await this.owned.contextMessages(run.agentId), COMPACT_PHASE_ID);
         const compactResult = await executeModel(compactContext);
         const summary = compactResult.type === "completed" ? compactSummary(compactResult.outcome.payload) : undefined;
@@ -2894,31 +2899,14 @@ function isContextOverflowError(error: unknown): boolean {
 }
 
 function normalizePhaseRegistry(registry: PhaseRegistry | undefined): PhaseRegistry {
-  const core = createCorePhases();
-  const coreNames = CORE_PHASE_NAMES;
   for (const [name] of registry?.phases ?? []) {
     if (name === "continue" || name === "previous") {
       throw new TypeError(`Configured Phase name "${name}" is reserved by Rowan routing controls.`);
     }
   }
-  const configuredPhases = registry?.phases ?? new Map<string, Phase>();
-  const phases = new Map<string, Phase>();
-  for (const corePhase of core) {
-    const configured = configuredPhases.get(corePhase.name);
-    if (configured) {
-      phases.set(corePhase.name, configured.core ? configured : { ...configured, core: true });
-    } else {
-      phases.set(corePhase.name, corePhase);
-    }
-  }
-  for (const [name, phase] of configuredPhases) {
-    if (!coreNames.has(name)) {
-      phases.set(name, phase);
-    }
-  }
   return {
-    phases,
-    entryPhaseId: registry?.entryPhaseId ?? DEFAULT_PHASE_ID,
+    phases: new Map(registry?.phases ?? []),
+    entryPhaseId: registry?.entryPhaseId ?? null,
   };
 }
 function cursorSequence(cursor: EventCursor): number { return Number(String(cursor).split(":").at(-1) ?? 0); }

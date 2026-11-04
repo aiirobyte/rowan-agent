@@ -36,7 +36,7 @@ import type {
 import { createRunInteractionDriver, type RunInteractionDriver } from "../harness/phases/interactions";
 import { readPhaseContent } from "../harness/phases";
 import { preparePhasePayload } from "../harness/phases";
-import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
+import { mergeSkills, selectResources } from "../harness/resource-selection";
 
 import { executeRuntimeToolCall, createRouteTool, extractRouteCall, PhaseRouteTool } from "../harness/tools";
 import type { RouteToolArgs } from "../harness/tools";
@@ -45,7 +45,13 @@ import { LoopGuard } from "./errors";
 import { createOutcome, type LoopOutcome } from "./outcomes";
 import { snapshotMessages } from "./state";
 import { buildPhaseDirectiveMessage } from "../harness/context/resource-formatter";
-import { runInternalModelLoop, STOP_PHASE_ID } from "../harness/phases/core-phases";
+import {
+  runInternalModelLoop,
+  STOP_PHASE_ID,
+  isAutoInvocablePhase,
+} from "../harness/phases/core-phases";
+
+const ENTRY_LOOP_PHASE_ID = "<entry-loop>";
 
 // ============================================================================
 // Phase State Utilities
@@ -135,6 +141,7 @@ function resolveRouteDecision(
   }
 
   const validDecision = decision.flatMap((candidate) => {
+    if (candidate.phase === ENTRY_LOOP_PHASE_ID) return [];
     const target = registry.phases.get(candidate.phase);
     if (!target) return [];
     try {
@@ -295,7 +302,12 @@ function createTerminalOutcome(
   const outcome = phase.run
     ? createOutcome.phase(output, transcript)
     : createOutcome.default(output, transcript);
-  return isControlPhaseRun(config.execution.runMetadata) ? { ...outcome, display: false } : outcome;
+  const hiddenEntryOutcome = isEntryLoopPhase(phase) && outcome.message === `${phase.name} phase completed.`
+    ? { ...outcome, message: "Run completed." }
+    : outcome;
+  return isControlPhaseRun(config.execution.runMetadata)
+    ? { ...hiddenEntryOutcome, display: false }
+    : hiddenEntryOutcome;
 }
 
 function shouldRunStopPhase(phase: Phase, output: PhaseOutput): boolean {
@@ -316,11 +328,17 @@ function buildToolsWithRouting(
   // a fresh schema for the visible phases and avoid exposing the empty core
   // placeholder or registering two Tools with the same name.
   const tools = config.context.tools.filter((tool) => tool.name !== PhaseRouteTool);
-  const autoInvocablePhases = availablePhases.filter((phase) => phase.disableAutoInvocation !== true);
-  if (autoInvocablePhases.length > 0) {
-    tools.push(createRouteTool(autoInvocablePhases));
+  const autoInvocablePhases = availablePhases.filter(isAutoInvocablePhase);
+  if (hasRouteCatalog(availablePhases)) {
+    tools.push(createRouteTool(autoInvocablePhases, {
+      hasStopPhase: availablePhases.some(({ name }) => name === STOP_PHASE_ID),
+    }));
   }
   return tools;
+}
+
+function hasRouteCatalog(phases: readonly Pick<Phase, "disableAutoInvocation">[]): boolean {
+  return phases.filter(isAutoInvocablePhase).length >= 2;
 }
 
 function createMessageManager(
@@ -440,6 +458,7 @@ function createRouteToolResultContent(
 }
 
 async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
+  const routing = ctx.routing ?? true;
   let output: PhaseOutput = {
     message: "",
     phase: ctx.phase.name,
@@ -465,10 +484,7 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
         interactionId?: string;
         completedResults: readonly ToolResultRecord[];
       };
-      executableToolCalls = toolSuspension.toolCalls.filter((toolCall: LlmToolCall) =>
-        // An unknown name still runs, so the model gets "not available" back instead of a silent end of turn.
-        toolCall.name !== PhaseRouteTool,
-      );
+      executableToolCalls = modelToolCalls(toolSuspension.toolCalls, routing);
       output = {
         message: "",
         phase: ctx.phase.name,
@@ -483,37 +499,37 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
         // A route decision sharing a model response with an ordinary Tool is
         // rejected for this round. Keep ordinary calls visible so they can run,
         // but do not let the route escape the error/re-decision boundary.
-        toolCalls: collected.toolCalls.some((candidate) => candidate.name === PhaseRouteTool)
+        toolCalls: routing
+          && collected.toolCalls.some((candidate) => candidate.name === PhaseRouteTool)
           && collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool)
           ? collected.toolCalls.filter((candidate) => candidate.name !== PhaseRouteTool)
           : collected.toolCalls,
       };
 
-      for (const toolCall of collected.toolCalls) {
-        if (toolCall.name !== PhaseRouteTool) continue;
-        const hasOrdinaryTools = collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool);
-        const messageId = ctx.messageManager.start(
-          "tool",
-          createRouteToolResultContent(
-            toolCall,
-            hasOrdinaryTools
-              ? "Route must be called separately after ordinary tools finish; this route decision was ignored."
-              : undefined,
-            !hasOrdinaryTools
-              ? { completedPhases: ctx.completedPhases, phaseTransitions: ctx.state.metrics.phaseTransitions }
-              : undefined,
-          ),
-          {
-            phase: ctx.phase.name,
-          },
-        );
-        await ctx.messageManager.end(messageId);
+      if (routing) {
+        for (const toolCall of collected.toolCalls) {
+          if (toolCall.name !== PhaseRouteTool) continue;
+          const hasOrdinaryTools = collected.toolCalls.some((candidate) => candidate.name !== PhaseRouteTool);
+          const messageId = ctx.messageManager.start(
+            "tool",
+            createRouteToolResultContent(
+              toolCall,
+              hasOrdinaryTools
+                ? "Route must be called separately after ordinary tools finish; this route decision was ignored."
+                : undefined,
+              !hasOrdinaryTools
+                ? { completedPhases: ctx.completedPhases, phaseTransitions: ctx.state.metrics.phaseTransitions }
+                : undefined,
+            ),
+            {
+              phase: ctx.phase.name,
+            },
+          );
+          await ctx.messageManager.end(messageId);
+        }
       }
 
-      executableToolCalls = collected.toolCalls.filter((toolCall) =>
-        // An unknown name still runs, so the model gets "not available" back instead of a silent end of turn.
-        toolCall.name !== PhaseRouteTool,
-      );
+      executableToolCalls = modelToolCalls(collected.toolCalls, routing);
       roundContentBlocks = collected.contentBlocks;
       if (executableToolCalls.length === 0) {
         return output;
@@ -537,6 +553,18 @@ async function executePhaseWithModel(ctx: PhaseRuntime): Promise<PhaseOutput> {
   }
 }
 
+function modelToolCalls(
+  toolCalls: readonly LlmToolCall[],
+  routing: boolean,
+): readonly LlmToolCall[] {
+  // An unknown name still runs, so the model gets "not available" back instead
+  // of a silent end of turn. The reserved route Tool is only intercepted while
+  // routing is active; in Single Loop it follows the unknown-Tool path.
+  return routing
+    ? toolCalls.filter(({ name }) => name !== PhaseRouteTool)
+    : toolCalls;
+}
+
 async function runTurn<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -551,15 +579,34 @@ export async function startPhaseLoop(
   config: AgentConfig,
   state: ExecutionState,
 ): Promise<LoopResult> {
-  const registry = config.context.phases;
-  if (!registry) {
-    throw new Error("AgentContext.phases is required. Supply a phase registry to the execution context.");
+  const selected = config.context.phases ?? { phases: new Map(), entryPhaseId: null };
+  if (selected.entryPhaseId && selected.phases.has(selected.entryPhaseId)) {
+    return runPhaseLoop(config, state, selected);
   }
-  if (!registry.entryPhaseId) {
-    throw new Error("AgentContext.phases.entryPhaseId is required. Supply an entry phase to the execution context.");
-  }
+  const entryLoop = createEntryLoopPhase();
+  const phasesWithEntryLoop = new Map(selected.phases);
+  phasesWithEntryLoop.set(entryLoop.name, entryLoop);
+  return runPhaseLoop(config, state, {
+    phases: phasesWithEntryLoop,
+    entryPhaseId: entryLoop.name,
+  });
+}
 
-  return runPhaseLoop(config, state, registry);
+function createEntryLoopPhase(): Phase {
+  return {
+    name: ENTRY_LOOP_PHASE_ID,
+    description: "Internal entry Loop with no Phase configuration.",
+    filePath: "",
+    baseDir: "",
+    content: "",
+    skills: [],
+    disableAutoInvocation: true,
+    disableImplicitInvocation: true,
+  };
+}
+
+function isEntryLoopPhase(phase: Pick<Phase, "name">): boolean {
+  return phase.name === ENTRY_LOOP_PHASE_ID;
 }
 
 // ============================================================================
@@ -616,6 +663,7 @@ async function runPhaseLoop(
       promptGuidelines: phase.promptGuidelines,
     });
   }
+  const routing = hasRouteCatalog(availablePhases);
 
   // Execute targets concurrently — each gets its own PhaseContext (isolated=true
   // → fresh, otherwise a fork of current messages). Results are stashed as
@@ -776,7 +824,8 @@ async function runPhaseLoop(
     state.attempt++;
     state.metrics.iterations++;
 
-    await config.onPhaseEntered?.(currentPhaseId);
+    const entryLoop = currentPhaseId === ENTRY_LOOP_PHASE_ID;
+    if (!entryLoop) await config.onPhaseEntered?.(currentPhaseId);
     const phase = registry.phases.get(currentPhaseId);
     if (!phase) {
       throw new Error(`Phase "${currentPhaseId}" not found`);
@@ -805,6 +854,7 @@ async function runPhaseLoop(
       messages: messageManager.visible(),
       tools: phaseTools,
       skills: phaseSkills,
+      ...(phase.promptGuidelines ? { promptGuidelines: phase.promptGuidelines } : {}),
       invocation: {
         mode: "serial",
         instanceId: currentPhaseId,
@@ -822,7 +872,7 @@ async function runPhaseLoop(
     isContinuing = false;
 
     // beforePhase hook
-    if (config.beforePhase) {
+    if (config.beforePhase && !entryLoop) {
       const extBefore = await config.beforePhase(currentPhaseId, phaseContext);
       if (extBefore.abort) {
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
@@ -856,7 +906,7 @@ async function runPhaseLoop(
     // resumed iteration.
     const phaseMessageIsPresent = previousPhaseMsgId !== undefined
       && config.context.messages.some((message) => message.id === previousPhaseMsgId);
-    if (enteringNewPhase || !phaseMessageIsPresent) {
+    if (!entryLoop && (enteringNewPhase || !phaseMessageIsPresent)) {
       // Keep the active Phase prompt across waitForInput continuations, but
       // replace it when routing to a different Phase or restoring a missing
       // ephemeral prompt.
@@ -893,7 +943,17 @@ async function runPhaseLoop(
     }
 
     // Execute phase
-    const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry: registry, context: phaseContext, completedPhases };
+    const runtime: PhaseRuntime = {
+      phase,
+      config,
+      state,
+      execution,
+      messageManager,
+      registry,
+      context: phaseContext,
+      completedPhases,
+      routing,
+    };
     let output = await executePhase(runtime);
     // maxAttempts bounds consecutive executions that ran no Tool (routing in circles),
     // never a Run that keeps doing work.
@@ -909,7 +969,7 @@ async function runPhaseLoop(
     if (routeDecision) applyFirstDecision(routeDecision, output);
 
     // afterPhase hook
-    if (config.afterPhase) {
+    if (config.afterPhase && !entryLoop) {
       const extAfter = await config.afterPhase(currentPhaseId, output);
       if (extAfter.abort) {
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
@@ -952,9 +1012,15 @@ async function runPhaseLoop(
       await execution.reportStatus(output.status);
     }
 
+    if (!routing) {
+      removePhaseMessage(config.context.messages, previousPhaseMsgId);
+      removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
+      return completeRun(config, state, createTerminalOutcome(config, phase, output, config.context.messages));
+    }
+
     // Record this phase as completed for route tool context (skip continue
     // iterations which re-execute the same phase without leaving it).
-    if (output.route !== "continue") {
+    if (!entryLoop && output.route !== "continue") {
       completedPhases.push(currentPhaseId);
     }
 
@@ -1001,7 +1067,7 @@ async function runPhaseLoop(
         ? resolvePhaseTarget(phase.target, state)
         : registry.entryPhaseId!;
       if (entryPhaseId === "stop") {
-        if (!shouldRunStopPhase(phase, output)) {
+        if (!registry.phases.has(STOP_PHASE_ID) || !shouldRunStopPhase(phase, output)) {
           removePhaseMessage(config.context.messages, previousPhaseMsgId);
           removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
           previousPhaseMsgId = undefined;
@@ -1030,7 +1096,7 @@ async function runPhaseLoop(
     // Give a model-driven phase without a reply one final model pass for the
     // user-facing conclusion; existing replies and programmatic phases end as-is.
     if (nextRoute === "stop") {
-      if (!shouldRunStopPhase(phase, output)) {
+      if (!registry.phases.has(STOP_PHASE_ID) || !shouldRunStopPhase(phase, output)) {
         removePhaseMessage(config.context.messages, previousPhaseMsgId);
         removePhaseMessage(config.context.messages, previousPhaseInputMsgId);
         previousPhaseMsgId = undefined;
@@ -1054,11 +1120,13 @@ async function runPhaseLoop(
       return completeRun(config, state, createOutcome.phaseNotFound(output));
     }
 
-    state.metrics.phaseTransitions.push({
-      from: currentPhaseId,
-      to: targetPhaseId,
-      ts: createTimestamp(),
-    });
+    if (!entryLoop) {
+      state.metrics.phaseTransitions.push({
+        from: currentPhaseId,
+        to: targetPhaseId,
+        ts: createTimestamp(),
+      });
+    }
 
     // Prepare the fresh invocation payload for the next phase.
     const targetPhase = registry.phases.get(targetPhaseId);
@@ -1174,6 +1242,8 @@ interface PhaseRuntime {
   completedPhases?: readonly string[];
   /** Set once this execution runs a Tool: a Phase doing work is not a stuck one. */
   progressed?: boolean;
+  /** Whether the Phase catalog is routable and the reserved route Tool is active. */
+  routing?: boolean;
 }
 
 /** Execute phase code — run (PhaseContext) or LLM-driven. */
@@ -1357,7 +1427,7 @@ function createPhaseExecution(
     messages: messageManager,
     async invokeModel(phaseContext: PhaseContext, options: { output?: "reply" | "internal" } = {}): Promise<ModelInvokeOutput> {
       // Allow extensions to transform PhaseContext before building request
-      if (config.beforePrompt) {
+      if (config.beforePrompt && !isEntryLoopPhase(phase)) {
         phaseContext = await config.beforePrompt(phase.name, phaseContext);
       }
 
@@ -1572,6 +1642,7 @@ async function executeParallelPhase(
     messages,
     tools: phaseTools,
     skills: phaseSkills,
+    ...(phase.promptGuidelines ? { promptGuidelines: phase.promptGuidelines } : {}),
     invocation: {
       mode: "parallel",
       instanceId,
@@ -1606,7 +1677,16 @@ async function executeParallelPhase(
   const toolExecutionManager = createToolExecutionManager();
   const execution = createPhaseExecution(config, state, phase, messageManager, toolExecutionManager, registry);
 
-  const runtime: PhaseRuntime = { phase, config, state, execution, messageManager, registry, context: phaseContext };
+  const runtime: PhaseRuntime = {
+    phase,
+    config,
+    state,
+    execution,
+    messageManager,
+    registry,
+    context: phaseContext,
+    routing: hasRouteCatalog(availablePhases),
+  };
   const phaseStart = messages.length;
   let output = await executePhase(runtime);
 
@@ -1646,9 +1726,14 @@ function selectPhaseTools(
   const routing = includeRouting
     ? candidates.filter(({ name }) => name === PhaseRouteTool)
     : [];
-  const core = candidates.filter(({ core }) => core);
-  const ordinary = candidates.filter(({ name, core }) => name !== PhaseRouteTool && !core);
-  return [...core, ...selectNamedResources(ordinary, names, "Tool"), ...routing];
+  const selectable = candidates.filter(({ name }) => name !== PhaseRouteTool);
+  const selected = selectResources({
+    kind: "Tool",
+    candidates: selectable,
+    selection: names,
+  });
+  for (const warning of selected.warnings) console.warn(warning);
+  return [...selected.selected, ...routing];
 }
 
 async function waitForBackgroundTasks(

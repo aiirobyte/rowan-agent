@@ -3,10 +3,15 @@ import type {
   AgentDefinition,
   PhaseRegistrySelection,
 } from "../harness/definitions";
-import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
+import { mergeSkills, selectResources, type ResourceSelection } from "../harness/resource-selection";
 import type { Phase, PhaseRegistry } from "../harness/phases/types";
-import { COMPACT_PHASE_ID, DEFAULT_PHASE_ID, STOP_PHASE_ID, CORE_PHASE_NAMES } from "../harness/phases/core-phases";
-import { CORE_TOOL_NAMES } from "./core-tools";
+import {
+  CORE_PHASE_ORDER,
+  CORE_PHASE_NAMES,
+  DEFAULT_PHASE_ID,
+  isAutoInvocablePhase,
+} from "../harness/phases/core-phases";
+import { CORE_TOOL_NAMES, CORE_TOOL_ORDER } from "./core-tools";
 import type { ContextCandidate } from "./contracts";
 import { validateMaxAttempts } from "../loop/types";
 import {
@@ -14,8 +19,8 @@ import {
   type ResourceKind,
   type ResourceRef,
   type ResourceView,
-  type ResolvedResourceView,
 } from "./resource-registry";
+import { PhaseRouteTool } from "../harness/tools";
 
 export type DefinitionLayer = Readonly<{
   description?: string;
@@ -44,6 +49,8 @@ export type ConfigurationSnapshot = Readonly<{
   definition: AgentDefinition;
   resources: Readonly<{
     tools: readonly import("./contracts").Tool[];
+    /** Rowan-generated Core Tools selected for this Run, in execution order. */
+    coreToolNames?: readonly string[];
     skills: readonly import("../protocol").Skill[];
     phases?: PhaseRegistry;
     revisions: Readonly<Record<ResourceKind, readonly string[]>>;
@@ -70,31 +77,71 @@ export function resolveConfigurationSnapshot(
     throw new Error(`Agent Definition "${input.definition.name}" is not available in the Resource View.`);
   }
   const layer = input.definition.layer;
-  const selectedContexts = selectNamedResources(input.contexts ?? [], base.contexts, "Context");
-  const additionalContexts = deduplicateContexts(input.additionalContexts ?? [], selectedContexts);
   const definition = applyDefinitionLayer(base, layer);
-  const tools = resolveTools(resolved.tools, definition.tools);
-  const skills = mergeSkills(
-    selectNamedResources(resolved.skills, definition.skills, "Skill"),
-    definition.bundledSkills,
+
+  const contextSelection = selectResources({
+    kind: "Context",
+    candidates: input.contexts ?? [],
+    selection: base.contexts,
+  });
+  const additionalContexts = deduplicateContexts(input.additionalContexts ?? [], contextSelection.selected);
+
+  const toolSelection = resolveLayeredSelection(
+    "Tool",
+    resolved.tools.filter(({ name }) => name !== PhaseRouteTool),
+    base.tools,
+    layer?.tools,
+    CORE_TOOL_ORDER,
   );
-  const phases = resolvePhases(resolved.phases, definition.phases);
+  const tools = toolSelection.selected.map((tool) =>
+    CORE_TOOL_NAMES.has(tool.name) ? { ...tool, core: true } : tool);
+  const coreToolNames = CORE_TOOL_ORDER.filter((name) => toolSelection.names.has(name));
+
+  const skillSelection = resolveLayeredSelection(
+    "Skill",
+    resolved.skills,
+    base.skills,
+    layer?.skills,
+  );
+  const skills = mergeSkills(skillSelection.selected, definition.bundledSkills);
+
+  const phases = resolvePhases(resolved.phases, base, layer);
+  const selectedContextNames = [...contextSelection.names];
+
+  warnAll([
+    ...contextSelection.warnings,
+    ...toolSelection.warnings,
+    ...skillSelection.warnings,
+    ...phases.warnings,
+  ]);
+
+  const effectiveDefinition: AgentDefinition = {
+    ...definition,
+    tools: [...toolSelection.names],
+    skills: [...skillSelection.names],
+    phases: {
+      entryPhaseId: phases.entryPhaseId,
+      phaseIds: [...phases.names],
+    },
+    contexts: selectedContextNames,
+  };
   return {
     identity: input.identity,
-    definition,
+    definition: effectiveDefinition,
     resources: {
       tools,
+      coreToolNames,
       skills,
-      ...(phases ? { phases } : {}),
+      phases: phases.registry,
       revisions: resolved.revisions,
       refs: {
         agent: selectedRefs(resolved.refs.agent, [base.name]),
         tool: selectedRefs(resolved.refs.tool, tools.map(({ name }) => name)),
         skill: selectedRefs(resolved.refs.skill, skills.map(({ name }) => name)),
-        phase: selectedRefs(resolved.refs.phase, [...(phases?.phases.keys() ?? [])]),
+        phase: selectedRefs(resolved.refs.phase, [...phases.registry.phases.keys()]),
       },
     },
-    contexts: selectedContexts,
+    contexts: contextSelection.selected,
     additionalContexts,
     resourceView: input.resourceView,
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
@@ -120,9 +167,6 @@ function applyDefinitionLayer(base: AgentDefinition, layer: DefinitionLayer | un
     ...(layer.description === undefined ? {} : { description: layer.description }),
     ...(layer.prompt === undefined ? {} : { prompt: layer.prompt }),
     ...(layer.model === undefined ? {} : { model: layer.model }),
-    ...(layer.tools === undefined ? {} : { tools: intersectNames(base.tools, layer.tools, "Tool") }),
-    ...(layer.skills === undefined ? {} : { skills: intersectNames(base.skills, layer.skills, "Skill") }),
-    ...(layer.phases === undefined ? {} : { phases: intersectPhaseSelection(base.phases, layer.phases) }),
   };
 }
 
@@ -140,72 +184,107 @@ function deduplicateContexts(
   return contexts;
 }
 
-function intersectNames(parent: readonly string[] | undefined, layer: readonly string[], kind: "Tool" | "Skill"): readonly string[] {
-  if (parent === undefined) return [...layer];
-  const parentNames = new Set(parent);
-  for (const name of layer) {
-    if (!parentNames.has(name)) console.warn(`${kind} "${name}" is not available and will be skipped.`);
-  }
-  return layer.filter((name) => parentNames.has(name));
-}
-
-function intersectPhaseSelection(
-  parent: PhaseRegistrySelection | undefined,
-  layer: PhaseRegistrySelection,
-): PhaseRegistrySelection {
-  if (!parent) return layer;
-  const parentNames = new Set(parent.phaseIds);
-  for (const name of layer.phaseIds) {
-    if (!parentNames.has(name)) console.warn(`Phase "${name}" is not available and will be skipped.`);
-  }
-  return {
-    entryPhaseId: layer.entryPhaseId,
-    phaseIds: layer.phaseIds.filter((name) => parentNames.has(name)),
-  };
-}
-
-function resolveCoreResources<T extends { name: string; core?: boolean }>(
+function resolveLayeredSelection<T extends { name: string; core?: boolean }>(
+  kind: "Tool" | "Skill" | "Phase",
   candidates: readonly T[],
-  selection: readonly string[] | undefined,
-  coreNames: ReadonlySet<string>,
-  kind: "Tool" | "Phase",
-): T[] {
-  const core = candidates.filter((item) => item.core || coreNames.has(item.name));
-  const authoredSelection = selection
-    ? selection.filter((name) => !coreNames.has(name))
-    : undefined;
-  const authored = candidates.filter((item) => !coreNames.has(item.name) && !item.core);
-  return [
-    ...core.map((item) => (item.core ? item : { ...item, core: true })),
-    ...selectNamedResources(authored, authoredSelection, kind),
-  ];
-}
-
-function resolveTools(
-  candidates: readonly import("./contracts").Tool[],
-  selection: readonly string[] | undefined,
-): import("./contracts").Tool[] {
-  return resolveCoreResources(candidates, selection, CORE_TOOL_NAMES, "Tool");
+  base: readonly string[] | undefined,
+  layer: readonly string[] | undefined,
+  coreNames?: readonly string[],
+): ResourceSelection<T> {
+  const selected = selectResources({
+    kind,
+    candidates,
+    selection: base,
+    ...(coreNames === undefined ? {} : { coreNames }),
+  });
+  return layer === undefined
+    ? selected
+    : withWarnings(selectResources({
+        kind,
+        candidates,
+        selection: layer,
+        parent: [...selected.names],
+        ...(coreNames === undefined ? {} : { coreNames }),
+      }), selected.warnings);
 }
 
 function resolvePhases(
   candidates: readonly Phase[],
-  selection: PhaseRegistrySelection | undefined,
-): PhaseRegistry | undefined {
-  const selected = resolveCoreResources(candidates, selection?.phaseIds, CORE_PHASE_NAMES, "Phase");
-  const entryPhaseId = selection?.entryPhaseId ?? null;
-  // The built-in default Phase is materialized by Runtime execution rather
-  // than selected from a host source. It is therefore valid even when an
-  // explicit phase selector intentionally contains no authored Phases.
-  if (entryPhaseId !== null
-    && entryPhaseId !== DEFAULT_PHASE_ID
-    && !selected.some(({ name }) => name === entryPhaseId)) {
-    console.warn(`Phase entry "${entryPhaseId}" is not available and will be skipped.`);
-    return { phases: new Map(selected.map((phase) => [phase.name, phase])), entryPhaseId: null };
-  }
+  base: AgentDefinition,
+  layer: DefinitionLayer | undefined,
+): Readonly<{
+  registry: PhaseRegistry;
+  names: ReadonlySet<string>;
+  entryPhaseId: string | null;
+  warnings: readonly string[];
+}> {
+  const coreCandidates = candidates.map((phase) =>
+    CORE_PHASE_NAMES.has(phase.name) ? { ...phase, core: true } : phase);
+  const narrowed = resolveLayeredSelection(
+    "Phase",
+    coreCandidates,
+    base.phases?.phaseIds,
+    layer?.phases?.phaseIds,
+  );
+  const byName = new Map(narrowed.selected.map((phase) => [phase.name, phase]));
+  const selectedValues = [
+    ...CORE_PHASE_ORDER.flatMap((name) => {
+      const phase = byName.get(name);
+      return phase && narrowed.names.has(name) ? [{ ...phase, core: true }] : [];
+    }),
+    ...narrowed.selected.filter(({ name }) => !CORE_PHASE_NAMES.has(name)),
+  ];
+  const requestedEntry = layer?.phases
+    ? layer.phases.entryPhaseId
+    : base.phases?.entryPhaseId ?? null;
+  const warnings = [...narrowed.warnings];
+  const entryPhaseId = resolveEntryPhase(requestedEntry, narrowed.names, selectedValues, warnings);
   return {
-    phases: new Map(selected.map((phase) => [phase.name, phase])),
+    registry: {
+      phases: new Map(selectedValues.map((phase) => [phase.name, phase])),
+      entryPhaseId,
+    },
+    names: narrowed.names,
     entryPhaseId,
+    warnings,
+  };
+}
+
+function resolveEntryPhase(
+  requested: string | null,
+  selectedNames: ReadonlySet<string>,
+  selectedPhases: readonly Phase[],
+  warnings: string[],
+): string | null {
+  const defaultAvailable = selectedNames.has(DEFAULT_PHASE_ID);
+  let entry: string | null;
+  if (requested !== null && selectedNames.has(requested)) {
+    entry = requested;
+  } else {
+    if (requested !== null) {
+      warnings.push(`Phase entry "${requested}" is not available and will be skipped.`);
+    }
+    const routable = selectedPhases.filter(isAutoInvocablePhase);
+    entry = defaultAvailable
+      ? DEFAULT_PHASE_ID
+      : routable.length === 1
+        ? routable[0]!.name
+        : null;
+  }
+  return entry;
+}
+
+function warnAll(messages: readonly string[]): void {
+  for (const message of messages) console.warn(message);
+}
+
+function withWarnings<T extends { name: string; core?: boolean }>(
+  selection: ResourceSelection<T>,
+  warnings: readonly string[],
+): ResourceSelection<T> {
+  return {
+    ...selection,
+    warnings: [...warnings, ...selection.warnings],
   };
 }
 
