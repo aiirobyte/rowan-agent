@@ -217,7 +217,8 @@ export function readPhaseContent(phase: Phase): string {
  * - null by default (caller must explicitly set to start from a specific phase)
  * - Set to a specific phase name to start from that phase
  *
- * When entryPhaseId is null, Agent normalizes the registry to start from its default phase.
+ * When entryPhaseId is null, Configuration Snapshot resolution applies the
+ * Agent's entry order and may select a Single Loop.
  */
 export async function loadPhases(targetPath: string): Promise<PhaseRegistry> {
   const phases = new Map<string, Phase>();

@@ -500,12 +500,19 @@ test("a route sharing a response with an ordinary Tool is ignored until the next
 });
 
 test("serial route tool text documents optional routing and explicit stop semantics", () => {
-  const tool = createRouteTool([workPhase()]);
-  expect(tool.description).toContain("Route is optional");
-  expect(tool.description).toContain("final user-facing conclusion");
-  expect(tool.description).toContain("no further user input is needed");
-  expect(tool.description).toContain("current phase starts another iteration");
-  expect(tool.promptSnippet).toContain("omit it");
+  const withoutStop = createRouteTool([workPhase()]);
+  expect(withoutStop.description).toContain("Route is optional");
+  expect(withoutStop.description).toContain("current reply is the final user-facing outcome");
+  expect(withoutStop.description).not.toContain("built-in Stop Phase provides one");
+  expect(withoutStop.description).toContain("no further user input is needed");
+  expect(withoutStop.description).toContain("current phase starts another iteration");
+  expect(withoutStop.promptSnippet).toContain("omit it");
+
+  const withStop = createRouteTool([workPhase(), createStopPhase()]);
+  expect(withStop.description).toContain("built-in Stop Phase provides one");
+  expect(withStop.promptGuidelines).toContain(
+    "Use route(stop) only when the current user request or task is complete; the Stop Phase will provide the final user-facing conclusion.",
+  );
 });
 
 test("maxAttempts suspends an autonomous self-loop instead of implicitly stopping", async () => {

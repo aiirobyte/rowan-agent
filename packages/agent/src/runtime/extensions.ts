@@ -1,12 +1,10 @@
-import { DEFAULT_PHASE_ID } from "../harness/phases/core-phases";
-import { mergeSkills, selectNamedResources } from "../harness/resource-selection";
 import { buildContextDescription } from "../harness/context/resource-formatter";
 import type { ResolvedAgentContext, AfterToolCall, BeforeToolCall, Tool } from "./contracts";
 import type { ConfigurationSnapshot } from "./configuration-snapshot";
 import type { JsonValue } from "../runtime-events";
 import type { BeforePhaseHook, AfterPhaseHook, BeforePromptHook, AgentContext } from "../loop/types";
 import type { ToolResult } from "@rowan-agent/models";
-import { createRuntimeCoreTools } from "./core-tools";
+import { CORE_TOOL_ORDER, createRuntimeCoreTools } from "./core-tools";
 
 export type ExtensionAssembly = Readonly<{
   context: ResolvedAgentContext;
@@ -29,18 +27,20 @@ export function assembleRegisteredExtensions(
   // Extension contributions reach this assembly the way every other resource
   // does: through the Resource View's implicit Extension source. The assembly
   // never adds a second copy of them.
-  const coreTools = createRuntimeCoreTools({
+  const runtimeCoreTools = createRuntimeCoreTools({
     root: snapshot.cwd,
     ...(options.toolArchiveDir ? { archiveDir: options.toolArchiveDir } : {}),
   });
-  const replacingNames = new Set(
-    snapshot.resources.tools
-      .filter((tool) => tool.core)
-      .map((tool) => tool.name),
-  );
+  const selectedCoreNames = new Set(snapshot.resources.coreToolNames ?? CORE_TOOL_ORDER);
+  const selectedByName = new Map(snapshot.resources.tools.map((tool) => [tool.name, tool]));
+  const builtInNames = new Set(runtimeCoreTools.map(({ name }) => name));
   const tools = [
-    ...snapshot.resources.tools,
-    ...coreTools.filter((tool) => !replacingNames.has(tool.name)),
+    ...runtimeCoreTools.flatMap((tool) => {
+      if (!selectedCoreNames.has(tool.name)) return [];
+      return [selectedByName.get(tool.name) ?? tool];
+    }),
+    ...snapshot.resources.tools.filter((tool) => tool.core && !builtInNames.has(tool.name)),
+    ...snapshot.resources.tools.filter((tool) => !tool.core),
   ];
   const context = resolveDefinitionContext(snapshot, tools, runner, options.scope);
   return {
@@ -92,50 +92,23 @@ function resolveDefinitionContext(
   runner?: import("../extensions").ExtensionRunner,
   scope?: import("@rowan-agent/models").ScopeRef,
 ): ResolvedAgentContext {
-  const coreTools = assembled.filter((tool) => tool.core);
-  const authoredTools = assembled.filter((tool) => !tool.core);
-  const authoredSelection = snapshot.definition.tools
-    ? snapshot.definition.tools.filter((name) => !assembled.some((t) => t.core && t.name === name))
-    : undefined;
-  const tools = [
-    ...selectNamedResources(authoredTools, authoredSelection, "Tool"),
-    ...coreTools,
-  ];
-  const skills = mergeSkills(
-    selectNamedResources(snapshot.resources.skills, snapshot.definition.skills, "Skill"),
-    snapshot.definition.bundledSkills,
-  );
+  const skills = [...snapshot.resources.skills];
   // Definition-selected Context goes into the System Prompt. Turn-scoped
   // host-supplied Contexts (additionalContexts) ride on the turn's user message
   // instead, keeping the System Prompt stable across turns.
-  const contexts = selectNamedResources(snapshot.contexts, snapshot.definition.contexts, "Context");
-  const phaseCandidates = [...(snapshot.resources.phases?.phases.values() ?? [])];
-  const corePhases = phaseCandidates.filter((phase) => phase.core);
-  const authoredPhases = phaseCandidates.filter((phase) => !phase.core);
-  const authoredPhaseIds = snapshot.definition.phases?.phaseIds
-    ? snapshot.definition.phases.phaseIds.filter((name) => !corePhases.some((p) => p.name === name))
-    : undefined;
-  const selectedPhases = [
-    ...corePhases,
-    ...selectNamedResources(authoredPhases, authoredPhaseIds, "Phase"),
-  ].map((phase) => {
+  const contexts = snapshot.contexts;
+  const selectedPhases = [...(snapshot.resources.phases?.phases.values() ?? [])].map((phase) => {
     const handler = runner?.getPhaseHandler(phase.name, scope);
     return handler && !phase.run ? { ...phase, run: handler } : phase;
   });
   const phases = new Map(selectedPhases.map((phase) => [phase.name, phase]));
-  const requestedEntry = snapshot.definition.phases
-    ? snapshot.definition.phases.entryPhaseId
-    : snapshot.resources.phases?.entryPhaseId ?? null;
-  const entryPhaseId = requestedEntry === DEFAULT_PHASE_ID
-    ? DEFAULT_PHASE_ID
-    : requestedEntry && phases.has(requestedEntry)
-    ? requestedEntry
-    : null;
+  const requestedEntry = snapshot.resources.phases?.entryPhaseId ?? null;
+  const entryPhaseId = requestedEntry && phases.has(requestedEntry) ? requestedEntry : null;
   return {
     systemPrompt: [snapshot.definition.prompt, buildContextDescription(contexts)]
       .filter((section) => section.length > 0)
       .join("\n\n"),
-    tools,
+    tools: assembled,
     skills,
     phases: { phases, entryPhaseId },
     ...(snapshot.cwd ? { cwd: snapshot.cwd } : {}),

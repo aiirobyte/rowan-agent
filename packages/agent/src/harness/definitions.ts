@@ -4,6 +4,7 @@ import type { Skill } from "../protocol";
 import type { JsonValue } from "../runtime-events";
 import { isJsonValue } from "../runtime/json";
 import { normalizeDefinitionMetadata } from "./definition-metadata";
+import { normalizeSelectionEntries, type ResourceSelectionKind } from "./resource-selection";
 
 export type PhaseRegistrySelection = Readonly<{
   entryPhaseId: string | null;
@@ -30,11 +31,11 @@ export function assertAgentDefinition(value: unknown): asserts value is AgentDef
   requiredString(value.name, "definition.name");
   requiredString(value.description, "definition.description");
   requiredString(value.prompt, "definition.prompt");
-  optionalStringList(value.tools, "definition.tools");
-  optionalStringList(value.skills, "definition.skills");
+  optionalResourceSelectionList(value.tools, "definition.tools", "Tool");
+  optionalResourceSelectionList(value.skills, "definition.skills", "Skill");
   optionalBundledSkills(value.bundledSkills, "definition.bundledSkills");
   optionalPhaseRegistrySelection(value.phases, "definition.phases");
-  optionalStringList(value.contexts, "definition.contexts");
+  optionalResourceSelectionList(value.contexts, "definition.contexts", "Context");
   if (value.metadata !== undefined && (!isRecord(value.metadata) || !isJsonValue(value.metadata))) {
     throw new TypeError("definition.metadata must be a JSON object");
   }
@@ -69,10 +70,10 @@ export function normalizeAgentDefinition(
     : requiredString(fields.name, "name");
   const description = requiredString(fields.description, "description");
   const normalizedPrompt = requiredString(prompt, "prompt");
-  const tools = optionalStringList(fields.tools, "tools");
-  const skills = optionalStringList(fields.skills, "skills");
+  const tools = optionalResourceSelectionList(fields.tools, "tools", "Tool");
+  const skills = optionalResourceSelectionList(fields.skills, "skills", "Skill");
   const phases = optionalPhaseRegistrySelection(fields.phases, "phases");
-  const contexts = optionalStringList(fields.contexts, "contexts");
+  const contexts = optionalResourceSelectionList(fields.contexts, "contexts", "Context");
   const model = optionalModel(fields.model);
 
   return {
@@ -120,6 +121,21 @@ export function optionalStringList(value: unknown, field: string): readonly stri
   return names;
 }
 
+function optionalResourceSelectionList(
+  value: unknown,
+  field: string,
+  kind: ResourceSelectionKind,
+): readonly string[] | undefined {
+  const entries = optionalStringList(value, field);
+  if (entries === undefined) return undefined;
+  try {
+    normalizeSelectionEntries(entries, kind);
+  } catch (error) {
+    throw new TypeError(`${field}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return entries;
+}
+
 function optionalBundledSkills(value: unknown, field: string): readonly Skill[] | undefined {
   if (value === undefined) return;
   if (!Array.isArray(value)) throw new TypeError(`${field} must be an array of Skills`);
@@ -153,7 +169,7 @@ function optionalPhaseRegistrySelection(
   if (entryPhaseId !== null && (typeof entryPhaseId !== "string" || entryPhaseId.trim() === "")) {
     throw new TypeError(`${field}.entryPhaseId must be a non-empty string or null`);
   }
-  const phaseIds = optionalStringList(value.phaseIds, `${field}.phaseIds`);
+  const phaseIds = optionalResourceSelectionList(value.phaseIds, `${field}.phaseIds`, "Phase");
   if (!phaseIds) throw new TypeError(`${field}.phaseIds is required`);
   return {
     entryPhaseId: entryPhaseId === null ? null : entryPhaseId.trim(),

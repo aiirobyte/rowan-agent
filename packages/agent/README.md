@@ -191,10 +191,10 @@ Each `load*()` call replaces one source atomically; use `directory` or inline
 in isolated sources but collide when selected together. The Runtime supplies the
 core `read`/`bash`/`edit`/`write` Tools and built-in `default`/`stop`/`compact` Phases.
 Host-defined resources (including Tools and Phases registered by Extensions) replace
-built-ins by name, retaining the built-in status (replaced Core Tools remain always
-available without explicit Definition selection; replaced Core Phases retain their
-built-in role). Reserved control names (`route` for Tools, `continue` for Phases)
-cannot be claimed by host sources.
+built-ins by name, retaining the built-in status (replaced Core Tools and Phases are
+selected by default and can be removed by an explicit `-name`; a replacement never
+falls back to the built-in value). Reserved control names (`route` for Tools,
+`continue` and `previous` for Phases) cannot be claimed by host sources.
 
 Extensions are Runtime-global. Load them only during `AgentRuntime.init()` via
 `bootstrap`; after initialization they are frozen until the Runtime closes.
@@ -202,8 +202,10 @@ Extensions can manage run-scoped in-memory state (`api.state.run(runId)`), agent
 durable state (`api.state.agent(agentId)`), and extension-scoped durable state
 (`api.state.global()`) via the configured `ExtensionHost`.
 Definition name lists narrow the selected Tools, Skills, and Phases: omission
-inherits all candidates, `[]` selects none, and missing names are skipped. The
-same rule applies to `definition.contexts`.
+inherits all candidates, `[]` selects Core values and no non-Core values, a
+positive name selects that non-Core value while retaining Core values, and
+`-name` explicitly removes a value. Missing names are skipped. The same rule
+applies to `definition.contexts`, Definition Layers, and Phase Tool filters.
 
 Markdown Agent Definitions and `PHASE.md` files share one metadata rule:
 Rowan-known keys stay fields, while every other JSON-safe key becomes flat

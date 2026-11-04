@@ -4,6 +4,11 @@ status: accepted
 
 # Host-declared core resources and Phase controls
 
+> **Amended by [ADR-0018](0018-shared-resource-selection-and-single-loop.md):**
+> `core: true` remains a registration attribute, but Core Resources are selected
+> by default and removable by an explicit `-name`; they are no longer
+> unconditionally selected. Phase count and entry resolution follow ADR-0018.
+
 A host needs some of its own capabilities to behave like Rowan's: present in
 every Agent whatever a Definition selects, routable back to the Phase that
 called them, able to add System Prompt guidance while they are available, and
@@ -16,10 +21,9 @@ the first resource that needs all four.
 - **Core is a registration attribute.** A resource value whose registrant sets
   `core: true` is core. Rowan never reads `core` from PHASE.md, SKILL.md, or
   Definition frontmatter. Rowan's own `rowan.core` resources stay core, and a
-  host may still replace one by registering its name. A core Tool or Phase is
-  always selected: no Definition list, Definition Layer, or Phase `tools`
-  filter removes it. Only its registrant removes it, by unloading or replacing
-  its source.
+  host may still replace one by registering its name. As amended by ADR-0018,
+  Core Tools and Phases are selected by default but are removable by an explicit
+  `-name`.
 - **`previous` is a reserved route target**, next to `continue` and `stop`. No
   resource may be named `previous`. Routing to `previous` returns to the Phase
   that routed into the current one, taken from the latest recorded Phase
