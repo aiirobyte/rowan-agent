@@ -80,11 +80,15 @@ export async function anthropicRequestAuth(
   signal?: AbortSignal,
   sessionId?: string,
 ): Promise<OAuthRequestAuth> {
-  return requestAuth(config, {
-    required: () => ({
-      "x-api-key": apiKey(config),
-      "anthropic-version": "2023-06-01",
-    }),
-    none: { "anthropic-version": "2023-06-01" },
+  const auth = await requestAuth(config, {
+    required: () => ({ "x-api-key": apiKey(config) }),
+    none: {},
   }, providerId, model, store, signal, sessionId);
+  return {
+    ...auth,
+    headers: {
+      ...auth.headers,
+      "anthropic-version": "2023-06-01",
+    },
+  };
 }
