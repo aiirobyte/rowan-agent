@@ -734,6 +734,7 @@ export class InMemoryStore implements DurableStore {
     answer?: import("../runtime-events").JsonValue,
     reply?: string,
     answerMetadata?: JsonObject,
+    configuration?: import("../runtime-events").ContextConfiguration,
   ): InteractionRecord {
     const now = createTimestamp();
     const record: InteractionRecord = {
@@ -749,6 +750,7 @@ export class InMemoryStore implements DurableStore {
       ...(answer !== undefined ? { answer: clone(answer) } : {}),
       ...(reply !== undefined ? { reply } : {}),
       ...(answerMetadata !== undefined ? { answerMetadata: clone(answerMetadata) } : {}),
+      ...(configuration !== undefined ? { configuration: clone(configuration) } : {}),
       ...(interaction.toolCallId !== undefined ? { toolCallId: interaction.toolCallId as ToolCallId } : {}),
       ...(interaction.result !== undefined ? { result: clone(interaction.result) } : {}),
       sequenceWithinRun: this.nextMessageSequence(run.id),
@@ -778,7 +780,7 @@ export class InMemoryStore implements DurableStore {
     delete run.interactionAnswers;
   }
 
-  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): RunRecord {
+  createRun(lease: OwnerLease, input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; configuration?: import("../runtime-events").ContextConfiguration; idempotencyKey: string }): RunRecord {
     this.assertOwner(lease);
     this.requireAgent(input.agentId);
     if (input.phasePayload !== undefined && input.entryPhases !== undefined) {
@@ -788,7 +790,7 @@ export class InMemoryStore implements DurableStore {
     if (input.phasePayload !== undefined) assertJsonValue(input.phasePayload, "run.phasePayload");
     if (input.entryPhases !== undefined) assertEntryPhases(input.entryPhases, "run.entryPhases");
     const scope = createIdempotencyScope("start_run", input.agentId, input.idempotencyKey);
-    const payload = canonicalStartRunRequest(normalizedInput, input.metadata, input.phasePayload, input.pinnedConfigToken, input.entryPhases, input.scope, input.cwd);
+    const payload = canonicalStartRunRequest(normalizedInput, input.metadata, input.phasePayload, input.entryPhases, input.scope, input.cwd);
     const replay = this.replay(scope, payload);
     if (replay) return clone(replay as RunRecord);
 
@@ -802,6 +804,9 @@ export class InMemoryStore implements DurableStore {
           ? normalizedInput.content
           : normalizedInput.content.map((c) => c.type === "text" ? c.text : "").join(" "));
       const openInteractions = waitingRun.openInteractions ?? [];
+      const atTurnBoundary = waitingRun.execution === undefined
+        && openInteractions.some((interaction) =>
+          interaction.kind === "user_input" && interaction.turnBoundary === true);
       const replyMetadata = userInputMetadata(normalizedInput);
       for (const interaction of openInteractions) {
         this.commitInteractionRecord(waitingRun, interaction, "replied", undefined, replyText, replyMetadata);
@@ -824,6 +829,9 @@ export class InMemoryStore implements DurableStore {
       }
 
       const now = createTimestamp();
+      if (atTurnBoundary && input.pinnedConfigToken !== undefined) {
+        waitingRun.pinnedConfigToken = input.pinnedConfigToken;
+      }
       const message: Message = {
         id: createId("msg") as MessageId,
         agentId: waitingRun.agentId,
@@ -831,6 +839,7 @@ export class InMemoryStore implements DurableStore {
         role: "user",
         content: userInputContent(normalizedInput),
         ...(userInputMetadata(normalizedInput) ? { metadata: clone(userInputMetadata(normalizedInput)!) } : {}),
+        ...(input.configuration === undefined || !atTurnBoundary ? {} : { configuration: clone(input.configuration) }),
         sequenceWithinRun: this.nextMessageSequence(waitingRun.id),
         createdAt: now,
       };
@@ -873,7 +882,7 @@ export class InMemoryStore implements DurableStore {
     return clone(run);
   }
 
-  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[] }): RunClaim {
+  claimRun(lease: OwnerLease, input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; configuration?: import("../runtime-events").ContextConfiguration; additionalContexts?: readonly ContextCandidate[] }): RunClaim {
     this.assertOwner(lease);
     const executionId = input.executionId ?? (createId("exec") as ExecutionId);
     const operationKey = `claim:${executionId}`;
@@ -882,6 +891,7 @@ export class InMemoryStore implements DurableStore {
       input.expectedRevision,
       input.messageId ?? null,
       input.configToken ?? null,
+      input.configuration ?? null,
       input.additionalContexts ?? null,
     ] as never);
     const replay = this.replayOperation(operationKey, operationPayload);
@@ -916,6 +926,7 @@ export class InMemoryStore implements DurableStore {
         content: userInputContent(userInput),
         ...(userInputMetadata(userInput) ? { metadata: clone(userInputMetadata(userInput)!) } : {}),
         ...(turnContexts.length > 0 ? { contexts: clone(turnContexts) } : {}),
+        ...(input.configuration === undefined ? {} : { configuration: clone(input.configuration) }),
         sequenceWithinRun: this.nextMessageSequence(run.id),
         createdAt: createTimestamp(),
       };
@@ -1120,6 +1131,8 @@ export class InMemoryStore implements DurableStore {
     input?: import("../runtime-events").JsonValue;
     cancel?: boolean;
     metadata?: JsonObject;
+    pinnedConfigToken?: ConfigToken;
+    configuration?: import("../runtime-events").ContextConfiguration;
   }): RunRecord {
     this.assertOwner(lease);
     if (input.interactionId.trim().length === 0) throw new TypeError("interactionId must be non-empty");
@@ -1140,7 +1153,18 @@ export class InMemoryStore implements DurableStore {
     const status = isCancel ? "cancelled" : "answered";
     const now = createTimestamp();
 
-    this.commitInteractionRecord(run, targetInteraction, status, isCancel ? undefined : input.input, undefined, input.metadata);
+    if (!isCancel && input.pinnedConfigToken !== undefined) {
+      run.pinnedConfigToken = input.pinnedConfigToken;
+    }
+    this.commitInteractionRecord(
+      run,
+      targetInteraction,
+      status,
+      isCancel ? undefined : input.input,
+      undefined,
+      input.metadata,
+      isCancel ? undefined : input.configuration,
+    );
 
     if (run.checkpoint?.data && typeof run.checkpoint.data === "object") {
       const stored = (run.checkpoint.data as any).runInteractions ?? (run.checkpoint.data as any).phaseInteractions;
@@ -2138,6 +2162,9 @@ export class InMemoryStore implements DurableStore {
       sequenceWithinRun: covered?.sequenceWithinRun ?? 0,
       createdAt: record.createdAt,
       metadata: { kind: "context_summary", compactionId: record.id },
+      ...(record.configuration === undefined
+        ? {}
+        : { configuration: { ...record.configuration, prefix: true as const } }),
     };
     return [summary, ...recent];
   }
@@ -2284,14 +2311,14 @@ class MemoryOwnedStore implements OwnedStore {
   async commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord> {
     return this.store.commitContextCompaction(this.lease, record);
   }
-  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
-  async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[]; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
+  async createRun(input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; configuration?: import("../runtime-events").ContextConfiguration; idempotencyKey: string }): Promise<RunRecord> { return this.store.createRun(this.lease, input); }
+  async claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; configuration?: import("../runtime-events").ContextConfiguration; additionalContexts?: readonly ContextCandidate[]; inputContext?: UserInput }): Promise<RunClaim> { return this.store.claimRun(this.lease, input); }
   async failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: Extract<RunFailure, { code: "configuration_unavailable" | "checkpoint_incompatible" }> }): Promise<RunRecord> { return this.store.failQueuedRun(this.lease, input); }
   async commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord> { return this.store.commitPhaseEntered(this.lease, input); }
   async commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord> { return this.store.commitPhaseOutput(this.lease, input); }
   async commitInputRequired(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phase: string; prompt?: AssistantMessage; checkpoint: ExecutionCheckpoint; interactions?: readonly RunInteraction[]; interactionAnswers?: Readonly<Record<string, import("../runtime-events").JsonValue>>; pendingToolCallIds?: readonly ToolCallId[] }): Promise<RunRecord> { return this.store.commitInputRequired(this.lease, input); }
   async raiseInteraction(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; interaction: RunInteraction }): Promise<import("./contracts").InteractionRaise> { return this.store.raiseInteraction(this.lease, input); }
-  async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean; metadata?: JsonObject }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
+  async answerInteraction(input: { runId: RunId; interactionId: string; expectedRevision: number; input?: import("../runtime-events").JsonValue; cancel?: boolean; metadata?: JsonObject; pinnedConfigToken?: ConfigToken; configuration?: import("../runtime-events").ContextConfiguration }): Promise<RunRecord> { return this.store.answerInteraction(this.lease, input); }
   async commitOutcome(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; outcome?: Outcome; failure?: RunFailure; output?: AssistantMessage }): Promise<RunRecord> { return this.store.commitOutcome(this.lease, input); }
   async reserveToolCall(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; name: string; args: import("../runtime-events").JsonValue; toolCallId?: ToolCallId; providerToolCallId?: string; title?: string; kind?: ToolKind; locations?: ToolCallLocation[]; content?: ToolCallContent[]; _meta?: JsonObject; model?: ModelRef; usage?: LlmTokenUsage }): Promise<ToolCommit> { return this.store.reserveToolCall(this.lease, input); }
   async reserveToolCalls(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; requestMessageId: MessageId; calls: readonly import("./contracts").ToolCallReservation[]; contentBlocks?: readonly StreamBlock[]; model?: ModelRef; usage?: LlmTokenUsage }): Promise<import("./contracts").ToolBatchCommit> { return this.store.reserveToolCalls(this.lease, input); }
@@ -2353,7 +2380,7 @@ function userInputContent(input: UserInput): UserContent {
   return typeof input === "string" ? input : input.content;
 }
 
-function hasUserInput(input: UserInput): boolean {
+export function hasUserInput(input: UserInput): boolean {
   const content = userInputContent(input);
   return content.length > 0;
 }

@@ -56,10 +56,17 @@ export function latestUserInput(messages: AgentMessage[]): string {
 export function conversationMessages(messages: AgentMessage[]): LlmMessage[] {
   return messages.flatMap((message): LlmMessage[] => {
     if (message.role === "user") {
+      const leading: LlmContentBlock[] = [];
+      if (message.configuration?.notice !== undefined) {
+        leading.push({ type: "text", text: message.configuration.notice });
+      }
       if (message.contexts && message.contexts.length > 0) {
         const turnContextText = `<turn_context>\n${buildContextDescription(message.contexts)}\n</turn_context>`;
+        leading.push({ type: "text", text: turnContextText });
+      }
+      if (leading.length > 0) {
         const contentParts: LlmContentBlock[] = [
-          { type: "text", text: turnContextText },
+          ...leading,
           ...(typeof message.content === "string"
             ? [{ type: "text" as const, text: message.content }]
             : message.content),
@@ -91,6 +98,11 @@ type ModelRequestInput = {
   messages: AgentMessage[];
   tools: Array<{ name: string; description: string; parameters: unknown; promptSnippet?: string; promptGuidelines?: readonly string[] }>;
   skills: Skill[];
+  /** What the System Prompt lists; defaults to the request's tools and skills. */
+  prompt?: {
+    tools: Array<{ name: string; description: string; parameters: unknown; promptSnippet?: string; promptGuidelines?: readonly string[] }>;
+    skills: Skill[];
+  };
   promptGuidelines?: readonly string[];
   appendSystemPrompt?: string;
 };
@@ -99,7 +111,9 @@ export function buildModelRequest(
   input: ModelRequestInput,
   options?: { model?: ModelRef; thinkingLevel?: ThinkingLevel; providerOptions?: JsonObject; sessionId?: string },
 ): LlmRequest {
-  const toolMeta = input.tools.map((t) => ({
+  const promptTools = input.prompt?.tools ?? input.tools;
+  const promptSkills = input.prompt?.skills ?? input.skills;
+  const toolMeta = promptTools.map((t) => ({
     name: t.name,
     description: t.description,
     promptSnippet: t.promptSnippet,
@@ -109,7 +123,7 @@ export function buildModelRequest(
   let systemText = buildSystemPrompt({
     systemPrompt: input.systemPrompt,
     tools: toolMeta,
-    skills: input.skills.length > 0 ? serializeSkills(input.skills) : undefined,
+    skills: promptSkills.length > 0 ? serializeSkills(promptSkills) : undefined,
     promptGuidelines: input.promptGuidelines,
     appendSystemPrompt: input.appendSystemPrompt,
   });

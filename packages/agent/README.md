@@ -243,6 +243,9 @@ definition: {
 }
 ```
 
-Each Run resolves its view once into an immutable Configuration Snapshot and
-stays pinned to it: replacing a source afterwards cannot change an active or
-input-waiting Run, and a restarted Runtime re-resolves the same source IDs.
+Each Turn resolves its view once into an immutable Configuration Snapshot and
+stays pinned to it. Replacing a source mid-Turn cannot change the rest of that
+Turn; the next user Turn takes a new snapshot and announces what changed.
+Replying to a turn boundary or answering its interaction starts a new Turn and
+re-pins the waiting Run. A permission or other interaction inside the Turn keeps
+its snapshot, and a restarted Runtime re-resolves the same source IDs.

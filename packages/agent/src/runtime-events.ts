@@ -109,11 +109,20 @@ export type MessageBase = Readonly<{
   /** Monotonic active revision. Omitted on legacy/initial messages and read as 0. */
   messageRevision?: number;
   metadata?: JsonObject;
+  /** Configuration value carried by the message that opens a Turn. */
+  configuration?: ContextConfiguration;
   sequenceWithinRun: number;
   createdAt: string;
 }>;
 
 export type ContextCandidate = Readonly<{ name: string; value: JsonValue }>;
+
+export type ContextConfiguration = Readonly<{
+  token: ConfigToken;
+  digest: string;
+  prefix?: true;
+  notice?: string;
+}>;
 
 export type UserMessage = MessageBase & Readonly<{
   role: "user";

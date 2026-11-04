@@ -112,6 +112,13 @@ export type AgentContext = {
   skills: Skill[];
   /** Custom phases for this run. Rowan normalizes this with the built-in default phase. */
   phases?: PhaseRegistry;
+  /** The Prefix Configuration's prompt resources, when the Turn runs beside an older prefix. */
+  prefix?: {
+    systemPrompt: string;
+    tools: Tool[];
+    skills: Skill[];
+    phases?: PhaseRegistry;
+  };
   cwd?: string;
 };
 

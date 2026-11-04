@@ -288,7 +288,14 @@ export async function startSessionFilesConsumer(
       if (event.kind === "message_committed") {
         if (event.message.role === "user") {
           if (state.knownEntryIds.has(event.message.id)) return;
-          const content = convertUserContent(event.message.content);
+          const notice = event.message.configuration?.notice;
+          const converted = convertUserContent(event.message.content);
+          const content = notice === undefined
+            ? converted
+            : [
+                { type: "text" as const, text: notice },
+                ...(typeof converted === "string" ? [{ type: "text" as const, text: converted }] : converted),
+              ];
           const entry: PiSessionMessageEntry = {
             type: "message",
             id: event.message.id,
