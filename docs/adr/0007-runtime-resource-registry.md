@@ -9,6 +9,10 @@ status: accepted
 > Rowan built-ins (`read`, `edit`, `write`, `bash` Tools, and `default`, `stop`, `compact` Phases)
 > by name rather than colliding or being rejected.
 
+> **Amended by [ADR-0018](0018-shared-resource-selection-and-single-loop.md):**
+> Definition and Definition Layer list semantics are now implemented by the
+> shared Resource Selection module, including explicit `-name` removal.
+
 Rowan will expose one Runtime Resource Registry as the public seam for
 registering Agent Definitions, Tools, Skills, and Phases. A registration creates
 an atomically replaceable Resource Source; it does not create one Runtime-global

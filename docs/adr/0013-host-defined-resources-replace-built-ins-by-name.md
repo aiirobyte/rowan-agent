@@ -4,6 +4,11 @@ status: accepted
 
 # Host-defined resources replace built-ins by name
 
+> **Amended by [ADR-0018](0018-shared-resource-selection-and-single-loop.md):**
+> Core Resources are selected by default, not always selected. A host or
+> Extension same-name replacement still wins by name, but an explicit `-name`
+> removes the winning value for that Agent.
+
 ADR-0013 amends ADR-0007's core resource reservation and collision rule. Rowan
 will allow host-defined and Extension-registered resources to directly replace
 Rowan built-ins with the same name (`read`, `edit`, `write`, `bash` Tools, and
@@ -20,9 +25,8 @@ collision error or silently ignoring them.
 - Resource precedence order is: Host sources (more specific) > Extension
   sources (`rowan.extensions`) > Rowan built-in core (`rowan.core`).
 - A replacing resource retains the built-in resource's status:
-  - A replaced Core Tool stays always-available across all Agent Definitions
-    (it is exempt from the Definition's `tools` selection list, exactly like the
-    built-in Core Tool it replaces).
+  - A replaced Core Tool is selected by default across Agent Definitions, but
+    an explicit `-name` removes the winning replacement.
   - A replaced Core Phase retains the built-in Phase's role (routing, default
     entry, stop, or compact).
 - Existing Scope override behavior for non-core resources is unchanged: more

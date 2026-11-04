@@ -68,11 +68,19 @@ Definition and Phase narrowing. Candidates are never supplied as concrete
 values in an Agent Configuration.
 _Avoid_: Allowed Resource, Resource Reference, Registered Capability
 
+**Resource Selection**:
+The shared list rule for every selectable Resource kind. Omission selects every
+candidate, an empty list selects Core values only, positive names select
+non-Core values while retaining Core values, and `-name` explicitly removes a
+value. Definition Layer and Phase narrowing use the surviving parent set, so a
+later selector can only remove or narrow, never restore.
+_Avoid_: Per-kind allowlist, separate denylist, frontmatter filter
+
 **Core Resource**:
-A host-registered Tool or Phase whose registrant sets `core: true`. Rowan always
-selects it despite Definition, Definition Layer, and Phase Tool filters. Only
-its registrant can remove it by unloading or replacing its source; frontmatter
-cannot set `core`.
+A Resource whose registrant sets `core: true`, or a Rowan built-in Core
+Resource. It is selected by default but may be removed by an explicit `-name`
+in a Definition, Definition Layer, or Phase selection. No assembly or runtime
+step adds it back; frontmatter cannot set `core`.
 _Avoid_: Frontmatter Core, Core Selection
 
 **Phase Bundle**:
@@ -90,8 +98,9 @@ _Avoid_: Nested Resource Registry, Workflow Bundle, Phase Dependency Graph
 
 **Definition Layer**:
 An optional declarative layer supplied with a Definition reference that may
-replace the authored prompt or model and narrow Tool, Skill, and Phase selections.
-It cannot add a Resource Source, Context Candidate, or executable handler.
+replace the authored prompt or model and narrow Tool, Skill, and Phase selections
+through Resource Selection. It cannot add a Resource Source, Context Candidate,
+executable handler, or a value removed by its parent.
 _Avoid_: Workflow, Child Definition, Capability Grant
 
 **Context Candidate**:
@@ -209,8 +218,26 @@ One fenced period in which the Scheduler claims an Agent Run and executes it unt
 _Avoid_: Worker, Lease, Agent process
 
 **Phase Execution**:
-One invocation of a selected Phase inside an Execution Attempt, governed by the Run's Phase state, routing, Execution Checkpoint, and Run Interaction Driver. Routing recognizes reserved control targets: `continue` re-executes the current phase, `stop` completes the task (entering the Stop Phase when the reply has no final text), and `previous` returns to the Phase that routed into the current one (falling back to `stop` when none exists). A Phase may also declare `target: previous`. It is not an independent durable Tool Call and has no Tool-style automatic retry contract.
+One invocation of a selected Phase inside an Execution Attempt, governed by the Run's Phase state, routing, Execution Checkpoint, and Run Interaction Driver. Routing recognizes reserved control targets: `continue` re-executes the current phase, `stop` completes the task (entering the selected Stop Phase when the reply has no final text), and `previous` returns to the Phase that routed into the current one (falling back to `stop` when none exists). A Phase may also declare `target: previous`. It is not an independent durable Tool Call and has no Tool-style automatic retry contract.
 _Avoid_: Tool Call, Phase Job, Generic Invocation
+
+**Route Tool**:
+The reserved model-facing Tool that switches among selected auto-invocable Phases. It is synthesized exactly when at least two selected Phases have `disableAutoInvocation !== true`; its catalog is that set, with `stop` remaining a terminal control. It is never selected or removed by a Resource Selection list, and its catalog schema is unchanged.
+_Avoid_: Phase selector, capability grant, public Tool
+
+**Single Loop**:
+A Run execution mode without a `route` Tool. When an entry Phase is available,
+it uses that Phase's prompt, Tools, and Skills. When no entry resolves, it is a
+Phase-less entry Loop over the Agent's conversation, System Prompt, and selected
+Resources, with no Phase prompt or Phase filtering. A Phase-less entry Loop can
+carry `route` when at least two auto-invocable Phases remain; that routed form
+is not a Single Loop, while the form without `route` is. Both forms use the
+existing internal model-to-Tool loop and Phase execution state, perform no
+implicit Phase transition, and end the Single Loop when a response has no
+ordinary Tool calls. Compaction follows `compact` selection, not the Loop shape.
+Tool hooks, Run Interactions, suspension, cancellation, Execution Checkpoints,
+restart recovery, and the normal loop limit still apply.
+_Avoid_: Default Phase fallback, implicit Phase, route-only loop, no-compaction loop
 
 **Phase Status**:
 A transient consumer-facing update emitted by a Phase without entering the
