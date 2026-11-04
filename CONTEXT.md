@@ -30,7 +30,7 @@ A host request containing a stable identity, registered Agent Definition
 reference, Resource View, Context Candidates, and Rowan-native execution
 options. It contains no concrete executable resource or host business Scope.
 Hosts update it through the Runtime; Rowan resolves it into an immutable
-Configuration Snapshot for each new Run.
+Configuration Snapshot for each new Turn.
 _Avoid_: Agent Options, Agent Binding, serialized Agent
 
 **Agent Definition**:
@@ -112,8 +112,8 @@ _Avoid_: Agent Context, Prompt String, Memory Store
 **Configuration Snapshot**:
 An immutable, restart-resolvable result of resolving one Agent Configuration.
 It records source revisions, selected declarations, Context values, and
-source-qualified executable references. A Run waiting for input remains
-attached to the snapshot that created its Execution Checkpoint.
+source-qualified executable references. A Run stays attached to the snapshot of
+its current Turn; a reply or answer that opens a new Turn re-pins it.
 _Avoid_: Caller revision, ConfigRef, mutable current config
 
 **Extension**:
@@ -200,6 +200,31 @@ _Avoid_: Agent Fork Link, Run Clone, Checkpoint Import
 The execution-local projection built from Canonical Messages and the Run's Configuration Snapshot. Compaction and Phase-local prompts may change this projection without rewriting canonical history.
 _Avoid_: Runtime State, Session, canonical transcript
 
+**Turn**:
+One user turn. It begins when its user input is committed by a new Run's claim,
+by an Agent Input reply at a turn boundary, or by answering that boundary's
+Interaction. Model rounds, retries, Tool calls, permission Interactions, routes,
+and parallel Phases inside it all use the Turn's Configuration Snapshot.
+_Avoid_: Round, Model call, Run
+
+**Context Configuration**:
+The structured value carried by the Canonical Message that opens a Turn. It
+names the Configuration Snapshot Token and a digest of what the System Prompt
+and notice describe; the model never sees either.
+_Avoid_: Model Context, Prefix Configuration, Agent Configuration
+
+**Prefix Configuration**:
+The Configuration Snapshot named by the last message whose Context
+Configuration sets `prefix: true`, including a compaction summary. It supplies
+the System Prompt, Tool metadata, Skills, and Phase guidance until compaction.
+_Avoid_: Current Configuration, Run Configuration, Turn Configuration
+
+**Configuration Notice**:
+The rendered `<configuration_update>` text stored on the message that opens a
+Turn beside an older Prefix Configuration. Its bytes never change, so earlier
+messages and the cached prefix stay stable.
+_Avoid_: System Prompt update, diff message, host notification
+
 ## Execution
 
 **Agent Run**:
@@ -267,7 +292,8 @@ A durable execution boundary produced by a Phase or Tool when it cannot continue
 _Avoid_: Suspended Promise, Callback Handle, Automatic Retry
 
 **Execution Checkpoint**:
-Opaque durable state produced by the execution loop at an input boundary and consumed by a later Execution Attempt under the same Configuration Snapshot.
+Opaque durable state produced by the execution loop at an input boundary and
+consumed by a later Execution Attempt under the Turn's Configuration Snapshot.
 _Avoid_: Session State, continuation object, Consumer Checkpoint
 
 **Run Boundary**:
