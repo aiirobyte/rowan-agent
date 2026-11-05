@@ -44,6 +44,7 @@ export type ExecutionModelContext = Readonly<{
   tools: AgentContext["tools"];
   skills: AgentContext["skills"];
   phases?: PhaseRegistry;
+  prefix?: AgentContext["prefix"];
 }>;
 
 export type OneShotExecutionInput = Readonly<{
@@ -250,6 +251,7 @@ export async function executeOnce(input: OneShotExecutionInput): Promise<OneShot
     tools: [...input.context.tools],
     skills: [...input.context.skills],
     ...(input.context.phases ? { phases: input.context.phases } : {}),
+    ...(input.context.prefix ? { prefix: input.context.prefix } : {}),
   };
   input.onContext?.(context);
   const state: ExecutionState = restored ?? {

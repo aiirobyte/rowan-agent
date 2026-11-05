@@ -41,7 +41,6 @@ export function canonicalStartRunRequest(
   input: UserInput,
   metadata?: JsonObject,
   phasePayload?: JsonValue,
-  pinnedConfigToken?: string,
   entryPhases?: readonly EntryPhaseSpec[],
   scope?: ScopeRef,
   cwd?: string,
@@ -56,7 +55,6 @@ export function canonicalStartRunRequest(
     ...(metadata === undefined ? {} : { metadata }),
     ...(phasePayload === undefined ? {} : { phasePayload }),
     ...(entryPhases === undefined ? {} : { entryPhases }),
-    ...(pinnedConfigToken === undefined ? {} : { pinnedConfigToken }),
     ...(scope === undefined ? {} : { scope }),
     ...(cwd === undefined ? {} : { cwd }),
   } as never);

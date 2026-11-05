@@ -99,6 +99,7 @@ export function projectModelContext(input: {
         content: renderInteractionText(message),
         createdAt: message.createdAt,
         ...(message.metadata ? { metadata: message.metadata as never } : {}),
+        ...(message.configuration ? { configuration: message.configuration } : {}),
       });
       continue;
     }
@@ -158,13 +159,14 @@ function projectMessage(message: Message): AgentMessage {
         createdAt: message.createdAt,
         ...(message.metadata ? { metadata: message.metadata as never } : {}),
         ...(message.contexts && message.contexts.length > 0 ? { contexts: message.contexts } : {}),
+        ...(message.configuration ? { configuration: message.configuration } : {}),
       };
     case "assistant":
-      return { id: message.id, role: message.role, content: projectAssistantContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
+      return { id: message.id, role: message.role, content: projectAssistantContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}), ...(message.configuration ? { configuration: message.configuration } : {}) };
     case "tool":
-      return { id: message.id, role: message.role, content: projectToolContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
+      return { id: message.id, role: message.role, content: projectToolContent(message.content), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}), ...(message.configuration ? { configuration: message.configuration } : {}) };
     case "interaction":
-      return { id: message.id, role: "user", content: renderInteractionText(message), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}) };
+      return { id: message.id, role: "user", content: renderInteractionText(message), createdAt: message.createdAt, ...(message.metadata ? { metadata: message.metadata as never } : {}), ...(message.configuration ? { configuration: message.configuration } : {}) };
   }
 }
 
@@ -197,6 +199,7 @@ function projectToolMessage(
     }),
     createdAt: message.createdAt,
     ...(message.metadata ? { metadata: message.metadata as never } : {}),
+    ...(message.configuration ? { configuration: message.configuration } : {}),
   };
 }
 

@@ -60,7 +60,7 @@ import type {
   ToolProgress,
   ToolResult,
 } from "@rowan-agent/models";
-import type { AgentId, AssistantMessage, ExecutionId, JsonObject, JsonValue, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
+import type { AgentId, AssistantMessage, ContextConfiguration, ExecutionId, JsonObject, JsonValue, Message, MessageId, OutcomeId, RunId, RunFailure, ToolCallId, UserContent } from "../runtime-events";
 import { RuntimeError } from "./errors";
 import type { ToolBatchRunner, ToolRunnerInput } from "../loop/types";
 import { pageAgents, pageRuns } from "./read-models";
@@ -76,7 +76,7 @@ import { isSchemaParseError, toolErrorMessage } from "../harness/tools";
 import type { PhaseRegistry } from "../harness/phases/types";
 import { RunInteractionBoundary, RunInteractionCancelledError, createRunInteractionDriver, type RunInteractionDriver, type RunInteraction, type RunInteractionRequest } from "../harness/phases/interactions";
 import type { AgentRuntimePort } from "../loop/types";
-import { defaultToolCallContent, isControlMetadata, isControlRun } from "./durable-store";
+import { defaultToolCallContent, hasUserInput, isControlMetadata, isControlRun } from "./durable-store";
 import { assertJsonValue, isJsonValue } from "./json";
 import {
   mergeToolCall,
@@ -98,6 +98,13 @@ import type { AgentDefinition } from "../harness/definitions";
 import type { Phase } from "../harness/phases/types";
 import type { Skill } from "../protocol/agent";
 import { isConfigurationSnapshot, resolveConfigurationSnapshot, type AgentConfiguration, type ConfigurationSnapshot } from "./configuration-snapshot";
+import {
+  configurationDigest,
+  configurationView,
+  decideContextConfiguration,
+  prefixContextConfiguration,
+  type ConfigurationView,
+} from "./turn-configuration";
 
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_POLL_MS = 25;
@@ -148,6 +155,29 @@ type ExecutionToolConfig = Readonly<{
   beforeToolCall?: BeforeToolCall;
   afterToolCall?: AfterToolCall;
 }>;
+
+function combineTurnTools(
+  prefixTools: readonly DurableTool[],
+  turnTools: readonly DurableTool[],
+): DurableTool[] {
+  const turnByName = new Map(turnTools.map((tool) => [tool.name, tool]));
+  const prefixNames = new Set(prefixTools.map(({ name }) => name));
+  return [
+    ...prefixTools.map((tool) => turnByName.get(tool.name) ?? removedTool(tool)),
+    ...turnTools.filter(({ name }) => !prefixNames.has(name)),
+  ];
+}
+
+function removedTool(tool: DurableTool): DurableTool {
+  return {
+    ...tool,
+    execute: async () => ({
+      ok: false,
+      content: null,
+      error: `Tool "${tool.name}" was removed.`,
+    }),
+  };
+}
 
 function createToolInteractionDriver(
   driver: RunInteractionDriver,
@@ -586,6 +616,8 @@ export class AgentRuntime implements AgentRuntimeContract {
 
     let phasePayload: JsonValue | undefined;
     let pinnedConfigToken = agent.currentConfigToken;
+    let latestSnapshot: ConfigurationSnapshot | undefined;
+    let configuration: ContextConfiguration | undefined;
     if (options.phasePayload !== undefined) {
       const resolution = await this.commands.resolve({ agent, token: agent.currentConfigToken });
       if (resolution.kind !== "available") {
@@ -596,6 +628,7 @@ export class AgentRuntime implements AgentRuntimeContract {
         });
       }
       const config = this.resolveConfig(resolution.config);
+      latestSnapshot = config;
       const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
         toolArchiveDir: this.archiveDirFor(agentId),
         scope: options.scope,
@@ -609,6 +642,41 @@ export class AgentRuntime implements AgentRuntimeContract {
         operationId: `start-run-snapshot:${agentId}:${options.idempotencyKey}`,
       });
     }
+    if (!isControlMetadata(options.metadata)) {
+      const boundaryRun = (await this.owned.listRuns({ agentId })).find((candidate) =>
+        candidate.state === "input_required"
+        && candidate.execution === undefined
+        && (candidate.openInteractions ?? []).some((interaction) =>
+          interaction.kind === "user_input" && interaction.turnBoundary === true));
+      if (boundaryRun) {
+        if (latestSnapshot === undefined) {
+          try {
+            const resolution = await this.commands.resolve({ agent, token: agent.currentConfigToken });
+            if (resolution.kind === "available") latestSnapshot = this.resolveConfig(resolution.config);
+          } catch {
+            latestSnapshot = undefined;
+          }
+        }
+        if (latestSnapshot !== undefined) {
+          pinnedConfigToken = await this.commands.storeSnapshot({
+            agent,
+            config: latestSnapshot,
+            operationId: `start-run-snapshot:${agentId}:${options.idempotencyKey}`,
+          });
+          const assembly = assembleRegisteredExtensions(latestSnapshot, this.resources.extensionRunner, {
+            toolArchiveDir: this.archiveDirFor(agentId),
+            scope: options.scope,
+          });
+          configuration = await decideContextConfiguration({
+            messages: await this.owned.contextMessages(agentId),
+            token: pinnedConfigToken,
+            view: configurationView(assembly.context),
+            resolveView: async (configToken) =>
+              (await this.configurationAssemblyFor(agent, configToken, options.scope))?.view,
+          });
+        }
+      }
+    }
     const run = await this.owned.createRun({
       agentId,
       input,
@@ -618,6 +686,7 @@ export class AgentRuntime implements AgentRuntimeContract {
       ...(phasePayload === undefined ? {} : { phasePayload }),
       ...(options.entryPhases === undefined ? {} : { entryPhases: options.entryPhases }),
       ...(pinnedConfigToken === agent.currentConfigToken ? {} : { pinnedConfigToken }),
+      ...(configuration === undefined ? {} : { configuration }),
       idempotencyKey: options.idempotencyKey,
     });
     this.executions.get(run.id)?.onRevision(run.revision);
@@ -919,6 +988,42 @@ export class AgentRuntime implements AgentRuntimeContract {
     if (snapshot.state !== "input_required" || !snapshot.interactions.some((interaction) => interaction.id === input.interactionId)) {
       throw new RuntimeError("input_request_conflict", { runId, interactionId: input.interactionId, reason: "not_found" });
     }
+    const target = snapshot.interactions.find((interaction) => interaction.id === input.interactionId);
+    let pinnedConfigToken: import("../runtime-events").ConfigToken | undefined;
+    let configuration: ContextConfiguration | undefined;
+    if (!input.cancel && target?.kind === "user_input" && target.turnBoundary === true) {
+      const run = (await this.owned.listRuns({ agentId: snapshot.agentId })).find(({ id }) => id === runId);
+      if (run !== undefined && run.execution === undefined) {
+        const agent = await this.requireAgent(snapshot.agentId);
+        if (agent.currentConfigToken) {
+          try {
+            const resolution = await this.commands.resolve({ agent, token: agent.currentConfigToken });
+            if (resolution.kind === "available") {
+              const latest = this.resolveConfig(resolution.config);
+              pinnedConfigToken = await this.commands.storeSnapshot({
+                agent,
+                config: latest,
+                operationId: `interaction-snapshot:${runId}:${input.interactionId}`,
+              });
+              const assembly = assembleRegisteredExtensions(latest, this.resources.extensionRunner, {
+                toolArchiveDir: this.archiveDirFor(snapshot.agentId),
+                scope: run.scope,
+              });
+              configuration = await decideContextConfiguration({
+                messages: await this.owned.contextMessages(snapshot.agentId),
+                token: pinnedConfigToken,
+                view: configurationView(assembly.context),
+                resolveView: async (configToken) =>
+                  (await this.configurationAssemblyFor(agent, configToken, run.scope))?.view,
+              });
+            }
+          } catch {
+            pinnedConfigToken = undefined;
+            configuration = undefined;
+          }
+        }
+      }
+    }
     const answered = await this.owned.answerInteraction({
       runId,
       interactionId: input.interactionId,
@@ -926,6 +1031,8 @@ export class AgentRuntime implements AgentRuntimeContract {
       input: input.input,
       cancel: input.cancel,
       metadata: input.metadata,
+      ...(pinnedConfigToken === undefined ? {} : { pinnedConfigToken }),
+      ...(configuration === undefined ? {} : { configuration }),
     });
     this.executions.get(runId)?.onRevision(answered.revision);
     if (live) {
@@ -1067,12 +1174,29 @@ export class AgentRuntime implements AgentRuntimeContract {
           return;
         }
       }
+      const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
+        toolArchiveDir: this.archiveDirFor(run.agentId),
+        scope: run.scope,
+      });
+      const turnView = configurationView(assembly.context);
+      let configuration: ContextConfiguration | undefined;
+      if ((!controlPhase || hasUserInput(run.input)) && !run.checkpoint && !run.initialMessageId) {
+        const previousMessages = await this.owned.contextMessages(run.agentId);
+        configuration = await decideContextConfiguration({
+          messages: previousMessages,
+          token,
+          view: turnView,
+          resolveView: async (configToken) =>
+            (await this.configurationAssemblyFor(agent, configToken, run.scope))?.view,
+        });
+      }
       const executionId = createId("exec") as import("../runtime-events").ExecutionId;
       claim = await this.owned.claimRun({
         runId: run.id,
         expectedRevision: run.revision,
         executionId,
         configToken: token,
+        ...(configuration === undefined ? {} : { configuration }),
         ...(config.additionalContexts && config.additionalContexts.length > 0
           ? { additionalContexts: config.additionalContexts }
           : {}),
@@ -1105,10 +1229,6 @@ export class AgentRuntime implements AgentRuntimeContract {
           // Extension failures must not stop the run
         }
       }
-      const assembly = assembleRegisteredExtensions(config, this.resources.extensionRunner, {
-        toolArchiveDir: this.archiveDirFor(run.agentId),
-        scope: run.scope,
-      });
       toolQueue = Promise.resolve();
       const model = "stream" in config && config.stream
         ? config.model as ModelRef
@@ -1136,16 +1256,47 @@ export class AgentRuntime implements AgentRuntimeContract {
         return;
       }
       let modelMessages = await this.owned.contextMessages(run.agentId);
-      const buildExecutionContext = (messages: readonly import("../runtime-events").Message[], phaseId?: string) => {
+      const turnDigest = configurationDigest(turnView);
+      let executionTools: ExecutionToolConfig = {
+        tools: assembly.context.tools,
+        beforeToolCall: assembly.beforeToolCall,
+        afterToolCall: assembly.afterToolCall,
+      };
+      const buildExecutionContext = async (messages: readonly Message[], phaseId?: string) => {
+        const prefix = await this.prefixAssemblyFor({
+          messages,
+          agent,
+          turnToken: claim!.run.pinnedConfigToken ?? token,
+          scope: run.scope,
+        });
+        const prefixContext = prefix?.context ?? assembly.context;
+        const combinedTools = prefix
+          ? combineTurnTools(prefixContext.tools, assembly.context.tools)
+          : [...assembly.context.tools];
         const executionContext = projectModelContext({
           context: {
             ...assembly.context,
+            systemPrompt: prefixContext.systemPrompt,
+            tools: combinedTools,
             phases: phaseRegistry,
           },
           messages,
           agentId: run.agentId,
           runId: run.id,
         });
+        if (prefix) {
+          executionContext.prefix = {
+            systemPrompt: prefixContext.systemPrompt,
+            tools: [...prefixContext.tools],
+            skills: [...prefixContext.skills],
+            phases: normalizePhaseRegistry(prefixContext.phases),
+          };
+        }
+        executionTools = {
+          tools: combinedTools,
+          beforeToolCall: assembly.beforeToolCall,
+          afterToolCall: assembly.afterToolCall,
+        };
         const targetPhase = phaseId ?? controlPhase;
         if (targetPhase !== undefined) {
           executionContext.phases = {
@@ -1155,15 +1306,10 @@ export class AgentRuntime implements AgentRuntimeContract {
         }
         return executionContext;
       };
-      let executionContext = buildExecutionContext(modelMessages);
-      const executionTools: ExecutionToolConfig = {
-        tools: assembly.context.tools,
-        beforeToolCall: assembly.beforeToolCall,
-        afterToolCall: assembly.afterToolCall,
-      };
+      let executionContext = await buildExecutionContext(modelMessages);
       let phaseVisit = (await this.owned.listEvents())
         .filter((event) => event.runId === run.id && event.kind === "phase_entered").length;
-      const executeModel = (context: ReturnType<typeof buildExecutionContext>) => executeOnce({
+      const executeModel = (context: Awaited<ReturnType<typeof buildExecutionContext>>) => executeOnce({
         canonicalMessages: context.messages,
         context,
         execution: {
@@ -1212,6 +1358,9 @@ export class AgentRuntime implements AgentRuntimeContract {
                   summary,
                   ...(covered ? { coveredThrough: { messageId: covered.id, sequence: covered.sequenceWithinRun } } : {}),
                   ...(instructions ? { instructions } : {}),
+                  ...(claim!.run.pinnedConfigToken === undefined
+                    ? {}
+                    : { configuration: { token: claim!.run.pinnedConfigToken, digest: turnDigest } }),
                   createdAt: new Date().toISOString(),
                 };
                 await this.owned.commitContextCompaction(record);
@@ -1562,12 +1711,12 @@ export class AgentRuntime implements AgentRuntimeContract {
         && config.resources.phases?.phases.has(COMPACT_PHASE_ID)
         && result.type === "failed"
         && isContextOverflowError(result.error)) {
-        const compactContext = buildExecutionContext(await this.owned.contextMessages(run.agentId), COMPACT_PHASE_ID);
+        const compactContext = await buildExecutionContext(await this.owned.contextMessages(run.agentId), COMPACT_PHASE_ID);
         const compactResult = await executeModel(compactContext);
         const summary = compactResult.type === "completed" ? compactSummary(compactResult.outcome.payload) : undefined;
         if (summary) {
           modelMessages = await this.owned.contextMessages(run.agentId);
-          executionContext = buildExecutionContext(modelMessages);
+          executionContext = await buildExecutionContext(modelMessages);
           result = await executeModel(executionContext);
         }
       }
@@ -2771,6 +2920,39 @@ export class AgentRuntime implements AgentRuntimeContract {
    * stored snapshot is already source-qualified and is used as it stands. */
   private resolveConfig(config: AgentConfiguration | ConfigurationSnapshot): ConfigurationSnapshot {
     return isConfigurationSnapshot(config) ? config : resolveConfigurationSnapshot(this.resources, config);
+  }
+
+  private async configurationAssemblyFor(
+    agent: AgentRecord,
+    token: import("../runtime-events").ConfigToken,
+    scope: ScopeRef | undefined,
+  ): Promise<Readonly<{
+    assembly: ReturnType<typeof assembleRegisteredExtensions>;
+    view: ConfigurationView;
+  }> | undefined> {
+    try {
+      const resolution = await this.commands.resolve({ agent, token });
+      if (resolution.kind !== "available") return undefined;
+      const snapshot = this.resolveConfig(resolution.config);
+      const assembly = assembleRegisteredExtensions(snapshot, this.resources.extensionRunner, {
+        toolArchiveDir: this.archiveDirFor(agent.id),
+        ...(scope === undefined ? {} : { scope }),
+      });
+      return { assembly, view: configurationView(assembly.context) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async prefixAssemblyFor(input: Readonly<{
+    messages: readonly Message[];
+    agent: AgentRecord;
+    turnToken: import("../runtime-events").ConfigToken;
+    scope: ScopeRef | undefined;
+  }>): Promise<ReturnType<typeof assembleRegisteredExtensions> | undefined> {
+    const prefix = prefixContextConfiguration(input.messages);
+    if (prefix === undefined || prefix.token === input.turnToken) return undefined;
+    return (await this.configurationAssemblyFor(input.agent, prefix.token, input.scope))?.assembly;
   }
 
   private startHeartbeat(): void {

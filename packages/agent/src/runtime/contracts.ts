@@ -30,6 +30,7 @@ import type {
   AssistantMessage,
   ConfigToken,
   ContextCandidate,
+  ContextConfiguration,
   DurableRunEvent,
   EventCursor,
   ExecutionId,
@@ -121,6 +122,7 @@ export type {
   ToolResultRecord,
   ToolStateChanged,
   ToolUseBlock,
+  ContextConfiguration,
   UserContent,
   UserMessage,
   WithdrawnUserInput,
@@ -158,6 +160,7 @@ export type ContextCompactionRecord = Readonly<{
   summary: string;
   coveredThrough?: Readonly<{ messageId: MessageId; sequence: number }>;
   instructions?: string;
+  configuration?: Readonly<{ token: ConfigToken; digest: string }>;
   createdAt: string;
 }>;
 
@@ -415,8 +418,8 @@ export interface OwnedStore {
   contextStatus(agentId: AgentId, contextWindow: number): Promise<ContextStatus>;
   contextMessages(agentId: AgentId, recentTokenBudget?: number): Promise<readonly Message[]>;
   commitContextCompaction(record: ContextCompactionRecord): Promise<ContextCompactionRecord>;
-  createRun(input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; idempotencyKey: string }): Promise<RunRecord>;
-  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; additionalContexts?: readonly ContextCandidate[] }): Promise<RunClaim>;
+  createRun(input: { agentId: AgentId; input: UserInput; metadata?: JsonObject; scope?: ScopeRef; cwd?: string; phasePayload?: JsonValue; entryPhases?: readonly EntryPhaseSpec[]; pinnedConfigToken?: ConfigToken; configuration?: ContextConfiguration; idempotencyKey: string }): Promise<RunRecord>;
+  claimRun(input: { runId: RunId; expectedRevision: number; executionId?: ExecutionId; messageId?: MessageId; configToken?: ConfigToken; configuration?: ContextConfiguration; additionalContexts?: readonly ContextCandidate[] }): Promise<RunClaim>;
   failQueuedRun(input: { runId: RunId; expectedRevision: number; failure: QueuedRunFailure }): Promise<RunRecord>;
   commitPhaseEntered(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; phaseId: string; visit: number }): Promise<RunRecord>;
   commitPhaseOutput(input: { runId: RunId; execution: ExecutionToken; expectedRevision: number; message: AssistantMessage }): Promise<RunRecord>;
@@ -444,6 +447,8 @@ export interface OwnedStore {
     input?: JsonValue;
     cancel?: boolean;
     metadata?: JsonObject;
+    pinnedConfigToken?: ConfigToken;
+    configuration?: ContextConfiguration;
   }): Promise<RunRecord>;
   commitOutcome(input: {
     runId: RunId;

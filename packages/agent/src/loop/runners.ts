@@ -10,7 +10,7 @@ import type {
   ToolResult,
 } from "@rowan-agent/models";
 import type { AgentId, JsonObject, JsonValue, Outcome, RunId, ToolCallId, ToolResultRecord } from "../runtime-events";
-import type { AgentMessage } from "../protocol/agent";
+import type { AgentMessage, Skill } from "../protocol/agent";
 import type { AgentContext } from "./types";
 import { createMessage } from "./messages";
 import { createId, createTimestamp, combineSignals } from "../utils";
@@ -320,14 +320,14 @@ function shouldRunStopPhase(phase: Phase, output: PhaseOutput): boolean {
 // ============================================================================
 
 function buildToolsWithRouting(
-  config: AgentConfig,
+  selectedTools: readonly Tool[],
   availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[],
 ) {
   // The Runtime Resource Registry keeps Rowan's reserved route Tool in the
   // implicit core source. Routing, however, is phase-registry-specific: build
   // a fresh schema for the visible phases and avoid exposing the empty core
   // placeholder or registering two Tools with the same name.
-  const tools = config.context.tools.filter((tool) => tool.name !== PhaseRouteTool);
+  const tools = selectedTools.filter((tool) => tool.name !== PhaseRouteTool);
   const autoInvocablePhases = availablePhases.filter(isAutoInvocablePhase);
   if (hasRouteCatalog(availablePhases)) {
     tools.push(createRouteTool(autoInvocablePhases, {
@@ -580,7 +580,18 @@ export async function startPhaseLoop(
   state: ExecutionState,
 ): Promise<LoopResult> {
   const selected = config.context.phases ?? { phases: new Map(), entryPhaseId: null };
-  if (selected.entryPhaseId && selected.phases.has(selected.entryPhaseId)) {
+  const hasEntryPhase = Boolean(selected.entryPhaseId && selected.phases.has(selected.entryPhaseId));
+  const entryPhaseId = hasEntryPhase ? selected.entryPhaseId! : ENTRY_LOOP_PHASE_ID;
+  const currentPhaseWillRun = state.currentPhase === ENTRY_LOOP_PHASE_ID
+    ? !hasEntryPhase
+    : selected.phases.has(state.currentPhase);
+  if (state.status === "suspended" && !currentPhaseWillRun) {
+    state.currentPhase = entryPhaseId;
+    state.attempt = 0;
+    state.status = "running";
+    delete state.continuation;
+  }
+  if (hasEntryPhase) {
     return runPhaseLoop(config, state, selected);
   }
   const entryLoop = createEntryLoopPhase();
@@ -602,6 +613,39 @@ function createEntryLoopPhase(): Phase {
     skills: [],
     disableAutoInvocation: true,
     disableImplicitInvocation: true,
+  };
+}
+
+type PhaseCatalog = Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[];
+
+function phaseCatalog(registry: PhaseRegistry): PhaseCatalog {
+  return [...registry.phases.values()].map((phase) => ({
+    name: phase.name,
+    description: phase.description,
+    tools: phase.tools,
+    skills: phase.skills,
+    input: phase.input,
+    isolated: phase.isolated,
+    disableAutoInvocation: phase.disableAutoInvocation,
+    promptGuidelines: phase.promptGuidelines,
+  }));
+}
+
+function promptResources(
+  config: AgentConfig,
+  phase: Phase,
+): Readonly<{ tools: Tool[]; skills: Skill[]; promptGuidelines?: string[] }> | undefined {
+  const prefix = config.context.prefix;
+  if (!prefix) return undefined;
+  const prefixRegistry = prefix.phases ?? { phases: new Map(), entryPhaseId: null };
+  const prefixPhase = prefix.phases?.phases.get(phase.name);
+  const promptTools = buildToolsWithRouting(prefix.tools, phaseCatalog(prefixRegistry));
+  return {
+    tools: selectPhaseTools(promptTools, prefixPhase?.tools ?? phase.tools),
+    skills: mergeSkills(prefix.skills, prefixPhase?.skills ?? phase.skills),
+    ...(prefixPhase?.promptGuidelines ?? phase.promptGuidelines
+      ? { promptGuidelines: prefixPhase?.promptGuidelines ?? phase.promptGuidelines }
+      : {}),
   };
 }
 
@@ -650,19 +694,7 @@ async function runPhaseLoop(
   const completedPhases: string[] = [];
 
   // Build available phases list for route tool from the explicit registry.
-  const availablePhases: Pick<Phase, 'name' | 'description' | 'tools' | 'skills' | 'input' | 'isolated' | 'disableAutoInvocation' | 'promptGuidelines'>[] = [];
-  for (const [, phase] of registry.phases) {
-    availablePhases.push({
-      name: phase.name,
-      description: phase.description,
-      tools: phase.tools,
-      skills: phase.skills,
-      input: phase.input,
-      isolated: phase.isolated,
-      disableAutoInvocation: phase.disableAutoInvocation,
-      promptGuidelines: phase.promptGuidelines,
-    });
-  }
+  const availablePhases = phaseCatalog(registry);
   const routing = hasRouteCatalog(availablePhases);
 
   // Execute targets concurrently — each gets its own PhaseContext (isolated=true
@@ -837,7 +869,7 @@ async function runPhaseLoop(
 
     state.currentPhase = currentPhaseId;
 
-    const allTools = buildToolsWithRouting(config, availablePhases);
+    const allTools = buildToolsWithRouting(config.context.tools, availablePhases);
 
     const messageManager = createMessageManager(config.context, config.onMessage, config.onMessageDelta);
     const toolExecutionManager = createToolExecutionManager();
@@ -848,13 +880,17 @@ async function runPhaseLoop(
     // phase-filtered tools/skills; route tool always included
     const phaseTools = selectPhaseTools(allTools, phase.tools);
     const phaseSkills = mergeSkills(config.context.skills, phase.skills);
+    const prompt = promptResources(config, phase);
 
     let phaseContext: PhaseContext = {
       systemPrompt: config.context.systemPrompt,
       messages: messageManager.visible(),
       tools: phaseTools,
       skills: phaseSkills,
-      ...(phase.promptGuidelines ? { promptGuidelines: phase.promptGuidelines } : {}),
+      ...(prompt ? { prompt: { tools: prompt.tools, skills: prompt.skills } } : {}),
+      ...(prompt
+        ? (prompt.promptGuidelines ? { promptGuidelines: prompt.promptGuidelines } : {})
+        : (phase.promptGuidelines ? { promptGuidelines: phase.promptGuidelines } : {})),
       invocation: {
         mode: "serial",
         instanceId: currentPhaseId,
@@ -1437,6 +1473,7 @@ function createPhaseExecution(
         messages: phaseContext.messages,
         tools: phaseContext.tools,
         skills: phaseContext.skills,
+        ...(phaseContext.prompt ? { prompt: phaseContext.prompt } : {}),
         promptGuidelines: phaseContext.promptGuidelines,
         appendSystemPrompt: phaseContext.appendSystemPrompt,
       }, {
@@ -1627,11 +1664,12 @@ async function executeParallelPhase(
   const messages = [...context];
   const effectivePayload = preparePhasePayload(phase.input, payload);
 
-  const allTools = buildToolsWithRouting(config, availablePhases);
+  const allTools = buildToolsWithRouting(config.context.tools, availablePhases);
   // Parallel workers are one-shot executions; they return a result to the
   // serial coordinator instead of routing or waiting for user input.
   const phaseTools = selectPhaseTools(allTools, phase.tools, false);
   const phaseSkills = mergeSkills(config.context.skills, phase.skills);
+  const prompt = promptResources(config, phase);
 
   // Both isolated and forked phases use the host system prompt. Phase content
   // is always injected as a user context message below.
@@ -1642,7 +1680,10 @@ async function executeParallelPhase(
     messages,
     tools: phaseTools,
     skills: phaseSkills,
-    ...(phase.promptGuidelines ? { promptGuidelines: phase.promptGuidelines } : {}),
+    ...(prompt ? { prompt: { tools: prompt.tools, skills: prompt.skills } } : {}),
+    ...(prompt
+      ? (prompt.promptGuidelines ? { promptGuidelines: prompt.promptGuidelines } : {})
+      : (phase.promptGuidelines ? { promptGuidelines: phase.promptGuidelines } : {})),
     invocation: {
       mode: "parallel",
       instanceId,

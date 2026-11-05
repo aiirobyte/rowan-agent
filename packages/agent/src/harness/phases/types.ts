@@ -80,6 +80,11 @@ export interface PhaseContext {
   tools: Tool[];
   /** Phase-filtered skills */
   skills: Skill[];
+  /** What the System Prompt lists; defaults to `tools` and `skills`. */
+  prompt?: {
+    tools: Tool[];
+    skills: Skill[];
+  };
   /** Phase machine state */
   state: PhaseState;
   /** Identity and dispatch metadata for this phase execution */

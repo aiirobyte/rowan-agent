@@ -1,5 +1,5 @@
 import type { JsonObject, LlmContentBlock, LlmMessage, LlmTokenUsage, ModelRef } from "@rowan-agent/models";
-import type { ContextCandidate } from "../runtime-events";
+import type { ContextCandidate, ContextConfiguration } from "../runtime-events";
 
 export type AgentMessage = Omit<LlmMessage, "role" | "content"> & {
   id: string;
@@ -10,6 +10,7 @@ export type AgentMessage = Omit<LlmMessage, "role" | "content"> & {
     phase?: string;
   };
   contexts?: readonly ContextCandidate[];
+  configuration?: ContextConfiguration;
   model?: ModelRef;
   usage?: LlmTokenUsage;
 };
